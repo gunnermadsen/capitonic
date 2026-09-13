@@ -404,7 +404,7 @@ def _load_or_build_early_panel(
             "low_price",
             "close_price",
         ),
-    )
+    ).unique(subset=["close_timestamp"], keep="last")
     candle_features = attach_candle_context(frame, candles).select(
         *KEY_COLUMNS, *CHAINLINK_CANDLE_FEATURES
     )
