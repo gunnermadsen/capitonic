@@ -175,6 +175,11 @@ Think of Capitonic as a vision to generate income through systems with automatio
 ## Observability provisioning
 - Provision every Grafana, Prometheus, Loki, and Alloy deployment, including all environment configuration changes; do not make manual, unprovisioned changes.
 
+## Websocket consumer latency
+- Follow [the websocket consumer latency contract](docs/websocket-consumer-latency.md) for every realtime provider socket.
+- Keep the successful data-frame path from `socket.next()` through bounded-channel enqueue free of logging, metrics, parsing, persistence, publication, and other optional work. Perform that work only after dequeueing.
+- Do not add high-frequency observability that competes with socket intake. Preserve explicit bounded-channel overflow, continuity-gap recording, fresh-epoch recovery, and automatic restart behavior.
+
 ## Observability deployment provenance
 - After provisioning Grafana, Prometheus, Loki, or Alloy configuration, create one annotated tag on the exact source commit using `provisioned/observability/<environment>/<YYYYMMDDTHHMMSSZ>`.
 - Record the target environment, provisioning timestamp, originating branch, deployment result, configuration hash, and every component and configuration path provisioned.

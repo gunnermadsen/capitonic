@@ -9,8 +9,10 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt::Write as _,
+    future::Future,
     str::FromStr,
     sync::Arc,
+    thread,
     time::Duration,
 };
 
@@ -1936,10 +1938,23 @@ impl BookRegistry {
     }
 
     fn samples(&self, top_n: usize) -> Vec<BookSample> {
+        self.samples_matching(top_n, |_| true)
+    }
+
+    fn samples_for_tokens(&self, top_n: usize, token_ids: &BTreeSet<String>) -> Vec<BookSample> {
+        self.samples_matching(top_n, |book| token_ids.contains(&book.token_id))
+    }
+
+    fn samples_matching(
+        &self,
+        top_n: usize,
+        include: impl Fn(&BookState) -> bool,
+    ) -> Vec<BookSample> {
         let mut samples = self
             .books
             .values()
             .filter(|book| book.bootstrapped)
+            .filter(|book| include(book))
             .filter_map(|book| {
                 Some(BookSample {
                     market: book.market.clone(),
@@ -3682,20 +3697,20 @@ enum ClobIoEvent {
 // A terminal socket event must be delivered exactly once. Polling an ended
 // stream again can produce an immediately-ready EOF loop and manufacture
 // queue pressure after the remote peer has already closed the connection.
+//
+// LATENCY CONTRACT: the successful data-frame path must do nothing except
+// enqueue the already-decoded websocket message. Do not add logging, metrics,
+// parsing, book work, persistence, publication, or other accounting here.
+// Polymarket closes clients that do not drain its socket promptly; even useful
+// observability on this side of the channel can therefore damage downstream
+// trade-data quality. Perform that work after `io_receiver.recv()` instead.
 async fn enqueue_clob_io_event(sender: &mpsc::Sender<ClobIoEvent>, event: ClobIoEvent) -> bool {
     if matches!(event, ClobIoEvent::Failed(_)) {
         let _ = sender.send(event).await;
         return false;
     }
     match sender.try_send(event) {
-        Ok(()) => {
-            crate::streaming::set_websocket_queue_depth(
-                STRATEGY_KEY.as_str(),
-                WEBSOCKET_EVENT_BUFFER.saturating_sub(sender.capacity()),
-                WEBSOCKET_EVENT_BUFFER,
-            );
-            true
-        }
+        Ok(()) => true,
         Err(mpsc::error::TrySendError::Closed(_)) => false,
         Err(mpsc::error::TrySendError::Full(_)) => {
             crate::streaming::observe_websocket_queue_overflow(STRATEGY_KEY.as_str());
@@ -3719,14 +3734,51 @@ async fn enqueue_clob_io_event(sender: &mpsc::Sender<ClobIoEvent>, event: ClobIo
 
 struct ClobIoWorker {
     shutdown: CancellationToken,
-    handle: JoinHandle<()>,
+    handle: Option<thread::JoinHandle<()>>,
 }
 
 impl Drop for ClobIoWorker {
     fn drop(&mut self) {
         self.shutdown.cancel();
-        self.handle.abort();
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
     }
+}
+
+fn spawn_clob_io_worker<F>(
+    shutdown: CancellationToken,
+    worker: F,
+) -> Result<ClobIoWorker, StrategyError>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    // This runtime is the scheduling boundary that protects provider socket
+    // intake from CPU or cooperative-scheduling pressure in the strategy's
+    // processing runtime. Keep this thread single-purpose: do not move frame
+    // parsing, metrics, book mutation, persistence, or publication into it.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| {
+            source_error(
+                "polymarket_clob_io_worker_start_failed",
+                format!("failed to build dedicated Polymarket CLOB I/O runtime: {error}"),
+            )
+        })?;
+    let handle = thread::Builder::new()
+        .name("polymarket-clob-io".to_owned())
+        .spawn(move || runtime.block_on(worker))
+        .map_err(|error| {
+            source_error(
+                "polymarket_clob_io_worker_start_failed",
+                format!("failed to start dedicated Polymarket CLOB I/O thread: {error}"),
+            )
+        })?;
+    Ok(ClobIoWorker {
+        shutdown,
+        handle: Some(handle),
+    })
 }
 
 impl Drop for DiscoveryWorker {
@@ -3920,47 +3972,60 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
             }
         };
         let mut active_markets = subscription_markets(&discovered, Utc::now(), &self.config);
-        let websocket_config = WebSocketConfig::default()
-            .read_buffer_size(64 * 1024)
-            .write_buffer_size(16 * 1024)
-            .max_write_buffer_size(64 * 1024)
-            .max_message_size(Some(MAX_WEBSOCKET_FRAME_BYTES))
-            .max_frame_size(Some(MAX_WEBSOCKET_FRAME_BYTES));
-        let websocket = tokio::time::timeout(
-            Duration::from_millis(self.config.connect_timeout_ms),
-            connect_async_with_config(&self.config.websocket_url, Some(websocket_config), true),
-        )
-        .await
-        .map_err(|_| {
-            source_error(
-                "polymarket_clob_connect_timeout",
-                "timed out connecting to Polymarket CLOB websocket",
-            )
-        })?
-        .map_err(|error| {
-            source_error(
-                "polymarket_clob_connect_failed",
-                format!("failed to connect Polymarket CLOB websocket: {error}"),
-            )
-        })?
-        .0;
-        let (mut sink, mut stream) = websocket.split();
-        send_websocket_message(
-            &mut sink,
-            Message::Text(clob_subscription(&active_markets).into()),
-            Duration::from_millis(self.config.connect_timeout_ms),
-        )
-        .await?;
-
         let (outgoing_sender, mut outgoing_receiver) = mpsc::channel::<Message>(64);
         let (io_sender, mut io_receiver) = mpsc::channel::<ClobIoEvent>(WEBSOCKET_EVENT_BUFFER);
         let io_shutdown = CancellationToken::new();
         let worker_shutdown = io_shutdown.clone();
+        let websocket_url = self.config.websocket_url.clone();
+        let subscription = clob_subscription(&active_markets);
         let ping_interval = Duration::from_millis(self.config.ping_interval_ms);
         let pong_timeout = Duration::from_millis(self.config.pong_timeout_ms);
         let read_timeout = Duration::from_millis(self.config.read_timeout_ms);
         let write_timeout = Duration::from_millis(self.config.connect_timeout_ms);
-        let io_handle = tokio::spawn(async move {
+        let _io_worker = spawn_clob_io_worker(io_shutdown, async move {
+            // The socket must be created on this runtime. Creating it before
+            // this boundary would leave readiness driven by the shared Tokio
+            // reactor and would not isolate intake scheduling in practice.
+            let websocket_config = WebSocketConfig::default()
+                .read_buffer_size(64 * 1024)
+                .write_buffer_size(16 * 1024)
+                .max_write_buffer_size(64 * 1024)
+                .max_message_size(Some(MAX_WEBSOCKET_FRAME_BYTES))
+                .max_frame_size(Some(MAX_WEBSOCKET_FRAME_BYTES));
+            let websocket = match tokio::time::timeout(
+                write_timeout,
+                connect_async_with_config(&websocket_url, Some(websocket_config), true),
+            )
+            .await
+            {
+                Err(_) => {
+                    let _ = io_sender
+                        .send(ClobIoEvent::Failed(source_error(
+                            "polymarket_clob_connect_timeout",
+                            "timed out connecting to Polymarket CLOB websocket",
+                        )))
+                        .await;
+                    return;
+                }
+                Ok(Err(error)) => {
+                    let _ = io_sender
+                        .send(ClobIoEvent::Failed(source_error(
+                            "polymarket_clob_connect_failed",
+                            format!("failed to connect Polymarket CLOB websocket: {error}"),
+                        )))
+                        .await;
+                    return;
+                }
+                Ok(Ok((websocket, _))) => websocket,
+            };
+            let (mut sink, mut stream) = websocket.split();
+            if let Err(error) =
+                send_websocket_message(&mut sink, Message::Text(subscription.into()), write_timeout)
+                    .await
+            {
+                let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
+                return;
+            }
             let mut ping = tokio::time::interval_at(Instant::now() + ping_interval, ping_interval);
             ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut scheduling_probe = tokio::time::interval_at(
@@ -3970,7 +4035,6 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
             scheduling_probe.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut read_deadline = Instant::now() + read_timeout;
             let mut pong_deadline = None;
-            let mut last_data_frame_at = None;
             loop {
                 let disabled_deadline = Instant::now() + Duration::from_secs(86_400);
                 let pong_sleep =
@@ -4077,37 +4141,15 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                                 "Polymarket CLOB websocket ended",
                             )),
                         };
-                        if let ClobIoEvent::Frame { message, .. } = &event {
-                            let frame_bytes = match message {
-                                Message::Text(text) => text.as_bytes(),
-                                Message::Binary(bytes) => bytes.as_ref(),
-                                _ => unreachable!("CLOB frame event contains non-data message"),
-                            };
-                            let now = Instant::now();
-                            let interframe = last_data_frame_at
-                                .replace(now)
-                                .map(|previous| now.saturating_duration_since(previous));
-                            crate::streaming::observe_websocket_frame(
-                                STRATEGY_KEY.as_str(),
-                                frame_bytes.len(),
-                                interframe,
-                            );
-                            crate::streaming::observe_source_event(
-                                STRATEGY_KEY.as_str(),
-                                received_at,
-                            );
-                        }
+                        // Keep the read-to-enqueue boundary intentionally bare.
+                        // See `docs/websocket-consumer-latency.md`.
                         if !enqueue_clob_io_event(&io_sender, event).await {
                             return;
                         }
                     }
                 }
             }
-        });
-        let _io_worker = ClobIoWorker {
-            shutdown: io_shutdown,
-            handle: io_handle,
-        };
+        })?;
 
         let mut registry = BookRegistry::new(connection_epoch, &active_markets)?;
         // A new socket is always a new integrity epoch. No retained level may
@@ -4122,6 +4164,7 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
         let mut bootstrap_deadline =
             Some(Instant::now() + Duration::from_millis(self.config.bootstrap_timeout_ms));
         let mut missing_current_since = None;
+        let mut last_data_frame_at = None;
 
         loop {
             let disabled_deadline = Instant::now() + Duration::from_secs(86_400);
@@ -4307,6 +4350,12 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                 event = io_receiver.recv() => {
                     match event {
                         Some(ClobIoEvent::Frame { message, received_at, queued_at }) => {
+                            // All optional frame accounting belongs after dequeue.
+                            // Moving it above the channel can starve socket reads and
+                            // cause provider slow-consumer disconnects.
+                            let interframe = last_data_frame_at
+                                .replace(queued_at)
+                                .map(|previous| queued_at.saturating_duration_since(previous));
                             crate::streaming::observe_websocket_queue_delay(
                                 STRATEGY_KEY.as_str(),
                                 queued_at.elapsed(),
@@ -4321,7 +4370,16 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                                 Message::Binary(bytes) => bytes.as_ref(),
                                 _ => unreachable!("CLOB frame event contains non-data message"),
                             };
-                            self.apply_frame(
+                            crate::streaming::observe_websocket_frame(
+                                STRATEGY_KEY.as_str(),
+                                frame_bytes.len(),
+                                interframe,
+                            );
+                            crate::streaming::observe_source_event(
+                                STRATEGY_KEY.as_str(),
+                                received_at,
+                            );
+                            let processing_result = self.apply_frame(
                                 &persistence_sender,
                                 publication_sender,
                                 continuity,
@@ -4329,7 +4387,11 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                                 connection_epoch,
                                 frame_bytes,
                                 received_at,
-                            ).await?;
+                            ).await;
+                            crate::streaming::observe_websocket_frame_processed(
+                                STRATEGY_KEY.as_str(),
+                            );
+                            processing_result?;
                         }
                         Some(ClobIoEvent::Failed(error)) => return Err(error),
                         None => return Err(source_error(
@@ -4437,11 +4499,7 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
         }
         let apply_duration = apply_started_at.elapsed();
         let sample_started_at = Instant::now();
-        let samples = registry
-            .samples(self.config.top_n)
-            .into_iter()
-            .filter(|sample| frame_tokens.contains(&sample.token_id))
-            .collect::<Vec<_>>();
+        let samples = registry.samples_for_tokens(self.config.top_n, &frame_tokens);
         let sample_duration = sample_started_at.elapsed();
         let (bid_levels, ask_levels) = registry.level_counts();
         crate::streaming::observe_clob_frame_processing(
@@ -4698,6 +4756,33 @@ mod tests {
             tick_size: Decimal::new(1, 2),
             received_at: base.received_at,
         }
+    }
+
+    #[test]
+    fn clob_io_worker_uses_and_cleanly_stops_a_dedicated_thread() {
+        let shutdown = CancellationToken::new();
+        let worker_shutdown = shutdown.clone();
+        let (started_sender, started_receiver) = std::sync::mpsc::channel();
+        let (stopped_sender, stopped_receiver) = std::sync::mpsc::channel();
+        let worker = spawn_clob_io_worker(shutdown, async move {
+            started_sender
+                .send(thread::current().id())
+                .expect("test receives I/O thread identity");
+            worker_shutdown.cancelled().await;
+            stopped_sender
+                .send(())
+                .expect("test receives I/O thread shutdown");
+        })
+        .expect("dedicated CLOB I/O worker starts");
+
+        let io_thread = started_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("dedicated I/O thread starts promptly");
+        assert_ne!(io_thread, thread::current().id());
+        drop(worker);
+        stopped_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("dedicated I/O thread stops when its owner is dropped");
     }
 
     #[tokio::test]
@@ -4974,6 +5059,31 @@ mod tests {
             .expect("Down sample");
         assert!(down.bids.is_empty());
         assert!(down.asks.is_empty());
+    }
+
+    #[test]
+    fn source_update_sampling_builds_only_changed_tokens() {
+        let registry = bootstrapped_registry();
+        let market = fixture_market();
+        let changed_tokens = BTreeSet::from([market.up_token_id.clone()]);
+
+        let samples = registry.samples_for_tokens(20, &changed_tokens);
+        let expected = registry
+            .samples(20)
+            .into_iter()
+            .find(|sample| sample.token_id == market.up_token_id)
+            .expect("full-market Up sample");
+
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].token_id, market.up_token_id);
+        assert_eq!(samples[0], expected);
+    }
+
+    #[test]
+    fn source_update_sampling_ignores_frames_without_changed_tokens() {
+        let registry = bootstrapped_registry();
+
+        assert!(registry.samples_for_tokens(20, &BTreeSet::new()).is_empty());
     }
 
     #[test]

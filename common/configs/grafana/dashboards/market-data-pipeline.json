@@ -21,6 +21,1679 @@
   "links": [],
   "panels": [
     {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 31,
+      "panels": [],
+      "title": "Polymarket Websocket Pipeline",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Green only when the provider connection and current authoritative book are both ready.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "red",
+                  "text": "DOWN"
+                },
+                "1": {
+                  "color": "green",
+                  "text": "HEALTHY"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 1
+      },
+      "id": 38,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "min(ingester_source_connection_ready{product=\"polymarket_btc_five_minute_orderbooks\"} or market_data_ingester_clob_bootstrap_ready{product=\"polymarket_btc_five_minute_orderbooks\",scope=\"current\"})",
+          "instant": true,
+          "legendFormat": "Orderbook",
+          "refId": "A"
+        }
+      ],
+      "title": "Orderbook Source",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Five-minute p99 delay in scheduling the socket task's 100ms runtime probe.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 25
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 1
+      },
+      "id": 45,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "1000 * histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_io_scheduling_delay_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))",
+          "instant": true,
+          "legendFormat": "Runtime p99",
+          "refId": "A"
+        }
+      ],
+      "title": "Runtime Delay p99",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Received and completed frame rates, reconnect-safe excess arrival rate, current queue depth, and the highest queue depth observed between Prometheus collections.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 16,
+        "x": 8,
+        "y": 1
+      },
+      "id": 32,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "sum(rate(market_data_ingester_websocket_frames_total{product=\"polymarket_btc_five_minute_orderbooks\"}[1m]))",
+          "legendFormat": "received frames/s",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(market_data_ingester_websocket_frames_processed_total{product=\"polymarket_btc_five_minute_orderbooks\"}[1m]))",
+          "legendFormat": "processed frames/s",
+          "refId": "B"
+        },
+        {
+          "expr": "clamp_min(sum(rate(market_data_ingester_websocket_frames_total{product=\"polymarket_btc_five_minute_orderbooks\"}[1m])) - sum(rate(market_data_ingester_websocket_frames_processed_total{product=\"polymarket_btc_five_minute_orderbooks\"}[1m])), 0)",
+          "legendFormat": "excess arrivals/s",
+          "refId": "C"
+        },
+        {
+          "expr": "max(market_data_ingester_websocket_queue_depth{product=\"polymarket_btc_five_minute_orderbooks\"})",
+          "legendFormat": "current queue depth",
+          "refId": "D"
+        },
+        {
+          "expr": "max(market_data_ingester_websocket_queue_high_watermark{product=\"polymarket_btc_five_minute_orderbooks\"})",
+          "legendFormat": "queue high-water mark",
+          "refId": "E"
+        }
+      ],
+      "title": "Orderbook Consumer Throughput",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Five-minute p99 time a received frame waits before book processing starts.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 25
+              }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 5
+      },
+      "id": 44,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "1000 * histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_queue_delay_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))",
+          "instant": true,
+          "legendFormat": "Queue p99",
+          "refId": "A"
+        }
+      ],
+      "title": "Socket Queue p99",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Pre-bootstrap status of the next five-minute market. This is informational and does not block current-market readiness.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "blue",
+                  "text": "WAITING"
+                },
+                "1": {
+                  "color": "green",
+                  "text": "READY"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 5
+      },
+      "id": 47,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "max(market_data_ingester_clob_bootstrap_ready{product=\"polymarket_btc_five_minute_orderbooks\",scope=\"successor\"})",
+          "instant": true,
+          "legendFormat": "Successor",
+          "refId": "A"
+        }
+      ],
+      "title": "Successor Book",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Current occupancy of the socket-to-book queue.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 0.5
+              },
+              {
+                "color": "red",
+                "value": 0.8
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 9
+      },
+      "id": 41,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "max(market_data_ingester_websocket_queue_utilization_ratio{product=\"polymarket_btc_five_minute_orderbooks\"})",
+          "instant": true,
+          "legendFormat": "Raw queue",
+          "refId": "A"
+        }
+      ],
+      "title": "Raw Queue Pressure",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Elapsed time since the worker accepted a valid provider frame.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 9
+      },
+      "id": 39,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "clamp_min(time() - max(ingester_source_last_event_timestamp_seconds{product=\"polymarket_btc_five_minute_orderbooks\"}), 0)",
+          "instant": true,
+          "legendFormat": "Frame age",
+          "refId": "A"
+        }
+      ],
+      "title": "Last Frame Age",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Provider websocket data-frame rate over the last minute.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 0.01
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 13
+      },
+      "id": 48,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "sum(rate(market_data_ingester_websocket_frames_total{product=\"polymarket_btc_five_minute_orderbooks\"}[1m]))",
+          "instant": true,
+          "legendFormat": "Frames/s",
+          "refId": "A"
+        }
+      ],
+      "title": "Input Rate",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Raw-frame and publication handoff overflows during the last twenty minutes.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 13
+      },
+      "id": 43,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "sum(increase(market_data_ingester_websocket_queue_overflow_total{product=\"polymarket_btc_five_minute_orderbooks\"}[20m])) + sum(increase(market_data_ingester_publication_queue_overflow_total{product=\"polymarket_btc_five_minute_orderbooks\"}[20m]))",
+          "instant": true,
+          "legendFormat": "Overflows",
+          "refId": "A"
+        }
+      ],
+      "title": "Queue Overflows (20m)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Five-minute p99 timings that separate host scheduling, provider cadence, and local queue delay. The render series reports the preceding Prometheus response build.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 16,
+        "x": 8,
+        "y": 13
+      },
+      "id": 34,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_io_scheduling_delay_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))",
+          "legendFormat": "runtime scheduling",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_interframe_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))",
+          "legendFormat": "provider inter-frame",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_queue_delay_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))",
+          "legendFormat": "raw queue",
+          "refId": "C"
+        },
+        {
+          "expr": "max(market_data_ingester_prometheus_render_duration_seconds)",
+          "legendFormat": "metrics render",
+          "refId": "E"
+        }
+      ],
+      "title": "Socket Pipeline p99",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Provider reconnects during the last twenty minutes. Any nonzero value indicates flapping or recovery activity.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 17
+      },
+      "id": 40,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "sum(increase(ingester_source_reconnects_total{product=\"polymarket_btc_five_minute_orderbooks\"}[20m])) or vector(0)",
+          "instant": true,
+          "legendFormat": "Reconnects",
+          "refId": "A"
+        }
+      ],
+      "title": "Reconnects (20m)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Whether both current-market outcome tokens have authoritative full books.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "red",
+                  "text": "NOT READY"
+                },
+                "1": {
+                  "color": "green",
+                  "text": "READY"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 17
+      },
+      "id": 46,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "max(market_data_ingester_clob_bootstrap_ready{product=\"polymarket_btc_five_minute_orderbooks\",scope=\"current\"})",
+          "instant": true,
+          "legendFormat": "Current",
+          "refId": "A"
+        }
+      ],
+      "title": "Current Book",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Current occupancy of the book-to-direct-stream publication queue.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 0.5
+              },
+              {
+                "color": "red",
+                "value": 0.8
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 21
+      },
+      "id": 42,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "max(market_data_ingester_publication_queue_utilization_ratio{product=\"polymarket_btc_five_minute_orderbooks\"})",
+          "instant": true,
+          "legendFormat": "Publish queue",
+          "refId": "A"
+        }
+      ],
+      "title": "Publication Pressure",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Elapsed time since the strategy last durably persisted an orderbook sample.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 21
+      },
+      "id": 49,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "clamp_min(time() - max(market_data_ingester_strategy_last_persistence_timestamp_seconds{strategy=\"polymarket_btc_five_minute_orderbooks\"}), 0)",
+          "instant": true,
+          "legendFormat": "Persistence age",
+          "refId": "A"
+        }
+      ],
+      "title": "Persistence Age",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Occupancy of the bounded socket-to-book and book-to-publication handoffs.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 0.5
+              },
+              {
+                "color": "red",
+                "value": 0.8
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 25
+      },
+      "id": 33,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "max(market_data_ingester_websocket_queue_utilization_ratio{product=\"polymarket_btc_five_minute_orderbooks\"})",
+          "legendFormat": "raw frames",
+          "refId": "A"
+        },
+        {
+          "expr": "max(market_data_ingester_publication_queue_utilization_ratio{product=\"polymarket_btc_five_minute_orderbooks\"})",
+          "legendFormat": "publication",
+          "refId": "B"
+        }
+      ],
+      "title": "Bounded Queue Utilization",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Explicit loss and recovery signals. Publication overflow does not reset the authoritative source; websocket overflow does.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "bars",
+            "fillOpacity": 35,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 11,
+        "w": 16,
+        "x": 8,
+        "y": 25
+      },
+      "id": 36,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "sum"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "sum(increase(market_data_ingester_websocket_queue_overflow_total{product=\"polymarket_btc_five_minute_orderbooks\"}[5m]))",
+          "legendFormat": "raw queue overflow",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(increase(market_data_ingester_publication_queue_overflow_total{product=\"polymarket_btc_five_minute_orderbooks\"}[5m]))",
+          "legendFormat": "publication overflow",
+          "refId": "B"
+        },
+        {
+          "expr": "sum by (reason) (increase(ingester_source_reconnects_total{product=\"polymarket_btc_five_minute_orderbooks\"}[5m]))",
+          "legendFormat": "reconnect {{reason}}",
+          "refId": "C"
+        },
+        {
+          "expr": "sum(increase(market_data_ingester_cached_contract_reconnect_total{product=\"polymarket_btc_five_minute_orderbooks\"}[5m]))",
+          "legendFormat": "cached-contract reconnect",
+          "refId": "D"
+        }
+      ],
+      "title": "Backpressure and Reconnect Events",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Five-minute p99 for each local frame-processing stage and the asynchronous direct-stream publisher.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 33
+      },
+      "id": 35,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_clob_frame_parse_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))",
+          "legendFormat": "parse",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_clob_book_apply_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))",
+          "legendFormat": "book apply",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_clob_sample_build_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))",
+          "legendFormat": "sample build",
+          "refId": "C"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_publication_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))",
+          "legendFormat": "publish",
+          "refId": "D"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_publication_queue_delay_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))",
+          "legendFormat": "publication queue",
+          "refId": "E"
+        }
+      ],
+      "title": "Frame Processing and Publication p99",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Authoritative-book readiness and Gamma contract refresh outcomes across window rotation and reconnects.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 16,
+        "x": 8,
+        "y": 36
+      },
+      "id": 37,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "max by (scope) (market_data_ingester_clob_bootstrap_ready{product=\"polymarket_btc_five_minute_orderbooks\"})",
+          "legendFormat": "ready {{scope}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (result) (increase(market_data_ingester_gamma_refresh_total{product=\"polymarket_btc_five_minute_orderbooks\"}[15m]))",
+          "legendFormat": "Gamma {{result}}",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(market_data_ingester_clob_messages_total{product=\"polymarket_btc_five_minute_orderbooks\"}[1m]))",
+          "legendFormat": "messages/s",
+          "refId": "C"
+        },
+        {
+          "expr": "sum(rate(market_data_ingester_clob_changes_total{product=\"polymarket_btc_five_minute_orderbooks\"}[1m]))",
+          "legendFormat": "changes/s",
+          "refId": "D"
+        }
+      ],
+      "title": "Bootstrap, Discovery, and Message Activity",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Exact provider slow-consumer disconnect events. Each red bar means Polymarket closed the orderbook websocket with 'slow consumer: send buffer full'. This excludes all other reconnect reasons.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "red",
+            "mode": "fixed"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "Disconnects per interval",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.9,
+            "drawStyle": "bars",
+            "fillOpacity": 100,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 0,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": true,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 0,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 41
+      },
+      "id": 50,
+      "options": {
+        "legend": {
+          "calcs": [
+            "sum"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service_name=\"ingester\",strategy=\"polymarket_btc_five_minute_orderbooks\"} |= \"slow consumer: send buffer full\"[$__interval]))",
+          "legendFormat": "SLOW-CONSUMER DISCONNECT",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "SLOW-CONSUMER DISCONNECT EVENTS — EACH RED BAR = DISCONNECT",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 49
+      },
+      "id": 51,
+      "panels": [],
+      "title": "Market Data and Strategy Health",
+      "type": "row"
+    },
+    {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -52,7 +1725,7 @@
         "h": 5,
         "w": 6,
         "x": 0,
-        "y": 0
+        "y": 50
       },
       "id": 1,
       "options": {
@@ -130,7 +1803,7 @@
         "h": 5,
         "w": 4,
         "x": 6,
-        "y": 0
+        "y": 50
       },
       "id": 12,
       "options": {
@@ -194,7 +1867,7 @@
         "h": 5,
         "w": 4,
         "x": 10,
-        "y": 0
+        "y": 50
       },
       "id": 3,
       "options": {
@@ -310,7 +1983,7 @@
         "h": 8,
         "w": 10,
         "x": 14,
-        "y": 0
+        "y": 50
       },
       "id": 5,
       "options": {
@@ -399,7 +2072,7 @@
         "h": 5,
         "w": 3,
         "x": 0,
-        "y": 5
+        "y": 55
       },
       "id": 13,
       "options": {
@@ -477,7 +2150,7 @@
         "h": 5,
         "w": 3,
         "x": 3,
-        "y": 5
+        "y": 55
       },
       "id": 11,
       "options": {
@@ -582,7 +2255,7 @@
         "h": 5,
         "w": 4,
         "x": 6,
-        "y": 5
+        "y": 55
       },
       "id": 27,
       "options": {
@@ -661,7 +2334,7 @@
         "h": 10,
         "w": 4,
         "x": 10,
-        "y": 5
+        "y": 55
       },
       "id": 2,
       "options": {
@@ -779,7 +2452,7 @@
         "h": 8,
         "w": 10,
         "x": 14,
-        "y": 8
+        "y": 58
       },
       "id": 7,
       "options": {
@@ -862,7 +2535,7 @@
         "h": 5,
         "w": 3,
         "x": 0,
-        "y": 10
+        "y": 60
       },
       "id": 20,
       "options": {
@@ -940,7 +2613,7 @@
         "h": 5,
         "w": 3,
         "x": 3,
-        "y": 10
+        "y": 60
       },
       "id": 21,
       "options": {
@@ -1058,7 +2731,7 @@
         "h": 5,
         "w": 4,
         "x": 6,
-        "y": 10
+        "y": 60
       },
       "id": 9,
       "options": {
@@ -1168,7 +2841,7 @@
         "h": 24,
         "w": 7,
         "x": 0,
-        "y": 15
+        "y": 65
       },
       "id": 22,
       "options": {
@@ -1261,7 +2934,7 @@
         "h": 8,
         "w": 7,
         "x": 7,
-        "y": 15
+        "y": 65
       },
       "id": 23,
       "options": {
@@ -1361,7 +3034,7 @@
         "h": 8,
         "w": 10,
         "x": 14,
-        "y": 16
+        "y": 66
       },
       "id": 4,
       "options": {
@@ -1458,7 +3131,7 @@
         "h": 8,
         "w": 7,
         "x": 7,
-        "y": 23
+        "y": 73
       },
       "id": 6,
       "options": {
@@ -1559,7 +3232,7 @@
         "h": 7,
         "w": 10,
         "x": 14,
-        "y": 24
+        "y": 74
       },
       "id": 24,
       "options": {
@@ -1650,7 +3323,7 @@
         "h": 8,
         "w": 7,
         "x": 7,
-        "y": 31
+        "y": 81
       },
       "id": 8,
       "options": {
@@ -1747,7 +3420,7 @@
         "h": 17,
         "w": 10,
         "x": 14,
-        "y": 31
+        "y": 81
       },
       "id": 18,
       "options": {
@@ -1775,19 +3448,6 @@
       ],
       "title": "Book ages at last execution",
       "type": "timeseries"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 48
-      },
-      "id": 10,
-      "panels": [],
-      "title": "Directional Execution Health",
-      "type": "row"
     },
     {
       "datasource": {
@@ -1856,7 +3516,7 @@
         "h": 9,
         "w": 14,
         "x": 0,
-        "y": 39
+        "y": 89
       },
       "id": 15,
       "options": {
@@ -1884,6 +3544,19 @@
       ],
       "title": "Execution freshness violations (since process start)",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 98
+      },
+      "id": 10,
+      "panels": [],
+      "title": "Directional Execution Health",
+      "type": "row"
     },
     {
       "datasource": {
@@ -1952,7 +3625,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 49
+        "y": 99
       },
       "id": 17,
       "options": {
@@ -2052,7 +3725,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 49
+        "y": 99
       },
       "id": 14,
       "options": {
@@ -2152,7 +3825,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 57
+        "y": 107
       },
       "id": 25,
       "options": {
@@ -2255,7 +3928,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 57
+        "y": 107
       },
       "id": 16,
       "options": {
@@ -2290,7 +3963,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 65
+        "y": 115
       },
       "id": 28,
       "panels": [],
@@ -2307,14 +3980,23 @@
         "defaults": {
           "custom": {
             "align": "auto",
-            "cellOptions": {"type": "auto"},
-            "footer": {"reducers": []},
+            "cellOptions": {
+              "type": "auto"
+            },
+            "footer": {
+              "reducers": []
+            },
             "inspect": false
           },
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
-            "steps": [{"color": "green", "value": null}]
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
           }
         },
         "overrides": []
@@ -2323,13 +4005,18 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 66
+        "y": 116
       },
       "id": 29,
       "options": {
         "cellHeight": "sm",
         "showHeader": true,
-        "sortBy": [{"desc": false, "displayName": "Strategy"}]
+        "sortBy": [
+          {
+            "desc": false,
+            "displayName": "Strategy"
+          }
+        ]
       },
       "pluginVersion": "12.4.2",
       "targets": [
@@ -2354,27 +4041,37 @@
         "uid": "loki"
       },
       "description": "Assignment acquisition, release, and failure events emitted by ingester workers.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
       "gridPos": {
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 66
+        "y": 116
       },
       "id": 30,
       "options": {
         "dedupStrategy": "none",
+        "enableInfiniteScrolling": false,
         "enableLogDetails": true,
         "prettifyLogMessage": false,
         "showCommonLabels": false,
+        "showControls": false,
         "showLabels": false,
         "showTime": true,
         "sortOrder": "Descending",
+        "unwrappedColumns": false,
         "wrapLogMessage": true
       },
       "pluginVersion": "12.4.2",
       "targets": [
         {
-          "datasource": {"type": "loki", "uid": "loki"},
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
           "editorMode": "code",
           "expr": "{service_name=\"ingester\",service_role=\"worker\",event=~\"realtime_assignment_(acquired|released|failed)\"}",
           "queryType": "range",
@@ -2383,238 +4080,6 @@
       ],
       "title": "Recent Assignment Events",
       "type": "logs"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 75},
-      "id": 31,
-      "panels": [],
-      "title": "Polymarket Websocket Pipeline",
-      "type": "row"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Green only when the provider connection and current authoritative book are both ready.",
-      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [{"options": {"0": {"color": "red", "text": "DOWN"}, "1": {"color": "green", "text": "HEALTHY"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": 0}, {"color": "green", "value": 1}]}, "unit": "none"}, "overrides": []},
-      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 76},
-      "id": 38,
-      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "wideLayout": true},
-      "targets": [{"expr": "min(ingester_source_connection_ready{product=\"polymarket_btc_five_minute_orderbooks\"} or market_data_ingester_clob_bootstrap_ready{product=\"polymarket_btc_five_minute_orderbooks\",scope=\"current\"})", "instant": true, "legendFormat": "Orderbook", "refId": "A"}],
-      "title": "Orderbook Source",
-      "type": "stat"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Elapsed time since the worker accepted a valid provider frame.",
-      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": 0}, {"color": "yellow", "value": 10}, {"color": "red", "value": 30}]}, "unit": "s"}, "overrides": []},
-      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 76},
-      "id": 39,
-      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "wideLayout": true},
-      "targets": [{"expr": "clamp_min(time() - max(ingester_source_last_event_timestamp_seconds{product=\"polymarket_btc_five_minute_orderbooks\"}), 0)", "instant": true, "legendFormat": "Frame age", "refId": "A"}],
-      "title": "Last Frame Age",
-      "type": "stat"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Provider reconnects during the last twenty minutes. Any nonzero value indicates flapping or recovery activity.",
-      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "decimals": 0, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": 0}, {"color": "yellow", "value": 1}, {"color": "red", "value": 3}]}, "unit": "short"}, "overrides": []},
-      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 76},
-      "id": 40,
-      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "wideLayout": true},
-      "targets": [{"expr": "sum(increase(ingester_source_reconnects_total{product=\"polymarket_btc_five_minute_orderbooks\"}[20m])) or vector(0)", "instant": true, "legendFormat": "Reconnects", "refId": "A"}],
-      "title": "Reconnects (20m)",
-      "type": "stat"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Current occupancy of the socket-to-book queue.",
-      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "max": 1, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": 0}, {"color": "yellow", "value": 0.5}, {"color": "red", "value": 0.8}]}, "unit": "percentunit"}, "overrides": []},
-      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 76},
-      "id": 41,
-      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "wideLayout": true},
-      "targets": [{"expr": "max(market_data_ingester_websocket_queue_utilization_ratio{product=\"polymarket_btc_five_minute_orderbooks\"})", "instant": true, "legendFormat": "Raw queue", "refId": "A"}],
-      "title": "Raw Queue Pressure",
-      "type": "stat"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Current occupancy of the book-to-direct-stream publication queue.",
-      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "max": 1, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": 0}, {"color": "yellow", "value": 0.5}, {"color": "red", "value": 0.8}]}, "unit": "percentunit"}, "overrides": []},
-      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 76},
-      "id": 42,
-      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "wideLayout": true},
-      "targets": [{"expr": "max(market_data_ingester_publication_queue_utilization_ratio{product=\"polymarket_btc_five_minute_orderbooks\"})", "instant": true, "legendFormat": "Publish queue", "refId": "A"}],
-      "title": "Publication Pressure",
-      "type": "stat"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Raw-frame and publication handoff overflows during the last twenty minutes.",
-      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "decimals": 0, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": 0}, {"color": "red", "value": 1}]}, "unit": "short"}, "overrides": []},
-      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 76},
-      "id": 43,
-      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "wideLayout": true},
-      "targets": [{"expr": "sum(increase(market_data_ingester_websocket_queue_overflow_total{product=\"polymarket_btc_five_minute_orderbooks\"}[20m])) + sum(increase(market_data_ingester_publication_queue_overflow_total{product=\"polymarket_btc_five_minute_orderbooks\"}[20m]))", "instant": true, "legendFormat": "Overflows", "refId": "A"}],
-      "title": "Queue Overflows (20m)",
-      "type": "stat"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Five-minute p99 time a received frame waits before book processing starts.",
-      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": 0}, {"color": "yellow", "value": 5}, {"color": "red", "value": 25}]}, "unit": "ms"}, "overrides": []},
-      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 80},
-      "id": 44,
-      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "wideLayout": true},
-      "targets": [{"expr": "1000 * histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_queue_delay_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))", "instant": true, "legendFormat": "Queue p99", "refId": "A"}],
-      "title": "Socket Queue p99",
-      "type": "stat"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Five-minute p99 delay in scheduling the socket task's 100ms runtime probe.",
-      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": 0}, {"color": "yellow", "value": 25}, {"color": "red", "value": 100}]}, "unit": "ms"}, "overrides": []},
-      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 80},
-      "id": 45,
-      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "wideLayout": true},
-      "targets": [{"expr": "1000 * histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_io_scheduling_delay_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))", "instant": true, "legendFormat": "Runtime p99", "refId": "A"}],
-      "title": "Runtime Delay p99",
-      "type": "stat"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Whether both current-market outcome tokens have authoritative full books.",
-      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [{"options": {"0": {"color": "red", "text": "NOT READY"}, "1": {"color": "green", "text": "READY"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": 0}, {"color": "green", "value": 1}]}, "unit": "none"}, "overrides": []},
-      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 80},
-      "id": 46,
-      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "wideLayout": true},
-      "targets": [{"expr": "max(market_data_ingester_clob_bootstrap_ready{product=\"polymarket_btc_five_minute_orderbooks\",scope=\"current\"})", "instant": true, "legendFormat": "Current", "refId": "A"}],
-      "title": "Current Book",
-      "type": "stat"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Pre-bootstrap status of the next five-minute market. This is informational and does not block current-market readiness.",
-      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [{"options": {"0": {"color": "blue", "text": "WAITING"}, "1": {"color": "green", "text": "READY"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": 0}, {"color": "green", "value": 1}]}, "unit": "none"}, "overrides": []},
-      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 80},
-      "id": 47,
-      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "wideLayout": true},
-      "targets": [{"expr": "max(market_data_ingester_clob_bootstrap_ready{product=\"polymarket_btc_five_minute_orderbooks\",scope=\"successor\"})", "instant": true, "legendFormat": "Successor", "refId": "A"}],
-      "title": "Successor Book",
-      "type": "stat"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Provider websocket data-frame rate over the last minute.",
-      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": 0}, {"color": "green", "value": 0.01}]}, "unit": "ops"}, "overrides": []},
-      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 80},
-      "id": 48,
-      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "wideLayout": true},
-      "targets": [{"expr": "sum(rate(market_data_ingester_websocket_frames_total{product=\"polymarket_btc_five_minute_orderbooks\"}[1m]))", "instant": true, "legendFormat": "Frames/s", "refId": "A"}],
-      "title": "Input Rate",
-      "type": "stat"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Elapsed time since the strategy last durably persisted an orderbook sample.",
-      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": 0}, {"color": "yellow", "value": 10}, {"color": "red", "value": 30}]}, "unit": "s"}, "overrides": []},
-      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 80},
-      "id": 49,
-      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "wideLayout": true},
-      "targets": [{"expr": "clamp_min(time() - max(market_data_ingester_strategy_last_persistence_timestamp_seconds{strategy=\"polymarket_btc_five_minute_orderbooks\"}), 0)", "instant": true, "legendFormat": "Persistence age", "refId": "A"}],
-      "title": "Persistence Age",
-      "type": "stat"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Provider frames and bytes drained by the dedicated socket reader.",
-      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 12, "lineWidth": 2, "showPoints": "never", "stacking": {"group": "A", "mode": "none"}}, "min": 0}, "overrides": []},
-      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 84},
-      "id": 32,
-      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [
-        {"expr": "sum(rate(market_data_ingester_websocket_frames_total{product=\"polymarket_btc_five_minute_orderbooks\"}[1m]))", "legendFormat": "frames/s", "refId": "A"},
-        {"expr": "sum(rate(market_data_ingester_websocket_bytes_total{product=\"polymarket_btc_five_minute_orderbooks\"}[1m]))", "legendFormat": "bytes/s", "refId": "B"}
-      ],
-      "title": "Websocket Input Rate",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Occupancy of the bounded socket-to-book and book-to-publication handoffs.",
-      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 15, "lineWidth": 2, "showPoints": "never", "stacking": {"group": "A", "mode": "none"}}, "max": 1, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": 0}, {"color": "yellow", "value": 0.5}, {"color": "red", "value": 0.8}]}, "unit": "percentunit"}, "overrides": []},
-      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 84},
-      "id": 33,
-      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [
-        {"expr": "max(market_data_ingester_websocket_queue_utilization_ratio{product=\"polymarket_btc_five_minute_orderbooks\"})", "legendFormat": "raw frames", "refId": "A"},
-        {"expr": "max(market_data_ingester_publication_queue_utilization_ratio{product=\"polymarket_btc_five_minute_orderbooks\"})", "legendFormat": "publication", "refId": "B"}
-      ],
-      "title": "Bounded Queue Utilization",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Five-minute p99 timings that separate host scheduling and provider cadence from local queue delay.",
-      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 10, "lineWidth": 2, "showPoints": "never", "stacking": {"group": "A", "mode": "none"}}, "min": 0, "unit": "s"}, "overrides": []},
-      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 84},
-      "id": 34,
-      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_io_scheduling_delay_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))", "legendFormat": "runtime scheduling", "refId": "A"},
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_interframe_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))", "legendFormat": "provider inter-frame", "refId": "B"},
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_queue_delay_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))", "legendFormat": "raw queue", "refId": "C"}
-      ],
-      "title": "Socket Pipeline p99",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Five-minute p99 for each local frame-processing stage and the asynchronous direct-stream publisher.",
-      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 10, "lineWidth": 2, "showPoints": "never", "stacking": {"group": "A", "mode": "none"}}, "min": 0, "unit": "s"}, "overrides": []},
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 92},
-      "id": 35,
-      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_clob_frame_parse_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))", "legendFormat": "parse", "refId": "A"},
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_clob_book_apply_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))", "legendFormat": "book apply", "refId": "B"},
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_clob_sample_build_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))", "legendFormat": "sample build", "refId": "C"},
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_publication_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))", "legendFormat": "publish", "refId": "D"},
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_publication_queue_delay_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))", "legendFormat": "publication queue", "refId": "E"}
-      ],
-      "title": "Frame Processing and Publication p99",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Explicit loss and recovery signals. Publication overflow does not reset the authoritative source; websocket overflow does.",
-      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "bars", "fillOpacity": 35, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "none"}}, "min": 0}, "overrides": []},
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 92},
-      "id": 36,
-      "options": {"legend": {"calcs": ["lastNotNull", "sum"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [
-        {"expr": "sum(increase(market_data_ingester_websocket_queue_overflow_total{product=\"polymarket_btc_five_minute_orderbooks\"}[5m]))", "legendFormat": "raw queue overflow", "refId": "A"},
-        {"expr": "sum(increase(market_data_ingester_publication_queue_overflow_total{product=\"polymarket_btc_five_minute_orderbooks\"}[5m]))", "legendFormat": "publication overflow", "refId": "B"},
-        {"expr": "sum by (reason) (increase(ingester_source_reconnects_total{product=\"polymarket_btc_five_minute_orderbooks\"}[5m]))", "legendFormat": "reconnect {{reason}}", "refId": "C"},
-        {"expr": "sum(increase(market_data_ingester_cached_contract_reconnect_total{product=\"polymarket_btc_five_minute_orderbooks\"}[5m]))", "legendFormat": "cached-contract reconnect", "refId": "D"}
-      ],
-      "title": "Backpressure and Reconnect Events",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Authoritative-book readiness and Gamma contract refresh outcomes across window rotation and reconnects.",
-      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 12, "lineWidth": 2, "showPoints": "never", "stacking": {"group": "A", "mode": "none"}}, "min": 0}, "overrides": []},
-      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 100},
-      "id": 37,
-      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [
-        {"expr": "max by (scope) (market_data_ingester_clob_bootstrap_ready{product=\"polymarket_btc_five_minute_orderbooks\"})", "legendFormat": "ready {{scope}}", "refId": "A"},
-        {"expr": "sum by (result) (increase(market_data_ingester_gamma_refresh_total{product=\"polymarket_btc_five_minute_orderbooks\"}[15m]))", "legendFormat": "Gamma {{result}}", "refId": "B"},
-        {"expr": "sum(rate(market_data_ingester_clob_messages_total{product=\"polymarket_btc_five_minute_orderbooks\"}[1m]))", "legendFormat": "messages/s", "refId": "C"},
-        {"expr": "sum(rate(market_data_ingester_clob_changes_total{product=\"polymarket_btc_five_minute_orderbooks\"}[1m]))", "legendFormat": "changes/s", "refId": "D"}
-      ],
-      "title": "Bootstrap, Discovery, and Message Activity",
-      "type": "timeseries"
     }
   ],
   "preload": false,
@@ -2661,6 +4126,6 @@
   "timezone": "browser",
   "title": "Market Data Pipeline",
   "uid": "market-data-pipeline",
-  "version": 18,
+  "version": 28,
   "weekStart": ""
 }
