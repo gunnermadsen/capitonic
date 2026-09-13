@@ -1216,6 +1216,29 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, force: bool 
     _write_json(work / "metrics.json", metrics)
     (work / "report.md").write_text(_report(metrics))
     _write_metric_parquets(work, results, winners)
+    (work / "model-family.sha256").write_text(artifact_sha + "\n")
+    source_identity = hashlib.sha256(
+        json.dumps(source["sha256"], sort_keys=True).encode()
+    ).hexdigest()
+    _write_json(
+        work / "model-provenance.json",
+        {
+            "schema_version": "btc-model-provenance-v1",
+            "model_artifact_sha256": artifact_sha,
+            "artifact_path": "tournament.joblib",
+            "producing_commit": metrics["source_commit"],
+            "training_run_id": run_id,
+            "source_identity": source_identity,
+            "source_hashes": source["sha256"],
+            "configuration_sha256": config_sha,
+            "qualification_status": qualification,
+            "deployment_status": "not_deployed",
+            "hypothesis_preserved": True,
+            "selected_bucket_variants": {
+                bucket: winner["name"] for bucket, winner in winners.items()
+            },
+        },
+    )
     composed_trades.write_parquet(work / "composed-sealed-trades.parquet", compression="zstd")
     _write_json(
         work / "completion.json",
