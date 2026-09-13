@@ -1578,6 +1578,110 @@
     },
     {
       "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Exact provider slow-consumer disconnect events. Each red bar means Polymarket closed the orderbook websocket with 'slow consumer: send buffer full'. This excludes all other reconnect reasons.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "red",
+            "mode": "fixed"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "Disconnects per interval",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.9,
+            "drawStyle": "bars",
+            "fillOpacity": 100,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 0,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": true,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 0,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 41
+      },
+      "id": 50,
+      "options": {
+        "legend": {
+          "calcs": [
+            "sum"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service_name=\"ingester\",strategy=\"polymarket_btc_five_minute_orderbooks\"} |= \"slow consumer: send buffer full\"[$__interval]))",
+          "legendFormat": "SLOW-CONSUMER DISCONNECT",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "SLOW-CONSUMER DISCONNECT EVENTS — EACH RED BAR = DISCONNECT",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
@@ -1608,7 +1712,7 @@
         "h": 5,
         "w": 6,
         "x": 0,
-        "y": 41
+        "y": 49
       },
       "id": 1,
       "options": {
@@ -1686,7 +1790,7 @@
         "h": 5,
         "w": 4,
         "x": 6,
-        "y": 41
+        "y": 49
       },
       "id": 12,
       "options": {
@@ -1750,7 +1854,7 @@
         "h": 5,
         "w": 4,
         "x": 10,
-        "y": 41
+        "y": 49
       },
       "id": 3,
       "options": {
@@ -1866,7 +1970,7 @@
         "h": 8,
         "w": 10,
         "x": 14,
-        "y": 41
+        "y": 49
       },
       "id": 5,
       "options": {
@@ -1955,7 +2059,7 @@
         "h": 5,
         "w": 3,
         "x": 0,
-        "y": 46
+        "y": 54
       },
       "id": 13,
       "options": {
@@ -2033,7 +2137,7 @@
         "h": 5,
         "w": 3,
         "x": 3,
-        "y": 46
+        "y": 54
       },
       "id": 11,
       "options": {
@@ -2138,7 +2242,7 @@
         "h": 5,
         "w": 4,
         "x": 6,
-        "y": 46
+        "y": 54
       },
       "id": 27,
       "options": {
@@ -2217,7 +2321,7 @@
         "h": 10,
         "w": 4,
         "x": 10,
-        "y": 46
+        "y": 54
       },
       "id": 2,
       "options": {
@@ -2335,7 +2439,7 @@
         "h": 8,
         "w": 10,
         "x": 14,
-        "y": 49
+        "y": 57
       },
       "id": 7,
       "options": {
@@ -2418,7 +2522,7 @@
         "h": 5,
         "w": 3,
         "x": 0,
-        "y": 51
+        "y": 59
       },
       "id": 20,
       "options": {
@@ -2496,7 +2600,7 @@
         "h": 5,
         "w": 3,
         "x": 3,
-        "y": 51
+        "y": 59
       },
       "id": 21,
       "options": {
@@ -2614,7 +2718,7 @@
         "h": 5,
         "w": 4,
         "x": 6,
-        "y": 51
+        "y": 59
       },
       "id": 9,
       "options": {
@@ -2724,7 +2828,7 @@
         "h": 24,
         "w": 7,
         "x": 0,
-        "y": 56
+        "y": 64
       },
       "id": 22,
       "options": {
@@ -2817,7 +2921,7 @@
         "h": 8,
         "w": 7,
         "x": 7,
-        "y": 56
+        "y": 64
       },
       "id": 23,
       "options": {
@@ -2917,7 +3021,7 @@
         "h": 8,
         "w": 10,
         "x": 14,
-        "y": 57
+        "y": 65
       },
       "id": 4,
       "options": {
@@ -3014,7 +3118,7 @@
         "h": 8,
         "w": 7,
         "x": 7,
-        "y": 64
+        "y": 72
       },
       "id": 6,
       "options": {
@@ -3115,7 +3219,7 @@
         "h": 7,
         "w": 10,
         "x": 14,
-        "y": 65
+        "y": 73
       },
       "id": 24,
       "options": {
@@ -3206,7 +3310,7 @@
         "h": 8,
         "w": 7,
         "x": 7,
-        "y": 72
+        "y": 80
       },
       "id": 8,
       "options": {
@@ -3303,7 +3407,7 @@
         "h": 17,
         "w": 10,
         "x": 14,
-        "y": 72
+        "y": 80
       },
       "id": 18,
       "options": {
@@ -3399,7 +3503,7 @@
         "h": 9,
         "w": 14,
         "x": 0,
-        "y": 80
+        "y": 88
       },
       "id": 15,
       "options": {
@@ -3434,7 +3538,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 89
+        "y": 97
       },
       "id": 10,
       "panels": [],
@@ -3508,7 +3612,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 90
+        "y": 98
       },
       "id": 17,
       "options": {
@@ -3608,7 +3712,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 90
+        "y": 98
       },
       "id": 14,
       "options": {
@@ -3708,7 +3812,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 98
+        "y": 106
       },
       "id": 25,
       "options": {
@@ -3811,7 +3915,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 98
+        "y": 106
       },
       "id": 16,
       "options": {
@@ -3846,7 +3950,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 106
+        "y": 114
       },
       "id": 28,
       "panels": [],
@@ -3888,7 +3992,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 107
+        "y": 115
       },
       "id": 29,
       "options": {
@@ -3932,7 +4036,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 107
+        "y": 115
       },
       "id": 30,
       "options": {
