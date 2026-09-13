@@ -1205,8 +1205,8 @@ groups:
         for: 0s
         annotations:
           summary: 'Polymarket disconnected the orderbook consumer for falling behind'
-          description: 'The provider reported slow consumer: send buffer full within ten minutes. Correlate socket queue, local processing, publication, runtime scheduling, and host network metrics.'
+          description: 'The provider reported slow consumer: send buffer full within ten minutes. In Orderbook Consumer Throughput, correlate received versus processed frame rates, outstanding frames, current queue depth, and the collection-interval queue high-water mark; then inspect p99 parse, apply, and sample-build latency.'
         labels: {strategy: polymarket_btc_five_minute_orderbooks, condition: upstream_slow_consumer_disconnect, service: ingester, family: market_data_ingestion, environment: $GRAFANA_ALERT_ENVIRONMENT, severity: critical}
         dashboardUid: market-data-pipeline
-        panelId: 36
+        panelId: 32
         isPaused: false

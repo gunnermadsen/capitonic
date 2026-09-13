@@ -2526,16 +2526,19 @@
     },
     {
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Provider frames and bytes drained by the dedicated socket reader.",
+      "description": "Received and completed frame rates, derived outstanding work, current queue depth, and the highest queue depth observed between Prometheus collections.",
       "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 12, "lineWidth": 2, "showPoints": "never", "stacking": {"group": "A", "mode": "none"}}, "min": 0}, "overrides": []},
       "gridPos": {"h": 8, "w": 8, "x": 0, "y": 84},
       "id": 32,
       "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
       "targets": [
-        {"expr": "sum(rate(market_data_ingester_websocket_frames_total{product=\"polymarket_btc_five_minute_orderbooks\"}[1m]))", "legendFormat": "frames/s", "refId": "A"},
-        {"expr": "sum(rate(market_data_ingester_websocket_bytes_total{product=\"polymarket_btc_five_minute_orderbooks\"}[1m]))", "legendFormat": "bytes/s", "refId": "B"}
+        {"expr": "sum(rate(market_data_ingester_websocket_frames_total{product=\"polymarket_btc_five_minute_orderbooks\"}[1m]))", "legendFormat": "received frames/s", "refId": "A"},
+        {"expr": "sum(rate(market_data_ingester_websocket_frames_processed_total{product=\"polymarket_btc_five_minute_orderbooks\"}[1m]))", "legendFormat": "processed frames/s", "refId": "B"},
+        {"expr": "clamp_min(sum(market_data_ingester_websocket_frames_total{product=\"polymarket_btc_five_minute_orderbooks\"}) - sum(market_data_ingester_websocket_frames_processed_total{product=\"polymarket_btc_five_minute_orderbooks\"}) - sum(market_data_ingester_websocket_queue_overflow_total{product=\"polymarket_btc_five_minute_orderbooks\"}), 0)", "legendFormat": "outstanding frames", "refId": "C"},
+        {"expr": "max(market_data_ingester_websocket_queue_depth{product=\"polymarket_btc_five_minute_orderbooks\"})", "legendFormat": "current queue depth", "refId": "D"},
+        {"expr": "max(market_data_ingester_websocket_queue_high_watermark{product=\"polymarket_btc_five_minute_orderbooks\"})", "legendFormat": "queue high-water mark", "refId": "E"}
       ],
-      "title": "Websocket Input Rate",
+      "title": "Orderbook Consumer Throughput",
       "type": "timeseries"
     },
     {

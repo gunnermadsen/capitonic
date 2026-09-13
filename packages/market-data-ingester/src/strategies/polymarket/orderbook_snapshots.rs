@@ -1936,10 +1936,23 @@ impl BookRegistry {
     }
 
     fn samples(&self, top_n: usize) -> Vec<BookSample> {
+        self.samples_matching(top_n, |_| true)
+    }
+
+    fn samples_for_tokens(&self, top_n: usize, token_ids: &BTreeSet<String>) -> Vec<BookSample> {
+        self.samples_matching(top_n, |book| token_ids.contains(&book.token_id))
+    }
+
+    fn samples_matching(
+        &self,
+        top_n: usize,
+        include: impl Fn(&BookState) -> bool,
+    ) -> Vec<BookSample> {
         let mut samples = self
             .books
             .values()
             .filter(|book| book.bootstrapped)
+            .filter(|book| include(book))
             .filter_map(|book| {
                 Some(BookSample {
                     market: book.market.clone(),
@@ -4321,7 +4334,7 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                                 Message::Binary(bytes) => bytes.as_ref(),
                                 _ => unreachable!("CLOB frame event contains non-data message"),
                             };
-                            self.apply_frame(
+                            let processing_result = self.apply_frame(
                                 &persistence_sender,
                                 publication_sender,
                                 continuity,
@@ -4329,7 +4342,11 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                                 connection_epoch,
                                 frame_bytes,
                                 received_at,
-                            ).await?;
+                            ).await;
+                            crate::streaming::observe_websocket_frame_processed(
+                                STRATEGY_KEY.as_str(),
+                            );
+                            processing_result?;
                         }
                         Some(ClobIoEvent::Failed(error)) => return Err(error),
                         None => return Err(source_error(
@@ -4437,11 +4454,7 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
         }
         let apply_duration = apply_started_at.elapsed();
         let sample_started_at = Instant::now();
-        let samples = registry
-            .samples(self.config.top_n)
-            .into_iter()
-            .filter(|sample| frame_tokens.contains(&sample.token_id))
-            .collect::<Vec<_>>();
+        let samples = registry.samples_for_tokens(self.config.top_n, &frame_tokens);
         let sample_duration = sample_started_at.elapsed();
         let (bid_levels, ask_levels) = registry.level_counts();
         crate::streaming::observe_clob_frame_processing(
@@ -4974,6 +4987,31 @@ mod tests {
             .expect("Down sample");
         assert!(down.bids.is_empty());
         assert!(down.asks.is_empty());
+    }
+
+    #[test]
+    fn source_update_sampling_builds_only_changed_tokens() {
+        let registry = bootstrapped_registry();
+        let market = fixture_market();
+        let changed_tokens = BTreeSet::from([market.up_token_id.clone()]);
+
+        let samples = registry.samples_for_tokens(20, &changed_tokens);
+        let expected = registry
+            .samples(20)
+            .into_iter()
+            .find(|sample| sample.token_id == market.up_token_id)
+            .expect("full-market Up sample");
+
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].token_id, market.up_token_id);
+        assert_eq!(samples[0], expected);
+    }
+
+    #[test]
+    fn source_update_sampling_ignores_frames_without_changed_tokens() {
+        let registry = bootstrapped_registry();
+
+        assert!(registry.samples_for_tokens(20, &BTreeSet::new()).is_empty());
     }
 
     #[test]
