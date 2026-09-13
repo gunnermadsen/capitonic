@@ -16,6 +16,7 @@ pub const CHAINLINK_ARCHIVE_PROVIDER: &str = "chainlink_data_streams";
 pub const DEFAULT_CHAINLINK_REST_URL: &str = "https://api.dataengine.chain.link";
 pub const DEFAULT_CHAINLINK_BTCUSD_FEED_ID: &str =
     "0x00039d9e45394f473ab1f050a1b963e6b05351e52d71e507509ada0c95ed75b8";
+const ERROR_RESPONSE_PREVIEW_BYTES: usize = 4096;
 
 #[derive(Debug, Clone)]
 pub struct ChainlinkCredentials {
@@ -114,9 +115,8 @@ impl ChainlinkArchiveConfig {
                 .header("X-Authorization-Signature-SHA256", signature)
                 .send()
                 .await
-                .context("failed to request Chainlink Data Streams reports")?
-                .error_for_status()
-                .context("Chainlink Data Streams rejected reports page")?;
+                .context("failed to request Chainlink Data Streams reports")?;
+            let response = validate_reports_response(response).await?;
             let body = response
                 .bytes()
                 .await
@@ -161,6 +161,71 @@ impl ChainlinkArchiveConfig {
             response_bytes,
         })
     }
+}
+
+async fn validate_reports_response(mut response: reqwest::Response) -> Result<reqwest::Response> {
+    if response.status().is_success() {
+        return Ok(response);
+    }
+    let status = response.status();
+    let classification = match status.as_u16() {
+        401 | 403 => "authorization",
+        404 | 410 => "unavailable_range",
+        429 => "rate_limited",
+        500..=599 => "provider_transient",
+        _ => "provider_rejected",
+    };
+    let retry_after = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("<missing>")
+        .to_owned();
+    let request_id = ["x-request-id", "x-amzn-requestid", "cf-ray"]
+        .iter()
+        .find_map(|name| response.headers().get(*name))
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("<missing>")
+        .to_owned();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("<missing>")
+        .to_owned();
+    let mut body = Vec::new();
+    while body.len() < ERROR_RESPONSE_PREVIEW_BYTES {
+        let Some(chunk) = response
+            .chunk()
+            .await
+            .context("failed to read Chainlink rejection response")?
+        else {
+            break;
+        };
+        let remaining = ERROR_RESPONSE_PREVIEW_BYTES - body.len();
+        body.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+    }
+    let preview = if matches!(status.as_u16(), 401 | 403) {
+        "<redacted authorization response>".to_owned()
+    } else {
+        sanitize_preview(&body)
+    };
+    bail!(
+        "Chainlink Data Streams rejected reports page: status={status}, classification={classification}, retry_after={retry_after}, request_id={request_id}, content_type={content_type}, body={preview}"
+    )
+}
+
+fn sanitize_preview(body: &[u8]) -> String {
+    String::from_utf8_lossy(body)
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
 }
 
 pub fn sign_request(
@@ -284,6 +349,19 @@ mod tests {
         assert_eq!(
             scaled_decimal("67123456789000000000000", 18).unwrap(),
             Decimal::new(67_123_456_789, 6)
+        );
+    }
+
+    #[test]
+    fn provider_error_preview_is_bounded_and_single_line() {
+        let body = vec![b'x'; ERROR_RESPONSE_PREVIEW_BYTES + 100];
+        assert_eq!(
+            sanitize_preview(&body[..ERROR_RESPONSE_PREVIEW_BYTES]).len(),
+            ERROR_RESPONSE_PREVIEW_BYTES
+        );
+        assert_eq!(
+            sanitize_preview(b"error\nmetadata\tvalue"),
+            "error metadata value"
         );
     }
 }

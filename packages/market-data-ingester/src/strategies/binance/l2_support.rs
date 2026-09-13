@@ -33,6 +33,8 @@ use uuid::Uuid;
 
 use sqlx::{PgPool, Row as SqlxRow};
 
+const PROVIDER_ERROR_PREVIEW_BYTES: usize = 4096;
+
 use super::{archive_support::ArchiveCancellation, types::BinanceL2OneSecondFeature};
 
 pub const CRYPTOHFT_ARCHIVE_PROVIDER: &str = "cryptohftdata";
@@ -718,9 +720,33 @@ pub async fn download_hour(
     let mut response = timeout(config.download_chunk_idle_timeout, request)
         .await
         .context("CryptoHFT archive request timed out")?
-        .with_context(|| format!("failed to request {}", spec.source_uri))?
-        .error_for_status()
-        .with_context(|| format!("CryptoHFT rejected {}", spec.source_uri))?;
+        .with_context(|| format!("failed to request {}", spec.source_uri))?;
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("<missing>")
+        .to_owned();
+    if !status.is_success() {
+        let mut body = Vec::new();
+        while body.len() < PROVIDER_ERROR_PREVIEW_BYTES {
+            let Some(chunk) = response
+                .chunk()
+                .await
+                .context("failed to read CryptoHFT error response")?
+            else {
+                break;
+            };
+            let remaining = PROVIDER_ERROR_PREVIEW_BYTES - body.len();
+            body.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+        }
+        let preview = bounded_response_preview(&body);
+        bail!(
+            "CryptoHFT archive request failed: status={status}, content_type={content_type}, body={preview}"
+        );
+    }
+    validate_archive_content_type(&content_type)?;
     let expected_content_length = response.content_length();
     if expected_content_length.is_some_and(|bytes| bytes > config.maximum_compressed_bytes) {
         bail!("CryptoHFT archive exceeded the compressed size limit");
@@ -823,6 +849,33 @@ pub async fn download_hour(
     };
     persist_manifest(spec, &manifest).await?;
     Ok(manifest)
+}
+
+fn validate_archive_content_type(content_type: &str) -> Result<()> {
+    let media_type = content_type.split(';').next().unwrap_or_default().trim();
+    if matches!(
+        media_type,
+        "application/zstd"
+            | "application/x-zstd"
+            | "application/octet-stream"
+            | "binary/octet-stream"
+    ) {
+        return Ok(());
+    }
+    bail!("CryptoHFT returned non-archive content type {content_type}")
+}
+
+fn bounded_response_preview(body: &[u8]) -> String {
+    String::from_utf8_lossy(&body[..body.len().min(PROVIDER_ERROR_PREVIEW_BYTES)])
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
 }
 
 fn validate_downloaded_content_length(expected: Option<u64>, actual: u64) -> Result<()> {
@@ -3271,6 +3324,19 @@ mod tests {
         assert!(validate_downloaded_content_length(Some(24_232_760), 24_232_760).is_ok());
         assert!(validate_downloaded_content_length(None, 24_232_760).is_ok());
         assert!(validate_downloaded_content_length(Some(0), 24_232_760).is_err());
+    }
+
+    #[test]
+    fn cryptohft_response_validation_rejects_error_documents_before_zstd_decode() {
+        assert!(validate_archive_content_type("application/zstd").is_ok());
+        assert!(validate_archive_content_type("application/octet-stream; charset=binary").is_ok());
+        assert!(validate_archive_content_type("text/html").is_err());
+        assert!(validate_archive_content_type("application/json").is_err());
+        let oversized = vec![b'x'; PROVIDER_ERROR_PREVIEW_BYTES + 100];
+        assert_eq!(
+            bounded_response_preview(&oversized).len(),
+            PROVIDER_ERROR_PREVIEW_BYTES
+        );
     }
 
     #[test]

@@ -106,6 +106,28 @@ pub fn daily_shards(
     Ok(shards)
 }
 
+pub fn published_daily_shards(
+    request: &ValidatedBackfillRequest,
+    maximum: usize,
+) -> Result<Vec<BackfillShard>, BackfillExecutionError> {
+    published_daily_shards_at(request, maximum, Utc::now())
+}
+
+fn published_daily_shards_at(
+    request: &ValidatedBackfillRequest,
+    maximum: usize,
+    now: DateTime<Utc>,
+) -> Result<Vec<BackfillShard>, BackfillExecutionError> {
+    let published_through = now.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc();
+    if request.range_end > published_through {
+        return Err(BackfillExecutionError::invalid(
+            "daily_archive_not_published",
+            "daily archives may only be requested for completed UTC dates",
+        ));
+    }
+    daily_shards(request, maximum)
+}
+
 pub fn hourly_shards(
     request: &ValidatedBackfillRequest,
     maximum: usize,
@@ -318,7 +340,9 @@ pub fn request(key: &str, start: DateTime<Utc>, end: DateTime<Utc>) -> BackfillR
 mod tests {
     use chrono::{TimeZone, Utc};
 
-    use super::{descriptor, hourly_shards, request, validate_empty_request};
+    use super::{
+        descriptor, hourly_shards, published_daily_shards_at, request, validate_empty_request,
+    };
 
     #[test]
     fn hourly_shards_are_deterministic_and_preserve_partial_boundaries() {
@@ -355,5 +379,61 @@ mod tests {
         let error = hourly_shards(&validated, 1).unwrap_err();
 
         assert_eq!(error.code, "too_many_shards");
+    }
+
+    #[test]
+    fn daily_archives_reject_current_day_ranges() {
+        let descriptor = descriptor("test", "Test", "Test strategy").unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 9, 11, 20, 0, 0).unwrap();
+        let current_day = request(
+            "test",
+            Utc.with_ymd_and_hms(2026, 9, 10, 0, 0, 0).unwrap(),
+            Utc.with_ymd_and_hms(2026, 9, 11, 1, 0, 0).unwrap(),
+        );
+        let current_day = validate_empty_request(&descriptor, &current_day).unwrap();
+        assert_eq!(
+            published_daily_shards_at(&current_day, 10, now)
+                .unwrap_err()
+                .code,
+            "daily_archive_not_published"
+        );
+
+        let unpublished = request(
+            "test",
+            Utc.with_ymd_and_hms(2026, 9, 10, 0, 0, 0).unwrap(),
+            Utc.with_ymd_and_hms(2026, 9, 12, 0, 0, 0).unwrap(),
+        );
+        let unpublished = validate_empty_request(&descriptor, &unpublished).unwrap();
+        assert_eq!(
+            published_daily_shards_at(&unpublished, 10, now)
+                .unwrap_err()
+                .code,
+            "daily_archive_not_published"
+        );
+    }
+
+    #[test]
+    fn daily_archives_accept_only_closed_utc_dates() {
+        let descriptor = descriptor("test", "Test", "Test strategy").unwrap();
+        let closed_request = request(
+            "test",
+            Utc.with_ymd_and_hms(2026, 9, 9, 0, 0, 0).unwrap(),
+            Utc.with_ymd_and_hms(2026, 9, 11, 0, 0, 0).unwrap(),
+        );
+        let validated = validate_empty_request(&descriptor, &closed_request).unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 9, 11, 20, 0, 0).unwrap();
+        let shards = published_daily_shards_at(&validated, 10, now).unwrap();
+        assert_eq!(shards.len(), 2);
+
+        let partial = request(
+            "test",
+            Utc.with_ymd_and_hms(2026, 9, 9, 1, 0, 0).unwrap(),
+            Utc.with_ymd_and_hms(2026, 9, 9, 2, 0, 0).unwrap(),
+        );
+        let partial = validate_empty_request(&descriptor, &partial).unwrap();
+        assert_eq!(
+            published_daily_shards_at(&partial, 10, now).unwrap().len(),
+            1
+        );
     }
 }
