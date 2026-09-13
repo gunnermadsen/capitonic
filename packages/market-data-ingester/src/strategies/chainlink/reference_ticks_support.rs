@@ -168,13 +168,7 @@ async fn validate_reports_response(mut response: reqwest::Response) -> Result<re
         return Ok(response);
     }
     let status = response.status();
-    let classification = match status.as_u16() {
-        401 | 403 => "authorization",
-        404 | 410 => "unavailable_range",
-        429 => "rate_limited",
-        500..=599 => "provider_transient",
-        _ => "provider_rejected",
-    };
+    let classification = classify_provider_status(status.as_u16());
     let retry_after = response
         .headers()
         .get(reqwest::header::RETRY_AFTER)
@@ -213,6 +207,16 @@ async fn validate_reports_response(mut response: reqwest::Response) -> Result<re
     bail!(
         "Chainlink Data Streams rejected reports page: status={status}, classification={classification}, retry_after={retry_after}, request_id={request_id}, content_type={content_type}, body={preview}"
     )
+}
+
+fn classify_provider_status(status: u16) -> &'static str {
+    match status {
+        401 | 403 => "authorization",
+        404 | 410 => "unavailable_range",
+        429 => "rate_limited",
+        500..=599 => "provider_transient",
+        _ => "provider_rejected",
+    }
 }
 
 fn sanitize_preview(body: &[u8]) -> String {
@@ -363,5 +367,9 @@ mod tests {
             sanitize_preview(b"error\nmetadata\tvalue"),
             "error metadata value"
         );
+        assert_eq!(classify_provider_status(401), "authorization");
+        assert_eq!(classify_provider_status(404), "unavailable_range");
+        assert_eq!(classify_provider_status(429), "rate_limited");
+        assert_eq!(classify_provider_status(503), "provider_transient");
     }
 }
