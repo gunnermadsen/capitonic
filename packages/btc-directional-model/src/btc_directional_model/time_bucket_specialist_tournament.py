@@ -342,7 +342,42 @@ def _load_or_build_early_panel(
         print("checkpoint resume: early causal panel", flush=True)
         return _load_panel(panel_path, columns)
 
-    base_config = latent.load_config(_resolve(root, raw["paths"]["early_config"]))
+    early_config_path = _resolve(root, raw["paths"]["early_config"])
+    with early_config_path.open("rb") as handle:
+        early_raw = tomllib.load(handle)
+    periods = early_raw["periods"]
+    early_paths = early_raw["paths"]
+    base_config = latent.TournamentConfig(
+        source_path=early_config_path,
+        package_root=root,
+        raw=early_raw,
+        profile=str(early_raw["training"]["profile"]),
+        model_family=str(early_raw["training"]["model_family"]),
+        random_seed=int(early_raw["training"]["random_seed"]),
+        freeze_at=_parse_time(early_raw["training"]["freeze_at"]),
+        historical_start=_parse_time(periods["historical_fit_start"]),
+        historical_end=_parse_time(periods["historical_fit_end"]),
+        calibration_start=_parse_time(periods["calibration_start"]),
+        calibration_end=_parse_time(periods["calibration_end"]),
+        development_start=_parse_time(periods["development_start"]),
+        development_end=_parse_time(periods["development_end"]),
+        prospective_start=_parse_time(periods["prospective_start"]),
+        folds=tuple(
+            latent.Fold(
+                str(row["name"]),
+                _parse_time(row["test_start"]),
+                _parse_time(row["test_end"]),
+            )
+            for row in early_raw["folds"]
+        ),
+        source_cache=_resolve(root, early_paths["source_cache"]),
+        source_frame=_resolve(root, early_paths["source_frame"]),
+        source_manifest=_resolve(root, early_paths["source_manifest"]),
+        label_audit=_resolve(root, early_paths["label_audit"]),
+        comparator_metrics=_resolve(root, early_paths["corrected_comparator_metrics"]),
+        runs=_resolve(root, early_paths["runs"]),
+        committed_results=_resolve(root, early_paths["committed_results"]),
+    )
     freeze_at = min(base_config.freeze_at, windows["confirmation_end"])
     early_config = replace(
         base_config,
