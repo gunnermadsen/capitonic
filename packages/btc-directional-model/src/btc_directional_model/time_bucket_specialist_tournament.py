@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import itertools
 import json
 import math
@@ -669,6 +670,8 @@ def _economic_metrics(trades: pl.DataFrame, total_markets: int) -> dict[str, Any
     if trades.is_empty():
         return {
             "trades": 0,
+            "up_trades": 0,
+            "down_trades": 0,
             "wins": 0,
             "losses": 0,
             "win_rate": None,
@@ -679,6 +682,8 @@ def _economic_metrics(trades: pl.DataFrame, total_markets: int) -> dict[str, Any
             "market_coverage": 0.0,
             "average_entry_second": None,
             "average_share_cost": None,
+            "average_confidence": None,
+            "average_expected_edge": None,
             "maximum_drawdown": 0.0,
         }
     pnl = trades["net_pnl"].to_numpy().astype(float)
@@ -688,6 +693,8 @@ def _economic_metrics(trades: pl.DataFrame, total_markets: int) -> dict[str, Any
     drawdown = np.maximum.accumulate(np.r_[0.0, cumulative])[1:] - cumulative
     return {
         "trades": trades.height,
+        "up_trades": trades.filter(pl.col("side") == "up").height,
+        "down_trades": trades.filter(pl.col("side") == "down").height,
         "wins": len(wins),
         "losses": len(losses),
         "win_rate": float(len(wins) / trades.height),
@@ -700,8 +707,63 @@ def _economic_metrics(trades: pl.DataFrame, total_markets: int) -> dict[str, Any
         "market_coverage": float(trades["market_id"].n_unique() / max(total_markets, 1)),
         "average_entry_second": float(trades["seconds_elapsed"].mean()),
         "average_share_cost": float(trades["share_cost"].mean()),
+        "average_confidence": float(trades["selected_probability"].mean()),
+        "average_expected_edge": float(trades["expected_edge"].mean()),
         "maximum_drawdown": float(drawdown.max(initial=0.0)),
     }
+
+
+def _historical_fold_metrics(
+    frame: pl.DataFrame,
+    bucket: dict[str, Any],
+    features: tuple[str, ...],
+    raw: dict[str, Any],
+    seed: int,
+    checkpoints: Path,
+    dataset: str,
+) -> list[dict[str, Any]]:
+    signature = hashlib.sha256(
+        json.dumps(
+            {"dataset": dataset, "bucket": bucket["name"], "features": features},
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()[:20]
+    path = checkpoints / f"historical-folds-{signature}.json"
+    if path.is_file():
+        return json.loads(path.read_text())
+    source_start = _parse_time(raw["windows"]["source_start"])
+    results = []
+    for index, fold in enumerate(raw["folds"]):
+        test_start = _parse_time(fold["test_start"])
+        test_end = _parse_time(fold["test_end"])
+        fit = _slice(frame, bucket, source_start, test_start)
+        test = _slice(frame, bucket, test_start, test_end)
+        fit_markets = fit["market_id"].n_unique()
+        test_markets = test["market_id"].n_unique()
+        if fit_markets < 250 or test_markets == 0:
+            results.append(
+                {
+                    "name": fold["name"],
+                    "status": "insufficient_available_coverage",
+                    "fit_markets": fit_markets,
+                    "test_markets": test_markets,
+                }
+            )
+            continue
+        model = _fit_model(fit, features, raw, seed + index)
+        predictions = _prediction_frame(test, _predict(model, test), str(fold["name"]))
+        results.append(
+            {
+                "name": fold["name"],
+                "status": "evaluated",
+                "fit_markets": fit_markets,
+                "test_markets": test_markets,
+                "test_rows": test.height,
+                **_predictive_metrics(predictions),
+            }
+        )
+    _write_json(path, results)
+    return results
 
 
 def _policy_score(metrics: dict[str, Any]) -> float:
@@ -776,6 +838,62 @@ def _five_second_metrics(trades: pl.DataFrame, total_markets: int) -> list[dict[
     ]
 
 
+def _write_metric_parquets(work: Path, results: dict[str, Any], winners: dict[str, Any]) -> None:
+    candidate_rows = []
+    fold_rows = []
+    for result in results.values():
+        policy = result["policy"]
+        row = {
+            "candidate": result["candidate"],
+            "variant": result["name"],
+            "historical_model": result["historical_model"],
+            "bucket": result["bucket"],
+            "dataset": result["dataset"],
+            "rtds_mode": result["rtds_mode"],
+            **{f"policy_{name}": value for name, value in policy.items()},
+        }
+        for period in ("development", "sealed", "confirmation"):
+            row.update(
+                {
+                    f"{period}_{name}": value
+                    for name, value in result[period].items()
+                    if isinstance(value, (int, float)) or value is None
+                }
+            )
+        candidate_rows.append(row)
+        for fold in result["historical_folds"]:
+            fold_rows.append(
+                {
+                    "variant": result["name"],
+                    "historical_model": result["historical_model"],
+                    "bucket": result["bucket"],
+                    "rtds_mode": result["rtds_mode"],
+                    **fold,
+                }
+            )
+    capacity_rows = []
+    for bucket, winner in winners.items():
+        for quantity, metrics in winner["sealed_capacity"].items():
+            capacity_rows.append(
+                {
+                    "bucket": bucket,
+                    "winner": winner["name"],
+                    "rtds_mode": winner["rtds_mode"],
+                    "quantity": int(quantity),
+                    **metrics,
+                }
+            )
+    pl.DataFrame(candidate_rows, infer_schema_length=None).write_parquet(
+        work / "candidate-metrics.parquet", compression="zstd"
+    )
+    pl.DataFrame(fold_rows, infer_schema_length=None).write_parquet(
+        work / "historical-fold-metrics.parquet", compression="zstd"
+    )
+    pl.DataFrame(capacity_rows, infer_schema_length=None).write_parquet(
+        work / "winner-vwap-capacity.parquet", compression="zstd"
+    )
+
+
 def _report(metrics: dict[str, Any]) -> str:
     lines = [
         "# BTC Five-Minute Time-Bucket Specialist Tournament",
@@ -805,8 +923,8 @@ def _report(metrics: dict[str, Any]) -> str:
             "",
             "## Bucket winners",
             "",
-            "| Bucket | Winner | RTDS | Side | VWAP | PnL | Stress | PF | Trades | W/L | Coverage | Avg entry | Recovery |",
-            "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+            "| Bucket | Winner | RTDS | Side | VWAP | PnL | Stress | PF | Trades | UP/DOWN | W/L | Coverage | Avg entry | Recovery |",
+            "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for bucket, winner in metrics["winners"].items():
@@ -815,10 +933,50 @@ def _report(metrics: dict[str, Any]) -> str:
         lines.append(
             f"| {bucket} | {winner['candidate']} | {winner['rtds_mode']} | {policy['side']} | "
             f"{policy['quantity']} | {sealed['net_pnl']:.2f} | {sealed['stress_net_pnl']:.2f} | "
-            f"{sealed['profit_factor'] or 0:.3f} | {sealed['trades']} | {sealed['wins']}/{sealed['losses']} | "
+            f"{sealed['profit_factor'] or 0:.3f} | {sealed['trades']} | "
+            f"{sealed['up_trades']}/{sealed['down_trades']} | {sealed['wins']}/{sealed['losses']} | "
             f"{sealed['market_coverage']:.2%} | {sealed['average_entry_second'] or 0:.1f} | "
             f"{sealed['recovery_wins_per_loss'] or 0:.3f} |"
         )
+    lines.extend(
+        [
+            "",
+            "## All candidate variants — sealed test",
+            "",
+            "| Bucket | Candidate | RTDS | Side | VWAP | Confidence | PnL | Stress | PF | Trades | UP/DOWN | W/L | Coverage | Avg entry | Recovery |",
+            "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for result in metrics["candidate_results"].values():
+        sealed = result["sealed"]
+        policy = result["policy"]
+        lines.append(
+            f"| {result['bucket']} | {result['candidate']} | {result['rtds_mode']} | "
+            f"{policy['side']} | {policy['quantity']} | {policy['minimum_confidence']:.2f} | "
+            f"{sealed['net_pnl']:.2f} | {sealed['stress_net_pnl']:.2f} | "
+            f"{sealed['profit_factor'] or 0:.3f} | {sealed['trades']} | "
+            f"{sealed['up_trades']}/{sealed['down_trades']} | {sealed['wins']}/{sealed['losses']} | "
+            f"{sealed['market_coverage']:.2%} | {sealed['average_entry_second'] or 0:.1f} | "
+            f"{sealed['recovery_wins_per_loss'] or 0:.3f} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Winner VWAP capacity — sealed test",
+            "",
+            "| Bucket | Shares | PnL | Stress | PF | Trades | Coverage |",
+            "|---|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for bucket, winner in metrics["winners"].items():
+        for quantity, capacity in sorted(
+            winner["sealed_capacity"].items(), key=lambda item: int(item[0])
+        ):
+            lines.append(
+                f"| {bucket} | {quantity} | {capacity['net_pnl']:.2f} | "
+                f"{capacity['stress_net_pnl']:.2f} | {capacity['profit_factor'] or 0:.3f} | "
+                f"{capacity['trades']} | {capacity['market_coverage']:.2%} |"
+            )
     lines.extend(
         [
             "",
@@ -830,6 +988,7 @@ def _report(metrics: dict[str, Any]) -> str:
             "- Economic replay is chronological and admits at most one entry per market.",
             "- Inputs are immutable existing Parquet artifacts; no database, ingester, source, table, schema, runtime, or deployment was changed.",
             "- The sealed interval has been observed by prior research and is chronological but not epistemically fresh.",
+            "- Order-book VWAP evidence ends on August 26; the August 26-September 1 confirmation block is prediction-only and cannot produce economic trades.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -929,12 +1088,22 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, force: bool 
         confirmation_metrics = _economic_metrics(
             confirmation_trades, confirmation_frame["market_id"].n_unique()
         )
+        historical_folds = _historical_fold_metrics(
+            fit_dataset,
+            bucket,
+            tuple(contract["features"]),
+            raw,
+            seed + index * 10,
+            checkpoints,
+            contract["dataset"],
+        )
         results[name] = {
             **contract,
             "policy": asdict(policy),
             "development": development_metrics,
             "sealed": sealed_metrics,
             "confirmation": confirmation_metrics,
+            "historical_folds": historical_folds,
             "predictive": {
                 "development": _predictive_metrics(policy_predictions),
                 "sealed": _predictive_metrics(sealed_predictions),
@@ -1046,6 +1215,7 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, force: bool 
     }
     _write_json(work / "metrics.json", metrics)
     (work / "report.md").write_text(_report(metrics))
+    _write_metric_parquets(work, results, winners)
     composed_trades.write_parquet(work / "composed-sealed-trades.parquet", compression="zstd")
     _write_json(
         work / "completion.json",
