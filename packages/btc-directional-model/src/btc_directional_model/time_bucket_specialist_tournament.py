@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -25,7 +25,15 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 
+from . import latent_twap_tournament as latent
+from .binance_latent_twap_context import OI_FEATURES
+from .chainlink_oi_features import (
+    CHAINLINK_CANDLE_FEATURES,
+    _derive_open_interest_source_features,
+    _prepare_open_interest,
+)
 from .core_extract import file_sha256
+from .twap60_training_data import attach_candle_context
 
 SCHEMA_VERSION = "btc-time-bucket-specialist-tournament-v1"
 ARTIFACT_SCHEMA_VERSION = "btc-time-bucket-specialist-model-v1"
@@ -39,11 +47,30 @@ FORBIDDEN_FEATURE_TOKENS = (
     "label_up",
     "final_price",
     "resolution",
-    "twap",
     "ask_vwap",
     "share_cost",
     "net_pnl",
 )
+SAFE_CAUSAL_TWAP_FEATURES = (
+    "twap30_margin_bps",
+    "twap60_margin_bps",
+)
+EARLY_FEATURE_GROUPS = {
+    "latent_twap": (
+        *SAFE_CAUSAL_TWAP_FEATURES,
+        "refprice_margin_bps",
+        "sensor_source_age_seconds",
+        "seconds_elapsed",
+    ),
+    "latent_refprice": (
+        "refprice_margin_bps",
+        "sensor_source_age_seconds",
+        "seconds_elapsed",
+    ),
+    "latent_open_interest": tuple(
+        feature for feature in OI_FEATURES if "path_agreement" not in feature
+    ),
+}
 KEY_COLUMNS = ("market_id", "window_start", "observed_at", "seconds_elapsed")
 
 
@@ -121,6 +148,13 @@ def _source_contract(root: Path, raw: dict[str, Any]) -> dict[str, Any]:
             "training_manifest",
             "evaluation_panel",
             "evaluation_manifest",
+            "early_config",
+            "early_source_cache",
+            "early_source_manifest",
+            "early_source_frame",
+            "early_label_audit",
+            "early_context_manifest",
+            "early_open_interest",
         )
     }
     manifests = {
@@ -132,6 +166,10 @@ def _source_contract(root: Path, raw: dict[str, Any]) -> dict[str, Any]:
         digest = file_sha256(panel)
         if digest != manifests[kind]["sha256"]:
             raise RuntimeError(f"{kind} panel does not match its immutable manifest")
+    early_context = json.loads(resolved["early_context_manifest"].read_text())
+    expected_oi_sha = early_context["sources"]["open_interest"]["partitions"][0]["sha256"]
+    if file_sha256(resolved["early_open_interest"]) != expected_oi_sha:
+        raise RuntimeError("early open-interest partition does not match its immutable manifest")
     return {
         "paths": {name: str(path) for name, path in resolved.items()},
         "sha256": {
@@ -139,6 +177,12 @@ def _source_contract(root: Path, raw: dict[str, Any]) -> dict[str, Any]:
             "training_manifest": file_sha256(resolved["training_manifest"]),
             "evaluation_panel": manifests["evaluation"]["sha256"],
             "evaluation_manifest": file_sha256(resolved["evaluation_manifest"]),
+            "early_config": file_sha256(resolved["early_config"]),
+            "early_source_manifest": file_sha256(resolved["early_source_manifest"]),
+            "early_source_frame": file_sha256(resolved["early_source_frame"]),
+            "early_label_audit": file_sha256(resolved["early_label_audit"]),
+            "early_context_manifest": file_sha256(resolved["early_context_manifest"]),
+            "early_open_interest": file_sha256(resolved["early_open_interest"]),
         },
         "feature_groups": manifests["training"]["feature_groups"],
         "training_range": [
@@ -159,7 +203,11 @@ def _source_contract(root: Path, raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def _feature_contracts(raw: dict[str, Any], source: dict[str, Any]) -> list[dict[str, Any]]:
-    groups = {name: tuple(values) for name, values in source["feature_groups"].items()}
+    groups = {
+        **{name: tuple(values) for name, values in source["feature_groups"].items()},
+        **EARLY_FEATURE_GROUPS,
+    }
+    buckets = _bucket_map(raw)
     contracts: list[dict[str, Any]] = []
     for row in raw["candidates"]:
         requested = tuple(row["feature_groups"])
@@ -185,6 +233,11 @@ def _feature_contracts(raw: dict[str, Any], source: dict[str, Any]) -> list[dict
                     "candidate": row["name"],
                     "historical_model": row["historical_model"],
                     "bucket": row["bucket"],
+                    "dataset": (
+                        "early_causal_twap"
+                        if int(buckets[row["bucket"]]["start_second"]) < 60
+                        else "full_history_panel"
+                    ),
                     "rtds_mode": rtds_mode,
                     "feature_groups": selected_groups,
                     "features": features,
@@ -227,6 +280,138 @@ def _load_panel(path: Path, columns: tuple[str, ...]) -> pl.DataFrame:
         pl.col("window_start").cast(pl.Datetime(time_zone="UTC")),
         pl.col("observed_at").cast(pl.Datetime(time_zone="UTC")),
     )
+
+
+def _complete_columns(frame: pl.DataFrame, columns: tuple[str, ...]) -> pl.DataFrame:
+    for name in columns:
+        if name not in frame.columns:
+            frame = frame.with_columns(pl.lit(None, dtype=pl.Float64).alias(name))
+    return frame.with_columns(
+        pl.col("window_start").cast(pl.Datetime(time_zone="UTC")),
+        pl.col("observed_at").cast(pl.Datetime(time_zone="UTC")),
+    )
+
+
+def _attach_early_open_interest(frame: pl.DataFrame, source: pl.DataFrame) -> pl.DataFrame:
+    features = EARLY_FEATURE_GROUPS["latent_open_interest"]
+    interest = _derive_open_interest_source_features(_prepare_open_interest(source))
+    original = tuple(frame.columns)
+    joined = (
+        frame.with_row_index("_early_row")
+        .sort("observed_at")
+        .join_asof(
+            interest.select("available_at", "source_timestamp", *features),
+            left_on="observed_at",
+            right_on="available_at",
+            strategy="backward",
+            allow_exact_matches=False,
+        )
+    )
+    age_us = (pl.col("observed_at") - pl.col("source_timestamp")).dt.total_microseconds()
+    eligible = (
+        pl.col("available_at").is_not_null()
+        & (pl.col("available_at") < pl.col("observed_at"))
+        & pl.col("source_timestamp").is_not_null()
+        & (pl.col("source_timestamp") < pl.col("observed_at"))
+        & (age_us > 0)
+        & (age_us <= 300_000_000)
+    )
+    return (
+        joined.with_columns(
+            *(pl.when(eligible).then(pl.col(name)).otherwise(None).alias(name) for name in features)
+        )
+        .sort("_early_row")
+        .select(*original, *features)
+    )
+
+
+def _load_or_build_early_panel(
+    root: Path,
+    raw: dict[str, Any],
+    source: dict[str, Any],
+    columns: tuple[str, ...],
+    windows: dict[str, datetime],
+    work: Path,
+) -> pl.DataFrame:
+    panel_path = work / "early-causal-panel.parquet"
+    manifest_path = work / "early-causal-panel-manifest.json"
+    if panel_path.is_file() and manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text())
+        if file_sha256(panel_path) != manifest["sha256"]:
+            raise RuntimeError("early causal panel checkpoint changed")
+        print("checkpoint resume: early causal panel", flush=True)
+        return _load_panel(panel_path, columns)
+
+    base_config = latent.load_config(_resolve(root, raw["paths"]["early_config"]))
+    freeze_at = min(base_config.freeze_at, windows["confirmation_end"])
+    early_config = replace(
+        base_config,
+        historical_start=windows["source_start"],
+        development_start=windows["policy_start"],
+        development_end=freeze_at,
+        prospective_start=freeze_at,
+        source_cache=Path(source["paths"]["early_source_cache"]),
+        source_frame=Path(source["paths"]["early_source_frame"]),
+        source_manifest=Path(source["paths"]["early_source_manifest"]),
+        label_audit=Path(source["paths"]["early_label_audit"]),
+    )
+    print("build: causal 30-150 second TWAP/refprice sensor frame", flush=True)
+    frame, base_manifest = latent.build_training_frame(early_config)
+    candles = latent._load_source_partitions(
+        early_config.source_cache,
+        "candles",
+        (
+            "open_timestamp",
+            "close_timestamp",
+            "available_at",
+            "open_price",
+            "high_price",
+            "low_price",
+            "close_price",
+        ),
+    )
+    candle_features = attach_candle_context(frame, candles).select(
+        *KEY_COLUMNS, *CHAINLINK_CANDLE_FEATURES
+    )
+    frame = frame.join(candle_features, on=list(KEY_COLUMNS), how="left", validate="1:1")
+    frame = _attach_early_open_interest(
+        frame, pl.read_parquet(Path(source["paths"]["early_open_interest"]))
+    ).with_columns(
+        pl.col("label_up").cast(pl.Float64).alias("bridge_probability_target"),
+        pl.lit(1.0).alias("label_weight"),
+        (
+            (pl.col("observed_at") - pl.col("up_provider_received_at"))
+            .dt.total_microseconds()
+            .cast(pl.Float64)
+            / 1_000_000.0
+        ).alias("pm_up_book_age_seconds"),
+        (
+            (pl.col("observed_at") - pl.col("down_provider_received_at"))
+            .dt.total_microseconds()
+            .cast(pl.Float64)
+            / 1_000_000.0
+        ).alias("pm_down_book_age_seconds"),
+    )
+    frame = _complete_columns(frame, columns)
+    temporary = panel_path.with_suffix(".parquet.tmp")
+    frame.write_parquet(temporary, compression="zstd", statistics=True)
+    temporary.replace(panel_path)
+    manifest = {
+        "schema_version": "btc-time-bucket-early-causal-panel-v1",
+        "sha256": file_sha256(panel_path),
+        "rows": frame.height,
+        "markets": frame["market_id"].n_unique(),
+        "range_start": frame["window_start"].min(),
+        "range_end": frame["window_start"].max(),
+        "base_manifest": base_manifest,
+        "causal_twap_features": list(SAFE_CAUSAL_TWAP_FEATURES),
+        "settlement_labels_are_supervision_only": True,
+        "read_only_sources": True,
+        "database_mutations": False,
+    }
+    _write_json(manifest_path, manifest)
+    print(f"checkpoint complete: early causal panel ({frame.height:,} rows)", flush=True)
+    return frame
 
 
 def _bucket_map(raw: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -605,7 +790,7 @@ def _report(metrics: dict[str, Any]) -> str:
             "## Integrity",
             "",
             "- Training, policy fitting, sealed testing, and confirmation windows are chronological and disjoint.",
-            "- RefPrice/TWAP bridge supervision is used only for training; settlement labels and execution prices are excluded from inference features.",
+            "- Settlement labels, outcomes, and execution prices are supervision/evaluation only; the early specialist uses only causal TWAP/refprice state available at its decision timestamp.",
             "- RTDS candle and RTDS-free variants are paired on identical rows, splits, policies, and seeds.",
             "- Economic replay is chronological and admits at most one entry per market.",
             "- Inputs are immutable existing Parquet artifacts; no database, ingester, source, table, schema, runtime, or deployment was changed.",
@@ -634,26 +819,31 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, force: bool 
     evaluation = _load_panel(Path(source["paths"]["evaluation_panel"]), columns)
     buckets = _bucket_map(raw)
     windows = {name: _parse_time(value) for name, value in raw["windows"].items()}
+    early = _load_or_build_early_panel(root, raw, source, columns, windows, work)
     seed = int(raw["training"]["random_seed"])
     results: dict[str, Any] = {}
     sealed_trade_frames: dict[str, pl.DataFrame] = {}
     artifact_models: dict[str, Any] = {}
     for index, contract in enumerate(contracts):
         name = contract["name"]
+        dataset = early if contract["dataset"] == "early_causal_twap" else evaluation
+        fit_dataset = early if contract["dataset"] == "early_causal_twap" else training
         checkpoint = checkpoints / f"{name}.joblib"
         prediction_checkpoint = checkpoints / f"{name}-predictions.parquet"
         bucket = buckets[contract["bucket"]]
+        print(f"candidate {index + 1}/{len(contracts)}: {name}", flush=True)
         if checkpoint.is_file() and prediction_checkpoint.is_file() and not force:
             saved = joblib.load(checkpoint)
             if saved["config_sha256"] != config_sha or saved["source_sha256"] != source["sha256"]:
                 raise RuntimeError(f"checkpoint identity changed for {name}")
             model = saved["model"]
             prediction_all = pl.read_parquet(prediction_checkpoint)
+            print(f"checkpoint resume: {name}", flush=True)
         else:
-            fit = _slice(training, bucket, windows["source_start"], windows["fit_end"])
+            fit = _slice(fit_dataset, bucket, windows["source_start"], windows["fit_end"])
             model = _fit_model(fit, tuple(contract["features"]), raw, seed + index)
             evaluation_slice = _slice(
-                evaluation, bucket, windows["policy_start"], windows["confirmation_end"]
+                dataset, bucket, windows["policy_start"], windows["confirmation_end"]
             )
             prediction_all = _prediction_frame(
                 evaluation_slice, _predict(model, evaluation_slice), name
@@ -669,10 +859,10 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, force: bool 
                 },
             )
             prediction_all.write_parquet(prediction_checkpoint, compression="zstd")
-        policy_frame = _slice(evaluation, bucket, windows["policy_start"], windows["policy_end"])
-        sealed_frame = _slice(evaluation, bucket, windows["sealed_start"], windows["sealed_end"])
+        policy_frame = _slice(dataset, bucket, windows["policy_start"], windows["policy_end"])
+        sealed_frame = _slice(dataset, bucket, windows["sealed_start"], windows["sealed_end"])
         confirmation_frame = _slice(
-            evaluation, bucket, windows["confirmation_start"], windows["confirmation_end"]
+            dataset, bucket, windows["confirmation_start"], windows["confirmation_end"]
         )
         policy_predictions = prediction_all.filter(
             pl.col("window_start").is_between(
@@ -733,6 +923,11 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, force: bool 
             checkpoints / f"{name}-sealed-trades.parquet", compression="zstd"
         )
         _write_json(checkpoints / f"{name}-metrics.json", results[name])
+        print(
+            f"checkpoint complete: {name} "
+            f"sealed_pnl={sealed_metrics['net_pnl']:.2f} trades={sealed_metrics['trades']}",
+            flush=True,
+        )
     winners: dict[str, Any] = {}
     winner_trade_frames = []
     for bucket_name in buckets:

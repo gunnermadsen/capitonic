@@ -41,6 +41,13 @@ training_panel = "data/btc-hybrid-payoff-admission-20260321-20260827/middle-pane
 training_manifest = "data/btc-hybrid-payoff-admission-20260321-20260827/panel-manifest.json"
 evaluation_panel = "data/btc-full-august-vwap-admission-20260321-20260901/vwap-admission-panel.parquet"
 evaluation_manifest = "data/btc-full-august-vwap-admission-20260321-20260901/vwap-admission-panel-manifest.json"
+early_config = "configs/btc-5m-latent-twap-settlement-risk-20260607-20260828.toml"
+early_source_cache = "/Volumes/docker-data/archives/polymarket-bot-worktrees/btc-latent-twap-settlement-risk/packages/btc-directional-model/data/btc-latent-twap-settlement-risk-20260607-20260828"
+early_source_manifest = "/Volumes/docker-data/archives/polymarket-bot-worktrees/btc-latent-twap-settlement-risk/packages/btc-directional-model/data/btc-latent-twap-settlement-risk-20260607-20260828/source-manifest.json"
+early_source_frame = "/Volumes/docker-data/archives/polymarket-bot-worktrees/btc-latent-twap-settlement-risk/packages/btc-directional-model/data/btc-latent-twap-settlement-risk-20260607-20260828/tournament-frame.parquet"
+early_label_audit = "/Volumes/docker-data/archives/polymarket-bot-worktrees/btc-latent-twap-settlement-risk/packages/btc-directional-model/data/btc-latent-twap-settlement-risk-20260607-20260828/label-audit.parquet"
+early_context_manifest = "/Volumes/docker-data/archives/polymarket-bot-worktrees/btc-binance-latent-twap-context/packages/btc-directional-model/data/btc-binance-latent-twap-context-20260607-20260828/source/manifest.json"
+early_open_interest = "/Volumes/docker-data/archives/polymarket-bot-worktrees/btc-binance-latent-twap-context/packages/btc-directional-model/data/btc-binance-latent-twap-context-20260607-20260828/source/open-interest/2026-06-07_2026-08-28.parquet"
 runs = "runs/btc-time-bucket-specialist-tournament-20260321-20260901"
 committed_results = "training-results/btc-5m-time-bucket-specialist-tournament-20260321-20260901"
 
@@ -121,19 +128,19 @@ trade_sides = ["up", "down", "both"]
 name = "early_twap_open_interest"
 historical_model = "twap_regime_open_interest_residual"
 bucket = "early_twap_up"
-feature_groups = ["core", "oracle", "refprice", "open_interest"]
+feature_groups = ["latent_twap", "latent_open_interest", "candles"]
 
 [[candidates]]
 name = "early_refprice_single_regime"
 historical_model = "twap_refprice_single_regime"
 bucket = "early_twap_up"
-feature_groups = ["core", "candles", "oracle", "refprice"]
+feature_groups = ["latent_refprice", "candles"]
 
 [[candidates]]
 name = "early_twap_single_regime"
 historical_model = "twap_single_regime"
 bucket = "early_twap_up"
-feature_groups = ["core", "candles", "oracle"]
+feature_groups = ["latent_twap", "candles"]
 
 [[candidates]]
 name = "bridge_aware_specialist"

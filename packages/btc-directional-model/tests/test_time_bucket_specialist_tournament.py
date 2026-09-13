@@ -7,6 +7,7 @@ import polars as pl
 from btc_directional_model.time_bucket_specialist_tournament import (
     Policy,
     _economic_metrics,
+    _feature_contracts,
     _load_config,
     _select_trades,
 )
@@ -61,5 +62,18 @@ def test_sequential_gate_uses_first_eligible_entry_once_per_market() -> None:
 def test_candidate_roster_contains_rtds_and_rtds_free_training_pairs() -> None:
     _, raw = _load_config(CONFIG)
     assert any("candles" in row["feature_groups"] for row in raw["candidates"])
-    assert any("candles" not in row["feature_groups"] for row in raw["candidates"])
+    requested = {
+        group
+        for row in raw["candidates"]
+        for group in row["feature_groups"]
+        if not group.startswith("latent_")
+    }
+    source = {"feature_groups": {group: [f"{group}_feature"] for group in requested}}
+    contracts = _feature_contracts(raw, source)
+    for candidate in raw["candidates"]:
+        pair = [row for row in contracts if row["candidate"] == candidate["name"]]
+        assert {row["rtds_mode"] for row in pair} == {
+            "with_rtds_candles",
+            "without_rtds_candles",
+        }
     assert raw["execution"]["quantities"] == [5, 10, 20, 30, 50]
