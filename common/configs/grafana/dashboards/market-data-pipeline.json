@@ -2557,7 +2557,7 @@
     },
     {
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "description": "Five-minute p99 timings that separate host scheduling, metrics-lock contention, provider cadence, and local queue delay. The render series reports the preceding Prometheus response build.",
+      "description": "Five-minute p99 timings that separate host scheduling, provider cadence, and local queue delay. The render series reports the preceding Prometheus response build.",
       "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 10, "lineWidth": 2, "showPoints": "never", "stacking": {"group": "A", "mode": "none"}}, "min": 0, "unit": "s"}, "overrides": []},
       "gridPos": {"h": 8, "w": 8, "x": 16, "y": 84},
       "id": 34,
@@ -2566,7 +2566,6 @@
         {"expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_io_scheduling_delay_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))", "legendFormat": "runtime scheduling", "refId": "A"},
         {"expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_interframe_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))", "legendFormat": "provider inter-frame", "refId": "B"},
         {"expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_queue_delay_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))", "legendFormat": "raw queue", "refId": "C"},
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_metrics_lock_wait_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))", "legendFormat": "metrics lock", "refId": "D"},
         {"expr": "max(market_data_ingester_prometheus_render_duration_seconds)", "legendFormat": "metrics render", "refId": "E"}
       ],
       "title": "Socket Pipeline p99",

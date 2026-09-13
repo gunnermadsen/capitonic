@@ -75,7 +75,6 @@ struct RealtimePipelineMetrics {
     websocket_queue_delay: LatencyHistogram,
     websocket_interframe: LatencyHistogram,
     websocket_io_scheduling_delay: LatencyHistogram,
-    metrics_lock_wait: LatencyHistogram,
     clob_frame_parse: LatencyHistogram,
     clob_book_apply: LatencyHistogram,
     clob_sample_build: LatencyHistogram,
@@ -440,15 +439,12 @@ pub fn observe_persistence_queue_overflow(product_key: &str) {
 
 fn with_pipeline_metrics(product_key: &str, observe: impl FnOnce(&mut RealtimePipelineMetrics)) {
     if let Some(publisher) = PUBLISHER.get() {
-        let lock_started_at = Instant::now();
         let mut metrics = publisher
             .metrics
             .realtime_pipeline
             .lock()
             .expect("metrics lock");
-        let lock_wait = lock_started_at.elapsed();
         let metrics = metrics.entry(product_key.to_owned()).or_default();
-        metrics.metrics_lock_wait.observe(lock_wait);
         observe(metrics);
     }
 }
@@ -921,7 +917,6 @@ impl StreamingMetrics {
             "market_data_ingester_websocket_queue_delay_seconds",
             "market_data_ingester_websocket_interframe_seconds",
             "market_data_ingester_websocket_io_scheduling_delay_seconds",
-            "market_data_ingester_metrics_lock_wait_seconds",
             "market_data_ingester_clob_frame_parse_seconds",
             "market_data_ingester_clob_book_apply_seconds",
             "market_data_ingester_clob_sample_build_seconds",
@@ -987,12 +982,6 @@ impl StreamingMetrics {
                 "market_data_ingester_websocket_io_scheduling_delay_seconds",
                 key,
                 &metrics.websocket_io_scheduling_delay,
-            );
-            render_histogram(
-                &mut out,
-                "market_data_ingester_metrics_lock_wait_seconds",
-                key,
-                &metrics.metrics_lock_wait,
             );
             render_histogram(
                 &mut out,
@@ -1191,8 +1180,6 @@ mod tests {
         assert!(rendered.contains(
             "market_data_ingester_clob_frame_parse_seconds_count{product=\"product\"} 1"
         ));
-        assert!(rendered
-            .contains("market_data_ingester_metrics_lock_wait_seconds_count{product=\"product\"}"));
         assert!(rendered.contains("market_data_ingester_prometheus_render_duration_seconds"));
         assert!(rendered.contains(
             "market_data_ingester_clob_bootstrap_ready{product=\"product\",scope=\"current\"} 1"

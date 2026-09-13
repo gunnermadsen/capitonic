@@ -3695,20 +3695,20 @@ enum ClobIoEvent {
 // A terminal socket event must be delivered exactly once. Polling an ended
 // stream again can produce an immediately-ready EOF loop and manufacture
 // queue pressure after the remote peer has already closed the connection.
+//
+// LATENCY CONTRACT: the successful data-frame path must do nothing except
+// enqueue the already-decoded websocket message. Do not add logging, metrics,
+// parsing, book work, persistence, publication, or other accounting here.
+// Polymarket closes clients that do not drain its socket promptly; even useful
+// observability on this side of the channel can therefore damage downstream
+// trade-data quality. Perform that work after `io_receiver.recv()` instead.
 async fn enqueue_clob_io_event(sender: &mpsc::Sender<ClobIoEvent>, event: ClobIoEvent) -> bool {
     if matches!(event, ClobIoEvent::Failed(_)) {
         let _ = sender.send(event).await;
         return false;
     }
     match sender.try_send(event) {
-        Ok(()) => {
-            crate::streaming::set_websocket_queue_depth(
-                STRATEGY_KEY.as_str(),
-                WEBSOCKET_EVENT_BUFFER.saturating_sub(sender.capacity()),
-                WEBSOCKET_EVENT_BUFFER,
-            );
-            true
-        }
+        Ok(()) => true,
         Err(mpsc::error::TrySendError::Closed(_)) => false,
         Err(mpsc::error::TrySendError::Full(_)) => {
             crate::streaming::observe_websocket_queue_overflow(STRATEGY_KEY.as_str());
@@ -3983,7 +3983,6 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
             scheduling_probe.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut read_deadline = Instant::now() + read_timeout;
             let mut pong_deadline = None;
-            let mut last_data_frame_at = None;
             loop {
                 let disabled_deadline = Instant::now() + Duration::from_secs(86_400);
                 let pong_sleep =
@@ -4090,26 +4089,8 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                                 "Polymarket CLOB websocket ended",
                             )),
                         };
-                        if let ClobIoEvent::Frame { message, .. } = &event {
-                            let frame_bytes = match message {
-                                Message::Text(text) => text.as_bytes(),
-                                Message::Binary(bytes) => bytes.as_ref(),
-                                _ => unreachable!("CLOB frame event contains non-data message"),
-                            };
-                            let now = Instant::now();
-                            let interframe = last_data_frame_at
-                                .replace(now)
-                                .map(|previous| now.saturating_duration_since(previous));
-                            crate::streaming::observe_websocket_frame(
-                                STRATEGY_KEY.as_str(),
-                                frame_bytes.len(),
-                                interframe,
-                            );
-                            crate::streaming::observe_source_event(
-                                STRATEGY_KEY.as_str(),
-                                received_at,
-                            );
-                        }
+                        // Keep the read-to-enqueue boundary intentionally bare.
+                        // See `docs/websocket-consumer-latency.md`.
                         if !enqueue_clob_io_event(&io_sender, event).await {
                             return;
                         }
@@ -4135,6 +4116,7 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
         let mut bootstrap_deadline =
             Some(Instant::now() + Duration::from_millis(self.config.bootstrap_timeout_ms));
         let mut missing_current_since = None;
+        let mut last_data_frame_at = None;
 
         loop {
             let disabled_deadline = Instant::now() + Duration::from_secs(86_400);
@@ -4320,6 +4302,12 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                 event = io_receiver.recv() => {
                     match event {
                         Some(ClobIoEvent::Frame { message, received_at, queued_at }) => {
+                            // All optional frame accounting belongs after dequeue.
+                            // Moving it above the channel can starve socket reads and
+                            // cause provider slow-consumer disconnects.
+                            let interframe = last_data_frame_at
+                                .replace(queued_at)
+                                .map(|previous| queued_at.saturating_duration_since(previous));
                             crate::streaming::observe_websocket_queue_delay(
                                 STRATEGY_KEY.as_str(),
                                 queued_at.elapsed(),
@@ -4334,6 +4322,15 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                                 Message::Binary(bytes) => bytes.as_ref(),
                                 _ => unreachable!("CLOB frame event contains non-data message"),
                             };
+                            crate::streaming::observe_websocket_frame(
+                                STRATEGY_KEY.as_str(),
+                                frame_bytes.len(),
+                                interframe,
+                            );
+                            crate::streaming::observe_source_event(
+                                STRATEGY_KEY.as_str(),
+                                received_at,
+                            );
                             let processing_result = self.apply_frame(
                                 &persistence_sender,
                                 publication_sender,
