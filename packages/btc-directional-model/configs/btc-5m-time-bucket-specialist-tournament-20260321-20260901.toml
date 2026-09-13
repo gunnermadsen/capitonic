@@ -1,0 +1,232 @@
+[training]
+profile = "btc_5m_time_bucket_specialist_tournament"
+model_family = "btc-5m-time-bucket-specialist"
+training_only = true
+paper_only = true
+live_capital_allowed = false
+random_seed = 20260913
+
+[windows]
+source_start = "2026-03-21T00:00:00Z"
+fit_end = "2026-08-14T00:00:00Z"
+policy_start = "2026-08-14T00:00:00Z"
+policy_end = "2026-08-20T00:00:00Z"
+sealed_start = "2026-08-20T00:00:00Z"
+sealed_end = "2026-08-26T00:00:00Z"
+confirmation_start = "2026-08-26T00:00:00Z"
+confirmation_end = "2026-09-01T00:00:00Z"
+
+[model]
+learning_rate = 0.06
+max_iter = 120
+max_leaf_nodes = 31
+min_samples_leaf = 100
+l2_regularization = 1.5
+max_bins = 127
+calibration_fraction = 0.20
+
+[execution]
+quantities = [5, 10, 20, 30, 50]
+capacity_quantities = [75, 100, 125, 150, 175, 200]
+freshness_seconds = 2
+execution_reserve_per_share = 0.005
+stress_slippage_per_share = 0.01
+minimum_edges = [0.00, 0.02, 0.05, 0.10]
+minimum_confidences = [0.55, 0.65, 0.75, 0.85]
+maximum_share_costs = [0.70, 0.80, 0.90, 0.95]
+minimum_policy_trades = 20
+
+[paths]
+training_panel = "data/btc-hybrid-payoff-admission-20260321-20260827/middle-panel.parquet"
+training_manifest = "data/btc-hybrid-payoff-admission-20260321-20260827/panel-manifest.json"
+evaluation_panel = "data/btc-full-august-vwap-admission-20260321-20260901/vwap-admission-panel.parquet"
+evaluation_manifest = "data/btc-full-august-vwap-admission-20260321-20260901/vwap-admission-panel-manifest.json"
+runs = "runs/btc-time-bucket-specialist-tournament-20260321-20260901"
+committed_results = "training-results/btc-5m-time-bucket-specialist-tournament-20260321-20260901"
+
+[[folds]]
+name = "april"
+test_start = "2026-04-01T00:00:00Z"
+test_end = "2026-05-01T00:00:00Z"
+
+[[folds]]
+name = "may"
+test_start = "2026-05-01T00:00:00Z"
+test_end = "2026-06-01T00:00:00Z"
+
+[[folds]]
+name = "june"
+test_start = "2026-06-01T00:00:00Z"
+test_end = "2026-07-01T00:00:00Z"
+
+[[folds]]
+name = "july"
+test_start = "2026-07-01T00:00:00Z"
+test_end = "2026-08-01T00:00:00Z"
+
+[[folds]]
+name = "august_pre_cutover"
+test_start = "2026-08-01T00:00:00Z"
+test_end = "2026-08-14T00:00:00Z"
+
+[[buckets]]
+name = "early_twap_up"
+start_second = 40
+end_second = 49
+trade_sides = ["up"]
+
+[[buckets]]
+name = "bridge_early"
+start_second = 60
+end_second = 74
+trade_sides = ["up", "down", "both"]
+
+[[buckets]]
+name = "extended_specialist_down"
+start_second = 75
+end_second = 89
+trade_sides = ["down"]
+
+[[buckets]]
+name = "middle_q5_down"
+start_second = 110
+end_second = 119
+trade_sides = ["down"]
+
+[[buckets]]
+name = "multivenue_middle"
+start_second = 120
+end_second = 149
+trade_sides = ["up", "down", "both"]
+
+[[buckets]]
+name = "settlement_middle"
+start_second = 150
+end_second = 169
+trade_sides = ["up", "down", "both"]
+
+[[buckets]]
+name = "late_discovery"
+start_second = 185
+end_second = 209
+trade_sides = ["up", "down", "both"]
+
+[[buckets]]
+name = "terminal_discovery"
+start_second = 210
+end_second = 239
+trade_sides = ["up", "down", "both"]
+
+[[candidates]]
+name = "early_twap_open_interest"
+historical_model = "twap_regime_open_interest_residual"
+bucket = "early_twap_up"
+feature_groups = ["core", "oracle", "refprice", "open_interest"]
+
+[[candidates]]
+name = "early_refprice_single_regime"
+historical_model = "twap_refprice_single_regime"
+bucket = "early_twap_up"
+feature_groups = ["core", "candles", "oracle", "refprice"]
+
+[[candidates]]
+name = "early_twap_single_regime"
+historical_model = "twap_single_regime"
+bucket = "early_twap_up"
+feature_groups = ["core", "candles", "oracle"]
+
+[[candidates]]
+name = "bridge_aware_specialist"
+historical_model = "bridge_aware_specialist"
+bucket = "bridge_early"
+feature_groups = ["core", "candles", "oracle"]
+
+[[candidates]]
+name = "time_specialist_early"
+historical_model = "time_specialist_ensemble"
+bucket = "bridge_early"
+feature_groups = ["core", "candles", "oracle", "refprice", "open_interest", "binance_prints", "kraken"]
+
+[[candidates]]
+name = "extended_specialist_official"
+historical_model = "extended_specialist_official"
+bucket = "extended_specialist_down"
+feature_groups = ["core", "candles", "oracle"]
+
+[[candidates]]
+name = "specialist_dual_head"
+historical_model = "specialist_dual_head_economics"
+bucket = "extended_specialist_down"
+feature_groups = ["core", "candles", "oracle"]
+
+[[candidates]]
+name = "middle_q5_admission"
+historical_model = "middle_q5_admission"
+bucket = "middle_q5_down"
+feature_groups = ["core", "candles", "oracle", "refprice", "binance_prints"]
+
+[[candidates]]
+name = "crossvenue_middle_110"
+historical_model = "crossvenue_middle_specialist"
+bucket = "middle_q5_down"
+feature_groups = ["core", "candles", "oracle", "refprice", "open_interest", "binance_prints", "kraken", "spot_l2"]
+
+[[candidates]]
+name = "multivenue_consensus"
+historical_model = "multivenue_consensus"
+bucket = "multivenue_middle"
+feature_groups = ["core", "candles", "oracle", "refprice", "open_interest", "binance_prints", "kraken"]
+
+[[candidates]]
+name = "kraken_crossvenue_middle"
+historical_model = "kraken_crossvenue"
+bucket = "multivenue_middle"
+feature_groups = ["core", "candles", "kraken"]
+
+[[candidates]]
+name = "crossvenue_settlement_middle"
+historical_model = "crossvenue_middle_specialist"
+bucket = "settlement_middle"
+feature_groups = ["core", "candles", "oracle", "refprice", "open_interest", "binance_prints", "kraken", "spot_l2"]
+
+[[candidates]]
+name = "middle_agreement"
+historical_model = "middle_agreement_ensemble"
+bucket = "settlement_middle"
+feature_groups = ["core", "candles", "oracle", "refprice", "binance_prints"]
+
+[[candidates]]
+name = "price_time_calibrated_middle"
+historical_model = "price_time_calibrated_middle_ensemble"
+bucket = "settlement_middle"
+feature_groups = ["core", "candles", "oracle", "refprice", "open_interest", "binance_prints", "kraken"]
+
+[[candidates]]
+name = "multivenue_late"
+historical_model = "multivenue_consensus"
+bucket = "late_discovery"
+feature_groups = ["core", "candles", "oracle", "refprice", "open_interest", "binance_prints", "kraken"]
+
+[[candidates]]
+name = "time_specialist_late"
+historical_model = "time_specialist_ensemble"
+bucket = "late_discovery"
+feature_groups = ["core", "candles", "oracle", "refprice", "open_interest", "binance_prints", "kraken"]
+
+[[candidates]]
+name = "settlement_aligned_terminal"
+historical_model = "settlement_aligned_oracle"
+bucket = "terminal_discovery"
+feature_groups = ["core", "candles", "oracle", "refprice"]
+
+[[candidates]]
+name = "kraken_crossvenue_terminal"
+historical_model = "kraken_crossvenue"
+bucket = "terminal_discovery"
+feature_groups = ["core", "candles", "kraken"]
+
+[[candidates]]
+name = "price_control_terminal"
+historical_model = "full_history_price_control"
+bucket = "terminal_discovery"
+feature_groups = ["core", "candles"]
