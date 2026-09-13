@@ -9,8 +9,10 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt::Write as _,
+    future::Future,
     str::FromStr,
     sync::Arc,
+    thread,
     time::Duration,
 };
 
@@ -3732,14 +3734,51 @@ async fn enqueue_clob_io_event(sender: &mpsc::Sender<ClobIoEvent>, event: ClobIo
 
 struct ClobIoWorker {
     shutdown: CancellationToken,
-    handle: JoinHandle<()>,
+    handle: Option<thread::JoinHandle<()>>,
 }
 
 impl Drop for ClobIoWorker {
     fn drop(&mut self) {
         self.shutdown.cancel();
-        self.handle.abort();
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
     }
+}
+
+fn spawn_clob_io_worker<F>(
+    shutdown: CancellationToken,
+    worker: F,
+) -> Result<ClobIoWorker, StrategyError>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    // This runtime is the scheduling boundary that protects provider socket
+    // intake from CPU or cooperative-scheduling pressure in the strategy's
+    // processing runtime. Keep this thread single-purpose: do not move frame
+    // parsing, metrics, book mutation, persistence, or publication into it.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| {
+            source_error(
+                "polymarket_clob_io_worker_start_failed",
+                format!("failed to build dedicated Polymarket CLOB I/O runtime: {error}"),
+            )
+        })?;
+    let handle = thread::Builder::new()
+        .name("polymarket-clob-io".to_owned())
+        .spawn(move || runtime.block_on(worker))
+        .map_err(|error| {
+            source_error(
+                "polymarket_clob_io_worker_start_failed",
+                format!("failed to start dedicated Polymarket CLOB I/O thread: {error}"),
+            )
+        })?;
+    Ok(ClobIoWorker {
+        shutdown,
+        handle: Some(handle),
+    })
 }
 
 impl Drop for DiscoveryWorker {
@@ -3933,47 +3972,60 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
             }
         };
         let mut active_markets = subscription_markets(&discovered, Utc::now(), &self.config);
-        let websocket_config = WebSocketConfig::default()
-            .read_buffer_size(64 * 1024)
-            .write_buffer_size(16 * 1024)
-            .max_write_buffer_size(64 * 1024)
-            .max_message_size(Some(MAX_WEBSOCKET_FRAME_BYTES))
-            .max_frame_size(Some(MAX_WEBSOCKET_FRAME_BYTES));
-        let websocket = tokio::time::timeout(
-            Duration::from_millis(self.config.connect_timeout_ms),
-            connect_async_with_config(&self.config.websocket_url, Some(websocket_config), true),
-        )
-        .await
-        .map_err(|_| {
-            source_error(
-                "polymarket_clob_connect_timeout",
-                "timed out connecting to Polymarket CLOB websocket",
-            )
-        })?
-        .map_err(|error| {
-            source_error(
-                "polymarket_clob_connect_failed",
-                format!("failed to connect Polymarket CLOB websocket: {error}"),
-            )
-        })?
-        .0;
-        let (mut sink, mut stream) = websocket.split();
-        send_websocket_message(
-            &mut sink,
-            Message::Text(clob_subscription(&active_markets).into()),
-            Duration::from_millis(self.config.connect_timeout_ms),
-        )
-        .await?;
-
         let (outgoing_sender, mut outgoing_receiver) = mpsc::channel::<Message>(64);
         let (io_sender, mut io_receiver) = mpsc::channel::<ClobIoEvent>(WEBSOCKET_EVENT_BUFFER);
         let io_shutdown = CancellationToken::new();
         let worker_shutdown = io_shutdown.clone();
+        let websocket_url = self.config.websocket_url.clone();
+        let subscription = clob_subscription(&active_markets);
         let ping_interval = Duration::from_millis(self.config.ping_interval_ms);
         let pong_timeout = Duration::from_millis(self.config.pong_timeout_ms);
         let read_timeout = Duration::from_millis(self.config.read_timeout_ms);
         let write_timeout = Duration::from_millis(self.config.connect_timeout_ms);
-        let io_handle = tokio::spawn(async move {
+        let _io_worker = spawn_clob_io_worker(io_shutdown, async move {
+            // The socket must be created on this runtime. Creating it before
+            // this boundary would leave readiness driven by the shared Tokio
+            // reactor and would not isolate intake scheduling in practice.
+            let websocket_config = WebSocketConfig::default()
+                .read_buffer_size(64 * 1024)
+                .write_buffer_size(16 * 1024)
+                .max_write_buffer_size(64 * 1024)
+                .max_message_size(Some(MAX_WEBSOCKET_FRAME_BYTES))
+                .max_frame_size(Some(MAX_WEBSOCKET_FRAME_BYTES));
+            let websocket = match tokio::time::timeout(
+                write_timeout,
+                connect_async_with_config(&websocket_url, Some(websocket_config), true),
+            )
+            .await
+            {
+                Err(_) => {
+                    let _ = io_sender
+                        .send(ClobIoEvent::Failed(source_error(
+                            "polymarket_clob_connect_timeout",
+                            "timed out connecting to Polymarket CLOB websocket",
+                        )))
+                        .await;
+                    return;
+                }
+                Ok(Err(error)) => {
+                    let _ = io_sender
+                        .send(ClobIoEvent::Failed(source_error(
+                            "polymarket_clob_connect_failed",
+                            format!("failed to connect Polymarket CLOB websocket: {error}"),
+                        )))
+                        .await;
+                    return;
+                }
+                Ok(Ok((websocket, _))) => websocket,
+            };
+            let (mut sink, mut stream) = websocket.split();
+            if let Err(error) =
+                send_websocket_message(&mut sink, Message::Text(subscription.into()), write_timeout)
+                    .await
+            {
+                let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
+                return;
+            }
             let mut ping = tokio::time::interval_at(Instant::now() + ping_interval, ping_interval);
             ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut scheduling_probe = tokio::time::interval_at(
@@ -4097,11 +4149,7 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                     }
                 }
             }
-        });
-        let _io_worker = ClobIoWorker {
-            shutdown: io_shutdown,
-            handle: io_handle,
-        };
+        })?;
 
         let mut registry = BookRegistry::new(connection_epoch, &active_markets)?;
         // A new socket is always a new integrity epoch. No retained level may
@@ -4708,6 +4756,33 @@ mod tests {
             tick_size: Decimal::new(1, 2),
             received_at: base.received_at,
         }
+    }
+
+    #[test]
+    fn clob_io_worker_uses_and_cleanly_stops_a_dedicated_thread() {
+        let shutdown = CancellationToken::new();
+        let worker_shutdown = shutdown.clone();
+        let (started_sender, started_receiver) = std::sync::mpsc::channel();
+        let (stopped_sender, stopped_receiver) = std::sync::mpsc::channel();
+        let worker = spawn_clob_io_worker(shutdown, async move {
+            started_sender
+                .send(thread::current().id())
+                .expect("test receives I/O thread identity");
+            worker_shutdown.cancelled().await;
+            stopped_sender
+                .send(())
+                .expect("test receives I/O thread shutdown");
+        })
+        .expect("dedicated CLOB I/O worker starts");
+
+        let io_thread = started_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("dedicated I/O thread starts promptly");
+        assert_ne!(io_thread, thread::current().id());
+        drop(worker);
+        stopped_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("dedicated I/O thread stops when its owner is dropped");
     }
 
     #[tokio::test]
