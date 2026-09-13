@@ -38,6 +38,18 @@ pub struct DrainJobRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct DrainJobEvent {
+    pub event_id: Uuid,
+    pub job_id: Uuid,
+    pub attempt: i32,
+    pub recorded_at: DateTime<Utc>,
+    pub level: String,
+    pub event_code: String,
+    pub message: String,
+    pub metadata: Value,
+}
+
 #[derive(Debug, Clone)]
 pub struct ClaimedDrainJob {
     pub job: DrainJobRecord,
@@ -80,6 +92,15 @@ impl DrainRepository {
             .fetch_all(&self.pool)
             .await?)
     }
+    pub async fn events(&self, id: Uuid, limit: i64) -> Result<Vec<DrainJobEvent>> {
+        Ok(sqlx::query_as(
+            "SELECT event_id,job_id,attempt,recorded_at,level,event_code,message,metadata FROM ingester.drain_job_events WHERE job_id=$1 ORDER BY recorded_at DESC,event_id DESC LIMIT $2",
+        )
+        .bind(id)
+        .bind(limit.clamp(1, 500))
+        .fetch_all(&self.pool)
+        .await?)
+    }
     pub async fn cancel(&self, id: Uuid) -> Result<Option<DrainJobRecord>> {
         let q=format!("UPDATE ingester.drain_jobs SET cancel_requested_at=clock_timestamp(),status=CASE WHEN status='queued' THEN 'cancelled' ELSE status END,updated_at=clock_timestamp() WHERE job_id=$1 AND status IN ('queued','running') RETURNING {COLUMNS}");
         Ok(sqlx::query_as(&q)
@@ -101,9 +122,14 @@ impl DrainRepository {
         supported: &[String],
     ) -> Result<Option<ClaimedDrainJob>> {
         let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "UPDATE ingester.drain_jobs SET status=CASE WHEN cancel_requested_at IS NOT NULL THEN 'cancelled' WHEN attempt>=max_attempts THEN 'failed' ELSE 'queued' END,last_error_code=CASE WHEN cancel_requested_at IS NOT NULL THEN 'cancelled_after_lease_expiry' ELSE 'worker_lease_expired' END,last_error_message='worker heartbeat expired before the drain attempt reached a terminal state',completed_at=CASE WHEN cancel_requested_at IS NOT NULL OR attempt>=max_attempts THEN clock_timestamp() ELSE NULL END,assigned_worker_id=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=clock_timestamp() WHERE status='running' AND lease_expires_at<clock_timestamp()",
+        )
+        .execute(&mut *tx)
+        .await?;
         let claim_columns = COLUMNS.replacen("job_id", "job.job_id", 1);
         let q = format!(
-            r#"WITH candidate AS (SELECT job_id FROM ingester.drain_jobs WHERE strategy_key=ANY($3::text[]) AND cancel_requested_at IS NULL AND (required_worker_id IS NULL OR required_worker_id=$1) AND (required_deployment IS NULL OR required_deployment=$2) AND (status='queued' OR (status='running' AND lease_expires_at<clock_timestamp())) AND attempt<max_attempts ORDER BY requested_at,job_id FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE ingester.drain_jobs job SET status='running',attempt=attempt+1,assigned_worker_id=$1,lease_token=gen_random_uuid(),lease_expires_at=clock_timestamp()+interval '45 seconds',started_at=COALESCE(started_at,clock_timestamp()),updated_at=clock_timestamp() FROM candidate WHERE job.job_id=candidate.job_id RETURNING {claim_columns}"#
+            r#"WITH candidate AS (SELECT job_id FROM ingester.drain_jobs WHERE strategy_key=ANY($3::text[]) AND cancel_requested_at IS NULL AND (required_worker_id IS NULL OR required_worker_id=$1) AND (required_deployment IS NULL OR required_deployment=$2) AND status='queued' AND attempt<max_attempts ORDER BY requested_at,job_id FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE ingester.drain_jobs job SET status='running',attempt=attempt+1,assigned_worker_id=$1,lease_token=gen_random_uuid(),lease_expires_at=clock_timestamp()+interval '45 seconds',started_at=COALESCE(started_at,clock_timestamp()),updated_at=clock_timestamp() FROM candidate WHERE job.job_id=candidate.job_id RETURNING {claim_columns}"#
         );
         let job: Option<DrainJobRecord> = sqlx::query_as(&q)
             .bind(worker)
@@ -132,5 +158,28 @@ impl DrainRepository {
         retryable: bool,
     ) -> Result<bool> {
         Ok(sqlx::query("UPDATE ingester.drain_jobs SET status=CASE WHEN cancel_requested_at IS NOT NULL THEN 'cancelled' WHEN $5 AND attempt<max_attempts THEN 'queued' ELSE 'failed' END,last_error_code=$3,last_error_message=$4,assigned_worker_id=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=clock_timestamp() WHERE job_id=$1 AND lease_token=$2 AND status='running'").bind(id).bind(lease).bind(code).bind(message).bind(retryable).execute(&self.pool).await?.rows_affected()==1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drain_event_contract_preserves_attempt_and_error_metadata() {
+        let timestamp = Utc::now();
+        let event = DrainJobEvent {
+            event_id: Uuid::new_v4(),
+            job_id: Uuid::new_v4(),
+            attempt: 2,
+            recorded_at: timestamp,
+            level: "error".to_owned(),
+            event_code: "attempt_requeued".to_owned(),
+            message: "provider unavailable".to_owned(),
+            metadata: serde_json::json!({"error_code": "provider_unavailable"}),
+        };
+        let encoded = serde_json::to_value(event).unwrap();
+        assert_eq!(encoded["attempt"], 2);
+        assert_eq!(encoded["metadata"]["error_code"], "provider_unavailable");
     }
 }

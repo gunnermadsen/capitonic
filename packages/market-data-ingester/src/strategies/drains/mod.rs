@@ -1,6 +1,10 @@
 mod binance_aggregate_trades;
+mod binance_futures_l2_one_second_features;
+mod binance_futures_open_interest;
+mod binance_l2_features;
 mod binance_one_second_ohlcv;
 mod binance_schema;
+mod binance_spot_l2_one_second_features;
 mod binance_spot_l2_snapshots;
 mod btc_capacity_execution_snapshots;
 mod btc_feature_snapshots;
@@ -16,7 +20,10 @@ mod reference_price_ticks;
 mod retained;
 
 pub use binance_aggregate_trades::BinanceAggregateTradesDrain;
+pub use binance_futures_l2_one_second_features::BinanceFuturesL2OneSecondFeaturesDrain;
+pub use binance_futures_open_interest::BinanceFuturesOpenInterestDrain;
 pub use binance_one_second_ohlcv::BinanceOneSecondOhlcvDrain;
+pub use binance_spot_l2_one_second_features::BinanceSpotL2OneSecondFeaturesDrain;
 pub use binance_spot_l2_snapshots::BinanceSpotL2SnapshotsDrain;
 pub use btc_capacity_execution_snapshots::BtcCapacityExecutionSnapshotsDrain;
 pub use btc_feature_snapshots::BtcFeatureSnapshotsDrain;

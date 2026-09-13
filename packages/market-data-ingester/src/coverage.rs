@@ -23,6 +23,7 @@ pub struct CoverageReport {
 pub struct ProductCoverage {
     pub product_key: String,
     pub relation: Option<String>,
+    pub drain_strategy_key: Option<String>,
     pub backfill_strategy_key: Option<String>,
     pub backfill_strategy_keys: Vec<String>,
     pub database: DatabaseCoverage,
@@ -343,6 +344,7 @@ pub async fn detect(
         products.push(ProductCoverage {
             product_key: target.product_key,
             relation: target.relation,
+            drain_strategy_key: target.drain_strategy_key,
             backfill_strategy_key,
             backfill_strategy_keys: target.backfill_strategy_keys,
             database: DatabaseCoverage {
@@ -426,8 +428,53 @@ fn gaps_between(intervals: &[Interval]) -> Vec<CoverageGap> {
 #[cfg(test)]
 mod tests {
     use chrono::{TimeZone, Utc};
+    use serde_json::json;
 
-    use super::{gaps_between, merge_intervals, Interval};
+    use super::{
+        gaps_between, merge_intervals, CombinedCoverage, DatabaseCoverage, Interval,
+        ProductCoverage, SsdCoverage,
+    };
+
+    #[test]
+    fn product_response_serializes_the_bound_drain_strategy() {
+        let product = ProductCoverage {
+            product_key: "binance_spot_btcusdt_aggregate_trades".to_owned(),
+            relation: Some("market_data.binance_spot_btcusdt_aggregate_trades".to_owned()),
+            drain_strategy_key: Some("binance_spot_btcusdt_aggregate_trades".to_owned()),
+            backfill_strategy_key: Some(
+                "binance_spot_btcusdt_aggregate_trades_backfill".to_owned(),
+            ),
+            backfill_strategy_keys: vec![
+                "binance_spot_btcusdt_aggregate_trades_backfill".to_owned()
+            ],
+            database: DatabaseCoverage {
+                from: None,
+                through: None,
+                closed_chunks: 0,
+                open_chunks: 0,
+            },
+            ssd: SsdCoverage {
+                from: None,
+                through: None,
+                verified_objects: 0,
+                rows: 0,
+                bytes: 0,
+            },
+            combined: CombinedCoverage {
+                from: None,
+                through: None,
+                interval_count: 0,
+            },
+            gaps: Vec::new(),
+            known_gaps_truncated: false,
+        };
+
+        let encoded = serde_json::to_value(product).unwrap();
+        assert_eq!(
+            encoded["drain_strategy_key"],
+            json!("binance_spot_btcusdt_aggregate_trades")
+        );
+    }
 
     fn at(hour: u32) -> chrono::DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 1, 1, hour, 0, 0).unwrap()
