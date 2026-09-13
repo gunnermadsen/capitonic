@@ -1,0 +1,71 @@
+{
+  "base_manifest": {
+    "book_valid_rows": 69543,
+    "checkpoint_seconds": [
+      30,
+      35,
+      40,
+      45,
+      50,
+      55,
+      60,
+      65,
+      70,
+      75,
+      80,
+      85,
+      90,
+      95,
+      100,
+      105,
+      110,
+      115,
+      120,
+      125,
+      130,
+      135,
+      140,
+      145,
+      150
+    ],
+    "checkpoints_per_market": 25,
+    "database_mutations": false,
+    "features_use_completed_targets": false,
+    "label_audit_sha256": "08a6684b49d8d20350d09d79c01e665f36421bbd5618a5f6bc0a04d938521130",
+    "label_inventory": {
+      "authentic_counterfactual_twap60": {
+        "markets": 3423,
+        "rows": 85575
+      },
+      "authentic_official_twap60": {
+        "markets": 3668,
+        "rows": 91700
+      },
+      "chainlink_reconstructed_twap60": {
+        "markets": 14710,
+        "rows": 367750
+      }
+    },
+    "labels_supervision_only": true,
+    "markets": 21801,
+    "read_only_sources": true,
+    "rows": 545025,
+    "schema_version": "btc-latent-twap-causal-frame-v1",
+    "sensor_valid_rows": 541339,
+    "source_frame_sha256": "223f70125de38f5d0143a5ddb13067d1ac3d12928fb4f8c8bfe4f68352c82d26",
+    "source_manifest_sha256": "b64ffe757e535053f9c16c0757a36b15d6d5090dd157010029d85de8788862d4"
+  },
+  "causal_twap_features": [
+    "twap30_margin_bps",
+    "twap60_margin_bps"
+  ],
+  "database_mutations": false,
+  "markets": 21801,
+  "range_end": "2026-08-26 23:55:00+00:00",
+  "range_start": "2026-06-07 05:50:00+00:00",
+  "read_only_sources": true,
+  "rows": 545025,
+  "schema_version": "btc-time-bucket-early-causal-panel-v1",
+  "settlement_labels_are_supervision_only": true,
+  "sha256": "a858f58253d1dbae3f0a625541842fa02625610f9a7486615fe95edb76698b8d"
+}
