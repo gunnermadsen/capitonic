@@ -8,7 +8,7 @@ Selected router: **full_rtds_free**
 
 Historically successful model families are retrained inside the time slices where they showed edge; individual, prior-weighted, and agreement-gated descendants are then folded into a no-trade-by-default router.
 
-## Router comparison — untouched confirmation
+## Router comparison — chronological confirmation (not globally blind)
 
 | Router | PnL | Stress | PF | Trades | UP/DOWN | W/L | Coverage | Avg entry | Recovery | Max DD |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -21,7 +21,7 @@ Historically successful model families are retrained inside the time slices wher
 | full_rtds_free | 676.38 | 499.58 | 1.190 | 440 | 96/344 | 298/142 | 26.47% | 112.5 | 1.764 | 407.81 |
 | prior_composed_replay | 2003.04 | 1480.04 | 1.212 | 1046 | 287/759 | 736/310 | 62.94% | 114.8 | 1.958 | 723.83 |
 
-## Common-window comparison — August 26–28
+## Common-window comparison — 2026-08-26 to 2026-08-27 (end exclusive)
 
 | Router | PnL | Stress | PF | Trades | W/L | Coverage | Max DD |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -75,6 +75,6 @@ Historically successful model families are retrained inside the time slices wher
 - Policy fitting, observed design validation, and untouched confirmation are chronological and disjoint.
 - August 20–26 is design evidence, not relabeled as an unseen test.
 - Confirmation execution is a read-only Parquet snapshot of the established current orderbook table.
-- The early causal TWAP/OI source ends on August 28; all-router comparisons therefore include a separate August 26–28 common window.
+- Early causal feature coverage ends at 2026-08-27T00:00:00+00:00 (exclusive); all-router comparisons therefore include the exact common window above.
 - No database row, table, schema, source, ingester, runtime model, trading process, or image was changed.
 - VWAP replay assumes the recorded ask ladder was fillable and does not model queue position.

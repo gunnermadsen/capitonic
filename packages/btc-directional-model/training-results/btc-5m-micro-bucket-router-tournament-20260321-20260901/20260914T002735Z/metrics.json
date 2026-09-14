@@ -52377,8 +52377,13 @@
     }
   },
   "hypothesis_preserved": true,
+  "confirmation_common_window": {
+    "end_exclusive": "2026-08-27T00:00:00+00:00",
+    "markets": 239,
+    "start": "2026-08-26T00:00:00+00:00"
+  },
   "limitations": [
-    "The early causal TWAP/open-interest archive ends at 2026-08-28.",
+    "The derived early causal feature panel ends at 2026-08-27T00:00:00+00:00 (exclusive).",
     "Later feature coverage extends through 2026-09-01 and is compared separately from the common window.",
     "Projected economics assume recorded ask-ladder VWAP was fillable and omit queue position."
   ],

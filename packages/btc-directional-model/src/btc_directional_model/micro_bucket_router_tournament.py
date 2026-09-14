@@ -340,6 +340,10 @@ def _router_metrics(
 
 
 def _report(metrics: dict[str, Any]) -> str:
+    common = metrics["confirmation_common_window"]
+    common_range = (
+        f"{common['start'][:10]} to {common['end_exclusive'][:10]} (end exclusive)"
+    )
     lines = [
         "# BTC Five-Minute Micro-Bucket Router Tournament",
         "",
@@ -351,7 +355,7 @@ def _report(metrics: dict[str, Any]) -> str:
         "",
         "Historically successful model families are retrained inside the time slices where they showed edge; individual, prior-weighted, and agreement-gated descendants are then folded into a no-trade-by-default router.",
         "",
-        "## Router comparison — untouched confirmation",
+        "## Router comparison — chronological confirmation (not globally blind)",
         "",
         "| Router | PnL | Stress | PF | Trades | UP/DOWN | W/L | Coverage | Avg entry | Recovery | Max DD |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
@@ -368,7 +372,7 @@ def _report(metrics: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "## Common-window comparison — August 26–28",
+            f"## Common-window comparison — {common_range}",
             "",
             "| Router | PnL | Stress | PF | Trades | W/L | Coverage | Max DD |",
             "|---|---:|---:|---:|---:|---:|---:|---:|",
@@ -411,7 +415,7 @@ def _report(metrics: dict[str, Any]) -> str:
             "- Policy fitting, observed design validation, and untouched confirmation are chronological and disjoint.",
             "- August 20–26 is design evidence, not relabeled as an unseen test.",
             "- Confirmation execution is a read-only Parquet snapshot of the established current orderbook table.",
-            "- The early causal TWAP/OI source ends on August 28; all-router comparisons therefore include a separate August 26–28 common window.",
+            f"- Early causal feature coverage ends at {common['end_exclusive']} (exclusive); all-router comparisons therefore include the exact common window above.",
             "- No database row, table, schema, source, ingester, runtime model, trading process, or image was changed.",
             "- VWAP replay assumes the recorded ask ladder was fillable and does not model queue position.",
         ]
@@ -834,6 +838,11 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
         "source_contract": source,
         "historic_inventory": inventory,
         "confirmation_execution": execution_manifest,
+        "confirmation_common_window": {
+            "start": windows["confirmation_start"].isoformat(),
+            "end_exclusive": common_end.isoformat(),
+            "markets": common_markets,
+        },
         "candidate_results": results,
         "bucket_layers": layers,
         "qualified_layers": qualified,
@@ -845,7 +854,7 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
             "sklearn": sklearn.__version__,
         },
         "limitations": [
-            "The early causal TWAP/open-interest archive ends at 2026-08-28.",
+            f"The derived early causal feature panel ends at {common_end.isoformat()} (exclusive).",
             "Later feature coverage extends through 2026-09-01 and is compared separately from the common window.",
             "Projected economics assume recorded ask-ladder VWAP was fillable and omit queue position.",
         ],
