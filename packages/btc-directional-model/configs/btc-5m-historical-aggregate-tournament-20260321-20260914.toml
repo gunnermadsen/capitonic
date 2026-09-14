@@ -1,0 +1,101 @@
+[training]
+profile = "btc_5m_historical_aggregate_full_coverage_q5"
+model_family = "btc-5m-historical-aggregate-full-coverage-q5"
+training_only = true
+paper_only = true
+live_capital_allowed = false
+random_seed = 20260914
+
+[windows]
+source_start = "2026-03-21T00:00:00Z"
+fit_end = "2026-08-26T00:00:00Z"
+policy_start = "2026-08-26T00:00:00Z"
+policy_end = "2026-09-01T00:00:00Z"
+sealed_start = "2026-09-01T00:00:00Z"
+sealed_end = "2026-09-07T00:00:00Z"
+confirmation_start = "2026-09-07T00:00:00Z"
+confirmation_end = "2026-09-14T00:00:00Z"
+settlement_cutover = "2026-08-14T00:00:00Z"
+
+[buckets]
+start_second = 60
+end_second = 239
+width_seconds = 10
+default_action = "no_trade"
+
+[model]
+learning_rate = 0.06
+max_iter = 120
+max_leaf_nodes = 31
+min_samples_leaf = 100
+l2_regularization = 1.5
+max_bins = 127
+calibration_fraction = 0.20
+
+[execution]
+fixed_primary_quantity = 5
+quantities = [5]
+freshness_seconds = 2
+execution_reserve_per_share = 0.005
+stress_slippage_per_share = 0.01
+minimum_edges = [0.00, 0.02, 0.05, 0.10]
+minimum_confidences = [0.55, 0.65, 0.75, 0.85]
+maximum_share_costs = [0.70, 0.80, 0.90, 0.95]
+minimum_policy_trades = 20
+
+[selection]
+donors_per_bucket = 3
+historical_bucket_width = 10
+selection_cutoff = "2026-08-26T00:00:00Z"
+minimum_historical_trades = 30
+use_post_cutoff_results_for_selection = false
+
+[paths]
+panel = "data/btc-full-coverage-vwap-admission-20260321-20260914/vwap-admission-panel.parquet"
+panel_manifest = "data/btc-full-coverage-vwap-admission-20260321-20260914/vwap-admission-panel-manifest.json"
+historical_trades = "training-results/btc-5m-historical-signature-replay-20260914/20260914T203000Z/normalized-trades.parquet"
+historical_inventory = "training-results/btc-5m-historical-signature-replay-20260914/20260914T203000Z/inventory.json"
+previous_tournament_metrics = "training-results/btc-5m-time-bucket-specialist-tournament-20260321-20260914/20260914T171438Z/metrics.json"
+runs = "runs/btc-historical-aggregate-tournament-20260321-20260914"
+committed_results = "training-results/btc-5m-historical-aggregate-tournament-20260321-20260914"
+
+[[recipes]]
+name = "price_control"
+match_tokens = ["price_control", "continuous_payoff_baseline"]
+feature_groups = ["core"]
+
+[[recipes]]
+name = "chainlink_fair_value"
+match_tokens = ["fair_value", "chainlink", "payoff_control", "regime_calibrated", "loss_veto", "stability_selected", "groupwise_entry_ranker"]
+feature_groups = ["core", "candles", "oracle", "refprice"]
+
+[[recipes]]
+name = "q5_context"
+match_tokens = ["middle_q5", "bridge_aware"]
+feature_groups = ["core", "candles", "oracle", "refprice", "binance_prints"]
+
+[[recipes]]
+name = "external_flow"
+match_tokens = ["external_flow", "binance_flow"]
+feature_groups = ["core", "open_interest", "binance_prints", "kraken", "spot_l2", "kraken_l2"]
+
+[[recipes]]
+name = "crossvenue"
+match_tokens = ["crossvenue", "multivenue", "dual_venue", "kraken", "agreement_ensemble", "calibrated_middle"]
+feature_groups = ["core", "candles", "oracle", "refprice", "open_interest", "binance_prints", "kraken", "spot_l2", "kraken_l2"]
+
+[[challengers]]
+name = "aggregate_leader"
+kind = "leader"
+
+[[challengers]]
+name = "aggregate_diverse"
+kind = "mean"
+
+[[challengers]]
+name = "aggregate_side_split"
+kind = "side_split"
+
+[[challengers]]
+name = "aggregate_consensus"
+kind = "consensus"
