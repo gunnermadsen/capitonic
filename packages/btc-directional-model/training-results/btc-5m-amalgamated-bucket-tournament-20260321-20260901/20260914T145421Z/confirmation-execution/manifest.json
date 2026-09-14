@@ -1,0 +1,52 @@
+{
+  "contract": {
+    "database_mutations": false,
+    "new_ingesters": false,
+    "new_schemas": false,
+    "new_sources": false,
+    "new_tables": false,
+    "query_sha256": "70e0a69a756c05a7706ea89511e67426a6ac6dd1f83b16e5a519de78833ef263",
+    "range_end": "2026-09-01T00:00:00+00:00",
+    "range_start": "2026-08-26T00:00:00+00:00",
+    "read_only": true,
+    "schema_version": "btc-current-orderbook-capacity-execution-cache-v1"
+  },
+  "partitions": [
+    {
+      "markets": 191,
+      "path": "2026-08-26.parquet",
+      "rows": 7860,
+      "sha256": "5a65512ac71e5ef410b3d1ae9858a8a863ac66ee76e3376933baab70b6389d5c"
+    },
+    {
+      "markets": 288,
+      "path": "2026-08-27.parquet",
+      "rows": 12258,
+      "sha256": "22355374fad35755a1f49401fadb25150b7e089b4452f775b951e67ff3eb63f2"
+    },
+    {
+      "markets": 269,
+      "path": "2026-08-28.parquet",
+      "rows": 11400,
+      "sha256": "9a7c656c89f9f25374b66b52d388cc6b959f4800d77be3dced50cd846e902d5f"
+    },
+    {
+      "markets": 288,
+      "path": "2026-08-29.parquet",
+      "rows": 11557,
+      "sha256": "94d58a65b47ab185b1aaca05f4f67f4363147e2200d803ed0ac729ce6b9c431f"
+    },
+    {
+      "markets": 284,
+      "path": "2026-08-30.parquet",
+      "rows": 10645,
+      "sha256": "65cfc5a534e1e01b9f898993d60ab56d1e0f0552b2fdec549ad83b128dd5fbd2"
+    },
+    {
+      "markets": 227,
+      "path": "2026-08-31.parquet",
+      "rows": 7570,
+      "sha256": "aa8423287acde5376670e18736f91143ad5ac5abe6b15b5a0dbcca7f8452d0ed"
+    }
+  ]
+}
