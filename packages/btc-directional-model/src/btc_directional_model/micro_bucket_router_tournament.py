@@ -22,8 +22,8 @@ from . import time_bucket_specialist_tournament as base
 from .core_extract import file_sha256
 from .twap60_training_data import _isolated_query_frame
 
-SCHEMA_VERSION = "btc-micro-bucket-router-tournament-v1"
-ARTIFACT_SCHEMA_VERSION = "btc-micro-bucket-router-model-v1"
+SCHEMA_VERSION = "btc-micro-bucket-router-tournament-v2"
+ARTIFACT_SCHEMA_VERSION = "btc-micro-bucket-router-model-v2"
 ECONOMIC_COLUMNS = (
     "fee_rate",
     "pm_up_book_age_seconds",
@@ -403,7 +403,7 @@ def _report(metrics: dict[str, Any]) -> str:
     common = metrics["confirmation_common_window"]
     common_range = f"{common['start'][:10]} to {common['end_exclusive'][:10]} (end exclusive)"
     lines = [
-        "# BTC Five-Minute Micro-Bucket Router Tournament",
+        f"# {metrics.get('model_family', 'BTC Five-Minute Micro-Bucket Router Tournament')}",
         "",
         f"Run: `{metrics['run_id']}`",
         f"Qualification: **{metrics['qualification']}**",
@@ -416,13 +416,14 @@ def _report(metrics: dict[str, Any]) -> str:
         "",
         "## Router comparison — chronological confirmation (not globally blind)",
         "",
-        "| Router | PnL | Stress | PF | Trades | UP/DOWN | W/L | Coverage | Avg entry | Recovery | Max DD |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Router | VWAP | PnL | Stress | PF | Trades | UP/DOWN | W/L | Coverage | Avg entry | Recovery | Max DD |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for name, row in metrics["routers"].items():
         value = row["confirmation"]
         lines.append(
-            f"| {name} | {value['net_pnl']:.2f} | {value['stress_net_pnl']:.2f} | "
+            f"| {name} | {metrics['router_quantities'][name]} | "
+            f"{value['net_pnl']:.2f} | {value['stress_net_pnl']:.2f} | "
             f"{value['profit_factor'] or 0:.3f} | {value['trades']} | "
             f"{value['up_trades']}/{value['down_trades']} | {value['wins']}/{value['losses']} | "
             f"{value['market_coverage']:.2%} | {value['average_entry_second'] or 0:.1f} | "
@@ -452,8 +453,8 @@ def _report(metrics: dict[str, Any]) -> str:
                     "",
                     f"## {router_name} — confirmation PnL by bucket",
                     "",
-                    "| Bucket | Seconds | PnL | Stress | PF | Trades | UP/DOWN | W/L | Win rate | Coverage | Avg entry | Confidence | Recovery | Max DD |",
-                    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+                    "| Bucket | Seconds | PnL | Stress | PnL/trade | PF | Trades | UP/DOWN | W/L | Loss rate | Coverage | Avg entry | Confidence | Recovery | Max DD |",
+                    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
                 ]
             )
             bucket_map = {row["name"]: row for row in metrics["buckets"]}
@@ -462,14 +463,38 @@ def _report(metrics: dict[str, Any]) -> str:
                 lines.append(
                     f"| {bucket_name} | {bucket['start_second']}-{bucket['end_second']} | "
                     f"{value['net_pnl']:.2f} | {value['stress_net_pnl']:.2f} | "
+                    f"{value['net_pnl'] / value['trades'] if value['trades'] else 0:.3f} | "
                     f"{value['profit_factor'] or 0:.3f} | {value['trades']} | "
                     f"{value['up_trades']}/{value['down_trades']} | "
-                    f"{value['wins']}/{value['losses']} | {value['win_rate'] or 0:.2%} | "
+                    f"{value['wins']}/{value['losses']} | "
+                    f"{1.0 - value['win_rate'] if value['win_rate'] is not None else 0:.2%} | "
                     f"{value['market_coverage']:.2%} | {value['average_entry_second'] or 0:.1f} | "
                     f"{value['average_confidence'] or 0:.3f} | "
                     f"{value['recovery_wins_per_loss'] or 0:.3f} | "
                     f"{value['maximum_drawdown']:.2f} |"
                 )
+    if any("transition_audit" in row for row in metrics["routers"].values()):
+        lines.extend(
+            [
+                "",
+                "## August 14 settlement-source transition audit",
+                "",
+                "Diagnostic only; this window never selects a model or policy.",
+                "",
+                "| Router | PnL | Stress | PF | Trades | W/L | Coverage | Max DD |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for name, row in metrics["routers"].items():
+            if "transition_audit" not in row:
+                continue
+            value = row["transition_audit"]
+            lines.append(
+                f"| {name} | {value['net_pnl']:.2f} | {value['stress_net_pnl']:.2f} | "
+                f"{value['profit_factor'] or 0:.3f} | {value['trades']} | "
+                f"{value['wins']}/{value['losses']} | {value['market_coverage']:.2%} | "
+                f"{value['maximum_drawdown']:.2f} |"
+            )
     lines.extend(
         [
             "",
@@ -496,7 +521,7 @@ def _report(metrics: dict[str, Any]) -> str:
             "## Integrity and limitations",
             "",
             "- Model fitting ends before the August 14 settlement cutover; August 14 is transition-audit-only.",
-            "- Policy fitting, observed design validation, and untouched confirmation are chronological and disjoint.",
+            "- Policy fitting, observed design validation, and untouched confirmation are chronological and disjoint; the transition audit is diagnostic only.",
             "- August 20–26 is design evidence, not relabeled as an unseen test.",
             "- Confirmation execution is a read-only Parquet snapshot of the established current orderbook table.",
             f"- Early causal feature coverage ends at {common['end_exclusive']} (exclusive); all-router comparisons therefore include the exact common window above.",
@@ -574,7 +599,10 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
             fit = base._slice(fit_dataset, bucket, windows["source_start"], windows["fit_end"])
             model = base._fit_model(fit, tuple(contract["features"]), raw, seed + index)
             scoring = base._slice(
-                dataset, bucket, windows["policy_start"], windows["confirmation_end"]
+                dataset,
+                bucket,
+                windows["transition_start"],
+                windows["confirmation_end"],
             )
             prediction_all = base._prediction_frame(scoring, base._predict(model, scoring), name)
             base._write_joblib(
@@ -589,6 +617,12 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
             )
             prediction_all.write_parquet(prediction_path, compression="zstd")
         period_frames = {
+            "transition_audit": base._slice(
+                dataset,
+                bucket,
+                windows["transition_start"],
+                windows["transition_end"],
+            ),
             "development": base._slice(
                 dataset, bucket, windows["policy_start"], windows["policy_end"]
             ),
@@ -628,6 +662,12 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
             "development": development_metrics,
             "design": design_metrics,
             "confirmation": confirmation_metrics,
+            "transition_audit": _period_result(
+                period_frames["transition_audit"],
+                period_predictions["transition_audit"],
+                policy,
+                raw,
+            )[0],
             "historical_folds": base._historical_fold_metrics(
                 fit_dataset,
                 bucket,
@@ -653,6 +693,12 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
             "development": development_trades,
             "design": design_trades,
             "confirmation": confirmation_trades,
+            "transition_audit": _period_result(
+                period_frames["transition_audit"],
+                period_predictions["transition_audit"],
+                policy,
+                raw,
+            )[1],
         }
         models[name] = model
         _write_json(checkpoints / f"{name}-metrics.json", results[name])
@@ -683,6 +729,12 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
                 )
                 dataset = early if int(bucket["start_second"]) < 60 else evaluation
                 period_frames = {
+                    "transition_audit": base._slice(
+                        dataset,
+                        bucket,
+                        windows["transition_start"],
+                        windows["transition_end"],
+                    ),
                     "development": base._slice(
                         dataset, bucket, windows["policy_start"], windows["policy_end"]
                     ),
@@ -737,6 +789,12 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
                     "development": development_metrics,
                     "design": design_metrics,
                     "confirmation": confirmation_metrics,
+                    "transition_audit": _period_result(
+                        period_frames["transition_audit"],
+                        period_predictions["transition_audit"],
+                        policy,
+                        raw,
+                    )[0],
                     "predictive": {
                         period: base._predictive_metrics(value)
                         for period, value in period_predictions.items()
@@ -747,6 +805,12 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
                     "development": development_trades,
                     "design": design_trades,
                     "confirmation": confirmation_trades,
+                    "transition_audit": _period_result(
+                        period_frames["transition_audit"],
+                        period_predictions["transition_audit"],
+                        policy,
+                        raw,
+                    )[1],
                 }
 
     qualified = {
@@ -776,7 +840,8 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
     champion_name = raw["router"]["champion_variant"]
     champion_model = prior_artifact["models"][champion_name]
     champion_prior = prior["candidate_results"][champion_name]
-    champion_policy = base.Policy(**champion_prior["policy"])
+    comparison_quantity = int(raw["execution"]["quantities"][0])
+    champion_policy = base.Policy(**{**champion_prior["policy"], "quantity": comparison_quantity})
     champion_bucket = {"name": "champion_60_74", "start_second": 60, "end_second": 74}
     champion_frame = base._slice(
         evaluation,
@@ -854,7 +919,12 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
             period: _compose_trades(
                 _reserved_parts(names, trades, layers, period, router_spec_by_name[name])
             )
-            for period in ("development", "design", "confirmation")
+            for period in (
+                "transition_audit",
+                "development",
+                "design",
+                "confirmation",
+            )
         }
         for name, names in router_layer_names.items()
     }
@@ -878,7 +948,12 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
         prediction = base._prediction_frame(
             prior_frame, base._predict(model, prior_frame), winner["candidate"]
         )
-        _, replay = _period_result(prior_frame, prediction, base.Policy(**winner["policy"]), raw)
+        _, replay = _period_result(
+            prior_frame,
+            prediction,
+            base.Policy(**{**winner["policy"], "quantity": comparison_quantity}),
+            raw,
+        )
         prior_parts.append(replay)
     router_trades["prior_composed_replay"] = _compose_trades(prior_parts)
 
@@ -899,6 +974,10 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
         for name, value in router_trades.items()
     }
     period_ranges = {
+        "transition_audit": (
+            windows["transition_start"],
+            windows["transition_end"],
+        ),
         "development": (windows["policy_start"], windows["policy_end"]),
         "design": (windows["sealed_start"], windows["sealed_end"]),
     }
@@ -950,6 +1029,7 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
     ).hexdigest()
     metrics = {
         "schema_version": SCHEMA_VERSION,
+        "model_family": raw["training"]["model_family"],
         "run_id": run_id,
         "source_commit": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=root, text=True
@@ -973,6 +1053,7 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
         "bucket_layers": layers,
         "qualified_layers": qualified,
         "routers": routers,
+        "router_quantities": {name: comparison_quantity for name in routers},
         "router_bucket_metrics": {
             name: _router_bucket_metrics(value, buckets, total_markets)
             for name, value in router_trades.items()
