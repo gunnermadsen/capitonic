@@ -161,6 +161,7 @@ def test_amalgamated_contract_preserves_august_and_qualifies_at_q5() -> None:
     assert raw["execution"]["quantities"] == [5]
     assert 50 in raw["execution"]["capacity_quantities"]
     assert raw["router"]["selection_period"] == "design"
+    assert not raw["router"]["require_qualified_layers_for_evaluation"]
     assert raw["router"]["default_action"] == "no_trade"
     assert any(row["form"] == "prior_weighted" for row in raw["router_definitions"])
     assert any("reservation_before_second" in row for row in raw["router_definitions"])

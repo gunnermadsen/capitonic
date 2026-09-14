@@ -51,6 +51,7 @@ champion_variant = "time_specialist_early__without_rtds_candles"
 prior_weight_floor = 0.05
 selection_period = "design"
 qualification_benchmark = "prior_composed_replay"
+require_qualified_layers_for_evaluation = false
 
 [paths]
 training_panel = "/Volumes/docker-data/polymarket-bot/model-training-archive/btc-early-entry-economic-tournament/20260902/data/btc-hybrid-payoff-admission-20260321-20260827/middle-panel.parquet"

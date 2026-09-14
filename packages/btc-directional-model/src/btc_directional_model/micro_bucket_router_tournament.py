@@ -812,9 +812,14 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
             form = router.get("form", "best")
             selected = []
             for bucket_name in router["buckets"]:
+                candidate_pool = (
+                    qualified[bucket_name]
+                    if raw["router"].get("require_qualified_layers_for_evaluation", True)
+                    else [row for row in layers.values() if row["bucket"] == bucket_name]
+                )
                 eligible = [
                     row
-                    for row in qualified[bucket_name]
+                    for row in candidate_pool
                     if (mode == "any" or row["rtds_mode"] == mode)
                     and (form == "best" or row["form"] == form)
                 ]
@@ -928,6 +933,7 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
             }
             for name, row in layers.items()
             if _layer_qualified(row, raw)
+            or not raw["router"].get("require_qualified_layers_for_evaluation", True)
         },
         "routers": router_layer_names,
         "router_definitions": router_spec_by_name,
@@ -951,6 +957,7 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
         "artifact_sha256": artifact_sha,
         "qualification": qualification,
         "selected_router": selected_router,
+        "selection_period": selection_period,
         "hypothesis_preserved": True,
         "windows": raw["windows"],
         "buckets": raw["buckets"],
