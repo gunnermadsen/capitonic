@@ -164,9 +164,7 @@ def _attach_confirmation_execution(
         raw["execution"]["capacity_quantities"]
     )
     vwaps = tuple(
-        f"{side}_ask_vwap_{quantity}"
-        for side in ("up", "down")
-        for quantity in quantities
+        f"{side}_ask_vwap_{quantity}" for side in ("up", "down") for quantity in quantities
     )
     selected = execution.select(
         *base.KEY_COLUMNS,
@@ -190,16 +188,14 @@ def _attach_confirmation_execution(
         ),
         pl.when(pl.col("up_provider_received_at").is_not_null())
         .then(
-            (pl.col("observed_at") - pl.col("up_provider_received_at"))
-            .dt.total_microseconds()
+            (pl.col("observed_at") - pl.col("up_provider_received_at")).dt.total_microseconds()
             / 1_000_000.0
         )
         .otherwise(pl.col("pm_up_book_age_seconds"))
         .alias("pm_up_book_age_seconds"),
         pl.when(pl.col("down_provider_received_at").is_not_null())
         .then(
-            (pl.col("observed_at") - pl.col("down_provider_received_at"))
-            .dt.total_microseconds()
+            (pl.col("observed_at") - pl.col("down_provider_received_at")).dt.total_microseconds()
             / 1_000_000.0
         )
         .otherwise(pl.col("pm_down_book_age_seconds"))
@@ -255,10 +251,13 @@ def _blend_predictions(
     if joined is None:
         raise RuntimeError("blend has no members")
     denominator = sum(weights[member] for member in members)
-    probability = sum(
-        pl.col(column) * weights[member]
-        for member, column in zip(members, probability_columns, strict=True)
-    ) / denominator
+    probability = (
+        sum(
+            pl.col(column) * weights[member]
+            for member, column in zip(members, probability_columns, strict=True)
+        )
+        / denominator
+    )
     if agreement:
         joined = joined.filter(
             pl.all_horizontal(pl.col(column) >= 0.5 for column in probability_columns)
@@ -285,16 +284,23 @@ def _layer_qualified(layer: dict[str, Any], raw: dict[str, Any]) -> bool:
     spec = raw["router"]
     development = layer["development"]
     design = layer["design"]
+    maximum_loss_rate = spec.get("maximum_loss_rate")
+    maximum_recovery = spec.get("maximum_recovery_wins_per_loss")
     return (
         development["trades"] >= int(spec["minimum_development_trades"])
         and design["trades"] >= int(spec["minimum_design_trades"])
         and (development["profit_factor"] or 0) >= float(spec["minimum_profit_factor"])
         and (design["profit_factor"] or 0) >= float(spec["minimum_profit_factor"])
-        and (
-            not spec["require_positive_development_stress"]
-            or development["stress_net_pnl"] > 0
-        )
+        and (not spec["require_positive_development_stress"] or development["stress_net_pnl"] > 0)
         and (not spec["require_positive_design_stress"] or design["stress_net_pnl"] > 0)
+        and (
+            maximum_loss_rate is None
+            or (1.0 - float(design["win_rate"] or 0.0)) <= float(maximum_loss_rate)
+        )
+        and (
+            maximum_recovery is None
+            or float(design["recovery_wins_per_loss"] or 0.0) <= float(maximum_recovery)
+        )
     )
 
 
@@ -311,15 +317,17 @@ def _compose_trades(parts: list[pl.DataFrame]) -> pl.DataFrame:
 
 
 def _select_challenger(
-    routers: dict[str, dict[str, dict[str, Any]]], challenger_names: tuple[str, ...]
+    routers: dict[str, dict[str, dict[str, Any]]],
+    challenger_names: tuple[str, ...],
+    period: str = "confirmation",
 ) -> str:
     if not challenger_names:
         raise RuntimeError("no newly trained routers are eligible for selection")
     return max(
         challenger_names,
         key=lambda name: (
-            routers[name]["confirmation"]["stress_net_pnl"],
-            routers[name]["confirmation"]["net_pnl"],
+            routers[name][period]["stress_net_pnl"],
+            routers[name][period]["net_pnl"],
         ),
     )
 
@@ -339,17 +347,68 @@ def _router_metrics(
     }
 
 
+def _router_bucket_metrics(
+    trades: pl.DataFrame,
+    buckets: dict[str, dict[str, Any]],
+    total_markets: int,
+) -> dict[str, dict[str, Any]]:
+    return {
+        name: base._economic_metrics(
+            trades.filter(
+                pl.col("seconds_elapsed").is_between(
+                    int(bucket["start_second"]),
+                    int(bucket["end_second"]),
+                    closed="both",
+                )
+            )
+            if not trades.is_empty()
+            else trades,
+            total_markets,
+        )
+        for name, bucket in buckets.items()
+    }
+
+
+def _reserved_parts(
+    names: list[str],
+    trades: dict[str, dict[str, pl.DataFrame]],
+    layers: dict[str, Any],
+    period: str,
+    router: dict[str, Any],
+) -> list[pl.DataFrame]:
+    parts = []
+    cutoff = router.get("reservation_before_second")
+    confidence_delta = float(router.get("reservation_confidence_delta", 0.0))
+    edge_delta = float(router.get("reservation_edge_delta", 0.0))
+    for name in names:
+        value = trades[name][period]
+        if cutoff is not None and int(layers[name]["policy"]["quantity"]) == 5:
+            threshold = int(cutoff)
+            policy = layers[name]["policy"]
+            value = value.filter(
+                (pl.col("seconds_elapsed") >= threshold)
+                | (
+                    (
+                        pl.col("selected_probability")
+                        >= float(policy["minimum_confidence"]) + confidence_delta
+                    )
+                    & (pl.col("expected_edge") >= float(policy["minimum_edge"]) + edge_delta)
+                )
+            )
+        parts.append(value)
+    return parts
+
+
 def _report(metrics: dict[str, Any]) -> str:
     common = metrics["confirmation_common_window"]
-    common_range = (
-        f"{common['start'][:10]} to {common['end_exclusive'][:10]} (end exclusive)"
-    )
+    common_range = f"{common['start'][:10]} to {common['end_exclusive'][:10]} (end exclusive)"
     lines = [
         "# BTC Five-Minute Micro-Bucket Router Tournament",
         "",
         f"Run: `{metrics['run_id']}`",
         f"Qualification: **{metrics['qualification']}**",
         f"Selected router: **{metrics['selected_router']}**",
+        f"Selection evidence: **{metrics.get('selection_period', 'confirmation')}**",
         "",
         "## Frozen hypothesis",
         "",
@@ -386,6 +445,31 @@ def _report(metrics: dict[str, Any]) -> str:
             f"{value['wins']}/{value['losses']} | {value['market_coverage']:.2%} | "
             f"{value['maximum_drawdown']:.2f} |"
         )
+    if metrics.get("router_bucket_metrics"):
+        for router_name, bucket_rows in metrics["router_bucket_metrics"].items():
+            lines.extend(
+                [
+                    "",
+                    f"## {router_name} — confirmation PnL by bucket",
+                    "",
+                    "| Bucket | Seconds | PnL | Stress | PF | Trades | UP/DOWN | W/L | Win rate | Coverage | Avg entry | Confidence | Recovery | Max DD |",
+                    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+                ]
+            )
+            bucket_map = {row["name"]: row for row in metrics["buckets"]}
+            for bucket_name, value in bucket_rows.items():
+                bucket = bucket_map[bucket_name]
+                lines.append(
+                    f"| {bucket_name} | {bucket['start_second']}-{bucket['end_second']} | "
+                    f"{value['net_pnl']:.2f} | {value['stress_net_pnl']:.2f} | "
+                    f"{value['profit_factor'] or 0:.3f} | {value['trades']} | "
+                    f"{value['up_trades']}/{value['down_trades']} | "
+                    f"{value['wins']}/{value['losses']} | {value['win_rate'] or 0:.2%} | "
+                    f"{value['market_coverage']:.2%} | {value['average_entry_second'] or 0:.1f} | "
+                    f"{value['average_confidence'] or 0:.3f} | "
+                    f"{value['recovery_wins_per_loss'] or 0:.3f} | "
+                    f"{value['maximum_drawdown']:.2f} |"
+                )
     lines.extend(
         [
             "",
@@ -418,6 +502,7 @@ def _report(metrics: dict[str, Any]) -> str:
             f"- Early causal feature coverage ends at {common['end_exclusive']} (exclusive); all-router comparisons therefore include the exact common window above.",
             "- No database row, table, schema, source, ingester, runtime model, trading process, or image was changed.",
             "- VWAP replay assumes the recorded ask ladder was fillable and does not model queue position.",
+            "- Tournament qualification uses VWAP5 only; larger quantities are post-selection capacity evidence.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -480,16 +565,12 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
             model = saved["model"]
             prediction_all = pl.read_parquet(prediction_path)
         else:
-            fit = base._slice(
-                fit_dataset, bucket, windows["source_start"], windows["fit_end"]
-            )
+            fit = base._slice(fit_dataset, bucket, windows["source_start"], windows["fit_end"])
             model = base._fit_model(fit, tuple(contract["features"]), raw, seed + index)
             scoring = base._slice(
                 dataset, bucket, windows["policy_start"], windows["confirmation_end"]
             )
-            prediction_all = base._prediction_frame(
-                scoring, base._predict(model, scoring), name
-            )
+            prediction_all = base._prediction_frame(scoring, base._predict(model, scoring), name)
             base._write_joblib(
                 checkpoint,
                 {
@@ -505,9 +586,7 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
             "development": base._slice(
                 dataset, bucket, windows["policy_start"], windows["policy_end"]
             ),
-            "design": base._slice(
-                dataset, bucket, windows["sealed_start"], windows["sealed_end"]
-            ),
+            "design": base._slice(dataset, bucket, windows["sealed_start"], windows["sealed_end"]),
             "confirmation": base._slice(
                 dataset, bucket, windows["confirmation_start"], windows["confirmation_end"]
             ),
@@ -666,9 +745,7 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
 
     qualified = {
         bucket: [
-            row
-            for row in layers.values()
-            if row["bucket"] == bucket and _layer_qualified(row, raw)
+            row for row in layers.values() if row["bucket"] == bucket and _layer_qualified(row, raw)
         ]
         for bucket in buckets
     }
@@ -679,8 +756,7 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
                 eligible = [
                     row
                     for row in rows
-                    if row["rtds_mode"] == mode
-                    and (form == "best" or row["form"] == form)
+                    if row["rtds_mode"] == mode and (form == "best" or row["form"] == form)
                 ]
                 if eligible:
                     selected_layers[(bucket, mode, form)] = max(
@@ -706,9 +782,7 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
     champion_predictions = base._prediction_frame(
         champion_frame, base._predict(champion_model, champion_frame), champion_name
     )
-    _, champion_trades = _period_result(
-        champion_frame, champion_predictions, champion_policy, raw
-    )
+    _, champion_trades = _period_result(champion_frame, champion_predictions, champion_policy, raw)
 
     def chosen(bucket: str, mode: str, form: str) -> dict[str, Any] | None:
         return selected_layers.get((bucket, mode, form))
@@ -723,30 +797,60 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
     def parts(names: list[str]) -> list[pl.DataFrame]:
         return [trades[name]["confirmation"] for name in names]
 
-    router_layer_names = {
-        "early_micro_individual": layer_names(
-            primary, "without_rtds_candles", "individual"
-        ),
-        "early_micro_prior_weighted": layer_names(
-            primary, "without_rtds_candles", "prior_weighted"
-        ),
-        "early_micro_agreement": layer_names(
-            primary, "without_rtds_candles", "agreement"
-        ),
-        "later_rtds": layer_names(optional, "with_rtds_candles", "best"),
-        "full_hybrid": layer_names(primary, "without_rtds_candles", "best")
-        + layer_names(optional, "with_rtds_candles", "best"),
-        "full_rtds_free": layer_names(
-            (*primary, *optional), "without_rtds_candles", "best"
-        ),
-    }
+    router_specs = raw.get("router_definitions")
+    if router_specs:
+        router_layer_names = {}
+        router_spec_by_name = {}
+        for router in router_specs:
+            router_name = router["name"]
+            mode = router.get("rtds_mode", "without_rtds_candles")
+            form = router.get("form", "best")
+            selected = []
+            for bucket_name in router["buckets"]:
+                eligible = [
+                    row
+                    for row in qualified[bucket_name]
+                    if (mode == "any" or row["rtds_mode"] == mode)
+                    and (form == "best" or row["form"] == form)
+                ]
+                if eligible:
+                    selected.append(
+                        max(
+                            eligible,
+                            key=lambda row: (
+                                base._policy_score(row["design"]),
+                                base._policy_score(row["development"]),
+                            ),
+                        )["name"]
+                    )
+            router_layer_names[router_name] = selected
+            router_spec_by_name[router_name] = router
+    else:
+        router_layer_names = {
+            "early_micro_individual": layer_names(primary, "without_rtds_candles", "individual"),
+            "early_micro_prior_weighted": layer_names(
+                primary, "without_rtds_candles", "prior_weighted"
+            ),
+            "early_micro_agreement": layer_names(primary, "without_rtds_candles", "agreement"),
+            "later_rtds": layer_names(optional, "with_rtds_candles", "best"),
+            "full_hybrid": layer_names(primary, "without_rtds_candles", "best")
+            + layer_names(optional, "with_rtds_candles", "best"),
+            "full_rtds_free": layer_names((*primary, *optional), "without_rtds_candles", "best"),
+        }
+        router_spec_by_name = {name: {} for name in router_layer_names}
 
+    router_period_trades = {
+        name: {
+            period: _compose_trades(
+                _reserved_parts(names, trades, layers, period, router_spec_by_name[name])
+            )
+            for period in ("development", "design", "confirmation")
+        }
+        for name, names in router_layer_names.items()
+    }
     router_trades = {
         "champion_replay": champion_trades,
-        **{
-            name: _compose_trades(parts(names))
-            for name, names in router_layer_names.items()
-        },
+        **{name: periods["confirmation"] for name, periods in router_period_trades.items()},
     }
     prior_parts = []
     for bucket_name, winner in prior_artifact["winners"].items():
@@ -764,9 +868,7 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
         prediction = base._prediction_frame(
             prior_frame, base._predict(model, prior_frame), winner["candidate"]
         )
-        _, replay = _period_result(
-            prior_frame, prediction, base.Policy(**winner["policy"]), raw
-        )
+        _, replay = _period_result(prior_frame, prediction, base.Policy(**winner["policy"]), raw)
         prior_parts.append(replay)
     router_trades["prior_composed_replay"] = _compose_trades(prior_parts)
 
@@ -780,17 +882,27 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
         early["window_start"].max() + timedelta(minutes=5),
     )
     common_markets = evaluation.filter(
-        pl.col("window_start").is_between(
-            windows["confirmation_start"], common_end, closed="left"
-        )
+        pl.col("window_start").is_between(windows["confirmation_start"], common_end, closed="left")
     )["market_id"].n_unique()
     routers = {
         name: _router_metrics(value, total_markets, common_end, common_markets)
         for name, value in router_trades.items()
     }
-    selected_router = _select_challenger(routers, tuple(router_layer_names))
+    period_ranges = {
+        "development": (windows["policy_start"], windows["policy_end"]),
+        "design": (windows["sealed_start"], windows["sealed_end"]),
+    }
+    for name, period_trades in router_period_trades.items():
+        for period, (start, end) in period_ranges.items():
+            period_markets = evaluation.filter(
+                pl.col("window_start").is_between(start, end, closed="left")
+            )["market_id"].n_unique()
+            routers[name][period] = base._economic_metrics(period_trades[period], period_markets)
+    selection_period = raw["router"].get("selection_period", "confirmation")
+    selected_router = _select_challenger(routers, tuple(router_layer_names), selection_period)
     winner = routers[selected_router]["confirmation"]
-    champion = routers["champion_replay"]["confirmation"]
+    benchmark_name = raw["router"].get("qualification_benchmark", "champion_replay")
+    champion = routers[benchmark_name]["confirmation"]
     qualification = (
         "trained_evaluated_outperformed_champion"
         if winner["stress_net_pnl"] > champion["stress_net_pnl"]
@@ -813,7 +925,9 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
             if _layer_qualified(row, raw)
         },
         "routers": router_layer_names,
+        "router_definitions": router_spec_by_name,
         "selected_router": selected_router,
+        "selection_period": selection_period,
         "default_action": "no_trade",
         "paper_only": True,
         "live_capital_allowed": False,
@@ -847,6 +961,10 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
         "bucket_layers": layers,
         "qualified_layers": qualified,
         "routers": routers,
+        "router_bucket_metrics": {
+            name: _router_bucket_metrics(value, buckets, total_markets)
+            for name, value in router_trades.items()
+        },
         "versions": {
             "python": platform.python_version(),
             "numpy": np.__version__,
@@ -897,6 +1015,14 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
         ],
         infer_schema_length=None,
     ).write_parquet(work / "router-metrics.parquet", compression="zstd")
+    pl.DataFrame(
+        [
+            {"router": router, "bucket": bucket, **value}
+            for router, bucket_rows in metrics["router_bucket_metrics"].items()
+            for bucket, value in bucket_rows.items()
+        ],
+        infer_schema_length=None,
+    ).write_parquet(work / "router-bucket-metrics.parquet", compression="zstd")
     _write_json(
         work / "model-provenance.json",
         {

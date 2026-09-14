@@ -212,7 +212,19 @@ def _feature_contracts(raw: dict[str, Any], source: dict[str, Any]) -> list[dict
     contracts: list[dict[str, Any]] = []
     for row in raw["candidates"]:
         requested = tuple(row["feature_groups"])
-        for rtds_mode in ("without_rtds_candles", "with_rtds_candles"):
+        rtds_modes = tuple(
+            row.get(
+                "rtds_modes",
+                ("without_rtds_candles", "with_rtds_candles"),
+            )
+        )
+        unknown_modes = set(rtds_modes) - {
+            "without_rtds_candles",
+            "with_rtds_candles",
+        }
+        if unknown_modes:
+            raise RuntimeError(f"unknown RTDS modes in {row['name']}: {sorted(unknown_modes)}")
+        for rtds_mode in rtds_modes:
             selected_groups = tuple(
                 group
                 for group in requested
