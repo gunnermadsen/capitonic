@@ -1,0 +1,35 @@
+{
+  "artifact_path": "tournament.joblib",
+  "configuration_sha256": "d62a27d7c0355a642808d97d69f65c8b86da2cbc13fd1ab9cbcb924ce693f127",
+  "deployment_status": "not_deployed",
+  "hypothesis_preserved": true,
+  "model_artifact_sha256": "6cabcb197f4c6feda26716c0a61863339e0efa32c084b1ee57749ff0c6640e13",
+  "producing_commit": "5ff7090109f87aa51d113409dd709403aa493cea",
+  "qualification_status": "trained_evaluated_not_qualified",
+  "schema_version": "btc-model-provenance-v1",
+  "selected_bucket_variants": {
+    "bridge_early": "time_specialist_early__without_rtds_candles",
+    "early_twap_up": "early_twap_single_regime__without_rtds_candles",
+    "extended_specialist_down": "extended_specialist_official__without_rtds_candles",
+    "late_discovery": "multivenue_late__with_rtds_candles",
+    "middle_q5_down": "crossvenue_middle_110__without_rtds_candles",
+    "multivenue_middle": "kraken_crossvenue_middle__without_rtds_candles",
+    "settlement_middle": "middle_agreement__with_rtds_candles",
+    "terminal_discovery": "settlement_aligned_terminal__with_rtds_candles"
+  },
+  "source_hashes": {
+    "early_config": "631a69585d1de2865a6e2c2cbc23379cabdaf59517438e079ea4a2127ebe6815",
+    "early_context_manifest": "560ab63366a24f4a716f8db6624f30aeda5f2d72ed27e60566c24991d5a0bee3",
+    "early_label_audit": "6e1f921fcc663920f314f89a1e8331ec2eea4a38f9c7055d786ba45f5ab69ad9",
+    "early_open_interest": "e4636d2ec9a47f86debbb08143a8dcbabd74f2f78ea3d0cda08cb668aa4fa54d",
+    "early_preparation_manifest": "90475b654b356ce442e078335088c9df47a71fd82b607691abdf6575d6f494f5",
+    "early_source_frame": "223f70125de38f5d0143a5ddb13067d1ac3d12928fb4f8c8bfe4f68352c82d26",
+    "early_source_manifest": "6ee22c22d86a74e0bd59ea6286928ba6e49977ec7545e3e31dd02796b410d5ad",
+    "evaluation_manifest": "ca752bbbeb91a5295add2f589950c673af26a9e05561a10a7d4aaec3de1e65e5",
+    "evaluation_panel": "f11e3bc597dfd546d667c5f610791fd48feab0015217c64278fc06e46612bffa",
+    "training_manifest": "ca752bbbeb91a5295add2f589950c673af26a9e05561a10a7d4aaec3de1e65e5",
+    "training_panel": "f11e3bc597dfd546d667c5f610791fd48feab0015217c64278fc06e46612bffa"
+  },
+  "source_identity": "c4564e777e1c483cf258dd9c5587bc7e04af05cfbfc666db6e1dee8c7f018dd9",
+  "training_run_id": "20260914T171438Z"
+}
