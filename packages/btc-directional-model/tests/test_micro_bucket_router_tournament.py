@@ -10,6 +10,7 @@ from btc_directional_model.micro_bucket_router_tournament import (
     _attach_confirmation_execution,
     _blend_predictions,
     _layer_qualified,
+    _select_challenger,
 )
 
 CONFIG = (
@@ -126,3 +127,14 @@ def test_layer_qualification_requires_both_development_and_design() -> None:
     assert _layer_qualified(layer, raw)
     layer["design"]["stress_net_pnl"] = -1.0
     assert not _layer_qualified(layer, raw)
+
+
+def test_challenger_selection_excludes_historical_benchmarks() -> None:
+    routers = {
+        "champion_replay": {"confirmation": {"stress_net_pnl": 20.0, "net_pnl": 30.0}},
+        "prior_composed_replay": {
+            "confirmation": {"stress_net_pnl": 100.0, "net_pnl": 120.0}
+        },
+        "new_router": {"confirmation": {"stress_net_pnl": 40.0, "net_pnl": 50.0}},
+    }
+    assert _select_challenger(routers, ("new_router",)) == "new_router"

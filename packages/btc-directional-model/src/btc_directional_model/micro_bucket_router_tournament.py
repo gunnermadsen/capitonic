@@ -310,6 +310,20 @@ def _compose_trades(parts: list[pl.DataFrame]) -> pl.DataFrame:
     )
 
 
+def _select_challenger(
+    routers: dict[str, dict[str, dict[str, Any]]], challenger_names: tuple[str, ...]
+) -> str:
+    if not challenger_names:
+        raise RuntimeError("no newly trained routers are eligible for selection")
+    return max(
+        challenger_names,
+        key=lambda name: (
+            routers[name]["confirmation"]["stress_net_pnl"],
+            routers[name]["confirmation"]["net_pnl"],
+        ),
+    )
+
+
 def _router_metrics(
     trades: pl.DataFrame,
     total_markets: int,
@@ -698,29 +712,37 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
     primary = ("early_40_44", "early_60_64", "early_65_69", "early_70_74")
     optional = ("middle_110_119", "middle_150_169", "late_185_209")
 
-    def parts(bucket_names: tuple[str, ...], mode: str, form: str) -> list[pl.DataFrame]:
+    def layer_names(bucket_names: tuple[str, ...], mode: str, form: str) -> list[str]:
         selected = [chosen(bucket, mode, form) for bucket in bucket_names]
-        return [trades[row["name"]]["confirmation"] for row in selected if row is not None]
+        return [row["name"] for row in selected if row is not None]
+
+    def parts(names: list[str]) -> list[pl.DataFrame]:
+        return [trades[name]["confirmation"] for name in names]
+
+    router_layer_names = {
+        "early_micro_individual": layer_names(
+            primary, "without_rtds_candles", "individual"
+        ),
+        "early_micro_prior_weighted": layer_names(
+            primary, "without_rtds_candles", "prior_weighted"
+        ),
+        "early_micro_agreement": layer_names(
+            primary, "without_rtds_candles", "agreement"
+        ),
+        "later_rtds": layer_names(optional, "with_rtds_candles", "best"),
+        "full_hybrid": layer_names(primary, "without_rtds_candles", "best")
+        + layer_names(optional, "with_rtds_candles", "best"),
+        "full_rtds_free": layer_names(
+            (*primary, *optional), "without_rtds_candles", "best"
+        ),
+    }
 
     router_trades = {
         "champion_replay": champion_trades,
-        "early_micro_individual": _compose_trades(
-            parts(primary, "without_rtds_candles", "individual")
-        ),
-        "early_micro_prior_weighted": _compose_trades(
-            parts(primary, "without_rtds_candles", "prior_weighted")
-        ),
-        "early_micro_agreement": _compose_trades(
-            parts(primary, "without_rtds_candles", "agreement")
-        ),
-        "later_rtds": _compose_trades(parts(optional, "with_rtds_candles", "best")),
-        "full_hybrid": _compose_trades(
-            parts(primary, "without_rtds_candles", "best")
-            + parts(optional, "with_rtds_candles", "best")
-        ),
-        "full_rtds_free": _compose_trades(
-            parts((*primary, *optional), "without_rtds_candles", "best")
-        ),
+        **{
+            name: _compose_trades(parts(names))
+            for name, names in router_layer_names.items()
+        },
     }
     prior_parts = []
     for bucket_name, winner in prior_artifact["winners"].items():
@@ -762,13 +784,7 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
         name: _router_metrics(value, total_markets, common_end, common_markets)
         for name, value in router_trades.items()
     }
-    selected_router = max(
-        routers,
-        key=lambda name: (
-            routers[name]["confirmation"]["stress_net_pnl"],
-            routers[name]["confirmation"]["net_pnl"],
-        ),
-    )
+    selected_router = _select_challenger(routers, tuple(router_layer_names))
     winner = routers[selected_router]["confirmation"]
     champion = routers["champion_replay"]["confirmation"]
     qualification = (
@@ -792,6 +808,7 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
             for name, row in layers.items()
             if _layer_qualified(row, raw)
         },
+        "routers": router_layer_names,
         "selected_router": selected_router,
         "default_action": "no_trade",
         "paper_only": True,
