@@ -273,6 +273,13 @@ def _period_bucket_metrics(
     return _economic_metrics(trades, frame["market_id"].n_unique()), trades
 
 
+def _available_predictive_metrics(frame: pl.DataFrame) -> dict[str, Any]:
+    available = frame.filter(
+        pl.col("probability").is_not_null() & pl.col("probability").is_finite()
+    )
+    return _predictive_metrics(available)
+
+
 def _report(metrics: dict[str, Any]) -> str:
     lines = [
         "# Historical time-bucket aggregate tournament",
@@ -496,7 +503,9 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, resume: bool
                             "period": period,
                             "donors": donors,
                             "policy": asdict(policy),
-                            "predictive": _predictive_metrics(aggregate_periods[period]),
+                            "predictive": _available_predictive_metrics(
+                                aggregate_periods[period]
+                            ),
                             "metrics": value,
                         }
                     )

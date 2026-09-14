@@ -4,6 +4,7 @@ import polars as pl
 
 from btc_directional_model.historical_aggregate_tournament import (
     _aggregate_predictions,
+    _available_predictive_metrics,
     _bucket_contracts,
     _recipe_for,
 )
@@ -43,3 +44,5 @@ def test_consensus_abstains_when_member_directions_disagree() -> None:
     right = base.with_columns(pl.Series("probability", [0.7, 0.2]), pl.lit("right").alias("candidate"))
     result = _aggregate_predictions([left, right], "consensus", "aggregate")
     assert result["probability"].to_list() == [0.75, None]
+    metrics = _available_predictive_metrics(result)
+    assert metrics["rows"] == 1
