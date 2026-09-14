@@ -39,7 +39,7 @@ LEFT JOIN LATERAL (
            PARTITION BY report.valid_from_timestamp
          )::integer AS effective_timestamp_rows
   FROM market_data.pmdata_chainlink_btcusd_twap report
-  JOIN polymarket.backfill_artifacts artifact
+  JOIN ingester.backfill_artifacts artifact
     ON artifact.artifact_id = report.artifact_id
    AND artifact.status = 'completed'
   WHERE report.window_seconds = 60
@@ -56,7 +56,7 @@ LEFT JOIN LATERAL (
            PARTITION BY report.valid_from_timestamp
          )::integer AS effective_timestamp_rows
   FROM market_data.pmdata_chainlink_btcusd_twap report
-  JOIN polymarket.backfill_artifacts artifact
+  JOIN ingester.backfill_artifacts artifact
     ON artifact.artifact_id = report.artifact_id
    AND artifact.status = 'completed'
   WHERE report.window_seconds = 60

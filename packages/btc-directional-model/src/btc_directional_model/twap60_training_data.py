@@ -347,7 +347,7 @@ def _query_completed_candles(
         rows = connection.execute(
             """
             SELECT artifact_id::text
-            FROM polymarket.backfill_artifacts
+            FROM ingester.capture_artifacts
             WHERE artifact_id = ANY(%s::uuid[])
               AND status = 'completed'
             """,

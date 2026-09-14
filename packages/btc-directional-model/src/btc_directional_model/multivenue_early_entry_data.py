@@ -648,9 +648,9 @@ def build_panel(
         "kraken": tuple(name for name in KRAKEN_FEATURES if name in panel.columns),
     }
     for group, features in groups.items():
-        if group == "refprice":
+        if group == "refprice" and "refprice_causal_eligible" in panel.columns:
             availability = pl.col("refprice_causal_eligible")
-        elif group == "oracle":
+        elif group == "oracle" and "oracle_model_eligible" in panel.columns:
             availability = pl.col("oracle_model_eligible")
         elif features:
             availability = pl.any_horizontal(

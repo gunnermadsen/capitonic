@@ -15,7 +15,7 @@ from btc_directional_model.time_bucket_specialist_tournament import (
 CONFIG = (
     Path(__file__).parents[1]
     / "configs"
-    / "btc-5m-time-bucket-specialist-tournament-20260321-20260901.toml"
+    / "btc-5m-time-bucket-specialist-tournament-20260321-20260914.toml"
 )
 
 
@@ -27,6 +27,8 @@ def test_hypothesis_config_is_training_only_and_bucket_disjoint() -> None:
     assert raw["windows"]["fit_end"] == raw["windows"]["policy_start"]
     assert raw["windows"]["policy_end"] == raw["windows"]["sealed_start"]
     assert raw["windows"]["sealed_end"] == raw["windows"]["confirmation_start"]
+    assert raw["windows"]["early_fit_end"] == raw["windows"]["early_policy_start"]
+    assert raw["windows"]["early_policy_end"] <= raw["windows"]["policy_start"]
     assert {row["historical_model"] for row in raw["candidates"]}
     assert {row["bucket"] for row in raw["candidates"]} <= {row["name"] for row in raw["buckets"]}
 
@@ -76,4 +78,6 @@ def test_candidate_roster_contains_rtds_and_rtds_free_training_pairs() -> None:
             "with_rtds_candles",
             "without_rtds_candles",
         }
-    assert raw["execution"]["quantities"] == [5, 10, 20, 30, 50]
+    assert raw["execution"]["fixed_primary_quantity"] == 5
+    assert raw["execution"]["quantities"] == [5]
+    assert 50 in raw["execution"]["capacity_quantities"]

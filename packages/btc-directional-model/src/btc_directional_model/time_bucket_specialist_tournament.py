@@ -132,6 +132,11 @@ def _load_config(path: Path) -> tuple[Path, dict[str, Any]]:
     known = set(names)
     if any(row["bucket"] not in known for row in raw["candidates"]):
         raise RuntimeError("candidate references an unknown bucket")
+    fixed_quantity = raw["execution"].get("fixed_primary_quantity")
+    if fixed_quantity is not None and (
+        int(fixed_quantity) != 5 or raw["execution"]["quantities"] != [5]
+    ):
+        raise RuntimeError("fixed-primary tournament must select policies at VWAP5 only")
     return root, raw
 
 
@@ -156,6 +161,7 @@ def _source_contract(root: Path, raw: dict[str, Any]) -> dict[str, Any]:
             "early_label_audit",
             "early_context_manifest",
             "early_open_interest",
+            "early_preparation_manifest",
         )
     }
     manifests = {
@@ -168,7 +174,12 @@ def _source_contract(root: Path, raw: dict[str, Any]) -> dict[str, Any]:
         if digest != manifests[kind]["sha256"]:
             raise RuntimeError(f"{kind} panel does not match its immutable manifest")
     early_context = json.loads(resolved["early_context_manifest"].read_text())
-    expected_oi_sha = early_context["sources"]["open_interest"]["partitions"][0]["sha256"]
+    preparation = json.loads(resolved["early_preparation_manifest"].read_text())
+    expected_oi_sha = preparation.get("open_interest", {}).get("sha256")
+    if expected_oi_sha is None:
+        expected_oi_sha = early_context["sources"]["open_interest"]["partitions"][0][
+            "sha256"
+        ]
     if file_sha256(resolved["early_open_interest"]) != expected_oi_sha:
         raise RuntimeError("early open-interest partition does not match its immutable manifest")
     return {
@@ -184,6 +195,9 @@ def _source_contract(root: Path, raw: dict[str, Any]) -> dict[str, Any]:
             "early_label_audit": file_sha256(resolved["early_label_audit"]),
             "early_context_manifest": file_sha256(resolved["early_context_manifest"]),
             "early_open_interest": file_sha256(resolved["early_open_interest"]),
+            "early_preparation_manifest": file_sha256(
+                resolved["early_preparation_manifest"]
+            ),
         },
         "feature_groups": manifests["training"]["feature_groups"],
         "training_range": [
@@ -395,7 +409,7 @@ def _load_or_build_early_panel(
     early_config = replace(
         base_config,
         historical_start=windows["source_start"],
-        development_start=windows["policy_start"],
+        development_start=min(base_config.development_start, windows["policy_start"]),
         development_end=freeze_at,
         prospective_start=freeze_at,
         source_cache=Path(source["paths"]["early_source_cache"]),
@@ -405,6 +419,7 @@ def _load_or_build_early_panel(
     )
     print("build: causal 30-150 second TWAP/refprice sensor frame", flush=True)
     frame, base_manifest = latent.build_training_frame(early_config)
+    frame = frame.filter(pl.col("sensor_valid"))
     candles = latent._load_source_partitions(
         early_config.source_cache,
         "candles",
@@ -687,6 +702,10 @@ def _economic_metrics(trades: pl.DataFrame, total_markets: int) -> dict[str, Any
             "wins": 0,
             "losses": 0,
             "win_rate": None,
+            "gross_profit": 0.0,
+            "gross_loss": 0.0,
+            "average_win": None,
+            "average_loss": None,
             "net_pnl": 0.0,
             "stress_net_pnl": 0.0,
             "profit_factor": None,
@@ -710,6 +729,10 @@ def _economic_metrics(trades: pl.DataFrame, total_markets: int) -> dict[str, Any
         "wins": len(wins),
         "losses": len(losses),
         "win_rate": float(len(wins) / trades.height),
+        "gross_profit": float(wins.sum()),
+        "gross_loss": float(losses.sum()),
+        "average_win": float(wins.mean()) if len(wins) else None,
+        "average_loss": float(losses.mean()) if len(losses) else None,
         "net_pnl": float(pnl.sum()),
         "stress_net_pnl": float(trades["stress_net_pnl"].sum()),
         "profit_factor": float(wins.sum() / losses.sum()) if losses.sum() else None,
@@ -933,6 +956,25 @@ def _report(metrics: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## Composed untouched confirmation result",
+            "",
+            "| PnL | Stress PnL | PF | Trades | Wins/Losses | Coverage | Avg entry | Recovery wins/loss | Max DD |",
+            "|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    confirmation = metrics["composed"]["confirmation"]
+    lines.append(
+        f"| {confirmation['net_pnl']:.2f} | {confirmation['stress_net_pnl']:.2f} | "
+        f"{confirmation['profit_factor'] or 0:.3f} | {confirmation['trades']} | "
+        f"{confirmation['wins']}/{confirmation['losses']} | "
+        f"{confirmation['market_coverage']:.2%} | "
+        f"{confirmation['average_entry_second'] or 0:.1f} | "
+        f"{confirmation['recovery_wins_per_loss'] or 0:.3f} | "
+        f"{confirmation['maximum_drawdown']:.2f} |"
+    )
+    lines.extend(
+        [
+            "",
             "## Bucket winners",
             "",
             "| Bucket | Winner | RTDS | Side | VWAP | PnL | Stress | PF | Trades | UP/DOWN | W/L | Coverage | Avg entry | Recovery |",
@@ -974,6 +1016,57 @@ def _report(metrics: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## All candidate variants — untouched confirmation",
+            "",
+            "| Bucket | Candidate | RTDS | Side | VWAP | PnL | Stress | PF | Trades | UP/DOWN | W/L | Coverage | Avg entry | Recovery |",
+            "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for result in metrics["candidate_results"].values():
+        confirmation = result["confirmation"]
+        policy = result["policy"]
+        lines.append(
+            f"| {result['bucket']} | {result['candidate']} | {result['rtds_mode']} | "
+            f"{policy['side']} | {policy['quantity']} | {confirmation['net_pnl']:.2f} | "
+            f"{confirmation['stress_net_pnl']:.2f} | "
+            f"{confirmation['profit_factor'] or 0:.3f} | {confirmation['trades']} | "
+            f"{confirmation['up_trades']}/{confirmation['down_trades']} | "
+            f"{confirmation['wins']}/{confirmation['losses']} | "
+            f"{confirmation['market_coverage']:.2%} | "
+            f"{confirmation['average_entry_second'] or 0:.1f} | "
+            f"{confirmation['recovery_wins_per_loss'] or 0:.3f} |"
+        )
+    lines.extend(["", "## Per-challenger period and bucket PnL", ""])
+    for result in metrics["candidate_results"].values():
+        policy = result["policy"]
+        lines.extend(
+            [
+                f"### {result['name']}",
+                "",
+                f"Bucket: `{result['bucket']}`; side: `{policy['side']}`; executable VWAP: `{policy['quantity']}` shares.",
+                "",
+                "| Period | PnL | Stress | Gross profit | Gross loss | PF | Trades | UP/DOWN | W/L | Win rate | Coverage | Avg entry | Avg cost | Avg confidence | Recovery | Max DD |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for period in ("development", "sealed", "confirmation"):
+            row = result[period]
+            lines.append(
+                f"| {period} | {row['net_pnl']:.2f} | {row['stress_net_pnl']:.2f} | "
+                f"{row['gross_profit']:.2f} | {row['gross_loss']:.2f} | "
+                f"{row['profit_factor'] or 0:.3f} | {row['trades']} | "
+                f"{row['up_trades']}/{row['down_trades']} | {row['wins']}/{row['losses']} | "
+                f"{row['win_rate'] or 0:.2%} | {row['market_coverage']:.2%} | "
+                f"{row['average_entry_second'] or 0:.1f} | "
+                f"{row['average_share_cost'] or 0:.4f} | "
+                f"{row['average_confidence'] or 0:.4f} | "
+                f"{row['recovery_wins_per_loss'] or 0:.3f} | "
+                f"{row['maximum_drawdown']:.2f} |"
+            )
+        lines.append("")
+    lines.extend(
+        [
+            "",
             "## Winner VWAP capacity — sealed test",
             "",
             "| Bucket | Shares | PnL | Stress | PF | Trades | Coverage |",
@@ -1000,13 +1093,19 @@ def _report(metrics: dict[str, Any]) -> str:
             "- Economic replay is chronological and admits at most one entry per market.",
             "- Inputs are immutable existing Parquet artifacts; no database, ingester, source, table, schema, runtime, or deployment was changed.",
             "- The sealed interval has been observed by prior research and is chronological but not epistemically fresh.",
-            "- Order-book VWAP evidence ends on August 26; the August 26-September 1 confirmation block is prediction-only and cannot produce economic trades.",
+            "- Current executable VWAP evidence is retained through September 13 with observed interruptions reported as missing coverage.",
         ]
     )
     return "\n".join(lines) + "\n"
 
 
-def run_tournament(config_path: Path, *, run_id: str | None = None, force: bool = False) -> Path:
+def run_tournament(
+    config_path: Path,
+    *,
+    run_id: str | None = None,
+    force: bool = False,
+    resume: bool = False,
+) -> Path:
     root, raw = _load_config(config_path)
     source = _source_contract(root, raw)
     contracts = _feature_contracts(raw, source)
@@ -1014,7 +1113,7 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, force: bool 
     run_id = run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     work = _resolve(root, raw["paths"]["runs"]) / run_id
     committed = _resolve(root, raw["paths"]["committed_results"]) / run_id
-    if committed.exists() and not force:
+    if committed.exists() and not force and not resume:
         raise RuntimeError(f"committed result already exists: {committed}")
     checkpoints = work / "checkpoints"
     checkpoints.mkdir(parents=True, exist_ok=True)
@@ -1026,9 +1125,63 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, force: bool 
     buckets = _bucket_map(raw)
     windows = {name: _parse_time(value) for name, value in raw["windows"].items()}
     early = _load_or_build_early_panel(root, raw, source, columns, windows, work)
+    split_audit: dict[str, Any] = {}
+    split_specs = {
+        "main": (
+            evaluation,
+            [
+                ("fit", windows["source_start"], windows["fit_end"]),
+                ("policy", windows["policy_start"], windows["policy_end"]),
+                ("sealed", windows["sealed_start"], windows["sealed_end"]),
+                (
+                    "confirmation",
+                    windows["confirmation_start"],
+                    windows["confirmation_end"],
+                ),
+            ],
+        ),
+        "early_causal_twap": (
+            early,
+            [
+                ("fit", windows["source_start"], windows["early_fit_end"]),
+                (
+                    "policy",
+                    windows["early_policy_start"],
+                    windows["early_policy_end"],
+                ),
+                ("sealed", windows["sealed_start"], windows["sealed_end"]),
+                (
+                    "confirmation",
+                    windows["confirmation_start"],
+                    windows["confirmation_end"],
+                ),
+            ],
+        ),
+    }
+    for dataset_name, (frame, specs) in split_specs.items():
+        market_sets = {
+            name: set(
+                frame.filter(pl.col("window_start").is_between(start, end, closed="left"))[
+                    "market_id"
+                ].to_list()
+            )
+            for name, start, end in specs
+        }
+        overlaps = {
+            f"{left}_vs_{right}": len(market_sets[left] & market_sets[right])
+            for position, (left, _, _) in enumerate(specs)
+            for right, _, _ in specs[position + 1 :]
+        }
+        if any(overlaps.values()):
+            raise RuntimeError(f"market leakage across {dataset_name} splits: {overlaps}")
+        split_audit[dataset_name] = {
+            "markets": {name: len(values) for name, values in market_sets.items()},
+            "pairwise_market_overlap": overlaps,
+        }
     seed = int(raw["training"]["random_seed"])
     results: dict[str, Any] = {}
     sealed_trade_frames: dict[str, pl.DataFrame] = {}
+    confirmation_trade_frames: dict[str, pl.DataFrame] = {}
     artifact_models: dict[str, Any] = {}
     for index, contract in enumerate(contracts):
         name = contract["name"]
@@ -1037,6 +1190,10 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, force: bool 
         checkpoint = checkpoints / f"{name}.joblib"
         prediction_checkpoint = checkpoints / f"{name}-predictions.parquet"
         bucket = buckets[contract["bucket"]]
+        is_early = contract["dataset"] == "early_causal_twap"
+        fit_end = windows["early_fit_end"] if is_early else windows["fit_end"]
+        policy_start = windows["early_policy_start"] if is_early else windows["policy_start"]
+        policy_end = windows["early_policy_end"] if is_early else windows["policy_end"]
         print(f"candidate {index + 1}/{len(contracts)}: {name}", flush=True)
         if checkpoint.is_file() and prediction_checkpoint.is_file() and not force:
             saved = joblib.load(checkpoint)
@@ -1046,10 +1203,10 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, force: bool 
             prediction_all = pl.read_parquet(prediction_checkpoint)
             print(f"checkpoint resume: {name}", flush=True)
         else:
-            fit = _slice(fit_dataset, bucket, windows["source_start"], windows["fit_end"])
+            fit = _slice(fit_dataset, bucket, windows["source_start"], fit_end)
             model = _fit_model(fit, tuple(contract["features"]), raw, seed + index)
             evaluation_slice = _slice(
-                dataset, bucket, windows["policy_start"], windows["confirmation_end"]
+                dataset, bucket, policy_start, windows["confirmation_end"]
             )
             prediction_all = _prediction_frame(
                 evaluation_slice, _predict(model, evaluation_slice), name
@@ -1065,14 +1222,14 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, force: bool 
                 },
             )
             prediction_all.write_parquet(prediction_checkpoint, compression="zstd")
-        policy_frame = _slice(dataset, bucket, windows["policy_start"], windows["policy_end"])
+        policy_frame = _slice(dataset, bucket, policy_start, policy_end)
         sealed_frame = _slice(dataset, bucket, windows["sealed_start"], windows["sealed_end"])
         confirmation_frame = _slice(
             dataset, bucket, windows["confirmation_start"], windows["confirmation_end"]
         )
         policy_predictions = prediction_all.filter(
             pl.col("window_start").is_between(
-                windows["policy_start"], windows["policy_end"], closed="left"
+                policy_start, policy_end, closed="left"
             )
         )
         sealed_predictions = prediction_all.filter(
@@ -1111,6 +1268,15 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, force: bool 
         )
         results[name] = {
             **contract,
+            "selection_windows": {
+                "fit_end": fit_end,
+                "policy_start": policy_start,
+                "policy_end": policy_end,
+                "sealed_start": windows["sealed_start"],
+                "sealed_end": windows["sealed_end"],
+                "confirmation_start": windows["confirmation_start"],
+                "confirmation_end": windows["confirmation_end"],
+            },
             "policy": asdict(policy),
             "development": development_metrics,
             "sealed": sealed_metrics,
@@ -1132,6 +1298,11 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, force: bool 
             pl.lit(contract["bucket"]).alias("bucket"),
             pl.lit(contract["rtds_mode"]).alias("rtds_mode"),
         )
+        confirmation_trade_frames[name] = confirmation_trades.with_columns(
+            pl.lit(name).alias("candidate"),
+            pl.lit(contract["bucket"]).alias("bucket"),
+            pl.lit(contract["rtds_mode"]).alias("rtds_mode"),
+        )
         development_trades.write_parquet(
             checkpoints / f"{name}-development-trades.parquet", compression="zstd"
         )
@@ -1146,6 +1317,7 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, force: bool 
         )
     winners: dict[str, Any] = {}
     winner_trade_frames = []
+    winner_confirmation_frames = []
     for bucket_name in buckets:
         rows = [value for value in results.values() if value["bucket"] == bucket_name]
         winner = max(
@@ -1157,6 +1329,7 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, force: bool 
         )
         winners[bucket_name] = winner
         winner_trade_frames.append(sealed_trade_frames[winner["name"]])
+        winner_confirmation_frames.append(confirmation_trade_frames[winner["name"]])
     composed_trades = (
         pl.concat(winner_trade_frames, how="diagonal_relaxed")
         .sort(["market_id", "seconds_elapsed"])
@@ -1170,10 +1343,28 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, force: bool 
         )
     )["market_id"].n_unique()
     composed_metrics = _economic_metrics(composed_trades, sealed_markets)
+    composed_confirmation_trades = (
+        pl.concat(winner_confirmation_frames, how="diagonal_relaxed")
+        .sort(["market_id", "seconds_elapsed"])
+        .group_by("market_id", maintain_order=True)
+        .first()
+        .sort(["window_start", "seconds_elapsed"])
+    )
+    confirmation_markets = evaluation.filter(
+        pl.col("window_start").is_between(
+            windows["confirmation_start"], windows["confirmation_end"], closed="left"
+        )
+    )["market_id"].n_unique()
+    composed_confirmation_metrics = _economic_metrics(
+        composed_confirmation_trades, confirmation_markets
+    )
     rtds_winners = sum(winner["rtds_mode"] == "with_rtds_candles" for winner in winners.values())
     qualification = (
         "trained_evaluated_positive_sealed"
-        if composed_metrics["stress_net_pnl"] > 0 and (composed_metrics["profit_factor"] or 0) > 1
+        if composed_metrics["stress_net_pnl"] > 0
+        and (composed_metrics["profit_factor"] or 0) > 1
+        and composed_confirmation_metrics["stress_net_pnl"] > 0
+        and (composed_confirmation_metrics["profit_factor"] or 0) > 1
         else "trained_evaluated_not_qualified"
     )
     artifact = {
@@ -1202,12 +1393,27 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, force: bool 
         "artifact_sha256": artifact_sha,
         "qualification": qualification,
         "hypothesis_preserved": True,
+        "integrity": {
+            "chronological_market_splits": split_audit,
+            "maximum_pairwise_market_overlap": max(
+                overlap
+                for dataset in split_audit.values()
+                for overlap in dataset["pairwise_market_overlap"].values()
+            ),
+            "primary_execution_quantity_locked": 5,
+        },
+        "fixed_primary_execution_quantity": raw["execution"].get(
+            "fixed_primary_quantity"
+        ),
         "source_contract": source,
         "windows": raw["windows"],
         "buckets": raw["buckets"],
         "candidate_results": results,
         "winners": winners,
-        "composed": {"sealed": composed_metrics},
+        "composed": {
+            "sealed": composed_metrics,
+            "confirmation": composed_confirmation_metrics,
+        },
         "rtds": {
             "paired_variants_per_candidate": True,
             "bucket_winners_using_candles": rtds_winners,
@@ -1222,6 +1428,7 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, force: bool 
         "limitations": [
             "The chronological sealed interval has been observed by prior research and is not epistemically fresh.",
             "Archived executable order-book coverage is incomplete and varies by date and VWAP quantity.",
+            "The pre-60-second specialists require the original causal Data Streams sensor; rows without fresh sensor evidence are ineligible rather than silently substituted.",
             "Projected PnL assumes recorded ask VWAP was fillable and does not model queue position.",
         ],
     }
@@ -1252,6 +1459,9 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, force: bool 
         },
     )
     composed_trades.write_parquet(work / "composed-sealed-trades.parquet", compression="zstd")
+    composed_confirmation_trades.write_parquet(
+        work / "composed-confirmation-trades.parquet", compression="zstd"
+    )
     _write_json(
         work / "completion.json",
         {
@@ -1261,9 +1471,14 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, force: bool 
             "qualification": qualification,
         },
     )
-    if committed.exists():
+    if committed.exists() and not resume:
         shutil.rmtree(committed)
-    shutil.copytree(work, committed, ignore=shutil.ignore_patterns("checkpoints"))
+    shutil.copytree(
+        work,
+        committed,
+        dirs_exist_ok=resume,
+        ignore=shutil.ignore_patterns("checkpoints"),
+    )
     return committed
 
 
@@ -1271,9 +1486,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--run-id")
+    parser.add_argument("--resume-run")
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
-    print(run_tournament(args.config, run_id=args.run_id, force=args.force))
+    run_id = args.resume_run or args.run_id
+    print(
+        run_tournament(
+            args.config,
+            run_id=run_id,
+            force=args.force,
+            resume=args.resume_run is not None,
+        )
+    )
 
 
 if __name__ == "__main__":

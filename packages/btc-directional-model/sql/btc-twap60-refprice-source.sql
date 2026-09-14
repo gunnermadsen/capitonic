@@ -12,7 +12,7 @@ SELECT
   report.backfill_artifact_id::text AS artifact_id,
   report.report_sha256
 FROM market_data.chainlink_btcusd_reference_prices report
-JOIN polymarket.backfill_artifacts artifact
+JOIN ingester.backfill_artifacts artifact
   ON artifact.artifact_id = report.backfill_artifact_id
  AND artifact.status = 'completed'
 WHERE report.source = 'pmdata_chainlink_streams'

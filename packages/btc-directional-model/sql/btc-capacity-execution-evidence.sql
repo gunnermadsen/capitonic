@@ -58,7 +58,7 @@ SELECT
   snapshot.down_ask_vwap_200::double precision AS down_ask_vwap_200,
   snapshot.quality_flags
 FROM polymarket.btc_market_capacity_execution_snapshots snapshot
-JOIN polymarket.backfill_artifacts artifact
+JOIN ingester.backfill_artifacts artifact
   ON artifact.artifact_id = snapshot.artifact_id
  AND artifact.status = 'completed'
  AND (
