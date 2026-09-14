@@ -1,0 +1,180 @@
+{
+  "archive_files_seen": 585,
+  "candidate_ledgers": 174,
+  "canonical_files": 697,
+  "created_at": "2026-09-14T20:15:29.857555+00:00",
+  "database_mutations": false,
+  "duplicate_relative_paths": 549,
+  "local_files_seen": 661,
+  "local_preferred_on_duplicate": true,
+  "models_trained": 0,
+  "normalized_trade_rows": 191793,
+  "origin_counts": {
+    "archive": 36,
+    "local": 661
+  },
+  "read_only": true,
+  "replayable_ledgers": 135,
+  "replayable_signatures": 232,
+  "schema_version": "btc-historical-signature-replay-inventory-v1",
+  "training_runs": 49,
+  "unavailable": [
+    {
+      "artifact": "btc-5m-binance-latent-twap-context-20260607-20260828/20260828T220039Z/development-ledgers/twap_regime_l2_residual_research.parquet",
+      "reason": "missing market_id or seconds_elapsed"
+    },
+    {
+      "artifact": "btc-5m-causal-twap-attribution-20260607-20260828/20260828T165228Z/ledgers/prospective-trades.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-continuous-edge-payoff-robust-20260525-20260802/20260820T031515Z/test-trades.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-counterfactual-twap-state-causal-20260321-20260827/20260828T012814Z/ledgers/prospective-trades.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-early-entry-settlement-consensus-20260321-20260827/20260829T144048Z/ledgers/aligned-constituent-oof.parquet",
+      "reason": "direction unavailable"
+    },
+    {
+      "artifact": "btc-5m-early-entry-settlement-consensus-20260321-20260827/20260829T144048Z/ledgers/history-ablation-oof.parquet",
+      "reason": "five-share economics unavailable"
+    },
+    {
+      "artifact": "btc-5m-early-entry-settlement-consensus-20260321-20260827/20260829T144048Z/ledgers/prospective-trades.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-micro-bucket-router-tournament-20260321-20260901/20260914T002735Z/router-trades-early_micro_agreement.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-middle-market-payoff-tournament-20260525-20260810/20260820T173617Z/holdout-ledgers/mid_binance_l2.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-middle-market-payoff-tournament-20260525-20260810/20260820T173617Z/holdout-ledgers/mid_direction_qualified.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-middle-market-payoff-tournament-20260525-20260810/20260820T173617Z/holdout-ledgers/mid_open_interest.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-middle-market-payoff-tournament-20260525-20260810/20260820T173617Z/holdout-ledgers/mid_trade_prints.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-multivenue-early-entry-20260321-20260828/20260831T013939Z/ledgers/candidate-oof-binance_flow.parquet",
+      "reason": "direction unavailable"
+    },
+    {
+      "artifact": "btc-5m-multivenue-early-entry-20260321-20260828/20260831T013939Z/ledgers/candidate-oof-dual_venue_flow_agreement.parquet",
+      "reason": "direction unavailable"
+    },
+    {
+      "artifact": "btc-5m-multivenue-early-entry-20260321-20260828/20260831T013939Z/ledgers/candidate-oof-full_history_price_control.parquet",
+      "reason": "direction unavailable"
+    },
+    {
+      "artifact": "btc-5m-multivenue-early-entry-20260321-20260828/20260831T013939Z/ledgers/candidate-oof-full_history_refprice_residual.parquet",
+      "reason": "direction unavailable"
+    },
+    {
+      "artifact": "btc-5m-multivenue-early-entry-20260321-20260828/20260831T013939Z/ledgers/candidate-oof-kraken_crossvenue.parquet",
+      "reason": "direction unavailable"
+    },
+    {
+      "artifact": "btc-5m-multivenue-early-entry-20260321-20260828/20260831T013939Z/ledgers/candidate-oof-multivenue_consensus.parquet",
+      "reason": "direction unavailable"
+    },
+    {
+      "artifact": "btc-5m-multivenue-early-entry-20260321-20260828/20260831T013939Z/ledgers/candidate-oof-settlement_aligned_oracle.parquet",
+      "reason": "direction unavailable"
+    },
+    {
+      "artifact": "btc-5m-multivenue-early-entry-20260321-20260828/20260831T013939Z/ledgers/candidate-oof-time_specialist_ensemble.parquet",
+      "reason": "direction unavailable"
+    },
+    {
+      "artifact": "btc-5m-refprice-twap-target-training-20260607-20260824/20260825T205302Z/R/q5-evaluation-ledger.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-refprice-twap-target-training-20260607-20260824/20260825T205302Z/RT/q5-evaluation-ledger.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-refprice-twap-target-training-20260607-20260824/20260825T205302Z/T/q5-evaluation-ledger.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-settlement-bridge-residual-20260321-20260828/20260828T171209Z/development-trade-ledger.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-settlement-bridge-residual-20260321-20260828/20260828T171209Z/prospective-trade-ledger.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-settlement-bridge-residual-20260321-20260828/20260828T172858Z/development-trade-ledger.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-settlement-bridge-residual-20260321-20260828/20260828T172858Z/prospective-trade-ledger.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-settlement-bridge-residual-20260321-20260828/20260828T174720Z/development-trade-ledger.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-settlement-bridge-residual-20260321-20260828/20260828T174720Z/prospective-trade-ledger.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-settlement-bridge-residual-20260321-20260828/20260828T204616Z/prospective-trade-ledger.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-signal-attribution-early-entry-20260321-20260905/20260901T010530Z/ledgers/sealed-trades.parquet",
+      "reason": "missing market_id or seconds_elapsed"
+    },
+    {
+      "artifact": "btc-5m-twap-conformal-risk-admission-20260814-20260825/20260828T201718Z/ledgers/development-direction_price_block_conformal-trades.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-twap-conformal-risk-admission-20260814-20260825/20260828T201718Z/ledgers/development-direction_time_price_block_conformal-trades.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-twap-conformal-risk-admission-20260814-20260825/20260828T201718Z/ledgers/development-global_market_block_conformal-trades.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-twap-conformal-risk-admission-20260814-20260825/20260828T201718Z/ledgers/test-global_market_block_conformal-trades.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-twap-conformal-risk-admission-20260814-20260825/20260828T205354Z/ledgers/development-direction_price_block_conformal-trades.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-twap-conformal-risk-admission-20260814-20260825/20260828T205354Z/ledgers/development-direction_time_price_block_conformal-trades.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-twap-conformal-risk-admission-20260814-20260825/20260828T205354Z/ledgers/development-global_market_block_conformal-trades.parquet",
+      "reason": "empty ledger"
+    },
+    {
+      "artifact": "btc-5m-twap-conformal-risk-admission-20260814-20260825/20260828T205354Z/ledgers/test-global_market_block_conformal-trades.parquet",
+      "reason": "empty ledger"
+    }
+  ],
+  "unavailable_ledgers": 39
+}
