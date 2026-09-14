@@ -523,7 +523,13 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
     _write_json(work / "source-contract.json", source)
     inventory = _historic_inventory(Path(source["paths"]["historic_results_root"]))
     _write_json(work / "historic-results-inventory.json", inventory)
-    columns = base._required_columns(contracts, raw)
+    prior_artifact = joblib.load(Path(source["paths"]["prior_artifact"]))
+    benchmark_features = tuple(
+        dict.fromkeys(
+            feature for model in prior_artifact["models"].values() for feature in model.features
+        )
+    )
+    columns = base._required_columns([*contracts, {"features": benchmark_features}], raw)
     training = base._load_panel(Path(source["paths"]["training_panel"]), columns)
     evaluation = base._load_panel(Path(source["paths"]["evaluation_panel"]), columns)
     windows = {name: base._parse_time(value) for name, value in raw["windows"].items()}
@@ -767,7 +773,6 @@ def run_tournament(config_path: Path, *, run_id: str | None = None) -> Path:
                         ),
                     )
 
-    prior_artifact = joblib.load(Path(source["paths"]["prior_artifact"]))
     champion_name = raw["router"]["champion_variant"]
     champion_model = prior_artifact["models"][champion_name]
     champion_prior = prior["candidate_results"][champion_name]
