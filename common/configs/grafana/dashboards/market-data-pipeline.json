@@ -173,13 +173,13 @@
       "pluginVersion": "12.4.2",
       "targets": [
         {
-          "expr": "1000 * histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_io_scheduling_delay_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))",
+          "expr": "1000 * histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_queue_delay_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))",
           "instant": true,
-          "legendFormat": "Runtime p99",
+          "legendFormat": "Queue p99",
           "refId": "A"
         }
       ],
-      "title": "Runtime Delay p99",
+      "title": "Raw Queue Delay p99",
       "type": "stat"
     },
     {
@@ -812,19 +812,14 @@
       "pluginVersion": "12.4.2",
       "targets": [
         {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_io_scheduling_delay_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))",
-          "legendFormat": "runtime scheduling",
-          "refId": "A"
-        },
-        {
           "expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_interframe_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))",
           "legendFormat": "provider inter-frame",
-          "refId": "B"
+          "refId": "A"
         },
         {
           "expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_queue_delay_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))",
           "legendFormat": "raw queue",
-          "refId": "C"
+          "refId": "B"
         },
         {
           "expr": "max(market_data_ingester_prometheus_render_duration_seconds)",
