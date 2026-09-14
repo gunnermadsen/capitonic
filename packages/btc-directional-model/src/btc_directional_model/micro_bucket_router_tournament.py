@@ -343,8 +343,8 @@ def _report(metrics: dict[str, Any]) -> str:
     lines = [
         "# BTC Five-Minute Micro-Bucket Router Tournament",
         "",
-        f"Run: `{metrics['run_id']}`  ",
-        f"Qualification: **{metrics['qualification']}**  ",
+        f"Run: `{metrics['run_id']}`",
+        f"Qualification: **{metrics['qualification']}**",
         f"Selected router: **{metrics['selected_router']}**",
         "",
         "## Frozen hypothesis",

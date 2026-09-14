@@ -1,0 +1,146 @@
+{
+  "bytes": 3226855969,
+  "parquet_files": 231,
+  "read_only": true,
+  "role": "historic roster and prior-weight evidence",
+  "root": "/Volumes/docker-data/polymarket-bot/model-training-archive",
+  "tournament_count": 34,
+  "tournaments": {
+    "btc-5m-binance-latent-twap-context-20260607-20260828": {
+      "bytes": 2237345,
+      "parquet_files": 8
+    },
+    "btc-5m-bucket-harm-risk-tournament-20260321-20260909": {
+      "bytes": 432667358,
+      "parquet_files": 2
+    },
+    "btc-5m-candidate-loss-risk-tournament-20260321-20260901": {
+      "bytes": 165137543,
+      "parquet_files": 2
+    },
+    "btc-5m-causal-twap-attribution-20260607-20260828": {
+      "bytes": 396345068,
+      "parquet_files": 8
+    },
+    "btc-5m-champion-admission-tournament-20260321-20260901": {
+      "bytes": 17068481,
+      "parquet_files": 2
+    },
+    "btc-5m-consensus-action-value-risk-tournament-20260321-20260909": {
+      "bytes": 449111173,
+      "parquet_files": 2
+    },
+    "btc-5m-continuous-edge-directional-20260525-20260723": {
+      "bytes": 129682,
+      "parquet_files": 1
+    },
+    "btc-5m-continuous-edge-payoff-aware-20260525-20260723": {
+      "bytes": 26542,
+      "parquet_files": 1
+    },
+    "btc-5m-continuous-edge-payoff-robust-20260525-20260802": {
+      "bytes": 5920,
+      "parquet_files": 1
+    },
+    "btc-5m-counterfactual-twap-state-20260321-20260826": {
+      "bytes": 7332802,
+      "parquet_files": 7
+    },
+    "btc-5m-counterfactual-twap-state-causal-20260321-20260827": {
+      "bytes": 5401773,
+      "parquet_files": 14
+    },
+    "btc-5m-early-entry-economic-tournament-20260321-20260826": {
+      "bytes": 161675794,
+      "parquet_files": 11
+    },
+    "btc-5m-early-entry-robustness-20260321-20260901": {
+      "bytes": 1042586,
+      "parquet_files": 1
+    },
+    "btc-5m-early-entry-settlement-consensus-20260321-20260827": {
+      "bytes": 88447312,
+      "parquet_files": 7
+    },
+    "btc-5m-entry-action-risk-tournament-20260321-20260901": {
+      "bytes": 395505364,
+      "parquet_files": 2
+    },
+    "btc-5m-extended-specialist-strategy-tournament-20260321-20260826": {
+      "bytes": 26814706,
+      "parquet_files": 4
+    },
+    "btc-5m-fair-value-challenger-tournament-20260525-20260802": {
+      "bytes": 27628864,
+      "parquet_files": 10
+    },
+    "btc-5m-full-august-vwap-admission-20260321-20260901": {
+      "bytes": 227292152,
+      "parquet_files": 9
+    },
+    "btc-5m-full-window-payoff-challenger-20260525-20260802": {
+      "bytes": 5510364,
+      "parquet_files": 5
+    },
+    "btc-5m-hybrid-payoff-admission-20260321-20260827": {
+      "bytes": 66815049,
+      "parquet_files": 3
+    },
+    "btc-5m-latent-twap-settlement-risk-20260607-20260828": {
+      "bytes": 694921,
+      "parquet_files": 4
+    },
+    "btc-5m-middle-market-ablation-tournament-20260525": {
+      "bytes": 2436478,
+      "parquet_files": 7
+    },
+    "btc-5m-middle-market-payoff-tournament-20260525-20260810": {
+      "bytes": 156204,
+      "parquet_files": 10
+    },
+    "btc-5m-middle-strategy-tournament-20260321-20260828": {
+      "bytes": 84535448,
+      "parquet_files": 3
+    },
+    "btc-5m-multivenue-early-entry-20260321-20260828": {
+      "bytes": 135313316,
+      "parquet_files": 10
+    },
+    "btc-5m-q5-optimal-stopping-tournament-20260525-20260802": {
+      "bytes": 2582640,
+      "parquet_files": 7
+    },
+    "btc-5m-refprice-twap-target-training-20260607-20260824": {
+      "bytes": 6825803,
+      "parquet_files": 30
+    },
+    "btc-5m-settlement-bridge-residual-20260321-20260828": {
+      "bytes": 317668007,
+      "parquet_files": 24
+    },
+    "btc-5m-signal-attribution-early-entry-20260321-20260905": {
+      "bytes": 64568432,
+      "parquet_files": 5
+    },
+    "btc-5m-source-preserving-settlement-bridge-middle-strategy-20260321-20260828": {
+      "bytes": 43289883,
+      "parquet_files": 4
+    },
+    "btc-5m-strategy-conditioned-risk-tournament-20260321-20260901": {
+      "bytes": 2295578,
+      "parquet_files": 1
+    },
+    "btc-5m-twap-conformal-risk-admission-20260814-20260825": {
+      "bytes": 23894987,
+      "parquet_files": 16
+    },
+    "btc-5m-twap-normalized-middle-strategy-20260321-20260828": {
+      "bytes": 58903936,
+      "parquet_files": 4
+    },
+    "btc-5m-twap60-challenger-tournament-20260607-20260825": {
+      "bytes": 7494458,
+      "parquet_files": 6
+    }
+  }
+}
