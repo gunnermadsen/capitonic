@@ -288,8 +288,8 @@ def _report(metrics: dict[str, Any]) -> str:
         "",
         "## Net challenger metrics",
         "",
-        "| Challenger | RTDS | Period | PnL | Stress | PF | Trades | W/L | UP/DOWN | Coverage | Avg entry | Recovery | Max DD |",
-        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Challenger | RTDS | Period | PnL | Stress | Gross +/− | PF | Trades | W/L | Win rate | UP/DOWN | Coverage | Avg entry | Avg cost | Avg confidence | Recovery | Max DD |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for result in metrics["challengers"].values():
         for period in ("policy", "sealed", "confirmation"):
@@ -297,7 +297,7 @@ def _report(metrics: dict[str, Any]) -> str:
             pf = "—" if row["profit_factor"] is None else f"{row['profit_factor']:.3f}"
             recovery = "—" if row["recovery_wins_per_loss"] is None else f"{row['recovery_wins_per_loss']:.3f}"
             lines.append(
-                f"| `{result['challenger']}` | {result['rtds_mode']} | {period} | {row['net_pnl']:.2f} | {row['stress_net_pnl']:.2f} | {pf} | {row['trades']} | {row['wins']}/{row['losses']} | {row['up_trades']}/{row['down_trades']} | {row['market_coverage']:.2%} | {row['average_entry_second'] or 0:.1f} | {recovery} | {row['maximum_drawdown']:.2f} |"
+                f"| `{result['challenger']}` | {result['rtds_mode']} | {period} | {row['net_pnl']:.2f} | {row['stress_net_pnl']:.2f} | {row['gross_profit']:.2f}/{row['gross_loss']:.2f} | {pf} | {row['trades']} | {row['wins']}/{row['losses']} | {(row['win_rate'] or 0):.2%} | {row['up_trades']}/{row['down_trades']} | {row['market_coverage']:.2%} | {row['average_entry_second'] or 0:.1f} | {row['average_share_cost'] or 0:.4f} | {row['average_confidence'] or 0:.4f} | {recovery} | {row['maximum_drawdown']:.2f} |"
             )
     lines.extend(
         [
@@ -320,8 +320,8 @@ def _report(metrics: dict[str, Any]) -> str:
                 "",
                 f"## {challenger}: per-bucket PnL",
                 "",
-                "| Seconds | RTDS | Period | Donors | PnL | Stress | PF | Trades | W/L | UP/DOWN | Coverage | Avg entry | Recovery |",
-                "|---:|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+                "| Seconds | RTDS | Period | Donors | PnL | Stress | Gross +/− | PF | Trades | W/L | Win rate | UP/DOWN | Coverage | Avg entry | Avg cost | Avg confidence | Recovery | Max DD |",
+                "|---:|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
             ]
         )
         rows = [
@@ -336,7 +336,7 @@ def _report(metrics: dict[str, Any]) -> str:
             pf = "—" if value["profit_factor"] is None else f"{value['profit_factor']:.3f}"
             recovery = "—" if value["recovery_wins_per_loss"] is None else f"{value['recovery_wins_per_loss']:.3f}"
             lines.append(
-                f"| {row['bucket_start']}-{row['bucket_end']} | {row['rtds_mode']} | {row['period']} | {', '.join(row['donors'])} | {value['net_pnl']:.2f} | {value['stress_net_pnl']:.2f} | {pf} | {value['trades']} | {value['wins']}/{value['losses']} | {value['up_trades']}/{value['down_trades']} | {value['market_coverage']:.2%} | {value['average_entry_second'] or 0:.1f} | {recovery} |"
+                f"| {row['bucket_start']}-{row['bucket_end']} | {row['rtds_mode']} | {row['period']} | {', '.join(row['donors'])} | {value['net_pnl']:.2f} | {value['stress_net_pnl']:.2f} | {value['gross_profit']:.2f}/{value['gross_loss']:.2f} | {pf} | {value['trades']} | {value['wins']}/{value['losses']} | {(value['win_rate'] or 0):.2%} | {value['up_trades']}/{value['down_trades']} | {value['market_coverage']:.2%} | {value['average_entry_second'] or 0:.1f} | {value['average_share_cost'] or 0:.4f} | {value['average_confidence'] or 0:.4f} | {recovery} | {value['maximum_drawdown']:.2f} |"
             )
     lines.extend(
         [
@@ -376,6 +376,19 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, resume: bool
     panel = _load_panel(panel_path, _required_columns(contracts))
     windows = {name: _parse_time(value) for name, value in raw["windows"].items()}
     split_audit = _split_audit(panel, windows)
+    cutover = windows["settlement_cutover"]
+    cutover_audit = {
+        "pre_cutover_fit_markets": panel.filter(
+            pl.col("window_start").is_between(
+                windows["source_start"], cutover, closed="left"
+            )
+        )["market_id"].n_unique(),
+        "post_cutover_fit_markets": panel.filter(
+            pl.col("window_start").is_between(
+                cutover, windows["fit_end"], closed="left"
+            )
+        )["market_id"].n_unique(),
+    }
     source_contract = {
         "panel": str(panel_path),
         "panel_sha256": manifest["sha256"],
@@ -593,6 +606,7 @@ def run_tournament(config_path: Path, *, run_id: str | None = None, resume: bool
             "maximum_pairwise_market_overlap": max(split_audit["pairwise_market_overlap"].values()),
             "primary_execution_quantity_locked": 5,
             "post_cutoff_donor_selection": False,
+            "settlement_cutover_coverage": cutover_audit,
         },
         "source_contract": source_contract,
         "previous_tournament": {
