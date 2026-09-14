@@ -1,0 +1,438 @@
+{
+  "donors": {
+    "seconds_100_109": [
+      "crossvenue",
+      "price_control",
+      "external_flow"
+    ],
+    "seconds_110_119": [
+      "crossvenue",
+      "chainlink_fair_value",
+      "external_flow"
+    ],
+    "seconds_120_129": [
+      "external_flow",
+      "chainlink_fair_value",
+      "price_control"
+    ],
+    "seconds_130_139": [
+      "crossvenue",
+      "external_flow",
+      "q5_context"
+    ],
+    "seconds_140_149": [
+      "crossvenue",
+      "chainlink_fair_value"
+    ],
+    "seconds_150_159": [
+      "crossvenue",
+      "chainlink_fair_value"
+    ],
+    "seconds_160_169": [
+      "chainlink_fair_value"
+    ],
+    "seconds_170_179": [
+      "chainlink_fair_value"
+    ],
+    "seconds_180_189": [
+      "chainlink_fair_value"
+    ],
+    "seconds_190_199": [
+      "chainlink_fair_value",
+      "price_control"
+    ],
+    "seconds_200_209": [
+      "chainlink_fair_value"
+    ],
+    "seconds_210_219": [
+      "chainlink_fair_value"
+    ],
+    "seconds_220_229": [
+      "chainlink_fair_value"
+    ],
+    "seconds_230_239": [
+      "chainlink_fair_value"
+    ],
+    "seconds_60_69": [
+      "chainlink_fair_value",
+      "q5_context",
+      "crossvenue"
+    ],
+    "seconds_70_79": [
+      "q5_context",
+      "price_control",
+      "chainlink_fair_value"
+    ],
+    "seconds_80_89": [
+      "chainlink_fair_value",
+      "external_flow",
+      "q5_context"
+    ],
+    "seconds_90_99": [
+      "chainlink_fair_value",
+      "crossvenue"
+    ]
+  },
+  "evidence": {
+    "seconds_100_109": [
+      {
+        "historical_candidate": "crossvenue_middle_specialist",
+        "profit_factor": 1.2230542995947271,
+        "range_end": "2026-08-25 23:05:00+00:00",
+        "recipe": "crossvenue",
+        "signature_id": "btc-5m-early-entry-economic-tournament-20260321-20260826/20260901T194936Z/crossvenue_middle_specialist",
+        "stress_net_pnl": 12.529611909639994,
+        "trades": 97
+      },
+      {
+        "historical_candidate": "continuous_payoff_baseline",
+        "profit_factor": 2.1542301859705026,
+        "range_end": "2026-08-01 21:55:00+00:00",
+        "recipe": "price_control",
+        "signature_id": "btc-5m-full-window-payoff-challenger-20260525-20260802/20260821T204106Z/continuous_payoff_baseline",
+        "stress_net_pnl": 28.136262251439994,
+        "trades": 55
+      },
+      {
+        "historical_candidate": "external_flow_only_control",
+        "profit_factor": 1.3053519038445252,
+        "range_end": "2026-08-25 16:05:00+00:00",
+        "recipe": "external_flow",
+        "signature_id": "btc-5m-full-august-vwap-admission-20260321-20260901/20260901T163321Z/external_flow_only_control",
+        "stress_net_pnl": 33.86719590924,
+        "trades": 152
+      }
+    ],
+    "seconds_110_119": [
+      {
+        "historical_candidate": "price_time_calibrated_middle_ensemble",
+        "profit_factor": 1.2488585381069575,
+        "range_end": "2026-08-25 11:05:00+00:00",
+        "recipe": "crossvenue",
+        "signature_id": "btc-5m-early-entry-economic-tournament-20260321-20260826/20260901T194936Z/price_time_calibrated_middle_ensemble",
+        "stress_net_pnl": 12.234029023500009,
+        "trades": 76
+      },
+      {
+        "historical_candidate": "payoff_control",
+        "profit_factor": 3.026510621403575,
+        "range_end": "2026-08-04 11:20:00+00:00",
+        "recipe": "chainlink_fair_value",
+        "signature_id": "btc-5m-middle-market-ablation-tournament-20260525/20260820T191331Z/payoff_control",
+        "stress_net_pnl": 15.038110000000003,
+        "trades": 30
+      },
+      {
+        "historical_candidate": "external_flow_only_control",
+        "profit_factor": 1.2230891578818786,
+        "range_end": "2026-08-25 12:20:00+00:00",
+        "recipe": "external_flow",
+        "signature_id": "btc-5m-full-august-vwap-admission-20260321-20260901/20260901T163321Z/external_flow_only_control",
+        "stress_net_pnl": 24.655210096000012,
+        "trades": 142
+      }
+    ],
+    "seconds_120_129": [
+      {
+        "historical_candidate": "external_flow_only_control",
+        "profit_factor": 1.3153453774855892,
+        "range_end": "2026-08-25 22:55:00+00:00",
+        "recipe": "external_flow",
+        "signature_id": "btc-5m-early-entry-economic-tournament-20260321-20260826/20260901T194936Z/external_flow_only_control",
+        "stress_net_pnl": 16.496509165260008,
+        "trades": 86
+      },
+      {
+        "historical_candidate": "stratified_fair_value",
+        "profit_factor": 1.2571967484843092,
+        "range_end": "2026-08-01 20:05:00+00:00",
+        "recipe": "chainlink_fair_value",
+        "signature_id": "btc-5m-fair-value-challenger-tournament-20260525-20260802/20260822T152633Z/stratified_fair_value",
+        "stress_net_pnl": 53.32324862455999,
+        "trades": 301
+      },
+      {
+        "historical_candidate": "continuous_payoff_baseline",
+        "profit_factor": 1.9634062225196591,
+        "range_end": "2026-08-01 15:10:00+00:00",
+        "recipe": "price_control",
+        "signature_id": "btc-5m-full-window-payoff-challenger-20260525-20260802/20260821T204106Z/continuous_payoff_baseline",
+        "stress_net_pnl": 33.09921614576,
+        "trades": 69
+      }
+    ],
+    "seconds_130_139": [
+      {
+        "historical_candidate": "middle_agreement_ensemble",
+        "profit_factor": 1.3502139003005567,
+        "range_end": "2026-08-25 12:10:00+00:00",
+        "recipe": "crossvenue",
+        "signature_id": "btc-5m-early-entry-economic-tournament-20260321-20260826/20260901T194936Z/middle_agreement_ensemble",
+        "stress_net_pnl": 11.483945000000002,
+        "trades": 57
+      },
+      {
+        "historical_candidate": "external_flow_only_control",
+        "profit_factor": 1.243576087734238,
+        "range_end": "2026-08-25 21:25:00+00:00",
+        "recipe": "external_flow",
+        "signature_id": "btc-5m-early-entry-economic-tournament-20260321-20260826/20260901T194936Z/external_flow_only_control",
+        "stress_net_pnl": 7.986260000000006,
+        "trades": 51
+      },
+      {
+        "historical_candidate": "middle_q5_admission",
+        "profit_factor": 1.2587129684623777,
+        "range_end": "2026-08-25 12:10:00+00:00",
+        "recipe": "q5_context",
+        "signature_id": "btc-5m-early-entry-economic-tournament-20260321-20260826/20260901T194936Z/middle_q5_admission",
+        "stress_net_pnl": 7.948184999999998,
+        "trades": 56
+      }
+    ],
+    "seconds_140_149": [
+      {
+        "historical_candidate": "crossvenue_middle_specialist",
+        "profit_factor": 1.5500919171922727,
+        "range_end": "2026-08-25 22:15:00+00:00",
+        "recipe": "crossvenue",
+        "signature_id": "btc-5m-early-entry-economic-tournament-20260321-20260826/20260901T194936Z/crossvenue_middle_specialist",
+        "stress_net_pnl": 13.643699433259997,
+        "trades": 36
+      },
+      {
+        "historical_candidate": "specialist_distilled_fair_value",
+        "profit_factor": 1.5666484016208277,
+        "range_end": "2026-07-31 17:35:00+00:00",
+        "recipe": "chainlink_fair_value",
+        "signature_id": "btc-5m-fair-value-challenger-tournament-20260525-20260802/20260822T152633Z/specialist_distilled_fair_value",
+        "stress_net_pnl": 33.54846928736,
+        "trades": 91
+      }
+    ],
+    "seconds_150_159": [
+      {
+        "historical_candidate": "middle_agreement_ensemble",
+        "profit_factor": 1.1147840917704326,
+        "range_end": "2026-08-25 07:40:00+00:00",
+        "recipe": "crossvenue",
+        "signature_id": "btc-5m-early-entry-economic-tournament-20260321-20260826/20260901T194936Z/middle_agreement_ensemble",
+        "stress_net_pnl": 1.7768449999999985,
+        "trades": 37
+      },
+      {
+        "historical_candidate": "specialist_distilled_fair_value",
+        "profit_factor": 1.2994981128908016,
+        "range_end": "2026-08-01 18:40:00+00:00",
+        "recipe": "chainlink_fair_value",
+        "signature_id": "btc-5m-fair-value-challenger-tournament-20260525-20260802/20260822T152633Z/specialist_distilled_fair_value",
+        "stress_net_pnl": 40.84950500000001,
+        "trades": 191
+      }
+    ],
+    "seconds_160_169": [
+      {
+        "historical_candidate": "chainlink_full_combined",
+        "profit_factor": 1.5477537611130994,
+        "range_end": "2026-08-01 18:40:00+00:00",
+        "recipe": "chainlink_fair_value",
+        "signature_id": "btc-5m-fair-value-challenger-tournament-20260525-20260802/20260822T152633Z/chainlink_full_combined",
+        "stress_net_pnl": 26.20849460742,
+        "trades": 82
+      }
+    ],
+    "seconds_170_179": [
+      {
+        "historical_candidate": "chainlink_stratified_payoff",
+        "profit_factor": 1.6168353908154862,
+        "range_end": "2026-08-01 05:40:00+00:00",
+        "recipe": "chainlink_fair_value",
+        "signature_id": "btc-5m-fair-value-challenger-tournament-20260525-20260802/20260822T152633Z/chainlink_stratified_payoff",
+        "stress_net_pnl": 20.44676,
+        "trades": 58
+      }
+    ],
+    "seconds_180_189": [
+      {
+        "historical_candidate": "terminal_margin_fair_value",
+        "profit_factor": 1.243841257111876,
+        "range_end": "2026-08-01 21:55:00+00:00",
+        "recipe": "chainlink_fair_value",
+        "signature_id": "btc-5m-fair-value-challenger-tournament-20260525-20260802/20260822T152633Z/terminal_margin_fair_value",
+        "stress_net_pnl": 34.96235020766001,
+        "trades": 369
+      }
+    ],
+    "seconds_190_199": [
+      {
+        "historical_candidate": "stratified_fair_value",
+        "profit_factor": 1.6036540540434514,
+        "range_end": "2026-07-31 21:10:00+00:00",
+        "recipe": "chainlink_fair_value",
+        "signature_id": "btc-5m-fair-value-challenger-tournament-20260525-20260802/20260822T152633Z/stratified_fair_value",
+        "stress_net_pnl": 35.38720151086,
+        "trades": 98
+      },
+      {
+        "historical_candidate": "continuous_payoff_baseline",
+        "profit_factor": 1.1541223107221494,
+        "range_end": "2026-08-01 02:10:00+00:00",
+        "recipe": "price_control",
+        "signature_id": "btc-5m-full-window-payoff-challenger-20260525-20260802/20260821T204106Z/continuous_payoff_baseline",
+        "stress_net_pnl": 2.393525000000002,
+        "trades": 41
+      }
+    ],
+    "seconds_200_209": [
+      {
+        "historical_candidate": "terminal_margin_fair_value",
+        "profit_factor": 1.7165326613892624,
+        "range_end": "2026-08-01 23:55:00+00:00",
+        "recipe": "chainlink_fair_value",
+        "signature_id": "btc-5m-fair-value-challenger-tournament-20260525-20260802/20260822T152633Z/terminal_margin_fair_value",
+        "stress_net_pnl": 95.37489747753999,
+        "trades": 294
+      }
+    ],
+    "seconds_210_219": [
+      {
+        "historical_candidate": "groupwise_entry_ranker",
+        "profit_factor": 1.2541844595977387,
+        "range_end": "2026-08-01 16:55:00+00:00",
+        "recipe": "chainlink_fair_value",
+        "signature_id": "btc-5m-fair-value-challenger-tournament-20260525-20260802/20260822T152633Z/groupwise_entry_ranker",
+        "stress_net_pnl": 7.3880849999999985,
+        "trades": 45
+      }
+    ],
+    "seconds_220_229": [
+      {
+        "historical_candidate": "exogenous_fair_value",
+        "profit_factor": 1.3789596302463982,
+        "range_end": "2026-07-30 02:40:00+00:00",
+        "recipe": "chainlink_fair_value",
+        "signature_id": "btc-5m-fair-value-challenger-tournament-20260525-20260802/20260822T152633Z/exogenous_fair_value",
+        "stress_net_pnl": 10.705773309359996,
+        "trades": 45
+      }
+    ],
+    "seconds_230_239": [
+      {
+        "historical_candidate": "tail_weighted_fair_value",
+        "profit_factor": 1.544177162289195,
+        "range_end": "2026-08-01 10:40:00+00:00",
+        "recipe": "chainlink_fair_value",
+        "signature_id": "btc-5m-fair-value-challenger-tournament-20260525-20260802/20260822T152633Z/tail_weighted_fair_value",
+        "stress_net_pnl": 11.171484999999999,
+        "trades": 34
+      }
+    ],
+    "seconds_60_69": [
+      {
+        "historical_candidate": "exogenous_fair_value",
+        "profit_factor": 1.1361825694113734,
+        "range_end": "2026-08-01 20:40:00+00:00",
+        "recipe": "chainlink_fair_value",
+        "signature_id": "btc-5m-fair-value-challenger-tournament-20260525-20260802/20260822T152633Z/exogenous_fair_value",
+        "stress_net_pnl": 11.817804242159998,
+        "trades": 141
+      },
+      {
+        "historical_candidate": "bridge_aware_control|bridge_aware_specialist",
+        "profit_factor": 1.317297027013636,
+        "range_end": "2026-08-25 23:45:00+00:00",
+        "recipe": "q5_context",
+        "signature_id": "btc-5m-champion-admission-tournament-20260321-20260901/20260902T025934Z/bridge_aware_control|bridge_aware_specialist",
+        "stress_net_pnl": 25.938987444380004,
+        "trades": 190
+      },
+      {
+        "historical_candidate": "price_time_calibrated_middle_ensemble",
+        "profit_factor": 1.1165189664697914,
+        "range_end": "2026-08-25 23:55:00+00:00",
+        "recipe": "crossvenue",
+        "signature_id": "btc-5m-full-august-vwap-admission-20260321-20260901/20260901T163321Z/price_time_calibrated_middle_ensemble",
+        "stress_net_pnl": 199.85048517036017,
+        "trades": 2743
+      }
+    ],
+    "seconds_70_79": [
+      {
+        "historical_candidate": "middle_q5_admission",
+        "profit_factor": 1.0853335700577489,
+        "range_end": "2026-08-25 23:25:00+00:00",
+        "recipe": "q5_context",
+        "signature_id": "btc-5m-early-entry-economic-tournament-20260321-20260826/20260901T194936Z/middle_q5_admission",
+        "stress_net_pnl": 13.964675541300021,
+        "trades": 366
+      },
+      {
+        "historical_candidate": "continuous_payoff_baseline",
+        "profit_factor": 1.302006024914983,
+        "range_end": "2026-08-01 23:20:00+00:00",
+        "recipe": "price_control",
+        "signature_id": "btc-5m-full-window-payoff-challenger-20260525-20260802/20260821T204106Z/continuous_payoff_baseline",
+        "stress_net_pnl": 16.660735826860005,
+        "trades": 87
+      },
+      {
+        "historical_candidate": "exogenous_fair_value",
+        "profit_factor": 1.0953117642910182,
+        "range_end": "2026-08-01 19:35:00+00:00",
+        "recipe": "chainlink_fair_value",
+        "signature_id": "btc-5m-fair-value-challenger-tournament-20260525-20260802/20260822T152633Z/exogenous_fair_value",
+        "stress_net_pnl": 8.816194067520009,
+        "trades": 213
+      }
+    ],
+    "seconds_80_89": [
+      {
+        "historical_candidate": "specialist_distilled_fair_value",
+        "profit_factor": 1.3010085760792336,
+        "range_end": "2026-08-01 18:25:00+00:00",
+        "recipe": "chainlink_fair_value",
+        "signature_id": "btc-5m-fair-value-challenger-tournament-20260525-20260802/20260822T152633Z/specialist_distilled_fair_value",
+        "stress_net_pnl": 21.752775000000007,
+        "trades": 105
+      },
+      {
+        "historical_candidate": "binance_flow",
+        "profit_factor": 1.4125968218951543,
+        "range_end": "2026-08-25 22:35:00+00:00",
+        "recipe": "external_flow",
+        "signature_id": "btc-5m-multivenue-early-entry-20260321-20260828/20260831T013939Z/binance_flow",
+        "stress_net_pnl": 33.91198000000001,
+        "trades": 101
+      },
+      {
+        "historical_candidate": "middle_q5_admission",
+        "profit_factor": 1.2667014181161975,
+        "range_end": "2026-08-25 22:35:00+00:00",
+        "recipe": "q5_context",
+        "signature_id": "btc-5m-full-august-vwap-admission-20260321-20260901/20260901T163321Z/middle_q5_admission",
+        "stress_net_pnl": 63.83759876376,
+        "trades": 321
+      }
+    ],
+    "seconds_90_99": [
+      {
+        "historical_candidate": "stratified_fair_value",
+        "profit_factor": 1.0909586815003047,
+        "range_end": "2026-08-01 23:35:00+00:00",
+        "recipe": "chainlink_fair_value",
+        "signature_id": "btc-5m-fair-value-challenger-tournament-20260525-20260802/20260822T152633Z/stratified_fair_value",
+        "stress_net_pnl": 12.174763321699986,
+        "trades": 386
+      },
+      {
+        "historical_candidate": "crossvenue_middle_specialist",
+        "profit_factor": 1.2060904653813882,
+        "range_end": "2026-08-25 23:20:00+00:00",
+        "recipe": "crossvenue",
+        "signature_id": "btc-5m-full-august-vwap-admission-20260321-20260901/20260901T163321Z/crossvenue_middle_specialist",
+        "stress_net_pnl": 34.01528749214002,
+        "trades": 264
+      }
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "artifact_path": "tournament.joblib",
+  "configuration_sha256": "843ad1894eff43c5a709e5519e09aed1b77f6c1ebcbbdc782c30f347f8284a5b",
+  "deployment_status": "not_deployed",
+  "hypothesis_preserved": true,
+  "model_artifact_sha256": "1ec84749afa0349c471d315582873c5f06e11e8cfbe4829411d91986c61cb38b",
+  "producing_commit": "20e08c9e388ebcc60ebae9a2e2af9f481664b8d0",
+  "qualification_status": {
+    "aggregate_consensus__with_rtds_candles": "trained_evaluated_not_qualified",
+    "aggregate_consensus__without_rtds_candles": "trained_evaluated_not_qualified",
+    "aggregate_diverse__with_rtds_candles": "trained_evaluated_not_qualified",
+    "aggregate_diverse__without_rtds_candles": "trained_evaluated_not_qualified",
+    "aggregate_leader__with_rtds_candles": "trained_evaluated_not_qualified",
+    "aggregate_leader__without_rtds_candles": "trained_evaluated_not_qualified",
+    "aggregate_side_split__with_rtds_candles": "trained_evaluated_not_qualified",
+    "aggregate_side_split__without_rtds_candles": "trained_evaluated_not_qualified"
+  },
+  "schema_version": "btc-model-provenance-v1",
+  "source_hashes": {
+    "historical_trades": "5c7e0f15e406e0fadaa6321751ae0f7ea4cb598523200d996975f1b9d6a22c4a",
+    "panel": "f11e3bc597dfd546d667c5f610791fd48feab0015217c64278fc06e46612bffa"
+  },
+  "source_identity": "ef6ddd3571bca1930a55ad83fd4654017e7699693fcefc653600c6699d9501f0",
+  "training_run_id": "20260914T204000Z"
+}

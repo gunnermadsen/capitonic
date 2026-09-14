@@ -1,0 +1,494 @@
+{
+  "available_feature_groups": {
+    "binance_prints": [
+      "binance_print_return_5s_bps",
+      "binance_print_signed_share_5s",
+      "binance_print_log_quote_volume_5s",
+      "binance_print_log_trade_count_5s",
+      "binance_print_return_15s_bps",
+      "binance_print_signed_share_15s",
+      "binance_print_log_quote_volume_15s",
+      "binance_print_log_trade_count_15s",
+      "binance_print_return_30s_bps",
+      "binance_print_signed_share_30s",
+      "binance_print_log_quote_volume_30s",
+      "binance_print_log_trade_count_30s",
+      "binance_print_return_60s_bps",
+      "binance_print_signed_share_60s",
+      "binance_print_log_quote_volume_60s",
+      "binance_print_log_trade_count_60s"
+    ],
+    "candles": [
+      "chainlink_candle_return_5m_bps",
+      "chainlink_candle_return_15m_bps",
+      "chainlink_candle_return_30m_bps",
+      "chainlink_candle_return_60m_bps",
+      "chainlink_candle_realized_volatility_15m_bps",
+      "chainlink_candle_realized_volatility_60m_bps",
+      "chainlink_candle_range_15m_bps",
+      "chainlink_candle_range_60m_bps"
+    ],
+    "core": [
+      "seconds_elapsed_scaled",
+      "seconds_remaining_scaled",
+      "btc_path_from_window_open_bps",
+      "btc_cross_venue_boundary_gap_bps",
+      "btc_window_open_cross_venue_basis_bps",
+      "btc_return_1s_bps",
+      "btc_return_5s_bps",
+      "btc_return_15s_bps",
+      "btc_return_30s_bps",
+      "btc_return_60s_bps",
+      "btc_return_90s_bps",
+      "btc_return_120s_bps",
+      "btc_return_180s_bps",
+      "btc_realized_volatility_5s_bps",
+      "btc_realized_volatility_15s_bps",
+      "btc_realized_volatility_30s_bps",
+      "btc_realized_volatility_60s_bps",
+      "btc_realized_volatility_90s_bps",
+      "btc_realized_volatility_120s_bps",
+      "btc_realized_volatility_180s_bps",
+      "btc_range_5s_bps",
+      "btc_range_30s_bps",
+      "btc_range_60s_bps",
+      "btc_path_efficiency_30s",
+      "btc_path_efficiency_60s",
+      "btc_range_position_30s",
+      "btc_range_position_60s",
+      "btc_signed_flow_5s",
+      "btc_signed_flow_30s",
+      "btc_signed_flow_60s",
+      "btc_signed_flow_90s",
+      "btc_signed_flow_120s",
+      "btc_signed_flow_180s",
+      "btc_path_cross_count",
+      "btc_boundary_cross_count",
+      "btc_seconds_since_path_cross",
+      "btc_seconds_since_boundary_cross",
+      "btc_path_terminal_volatility_z",
+      "btc_boundary_terminal_volatility_z",
+      "btc_boundary_distance_velocity_5s_bps",
+      "btc_boundary_momentum_alignment_5s",
+      "btc_momentum_multihorizon_score",
+      "btc_momentum_acceleration_5_vs_30",
+      "btc_momentum_acceleration_15_vs_60",
+      "btc_reversal_5_vs_30",
+      "btc_path_max_favorable_excursion_bps",
+      "btc_path_max_adverse_excursion_bps",
+      "btc_path_pullback_from_favorable_extreme_bps",
+      "btc_path_recovery_from_adverse_extreme_bps",
+      "btc_seconds_since_path_high_scaled",
+      "btc_seconds_since_path_low_scaled",
+      "btc_volatility_shock_30_vs_120",
+      "btc_volatility_shock_60_vs_180",
+      "btc_path_sign_normalized_return_5s_bps",
+      "btc_path_sign_normalized_return_30s_bps",
+      "btc_path_sign_normalized_return_60s_bps",
+      "btc_path_sign_normalized_return_90s_bps",
+      "btc_path_sign_normalized_return_120s_bps",
+      "btc_path_sign_normalized_flow_5s",
+      "btc_path_sign_normalized_flow_30s",
+      "btc_path_sign_normalized_flow_60s",
+      "btc_path_sign_normalized_flow_90s",
+      "btc_path_sign_normalized_flow_120s",
+      "hour_sin",
+      "hour_cos",
+      "weekday_sin",
+      "weekday_cos"
+    ],
+    "execution": [
+      "up_ask_vwap_5",
+      "up_ask_vwap_10",
+      "up_ask_vwap_15",
+      "up_ask_vwap_20",
+      "up_ask_vwap_25",
+      "up_ask_vwap_30",
+      "up_ask_vwap_40",
+      "up_ask_vwap_50",
+      "up_ask_vwap_75",
+      "up_ask_vwap_100",
+      "up_ask_vwap_125",
+      "up_ask_vwap_150",
+      "up_ask_vwap_175",
+      "up_ask_vwap_200",
+      "down_ask_vwap_5",
+      "down_ask_vwap_10",
+      "down_ask_vwap_15",
+      "down_ask_vwap_20",
+      "down_ask_vwap_25",
+      "down_ask_vwap_30",
+      "down_ask_vwap_40",
+      "down_ask_vwap_50",
+      "down_ask_vwap_75",
+      "down_ask_vwap_100",
+      "down_ask_vwap_125",
+      "down_ask_vwap_150",
+      "down_ask_vwap_175",
+      "down_ask_vwap_200",
+      "pm_vwap5_overround",
+      "pm_vwap50_overround",
+      "pm_vwap200_overround",
+      "pm_up_slope_5_25",
+      "pm_up_slope_25_100",
+      "pm_up_slope_100_200",
+      "pm_down_slope_5_25",
+      "pm_down_slope_25_100",
+      "pm_down_slope_100_200",
+      "pm_up_depth_log",
+      "pm_down_depth_log",
+      "pm_depth_imbalance",
+      "pm_up_book_age_seconds",
+      "pm_down_book_age_seconds",
+      "pm_yes_cost_per_share",
+      "pm_no_cost_per_share",
+      "pm_yes_vwap_slippage",
+      "pm_no_vwap_slippage",
+      "pm_yes_depth_log",
+      "pm_no_depth_log",
+      "pm_yes_book_age_seconds",
+      "pm_no_book_age_seconds",
+      "pm_yes_cost_logit",
+      "pm_no_cost_logit",
+      "pm_cost_overround",
+      "pm_yes_minus_no_cost"
+    ],
+    "kraken": [
+      "kraken_return_5s_bps",
+      "kraken_return_15s_bps",
+      "kraken_return_30s_bps",
+      "kraken_return_60s_bps",
+      "kraken_return_120s_bps",
+      "kraken_realized_volatility_30s_bps",
+      "kraken_realized_volatility_60s_bps",
+      "kraken_log_quote_volume_30s",
+      "kraken_log_quote_volume_60s",
+      "kraken_print_signed_share_5s",
+      "kraken_print_signed_share_30s",
+      "kraken_print_signed_share_60s",
+      "kraken_log_trade_count_30s",
+      "kraken_log_trade_count_60s",
+      "kraken_binance_basis_bps",
+      "kraken_binance_return_agreement_30s",
+      "kraken_binance_flow_agreement_30s"
+    ],
+    "kraken_l2": [
+      "kraken_l2_update_imbalance_5s",
+      "kraken_l2_quantity_imbalance_5s",
+      "kraken_l2_cancel_imbalance_5s",
+      "kraken_l2_log_update_count_5s",
+      "kraken_l2_log_quote_quantity_5s",
+      "kraken_l2_update_imbalance_15s",
+      "kraken_l2_quantity_imbalance_15s",
+      "kraken_l2_cancel_imbalance_15s",
+      "kraken_l2_log_update_count_15s",
+      "kraken_l2_log_quote_quantity_15s",
+      "kraken_l2_update_imbalance_30s",
+      "kraken_l2_quantity_imbalance_30s",
+      "kraken_l2_cancel_imbalance_30s",
+      "kraken_l2_log_update_count_30s",
+      "kraken_l2_log_quote_quantity_30s",
+      "kraken_l2_update_imbalance_60s",
+      "kraken_l2_quantity_imbalance_60s",
+      "kraken_l2_cancel_imbalance_60s",
+      "kraken_l2_log_update_count_60s",
+      "kraken_l2_log_quote_quantity_60s",
+      "kraken_l2_last_update_spread_bps",
+      "kraken_l2_last_update_mid_to_binance_bps",
+      "kraken_l2_age_seconds",
+      "has_kraken_l2"
+    ],
+    "open_interest": [
+      "binance_oi_change_5m_bps",
+      "binance_oi_change_15m_bps",
+      "binance_oi_change_30m_bps",
+      "binance_oi_change_60m_bps",
+      "binance_oi_value_change_15m_bps",
+      "binance_oi_value_change_60m_bps",
+      "binance_oi_acceleration_5_vs_30_bps",
+      "binance_oi_path_agreement_15m",
+      "binance_oi_path_agreement_60m"
+    ],
+    "oracle": [
+      "oracle_return_from_window_open_bps",
+      "oracle_round_age_seconds_scaled",
+      "oracle_update_count_since_open_scaled",
+      "binance_oracle_basis_bps"
+    ],
+    "refprice": [
+      "chainlink_ref_return_1s_bps",
+      "chainlink_ref_return_5s_bps",
+      "chainlink_ref_return_15s_bps",
+      "chainlink_ref_return_30s_bps",
+      "chainlink_ref_return_60s_bps",
+      "chainlink_ref_binance_basis_bps",
+      "chainlink_ref_boundary_gap_bps",
+      "chainlink_ref_spread_bps",
+      "chainlink_ref_spread_change_30s_bps",
+      "chainlink_ref_binance_direction_agreement_30s",
+      "chainlink_ref_return_90s_bps",
+      "chainlink_ref_return_120s_bps",
+      "chainlink_ref_momentum_alignment_5_30",
+      "chainlink_ref_reversal_5_vs_30",
+      "chainlink_ref_reversal_15_vs_60",
+      "chainlink_ref_boundary_velocity_5s_bps",
+      "chainlink_ref_realized_volatility_5s_bps",
+      "chainlink_ref_realized_volatility_15s_bps",
+      "chainlink_ref_realized_volatility_30s_bps",
+      "chainlink_ref_realized_volatility_60s_bps",
+      "chainlink_ref_realized_volatility_90s_bps",
+      "chainlink_ref_realized_volatility_120s_bps",
+      "chainlink_ref_range_15s_bps",
+      "chainlink_ref_range_30s_bps",
+      "chainlink_ref_range_60s_bps",
+      "chainlink_ref_range_90s_bps",
+      "chainlink_ref_range_120s_bps",
+      "chainlink_ref_path_efficiency_30s",
+      "chainlink_ref_path_efficiency_60s",
+      "chainlink_ref_range_position_60s",
+      "chainlink_ref_boundary_cross_count_60s",
+      "chainlink_ref_direction_changes_60s",
+      "chainlink_ref_age_seconds",
+      "chainlink_ref_reports_60s",
+      "chainlink_ref_max_gap_60s",
+      "chainlink_ref_binance_basis_velocity_5s_bps",
+      "chainlink_ref_binance_disagreement_30s",
+      "chainlink_ref_source_skew_seconds"
+    ],
+    "spot_l2": [
+      "spot_l2_midpoint_to_kline_close_bps",
+      "spot_l2_microprice_to_midpoint_bps",
+      "spot_l2_spread_bps",
+      "spot_l2_bid_depth_5_log",
+      "spot_l2_ask_depth_5_log",
+      "spot_l2_imbalance_5",
+      "spot_l2_bid_depth_10_log",
+      "spot_l2_ask_depth_10_log",
+      "spot_l2_imbalance_10",
+      "spot_l2_bid_depth_20_log",
+      "spot_l2_ask_depth_20_log",
+      "spot_l2_imbalance_20",
+      "spot_l2_bid_depth_slope_20",
+      "spot_l2_ask_depth_slope_20",
+      "spot_l2_bid_depth_concentration_20",
+      "spot_l2_ask_depth_concentration_20",
+      "spot_l2_bid_quote_replenishment_1s_log",
+      "spot_l2_ask_quote_replenishment_1s_log",
+      "spot_l2_bid_quote_churn_1s_log",
+      "spot_l2_ask_quote_churn_1s_log",
+      "spot_l2_midpoint_change_1s_bps",
+      "spot_l2_spread_change_1s_bps",
+      "spot_l2_depth_20_change_1s_bps",
+      "spot_l2_imbalance_20_change_1s",
+      "spot_l2_midpoint_change_5s_bps",
+      "spot_l2_spread_change_5s_bps",
+      "spot_l2_depth_20_change_5s_bps",
+      "spot_l2_imbalance_20_change_5s",
+      "spot_l2_midpoint_change_15s_bps",
+      "spot_l2_spread_change_15s_bps",
+      "spot_l2_depth_20_change_15s_bps",
+      "spot_l2_imbalance_20_change_15s",
+      "spot_l2_midpoint_change_30s_bps",
+      "spot_l2_spread_change_30s_bps",
+      "spot_l2_depth_20_change_30s_bps",
+      "spot_l2_imbalance_20_change_30s",
+      "spot_l2_midpoint_change_60s_bps",
+      "spot_l2_spread_change_60s_bps",
+      "spot_l2_depth_20_change_60s_bps",
+      "spot_l2_imbalance_20_change_60s"
+    ]
+  },
+  "database_mutations": false,
+  "historical_inventory": {
+    "archive_files_seen": 585,
+    "candidate_ledgers": 174,
+    "canonical_files": 697,
+    "created_at": "2026-09-14T20:15:29.857555+00:00",
+    "database_mutations": false,
+    "duplicate_relative_paths": 549,
+    "local_files_seen": 661,
+    "local_preferred_on_duplicate": true,
+    "models_trained": 0,
+    "normalized_trade_rows": 191793,
+    "origin_counts": {
+      "archive": 36,
+      "local": 661
+    },
+    "read_only": true,
+    "replayable_ledgers": 135,
+    "replayable_signatures": 232,
+    "schema_version": "btc-historical-signature-replay-inventory-v1",
+    "training_runs": 49,
+    "unavailable": [
+      {
+        "artifact": "btc-5m-binance-latent-twap-context-20260607-20260828/20260828T220039Z/development-ledgers/twap_regime_l2_residual_research.parquet",
+        "reason": "missing market_id or seconds_elapsed"
+      },
+      {
+        "artifact": "btc-5m-causal-twap-attribution-20260607-20260828/20260828T165228Z/ledgers/prospective-trades.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-continuous-edge-payoff-robust-20260525-20260802/20260820T031515Z/test-trades.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-counterfactual-twap-state-causal-20260321-20260827/20260828T012814Z/ledgers/prospective-trades.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-early-entry-settlement-consensus-20260321-20260827/20260829T144048Z/ledgers/aligned-constituent-oof.parquet",
+        "reason": "direction unavailable"
+      },
+      {
+        "artifact": "btc-5m-early-entry-settlement-consensus-20260321-20260827/20260829T144048Z/ledgers/history-ablation-oof.parquet",
+        "reason": "five-share economics unavailable"
+      },
+      {
+        "artifact": "btc-5m-early-entry-settlement-consensus-20260321-20260827/20260829T144048Z/ledgers/prospective-trades.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-micro-bucket-router-tournament-20260321-20260901/20260914T002735Z/router-trades-early_micro_agreement.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-middle-market-payoff-tournament-20260525-20260810/20260820T173617Z/holdout-ledgers/mid_binance_l2.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-middle-market-payoff-tournament-20260525-20260810/20260820T173617Z/holdout-ledgers/mid_direction_qualified.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-middle-market-payoff-tournament-20260525-20260810/20260820T173617Z/holdout-ledgers/mid_open_interest.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-middle-market-payoff-tournament-20260525-20260810/20260820T173617Z/holdout-ledgers/mid_trade_prints.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-multivenue-early-entry-20260321-20260828/20260831T013939Z/ledgers/candidate-oof-binance_flow.parquet",
+        "reason": "direction unavailable"
+      },
+      {
+        "artifact": "btc-5m-multivenue-early-entry-20260321-20260828/20260831T013939Z/ledgers/candidate-oof-dual_venue_flow_agreement.parquet",
+        "reason": "direction unavailable"
+      },
+      {
+        "artifact": "btc-5m-multivenue-early-entry-20260321-20260828/20260831T013939Z/ledgers/candidate-oof-full_history_price_control.parquet",
+        "reason": "direction unavailable"
+      },
+      {
+        "artifact": "btc-5m-multivenue-early-entry-20260321-20260828/20260831T013939Z/ledgers/candidate-oof-full_history_refprice_residual.parquet",
+        "reason": "direction unavailable"
+      },
+      {
+        "artifact": "btc-5m-multivenue-early-entry-20260321-20260828/20260831T013939Z/ledgers/candidate-oof-kraken_crossvenue.parquet",
+        "reason": "direction unavailable"
+      },
+      {
+        "artifact": "btc-5m-multivenue-early-entry-20260321-20260828/20260831T013939Z/ledgers/candidate-oof-multivenue_consensus.parquet",
+        "reason": "direction unavailable"
+      },
+      {
+        "artifact": "btc-5m-multivenue-early-entry-20260321-20260828/20260831T013939Z/ledgers/candidate-oof-settlement_aligned_oracle.parquet",
+        "reason": "direction unavailable"
+      },
+      {
+        "artifact": "btc-5m-multivenue-early-entry-20260321-20260828/20260831T013939Z/ledgers/candidate-oof-time_specialist_ensemble.parquet",
+        "reason": "direction unavailable"
+      },
+      {
+        "artifact": "btc-5m-refprice-twap-target-training-20260607-20260824/20260825T205302Z/R/q5-evaluation-ledger.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-refprice-twap-target-training-20260607-20260824/20260825T205302Z/RT/q5-evaluation-ledger.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-refprice-twap-target-training-20260607-20260824/20260825T205302Z/T/q5-evaluation-ledger.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-settlement-bridge-residual-20260321-20260828/20260828T171209Z/development-trade-ledger.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-settlement-bridge-residual-20260321-20260828/20260828T171209Z/prospective-trade-ledger.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-settlement-bridge-residual-20260321-20260828/20260828T172858Z/development-trade-ledger.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-settlement-bridge-residual-20260321-20260828/20260828T172858Z/prospective-trade-ledger.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-settlement-bridge-residual-20260321-20260828/20260828T174720Z/development-trade-ledger.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-settlement-bridge-residual-20260321-20260828/20260828T174720Z/prospective-trade-ledger.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-settlement-bridge-residual-20260321-20260828/20260828T204616Z/prospective-trade-ledger.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-signal-attribution-early-entry-20260321-20260905/20260901T010530Z/ledgers/sealed-trades.parquet",
+        "reason": "missing market_id or seconds_elapsed"
+      },
+      {
+        "artifact": "btc-5m-twap-conformal-risk-admission-20260814-20260825/20260828T201718Z/ledgers/development-direction_price_block_conformal-trades.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-twap-conformal-risk-admission-20260814-20260825/20260828T201718Z/ledgers/development-direction_time_price_block_conformal-trades.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-twap-conformal-risk-admission-20260814-20260825/20260828T201718Z/ledgers/development-global_market_block_conformal-trades.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-twap-conformal-risk-admission-20260814-20260825/20260828T201718Z/ledgers/test-global_market_block_conformal-trades.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-twap-conformal-risk-admission-20260814-20260825/20260828T205354Z/ledgers/development-direction_price_block_conformal-trades.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-twap-conformal-risk-admission-20260814-20260825/20260828T205354Z/ledgers/development-direction_time_price_block_conformal-trades.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-twap-conformal-risk-admission-20260814-20260825/20260828T205354Z/ledgers/development-global_market_block_conformal-trades.parquet",
+        "reason": "empty ledger"
+      },
+      {
+        "artifact": "btc-5m-twap-conformal-risk-admission-20260814-20260825/20260828T205354Z/ledgers/test-global_market_block_conformal-trades.parquet",
+        "reason": "empty ledger"
+      }
+    ],
+    "unavailable_ledgers": 39
+  },
+  "historical_inventory_sha256": "ce261179c3db018e7cddfcbe1dd1518f10f3d6aac2b9504f68dfa1d7d4e41560",
+  "historical_trades": "/Users/gunnermadsen/development/polymarket-bot/worktress/time-bucket-specialist-tournament/packages/btc-directional-model/training-results/btc-5m-historical-signature-replay-20260914/20260914T203000Z/normalized-trades.parquet",
+  "historical_trades_sha256": "5c7e0f15e406e0fadaa6321751ae0f7ea4cb598523200d996975f1b9d6a22c4a",
+  "new_ingesters": false,
+  "new_schemas": false,
+  "new_sources": false,
+  "new_tables": false,
+  "panel": "/Users/gunnermadsen/development/polymarket-bot/worktress/time-bucket-specialist-tournament/packages/btc-directional-model/data/btc-full-coverage-vwap-admission-20260321-20260914/vwap-admission-panel.parquet",
+  "panel_manifest": "/Users/gunnermadsen/development/polymarket-bot/worktress/time-bucket-specialist-tournament/packages/btc-directional-model/data/btc-full-coverage-vwap-admission-20260321-20260914/vwap-admission-panel-manifest.json",
+  "panel_manifest_sha256": "ca752bbbeb91a5295add2f589950c673af26a9e05561a10a7d4aaec3de1e65e5",
+  "panel_sha256": "f11e3bc597dfd546d667c5f610791fd48feab0015217c64278fc06e46612bffa",
+  "read_only": true
+}
