@@ -117,6 +117,10 @@ def code_identity():
     }
 
 
+def identity_matches(saved, active):
+    return saved == active or saved in active.get("compatible_prior_identities", [])
+
+
 def raw_predict(model, x, cost, fee):
     p = predict_estimator(model, x)
     if model["kind"] == "payoff":
@@ -216,7 +220,7 @@ def run_model(recipe, frame, manifest, identity, output):
         if cp.exists() and pp.exists() and sidecar.exists():
             saved = json.loads(sidecar.read_text())
             if (
-                saved["identity"] != identity
+                not identity_matches(saved["identity"], identity)
                 or file_sha256(cp) != saved["model_sha256"]
                 or file_sha256(pp) != saved["prediction_sha256"]
             ):
@@ -379,7 +383,7 @@ def run_model(recipe, frame, manifest, identity, output):
     if final.exists() and finalmeta.exists():
         saved = json.loads(finalmeta.read_text())
         if (
-            saved["source_identity"] != identity
+            not identity_matches(saved["source_identity"], identity)
             or file_sha256(final) != saved["model_artifact_sha256"]
         ):
             raise RuntimeError("final artifact checkpoint mismatch " + recipe.name)

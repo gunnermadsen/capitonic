@@ -156,6 +156,30 @@ def market_weights(frame):
     ).astype(float)
 
 
+def _fit_histogram(model, x, y, weights):
+    # Installed sklearn calls sliding_window_view on an empty array when its
+    # binning subsample misses every observed value of a sparse feature. An empty
+    # threshold vector is the correct single-bin result. Keep the library intact
+    # and scope this compatibility guard to this tournament's fit call.
+    from sklearn.ensemble._hist_gradient_boosting import binning
+
+    original = binning._find_binning_thresholds
+
+    def supported_thresholds(column, max_bins, sample_weight=None):
+        observed = ~np.isnan(column)
+        if sample_weight is not None:
+            observed &= sample_weight != 0
+        if not observed.any():
+            return np.asarray([], dtype=np.float64)
+        return original(column, max_bins, sample_weight)
+
+    binning._find_binning_thresholds = supported_thresholds
+    try:
+        return model.fit(x, y, sample_weight=weights)
+    finally:
+        binning._find_binning_thresholds = original
+
+
 def fit_estimator(x, y, w, kind, seed=20260915, parameters=None):
     if not len(y):
         return {
@@ -170,7 +194,7 @@ def fit_estimator(x, y, w, kind, seed=20260915, parameters=None):
     xx = x[:, usable]
     if kind == "legacy":
         model = HistGradientBoostingRegressor(**{**parameters, "random_state": seed})
-        model.fit(xx, y, sample_weight=w * len(w) / w.sum())
+        _fit_histogram(model, xx, y, w * len(w) / w.sum())
     elif kind == "linear":
         model = make_pipeline(
             SimpleImputer(strategy="median", add_indicator=True),
@@ -194,7 +218,7 @@ def fit_estimator(x, y, w, kind, seed=20260915, parameters=None):
             early_stopping=False,
             random_state=seed,
         )
-        model.fit(xx, y, sample_weight=w * len(w) / w.sum())
+        _fit_histogram(model, xx, y, w * len(w) / w.sum())
     return {"estimator": model, "columns": usable, "kind": kind}
 
 

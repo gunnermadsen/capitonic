@@ -269,3 +269,38 @@ def test_unavailable_teacher_warmup_abstains():
     probability = predict_estimator(model, np.ones((3, 2)))
     assert model["untrained"]
     assert not (probability >= 0).any()
+
+
+def test_sparse_binning_guard_preserves_successful_fits():
+    from sklearn.ensemble import HistGradientBoostingRegressor
+    from sklearn.ensemble._hist_gradient_boosting import binning
+
+    from btc_directional_model.micro_edge_models import _fit_histogram
+
+    rng = np.random.default_rng(17)
+    x = rng.normal(size=(500, 3))
+    y = x[:, 0] * 0.2
+    kwargs = {"max_iter": 5, "min_samples_leaf": 10, "early_stopping": False, "random_state": 17}
+    original = HistGradientBoostingRegressor(**kwargs).fit(x, y, sample_weight=np.ones(500))
+    guarded = _fit_histogram(HistGradientBoostingRegressor(**kwargs), x, y, np.ones(500))
+    np.testing.assert_array_equal(original.predict(x), guarded.predict(x))
+    # Reproduce the library failure on an all-missing binning input directly.
+    before = binning._find_binning_thresholds
+
+    class CheckEmptySubsample:
+        def fit(self, x, y, sample_weight):
+            assert binning._find_binning_thresholds(np.array([np.nan, np.nan]), 63).size == 0
+            return self
+
+    _fit_histogram(CheckEmptySubsample(), x, y, np.ones(500))
+    assert binning._find_binning_thresholds is before
+
+
+def test_checkpoint_compatibility_requires_explicit_identity():
+    from btc_directional_model.micro_edge_tournament import identity_matches
+
+    old = {"code": "original", "data": "same"}
+    active = {"code": "empty_bin_guard", "data": "same", "compatible_prior_identities": [old]}
+    assert identity_matches(old, active)
+    assert not identity_matches({"code": "unknown", "data": "same"}, active)
+    assert not identity_matches({"code": "original", "data": "changed"}, active)
