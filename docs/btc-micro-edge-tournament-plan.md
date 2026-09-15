@@ -180,3 +180,26 @@ Planning verification used local manifests, a narrow Parquet column read and SSD
 - Verified SSD archive root: `/Volumes/docker-data/archives/polymarket-bot-worktrees/time-bucket-specialist-tournament`. Its `archive-manifest.json` records original paths, byte sizes and SHA-256 values. Archived working outputs live under `packages/btc-directional-model/runs/`, and source caches under `packages/btc-directional-model/data/`; the archive does not use a `training-results/` directory. For example, the original run is `runs/btc-time-bucket-specialist-tournament-20260321-20260901/20260913T215700Z/` with `metrics.json`, `report.md`, `tournament.joblib` and checkpoints. Committed summaries also exist in repository `training-results/`. Resolve sources through the archive manifest instead of assuming the old working cache path still exists.
 
 Revision scope: plan only; training code and archived artifacts remain unchanged.
+
+## Authorized execution record
+
+The user subsequently authorized end-to-end training in this existing worktree, with no merges, branches, worktrees, images, deployments, database mutations, or infrastructure changes. The execution modules are tournament-local additions in the existing Python package; shared trainers, extractors, SQL files and trading code remain unchanged.
+
+- Run identity: `20260915T030000Z` under `packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/`.
+- Field: 32 new hypothesis/RTDS/objective configurations plus three distinct matched historical refits. Two selected historical identities have identical feature/estimator/bucket recipes and share one refit; all four origins are retained in `config/btc-micro-edge-baselines.json` with verified artifact hashes.
+- Recovered the full August 27 raw partition from the existing tail cache. September 14 contributes 285 resolved valid markets through the requested day’s end.
+- Existing stored orderbooks supplied 95,613 additional rows at previously unrequested checkpoints before 30 seconds and after 240 seconds. Queries reused the established capacity extractor with bounded daily timestamps, read-only connections, no parallel database workers, and a 60-second statement timeout. Larger ladders are optional input context; every fill, fee calculation, reserve and selection uses five shares.
+- New histogram estimators use 60 iterations, 15 leaves, minimum leaf size 100, learning rate 0.07, L2 regularization 3 and 63 bins. Historical controls retain their archived estimator parameters. Compact logistic controls use training-only imputation/scaling. One fitting job and two native threads limit resource contention.
+- Optional-source gaps remain missing. Waiting admission requires causal OOF teacher predictions, so its auxiliary fit begins after the initial warm-up; its underlying directional model still refits the full June 7–September 14 range. This necessary supervision boundary is disclosed in per-artifact fit counts.
+- The supplied August 14 cutover remains a date-level indicator, not a verified exact transition timestamp. Official resolved outcomes are retained; transition-day diagnostics are separate. A bounded post-cutover-only refit is a transfer diagnostic and does not replace any full-range final model.
+- Baseline comparisons refit archived features and estimators using the new common chronological OOF calibration/admission, official labels and VWAP5. They are matched controls, not a reproduction of earlier sealed selection or mixed-quantity totals.
+- Resume validates code/input identities and artifact hashes. Each fold saves its fitted estimator, OOF predictions and completion metadata atomically. Final artifacts are reloaded for prediction parity. Only completed actual training artifacts receive model provenance tags after their references are committed.
+
+Execution entry points (run from this worktree with the existing package virtual environment and `PYTHONPATH=packages/btc-directional-model/src`):
+
+1. `python -m btc_directional_model.micro_edge_data --snapshot` — last-day read-only extraction, already completed.
+2. `python -m btc_directional_model.micro_edge_execution` — checkpointed extraction of omitted book checkpoints, already completed.
+3. `python -m btc_directional_model.micro_edge_data` — hash-validated daily source preparation.
+4. `python -m btc_directional_model.micro_edge_tournament` — resume/run the registered field, full-range final refits and reports.
+
+Detailed numerical evidence belongs to the completed run reports, not the small verification fits. Verification artifacts are clearly separated under `verification/` and excluded from tournament rankings and model provenance tags.
