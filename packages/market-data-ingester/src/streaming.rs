@@ -1,11 +1,13 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    future::Future,
     net::SocketAddr,
     pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex, OnceLock,
     },
+    task::{Context as TaskContext, Poll},
     time::{Duration, Instant},
 };
 
@@ -14,8 +16,7 @@ use chrono::{DateTime, Utc};
 use futures_util::{Stream, StreamExt};
 use serde::Serialize;
 use subtle::ConstantTimeEq;
-use tokio::sync::{broadcast, mpsc, RwLock};
-use tokio_stream::wrappers::ReceiverStream;
+use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
 use tokio_util::sync::CancellationToken;
 use tonic::{Request, Response, Status};
 use tracing::{info, warn};
@@ -105,6 +106,7 @@ pub struct StreamingMetrics {
     published: Mutex<BTreeMap<String, u64>>,
     subscribers: Mutex<BTreeMap<String, i64>>,
     dropped: Mutex<BTreeMap<String, u64>>,
+    terminations: Mutex<BTreeMap<(String, &'static str), u64>>,
     last_published_micros: Mutex<BTreeMap<String, i64>>,
     source_reconnects: Mutex<BTreeMap<(String, String), u64>>,
     source_connection_attempts: Mutex<BTreeMap<(String, String), u64>>,
@@ -561,6 +563,67 @@ struct StreamService {
     publisher: Publisher,
 }
 
+// A terminal cause bypasses the saturated data queue. Otherwise overload
+// recovery must first drain stale messages and the client sees only an EOF.
+struct ClientStream {
+    receiver: mpsc::Receiver<Result<MarketDataMessage, Status>>,
+    terminal: Option<oneshot::Receiver<Status>>,
+    done: bool,
+}
+
+impl Stream for ClientStream {
+    type Item = Result<MarketDataMessage, Status>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        if self.done {
+            return Poll::Ready(None);
+        }
+        if let Some(terminal) = &mut self.terminal {
+            match Pin::new(terminal).poll(cx) {
+                Poll::Ready(Ok(status)) => {
+                    self.done = true;
+                    self.receiver.close();
+                    return Poll::Ready(Some(Err(status)));
+                }
+                Poll::Ready(Err(_)) => self.terminal = None,
+                Poll::Pending => {}
+            }
+        }
+        self.receiver.poll_recv(cx)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum StreamTermination {
+    ClientQueueFull,
+    ClientClosed,
+    BroadcastLag,
+}
+
+impl StreamTermination {
+    fn reason(self) -> &'static str {
+        match self {
+            Self::ClientQueueFull => "client_queue_full",
+            Self::ClientClosed => "client_closed",
+            Self::BroadcastLag => "broadcast_lag",
+        }
+    }
+
+    fn status(self) -> Status {
+        match self {
+            Self::ClientQueueFull | Self::BroadcastLag => Status::resource_exhausted(self.reason()),
+            Self::ClientClosed => Status::cancelled(self.reason()),
+        }
+    }
+
+    fn from_send<T>(error: &mpsc::error::TrySendError<T>) -> Self {
+        match error {
+            mpsc::error::TrySendError::Full(_) => Self::ClientQueueFull,
+            mpsc::error::TrySendError::Closed(_) => Self::ClientClosed,
+        }
+    }
+}
+
 type ResponseStream = Pin<Box<dyn Stream<Item = Result<MarketDataMessage, Status>> + Send>>;
 
 #[tonic::async_trait]
@@ -574,17 +637,19 @@ impl MarketDataStream for StreamService {
         let mut commands = request.into_inner();
         let mut events = self.publisher.tx.subscribe();
         let (output, receiver) = mpsc::channel(CLIENT_CAPACITY);
+        let (terminal, terminal_receiver) = oneshot::channel();
         let publisher = self.publisher.clone();
         tokio::spawn(async move {
             let mut selected = BTreeSet::<String>::new();
             let mut selectors = BTreeMap::<String, ProductSelector>::new();
             let mut health_tick = tokio::time::interval(Duration::from_secs(5));
             health_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
+            let mut termination = None;
+            'stream: loop {
                 tokio::select! {
                     command = commands.next() => {
-                        let Some(command) = command else { break };
-                        let command = match command { Ok(command) => command, Err(_) => break };
+                        let Some(command) = command else { termination = Some(StreamTermination::ClientClosed); break };
+                        let command = match command { Ok(command) => command, Err(_) => { termination = Some(StreamTermination::ClientClosed); break } };
                         let rejected = command.products.iter().filter(|product| product.contract_version != CONTRACT_VERSION)
                             .map(|product| ProductRejection { product: Some(product.clone()), reason: "unsupported_contract_version".to_owned() }).collect::<Vec<_>>();
                         let accepted = command.products.iter().filter(|product| product.contract_version == CONTRACT_VERSION)
@@ -599,7 +664,7 @@ impl MarketDataStream for StreamService {
                             rejected,
                             acknowledged_at_micros: Utc::now().timestamp_micros(),
                         }))};
-                        if output.send(Ok(ack)).await.is_err() { break; }
+                        if output.send(Ok(ack)).await.is_err() { termination = Some(StreamTermination::ClientClosed); break; }
                         let snapshots = publisher.latest.read().await;
                         for key in &selected {
                             let health = ProductHealth {
@@ -609,9 +674,9 @@ impl MarketDataStream for StreamService {
                                 last_event_at_micros: snapshots.get(key).map_or(0, |event| event.published_at_micros),
                                 detail: if snapshots.contains_key(key) { "snapshot_available" } else { "awaiting_first_event" }.to_owned(),
                             };
-                            if output.send(Ok(MarketDataMessage { message: Some(Message::Health(health)) })).await.is_err() { return; }
+                            if output.send(Ok(MarketDataMessage { message: Some(Message::Health(health)) })).await.is_err() { termination = Some(StreamTermination::ClientClosed); break 'stream; }
                             if let Some(event) = snapshots.get(key) {
-                                if output.send(Ok(MarketDataMessage { message: Some(Message::Event((**event).clone())) })).await.is_err() { return; }
+                                if output.send(Ok(MarketDataMessage { message: Some(Message::Event((**event).clone())) })).await.is_err() { termination = Some(StreamTermination::ClientClosed); break 'stream; }
                             }
                         }
                     }
@@ -631,19 +696,24 @@ impl MarketDataStream for StreamService {
                                 last_event_at_micros: snapshot.map_or(0, |event| event.published_at_micros),
                                 detail: if fresh { "current" } else if snapshot.is_some() { "stale" } else { "awaiting_first_event" }.to_owned(),
                             };
-                            if output.try_send(Ok(MarketDataMessage { message: Some(Message::Health(health)) })).is_err() { return; }
+                            if let Err(error) = output.try_send(Ok(MarketDataMessage { message: Some(Message::Health(health)) })) {
+                                termination = Some(StreamTermination::from_send(&error));
+                                break 'stream;
+                            }
                         }
                     }
                     event = events.recv() => match event {
                         Ok(event) if selected.contains(&event.product_key) => {
                             let key = event.product_key.clone();
-                            if output.try_send(Ok(MarketDataMessage { message: Some(Message::Event((*event).clone())) })).is_err() {
+                            if let Err(error) = output.try_send(Ok(MarketDataMessage { message: Some(Message::Event((*event).clone())) })) {
+                                termination = Some(StreamTermination::from_send(&error));
                                 publisher.metrics.observe_drops(&key, 1);
                                 break;
                             }
                         }
                         Ok(_) => {}
                         Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            termination = Some(StreamTermination::BroadcastLag);
                             for key in &selected { publisher.metrics.observe_drops(key, skipped); }
                             break;
                         }
@@ -651,11 +721,24 @@ impl MarketDataStream for StreamService {
                     }
                 }
             }
+            if let Some(cause) = termination {
+                for key in &selected {
+                    publisher.metrics.observe_termination(key, cause);
+                    warn!(product = %key, worker_id = %publisher.worker_id,
+                        reason = cause.reason(), event = "market_data_stream_terminated",
+                        "market-data consumer stream terminated");
+                }
+                let _ = terminal.send(cause.status());
+            }
             publisher
                 .metrics
                 .replace_subscriptions(&selected, &BTreeSet::new());
         });
-        Ok(Response::new(Box::pin(ReceiverStream::new(receiver))))
+        Ok(Response::new(Box::pin(ClientStream {
+            receiver,
+            terminal: Some(terminal_receiver),
+            done: false,
+        })))
     }
 }
 
@@ -670,6 +753,19 @@ impl StreamingMetrics {
     }
 
     fn replace_subscriptions(&self, old: &BTreeSet<String>, new: &BTreeSet<String>) {
+        let mut terminations = self.terminations.lock().expect("metrics lock");
+        for key in new {
+            for cause in [
+                StreamTermination::ClientQueueFull,
+                StreamTermination::ClientClosed,
+                StreamTermination::BroadcastLag,
+            ] {
+                terminations
+                    .entry((key.clone(), cause.reason()))
+                    .or_default();
+            }
+        }
+        drop(terminations);
         let mut subscriptions = self.subscribers.lock().expect("metrics lock");
         for key in old.difference(new) {
             *subscriptions.entry(key.clone()).or_insert(0) -= 1;
@@ -688,11 +784,21 @@ impl StreamingMetrics {
             .or_insert(0) += count;
     }
 
+    fn observe_termination(&self, product: &str, cause: StreamTermination) {
+        *self
+            .terminations
+            .lock()
+            .expect("metrics lock")
+            .entry((product.to_owned(), cause.reason()))
+            .or_default() += 1;
+    }
+
     fn render(&self) -> String {
         let render_started_at = Instant::now();
         let published = self.published.lock().expect("metrics lock").clone();
         let subscriptions = self.subscribers.lock().expect("metrics lock").clone();
         let dropped = self.dropped.lock().expect("metrics lock").clone();
+        let terminations = self.terminations.lock().expect("metrics lock").clone();
         let last = self
             .last_published_micros
             .lock()
@@ -782,6 +888,10 @@ impl StreamingMetrics {
                 "ingester_stream_subscribers{{product=\"{key}\"}} {}\n",
                 value.max(&0)
             ));
+        }
+        out.push_str("# HELP ingester_stream_terminations_total Consumer stream terminations by product and bounded cause.\n# TYPE ingester_stream_terminations_total counter\n");
+        for ((product, reason), value) in terminations {
+            out.push_str(&format!("ingester_stream_terminations_total{{product=\"{product}\",reason=\"{reason}\"}} {value}\n"));
         }
         out.push_str("# HELP ingester_stream_dropped_total Events dropped for slow consumers.\n# TYPE ingester_stream_dropped_total counter\n");
         for (key, value) in dropped.iter() {
@@ -1034,6 +1144,103 @@ fn render_histogram(out: &mut String, name: &str, product: &str, histogram: &Lat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn full_client_queue_delivers_terminal_cause_before_stale_backlog() {
+        let (output, receiver) = mpsc::channel(1);
+        output
+            .try_send(Ok(MarketDataMessage { message: None }))
+            .unwrap();
+        let error = output
+            .try_send(Ok(MarketDataMessage { message: None }))
+            .unwrap_err();
+        let cause = StreamTermination::from_send(&error);
+        assert_eq!(cause.reason(), "client_queue_full");
+        let (terminal, terminal_receiver) = oneshot::channel();
+        let mut stream = ClientStream {
+            receiver,
+            terminal: Some(terminal_receiver),
+            done: false,
+        };
+        terminal.send(cause.status()).unwrap();
+        let status = stream.next().await.unwrap().unwrap_err();
+        assert_eq!(status.code(), tonic::Code::ResourceExhausted);
+        assert_eq!(status.message(), "client_queue_full");
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn broadcast_lag_reports_distinct_overload_and_closed_client_is_not_overload() {
+        let (broadcast, mut subscriber) = broadcast::channel(1);
+        broadcast.send(1).unwrap();
+        broadcast.send(2).unwrap();
+        assert!(matches!(
+            subscriber.recv().await,
+            Err(broadcast::error::RecvError::Lagged(1))
+        ));
+        let (_output, receiver) = mpsc::channel(1);
+        let (terminal, terminal_receiver) = oneshot::channel();
+        let mut stream = ClientStream {
+            receiver,
+            terminal: Some(terminal_receiver),
+            done: false,
+        };
+        terminal
+            .send(StreamTermination::BroadcastLag.status())
+            .unwrap();
+        let status = stream.next().await.unwrap().unwrap_err();
+        assert_eq!(status.code(), tonic::Code::ResourceExhausted);
+        assert_eq!(status.message(), "broadcast_lag");
+        let (output, receiver) = mpsc::channel::<()>(1);
+        drop(receiver);
+        let cause = StreamTermination::from_send(&output.try_send(()).unwrap_err());
+        assert_eq!(cause.reason(), "client_closed");
+        assert_eq!(cause.status().code(), tonic::Code::Cancelled);
+        let metrics = StreamingMetrics::default();
+        let selected = BTreeSet::from(["polymarket_btc_five_minute_orderbooks".to_owned()]);
+        metrics.replace_subscriptions(&BTreeSet::new(), &selected);
+        metrics.observe_termination("polymarket_btc_five_minute_orderbooks", cause);
+        metrics.replace_subscriptions(&selected, &BTreeSet::new());
+        let rendered = metrics.render();
+        assert!(rendered.contains("reason=\"client_closed\"} 1"));
+        assert!(rendered.contains("reason=\"client_queue_full\"} 0"));
+        assert!(rendered.contains("reason=\"broadcast_lag\"} 0"));
+        assert!(rendered.contains(
+            "ingester_stream_subscribers{product=\"polymarket_btc_five_minute_orderbooks\"} 0"
+        ));
+    }
+
+    #[tokio::test]
+    async fn healthy_client_stream_preserves_fifo_and_normal_eof() {
+        let (output, receiver) = mpsc::channel(2);
+        let (terminal, terminal_receiver) = oneshot::channel();
+        let mut stream = ClientStream {
+            receiver,
+            terminal: Some(terminal_receiver),
+            done: false,
+        };
+        for revision in [1, 2] {
+            output
+                .send(Ok(MarketDataMessage {
+                    message: Some(Message::SubscriptionAck(SubscriptionAck {
+                        revision,
+                        ..Default::default()
+                    })),
+                }))
+                .await
+                .unwrap();
+        }
+        drop(output);
+        drop(terminal);
+        for expected in [1, 2] {
+            let Some(Message::SubscriptionAck(ack)) = stream.next().await.unwrap().unwrap().message
+            else {
+                panic!("ack expected");
+            };
+            assert_eq!(ack.revision, expected);
+        }
+        assert!(stream.next().await.is_none());
+    }
 
     #[test]
     fn renders_transport_and_persistence_health_metrics() {

@@ -211,6 +211,7 @@ pub struct StreamMetrics {
     products: Mutex<BTreeMap<String, ProductStreamMetrics>>,
     product_ready: Mutex<BTreeMap<String, bool>>,
     route_failures: Mutex<BTreeMap<String, u64>>,
+    retained_books: AtomicU64,
 }
 
 #[derive(Default)]
@@ -240,6 +241,15 @@ impl Drop for ConnectionGauge<'_> {
 }
 
 fn route_failure_reason(error: &anyhow::Error) -> &'static str {
+    if let Some(status) = error.downcast_ref::<tonic::Status>() {
+        if status.code() == tonic::Code::ResourceExhausted {
+            match status.message() {
+                "client_queue_full" => return "client_queue_full",
+                "broadcast_lag" => return "broadcast_lag",
+                _ => {}
+            }
+        }
+    }
     let message = error.to_string();
     if message.contains(" is stale") || message.contains("not contiguous") {
         "required_product_stale"
@@ -255,6 +265,18 @@ fn route_failure_reason(error: &anyhow::Error) -> &'static str {
         "worker_connect"
     } else {
         "stream_error"
+    }
+}
+
+fn route_retry_delay(previous: Duration, connected_for: Duration, reason: &str) -> Duration {
+    if matches!(reason, "client_queue_full" | "broadcast_lag") {
+        // A typed server overload report proves the route was reachable. Do
+        // not turn a recoverable data gap into a fifteen-second retry pause.
+        Duration::from_millis(500)
+    } else if connected_for >= Duration::from_secs(30) {
+        Duration::from_millis(250)
+    } else {
+        previous
     }
 }
 
@@ -512,6 +534,7 @@ impl MarketDataStreamRuntime {
                 return;
             }
             let attempt_started = tokio::time::Instant::now();
+            let mut failure_reason = "worker_stream_closed";
             match self
                 .consume_route(route.clone(), selectors.clone(), shutdown.clone())
                 .await
@@ -520,6 +543,7 @@ impl MarketDataStreamRuntime {
                 Ok(()) => {}
                 Err(error) => {
                     let reason = route_failure_reason(&error);
+                    failure_reason = reason;
                     self.metrics.observe_route_failure(reason);
                     self.metrics.reconnects.fetch_add(1, Ordering::Relaxed);
                     tracing::warn!(
@@ -531,9 +555,7 @@ impl MarketDataStreamRuntime {
                     );
                 }
             }
-            if attempt_started.elapsed() >= Duration::from_secs(30) {
-                delay = Duration::from_millis(250);
-            }
+            delay = route_retry_delay(delay, attempt_started.elapsed(), failure_reason);
             tokio::select! {
                 _ = shutdown.cancelled() => return,
                 _ = tokio::time::sleep(delay) => {}
@@ -886,20 +908,36 @@ impl MarketDataStreamRuntime {
             }
             other => bail!("unhandled market-data product {other}"),
         }
-        self.reconcile_market_window(Utc::now()).await;
+        self.reconcile_market_window(Utc::now(), event.product_key == PRODUCT_MARKETS)
+            .await?;
         Ok(())
     }
 
-    async fn reconcile_market_window(&self, now: DateTime<Utc>) {
-        let selection = {
+    async fn reconcile_market_window(&self, now: DateTime<Utc>, prune_books: bool) -> Result<()> {
+        let (selection, retained) = {
             let mut contracts = self
                 .market_contracts
                 .lock()
                 .expect("market contract catalog lock");
-            select_market_window(&mut contracts, now)
+            let selection = select_market_window(&mut contracts, now);
+            let retained = prune_books.then(|| contracts.values().cloned().collect::<Vec<_>>());
+            (selection, retained)
         };
-        let mut state = self.state.write().await;
-        apply_market_window_selection(&mut state, selection);
+        // Contract refreshes are the membership boundary, not the per-frame
+        // socket path. Preserve the catalog's ten-minute grace and future books.
+        if let Some(retained) = retained.filter(|markets| !markets.is_empty()) {
+            let mut books = self.books.write().await;
+            books.retain_markets(&retained)?;
+            let mut state = self.state.write().await;
+            state.update_books(&books);
+            self.metrics
+                .retained_books
+                .store(state.books.len() as u64, Ordering::Relaxed);
+            apply_market_window_selection(&mut state, selection);
+        } else {
+            apply_market_window_selection(&mut *self.state.write().await, selection);
+        }
+        Ok(())
     }
 }
 
@@ -1148,6 +1186,7 @@ impl StreamMetrics {
             self.decode_errors.load(Ordering::Relaxed), self.apply_latency_micros.load(Ordering::Relaxed) as f64 / 1_000_000.0,
             self.last_event_micros.load(Ordering::Relaxed) as f64 / 1_000_000.0)
         ;
+        output.push_str(&format!("# HELP polymarket_market_data_retained_books Books retained after market-contract reconciliation.\n# TYPE polymarket_market_data_retained_books gauge\npolymarket_market_data_retained_books {}\n", self.retained_books.load(Ordering::Relaxed)));
         output.push_str("# HELP polymarket_market_data_product_events_applied_total Canonical events applied by selected product.\n# TYPE polymarket_market_data_product_events_applied_total counter\n");
         let products = self.products.lock().expect("stream metrics lock");
         for (key, metrics) in products.iter() {
@@ -1216,6 +1255,7 @@ mod tests {
     struct RecoveryStreamFixture {
         worker_id: &'static str,
         connections: Arc<AtomicUsize>,
+        overloads: usize,
         shutdown: watch::Receiver<bool>,
     }
 
@@ -1231,6 +1271,7 @@ mod tests {
             let (sender, receiver) = mpsc::channel(4);
             let worker_id = self.worker_id.to_owned();
             let connections = self.connections.clone();
+            let overloads = self.overloads;
             let mut shutdown = self.shutdown.clone();
             tokio::spawn(async move {
                 let command = match inbound.message().await {
@@ -1241,7 +1282,12 @@ mod tests {
                         return;
                     }
                 };
-                connections.fetch_add(1, Ordering::Relaxed);
+                if connections.fetch_add(1, Ordering::Relaxed) < overloads {
+                    let _ = sender
+                        .send(Err(Status::resource_exhausted("client_queue_full")))
+                        .await;
+                    return;
+                }
                 let ack = proto::SubscriptionAck {
                     revision: command.revision,
                     accepted: command.products.clone(),
@@ -1288,6 +1334,7 @@ mod tests {
     async fn start_recovery_stream_fixture(
         worker_id: &'static str,
         connections: Arc<AtomicUsize>,
+        overloads: usize,
     ) -> (String, watch::Sender<bool>, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -1301,6 +1348,7 @@ mod tests {
                         RecoveryStreamFixture {
                             worker_id,
                             connections,
+                            overloads,
                             shutdown: shutdown_receiver,
                         },
                     ),
@@ -1694,6 +1742,120 @@ mod tests {
     }
 
     #[test]
+    fn typed_overload_retries_remain_short_without_weakening_transport_backoff() {
+        for cause in ["client_queue_full", "broadcast_lag"] {
+            let error =
+                anyhow::Error::new(Status::resource_exhausted(cause)).context("stream read");
+            assert_eq!(route_failure_reason(&error), cause);
+            let mut delay = Duration::from_secs(15);
+            for _ in 0..20 {
+                delay = route_retry_delay(delay, Duration::from_secs(3), cause);
+                assert_eq!(delay, Duration::from_millis(500));
+                delay = (delay * 2).min(Duration::from_secs(15));
+            }
+        }
+        for status in [
+            Status::unavailable("client_queue_full"),
+            Status::resource_exhausted("unknown"),
+            Status::cancelled("client_closed"),
+        ] {
+            let reason = route_failure_reason(&anyhow::Error::new(status));
+            assert_eq!(
+                route_retry_delay(Duration::from_secs(15), Duration::from_secs(3), reason),
+                Duration::from_secs(15)
+            );
+        }
+        assert_eq!(
+            route_retry_delay(
+                Duration::from_secs(15),
+                Duration::from_secs(30),
+                "worker_stream_closed"
+            ),
+            Duration::from_millis(250)
+        );
+    }
+
+    #[tokio::test]
+    async fn market_reconciliation_bounds_books_across_many_rotations_and_preserves_live_state() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://test:test@127.0.0.1/test")
+            .unwrap();
+        let epoch = Uuid::new_v4();
+        let runtime = MarketDataStreamRuntime::new(
+            "http://127.0.0.1:1".to_owned(),
+            "test".to_owned(),
+            "test".to_owned(),
+            BtcRepository::from_pool(pool),
+            Arc::new(RwLock::new(RealtimeState::default())),
+            Arc::new(RwLock::new(BookRegistry::new(epoch))),
+            Arc::new(StreamMetrics::default()),
+        )
+        .unwrap();
+        let start = Utc.with_ymd_and_hms(2026, 9, 3, 18, 0, 0).unwrap();
+        for index in 0..1000 {
+            let now = start + chrono::Duration::minutes(index * 5);
+            let current = market(&format!("market-{index}"), now, true, false, true);
+            let successor = market(
+                &format!("market-{}", index + 1),
+                now + chrono::Duration::minutes(5),
+                true,
+                false,
+                true,
+            );
+            for m in [&current, &successor] {
+                runtime
+                    .market_contracts
+                    .lock()
+                    .unwrap()
+                    .insert(m.window_start, m.clone());
+                runtime.books.write().await.try_register_market(m).unwrap();
+            }
+            runtime
+                .books
+                .write()
+                .await
+                .apply_canonical_snapshot_for_market_identity(
+                    epoch,
+                    &current.market_id,
+                    &current.condition_id,
+                    &current.up_token_id,
+                    &current.down_token_id,
+                    &current.up_token_id,
+                    BtcOutcome::Up,
+                    Decimal::new(1, 2),
+                    now,
+                    now,
+                    index as u64 + 1,
+                    None,
+                    vec![(Decimal::new(40, 2), Decimal::ONE)],
+                    vec![(Decimal::new(60, 2), Decimal::ONE)],
+                )
+                .unwrap();
+            let before = runtime
+                .books
+                .read()
+                .await
+                .checkpoint(&current.up_token_id)
+                .unwrap();
+            runtime.reconcile_market_window(now, true).await.unwrap();
+            let books = runtime.books.read().await;
+            let after = books.checkpoint(&current.up_token_id).unwrap();
+            assert_eq!(after.connection_id, epoch);
+            assert_eq!(after.ingest_sequence, before.ingest_sequence);
+            assert_eq!(after.bids, before.bids);
+            assert_eq!(after.asks, before.asks);
+            assert_eq!(after.received_at, before.received_at);
+            assert!(books
+                .book_readiness()
+                .iter()
+                .any(|b| b.token_id == successor.up_token_id));
+            // Previous ten-minute grace (including its boundary), current and successor.
+            assert!(books.book_readiness().len() <= 10);
+            assert!(runtime.metrics.retained_books.load(Ordering::Relaxed) <= 10);
+        }
+    }
+
+    #[test]
     fn route_failure_metrics_use_bounded_operational_reasons() {
         assert_eq!(
             route_failure_reason(&anyhow::anyhow!(
@@ -1743,16 +1905,82 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn repeated_typed_overloads_recover_over_grpc_without_long_retry_gaps() {
+        let connections = Arc::new(AtomicUsize::new(0));
+        let (endpoint, _stream_shutdown, server) =
+            start_recovery_stream_fixture("worker-overloaded", connections.clone(), 8).await;
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://test:test@127.0.0.1/test")
+            .unwrap();
+        let metrics = Arc::new(StreamMetrics::default());
+        let runtime = MarketDataStreamRuntime::new(
+            "http://127.0.0.1:1".to_owned(),
+            "test".to_owned(),
+            "test".to_owned(),
+            BtcRepository::from_pool(pool),
+            Arc::new(RwLock::new(RealtimeState::default())),
+            Arc::new(RwLock::new(BookRegistry::new(Uuid::new_v4()))),
+            metrics.clone(),
+        )
+        .unwrap();
+        let selector = SourceSelector {
+            key: PRODUCT_TWAP.to_owned(),
+            contract_version: CONTRACT_VERSION,
+            required: true,
+            maximum_age_ms: Some(120_000),
+            require_sequence_integrity: true,
+        };
+        let selectors = Arc::new(BTreeMap::from([(PRODUCT_TWAP.to_owned(), selector)]));
+        let route = WorkerRoute {
+            worker_id: "worker-overloaded".to_owned(),
+            endpoint,
+            source_revision: "test".to_owned(),
+            products: vec![RouteProduct {
+                key: PRODUCT_TWAP.to_owned(),
+                contract_version: CONTRACT_VERSION,
+            }],
+        };
+        let shutdown = CancellationToken::new();
+        let task_shutdown = shutdown.clone();
+        let task = tokio::spawn(async move {
+            runtime
+                .supervise_route(route, selectors, task_shutdown)
+                .await
+        });
+        wait_for_condition(
+            "recovery after eight typed overloads",
+            Duration::from_secs(7),
+            || {
+                connections.load(Ordering::Relaxed) == 9
+                    && metrics.product_ready.lock().unwrap().get(PRODUCT_TWAP) == Some(&true)
+            },
+        )
+        .await;
+        assert_eq!(
+            metrics
+                .route_failures
+                .lock()
+                .unwrap()
+                .get("client_queue_full"),
+            Some(&8)
+        );
+        shutdown.cancel();
+        task.await.unwrap();
+        assert_eq!(metrics.connections.load(Ordering::Relaxed), 0);
+        server.abort();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn route_runtime_recovers_across_worker_identity_replacement_and_outage() {
         let first_connections = Arc::new(AtomicUsize::new(0));
         let second_connections = Arc::new(AtomicUsize::new(0));
         let third_connections = Arc::new(AtomicUsize::new(0));
         let (first_endpoint, _first_stream_shutdown, first_server) =
-            start_recovery_stream_fixture("worker-a", first_connections.clone()).await;
+            start_recovery_stream_fixture("worker-a", first_connections.clone(), 0).await;
         let (second_endpoint, second_stream_shutdown, second_server) =
-            start_recovery_stream_fixture("worker-b", second_connections.clone()).await;
+            start_recovery_stream_fixture("worker-b", second_connections.clone(), 0).await;
         let (third_endpoint, _third_stream_shutdown, third_server) =
-            start_recovery_stream_fixture("worker-c", third_connections.clone()).await;
+            start_recovery_stream_fixture("worker-c", third_connections.clone(), 0).await;
         let topology = Arc::new(AtomicU8::new(0));
         let route_topology = topology.clone();
         let endpoints = Arc::new([first_endpoint, second_endpoint, third_endpoint]);

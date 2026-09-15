@@ -28,8 +28,17 @@ test = ->(name, rule, inputs, expected) do
    'promql_expr_test' => [{'expr' => "sum((#{expr.call(rule)}) > bool #{threshold.call(rule)}) or vector(0)",
      'eval_time' => '2m', 'exp_samples' => [{'labels' => '{}', 'value' => expected}]}]}
 end
-fixture = {'evaluation_interval' => '10s', 'tests' => [
-  test.call('fresh source', source, [series.call(source_name, '0+10x12'), series.call(state, '1+0x12')], 0),
+overload = rules.find { |rule| rule['uid'] == 'mdp_orderbook_consumer_overload' }
+raise 'missing overload alert' unless overload && overload['for'] == '0s' && overload['noDataState'] == 'OK'
+termination_name = 'ingester_stream_terminations_total{product="polymarket_btc_five_minute_orderbooks",instance="owner",reason="client_queue_full"}'
+fixture = {'evaluation_interval'  => '10s', 'tests' => [
+  test.call('no consumer overload', overload, [series.call(termination_name, '0+0x12')], 0),
+  test.call('client output full', overload, [series.call(termination_name, '0+0x5 1+0x6')], 1),
+  test.call('publisher broadcast lag', overload, [series.call(termination_name.sub('client_queue_full', 'broadcast_lag'), '0+0x5 1+0x6')], 1),
+  test.call('client disconnect is not overload', overload, [series.call(termination_name.sub('client_queue_full', 'client_closed'), '0+1x12')], 0),
+  test.call('other product overload', overload, [series.call(termination_name.sub('polymarket_btc_five_minute_orderbooks', 'other'), '0+1x12')], 0),
+  test.call('overload counter reset', overload, [series.call(termination_name, '5+0x5 0+0x6')], 0),
+  test.call('fresh source' , source, [series.call(source_name, '0+10x12'), series.call(state, '1+0x12')], 0),
   test.call('stalled source alerts even without subscribers', source, [series.call(source_name, '1+0x12'), series.call(state, '1+0x12')], 1),
   test.call('disabled strategy', source, [series.call(source_name, '1+0x12')], 0),
   test.call('stale former owner cannot poison healthy replacement', source, [series.call(source_name, '1+0x12'), series.call(source_name.sub('owner', 'replacement'), '0+10x12'), series.call(state, '1+0x12')], 0),

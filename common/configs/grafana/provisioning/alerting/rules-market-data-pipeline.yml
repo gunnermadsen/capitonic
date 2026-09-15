@@ -72,6 +72,37 @@ groups:
         annotations: {summary: A slow consumer or bounded stream queue dropped market data}
         labels: {service: ingester-worker, family: market_data_pipeline, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
         isPaused: false
+      - uid: mdp_orderbook_consumer_overload
+        title: Orderbook consumer stream overloaded
+        condition: C
+        data:
+          - refId: A
+            queryType: instant
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: prometheus
+            model:
+              datasource: {type: prometheus, uid: prometheus}
+              editorMode: code
+              expr: 'sum by (instance, product, reason) (increase(ingester_stream_terminations_total{product="polymarket_btc_five_minute_orderbooks",reason=~"client_queue_full|broadcast_lag"}[5m]))'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              datasource: {type: __expr__, uid: __expr__}
+              expression: B
+              type: threshold
+              conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}]
+              refId: C
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations: {summary: "Orderbook gRPC stream terminated: {{ $labels.reason }} on {{ $labels.instance }}", description: "client_queue_full means the per-client output queue filled; broadcast_lag means the stream task fell behind the publisher broadcast. Inspect consumer apply throughput and retained books. These are downstream gRPC failures, distinct from provider websocket failures."}
+        labels: {service: ingester-worker, family: market_data_pipeline, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
       - uid: mdp_stream_stale
         title: Selected market-data product is stale
         condition: C
