@@ -19,6 +19,8 @@ The successful data-frame path must not perform logging, metrics updates, JSON p
 
 All data-frame processing and observability belongs after `io_receiver.recv()`. The existing bounded channel is the isolation boundary. If it fills, the strategy must preserve the existing explicit overflow failure and fresh-epoch reconnect; it must not use an unbounded queue or silently discard frames.
 
+Control writes must be polled concurrently with reads through one ordered, bounded writer. Never await a control write inside the read loop branch. Control-write completion metadata may be handed off without waiting; histogram updates and logging remain after dequeue, and optional telemetry must not block socket intake.
+
 ## Observability constraints
 
 Metrics are necessary, but they must not compete with socket intake:

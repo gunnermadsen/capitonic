@@ -75,6 +75,8 @@ struct RealtimePipelineMetrics {
     publication_queue_overflows: u64,
     websocket_queue_delay: LatencyHistogram,
     websocket_interframe: LatencyHistogram,
+    clob_control_write: LatencyHistogram,
+    clob_control_write_failures: u64,
     clob_frame_parse: LatencyHistogram,
     clob_book_apply: LatencyHistogram,
     clob_sample_build: LatencyHistogram,
@@ -485,6 +487,16 @@ pub fn observe_websocket_queue_delay(product_key: &str, duration: Duration) {
 pub fn observe_websocket_frame_processed(product_key: &str) {
     with_pipeline_metrics(product_key, |metrics| {
         metrics.websocket_frames_processed = metrics.websocket_frames_processed.saturating_add(1);
+    });
+}
+
+// Called only by the strategy consumer after dequeue, never by socket intake.
+pub fn observe_clob_control_write(product_key: &str, elapsed: Duration, failed: bool) {
+    with_pipeline_metrics(product_key, |metrics| {
+        metrics.clob_control_write.observe(elapsed);
+        metrics.clob_control_write_failures = metrics
+            .clob_control_write_failures
+            .saturating_add(u64::from(failed));
     });
 }
 
@@ -1016,9 +1028,11 @@ impl StreamingMetrics {
         out.push_str(&format!(
             "market_data_ingester_prometheus_render_duration_seconds {previous_render_duration}\n"
         ));
+        out.push_str("# HELP market_data_ingester_clob_control_write_failures_total Observed failed CLOB control writes; terminal failure logs remain authoritative if telemetry cannot enqueue.\n# TYPE market_data_ingester_clob_control_write_failures_total counter\n");
         for name in [
             "market_data_ingester_websocket_queue_delay_seconds",
             "market_data_ingester_websocket_interframe_seconds",
+            "market_data_ingester_clob_control_write_seconds",
             "market_data_ingester_clob_frame_parse_seconds",
             "market_data_ingester_clob_book_apply_seconds",
             "market_data_ingester_clob_sample_build_seconds",
@@ -1079,6 +1093,16 @@ impl StreamingMetrics {
                 key,
                 &metrics.websocket_interframe,
             );
+            render_histogram(
+                &mut out,
+                "market_data_ingester_clob_control_write_seconds",
+                key,
+                &metrics.clob_control_write,
+            );
+            out.push_str(&format!(
+                "market_data_ingester_clob_control_write_failures_total{{product=\"{key}\"}} {}\n",
+                metrics.clob_control_write_failures
+            ));
             render_histogram(
                 &mut out,
                 "market_data_ingester_clob_frame_parse_seconds",
@@ -1330,7 +1354,21 @@ mod tests {
             .expect("metrics lock")
             .insert("product".to_owned(), pipeline);
 
+        {
+            let mut pipeline = metrics.realtime_pipeline.lock().unwrap();
+            let metric = pipeline.get_mut("product").unwrap();
+            metric
+                .clob_control_write
+                .observe(Duration::from_millis(150));
+            metric.clob_control_write_failures = 1;
+        }
         let rendered = metrics.render();
+        assert!(rendered.contains(
+            "market_data_ingester_clob_control_write_seconds_count{product=\"product\"} 1"
+        ));
+        assert!(rendered.contains(
+            "market_data_ingester_clob_control_write_failures_total{product=\"product\"} 1"
+        ));
         assert!(rendered.contains(
             "ingester_source_reconnects_total{product=\"product\",reason=\"read_idle\"} 2"
         ));

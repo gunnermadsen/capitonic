@@ -31,7 +31,15 @@ end
 overload = rules.find { |rule| rule['uid'] == 'mdp_orderbook_consumer_overload' }
 raise 'missing overload alert' unless overload && overload['for'] == '0s' && overload['noDataState'] == 'OK'
 termination_name = 'ingester_stream_terminations_total{product="polymarket_btc_five_minute_orderbooks",instance="owner",reason="client_queue_full"}'
+control = rules.find { |rule| rule['uid'] == 'mdp_clob_control_write_slow' }
+raise 'missing control write alert' unless control && control['for'] == '0s' && control['noDataState'] == 'OK'
+write_count = 'market_data_ingester_clob_control_write_seconds_count{product="polymarket_btc_five_minute_orderbooks",instance="owner"}'
+write_fast = 'market_data_ingester_clob_control_write_seconds_bucket{product="polymarket_btc_five_minute_orderbooks",instance="owner",le="0.1"}'
 fixture = {'evaluation_interval'  => '10s', 'tests' => [
+  test.call('fast control writes', control, [series.call(write_count, '0+1x12'), series.call(write_fast, '0+1x12')], 0),
+  test.call('slow control write', control, [series.call(write_count, '0+1x12'), series.call(write_fast, '0+0x12')], 1),
+  test.call('control write counters reset together', control, [series.call(write_count, '5+0x5 0+0x6'), series.call(write_fast, '5+0x5 0+0x6')], 0),
+
   test.call('no consumer overload', overload, [series.call(termination_name, '0+0x12')], 0),
   test.call('client output full', overload, [series.call(termination_name, '0+0x5 1+0x6')], 1),
   test.call('publisher broadcast lag', overload, [series.call(termination_name.sub('client_queue_full', 'broadcast_lag'), '0+0x5 1+0x6')], 1),

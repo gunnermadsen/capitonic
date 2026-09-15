@@ -4230,6 +4230,56 @@
       ],
       "title": "Orderbook gRPC Terminations by Cause",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Sink send/flush duration for subscription, ping and pong writes; excludes queue wait. Recorded after dequeue, never on successful data-frame intake. Best effort if the raw-frame queue is full.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 132,
+        "w": 12,
+        "h": 7
+      },
+      "id": 54,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by(instance) (rate(market_data_ingester_clob_control_write_seconds_sum{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])) / sum by(instance) (rate(market_data_ingester_clob_control_write_seconds_count{product=\"polymarket_btc_five_minute_orderbooks\"}[5m]))",
+          "legendFormat": "{{instance}} mean control-write duration",
+          "refId": "A"
+        }
+      ],
+      "title": "CLOB Control Write Duration",
+      "type": "timeseries"
     }
   ],
   "preload": false,

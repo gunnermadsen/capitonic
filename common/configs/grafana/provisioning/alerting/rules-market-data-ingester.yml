@@ -889,7 +889,7 @@ groups:
               datasource: {type: loki, uid: loki}
               editorMode: code
               expr: >-
-                (sum by (strategy, error_code) (count_over_time({service_name="ingester",strategy="polymarket_btc_five_minute_orderbooks",error_code=~"^(polymarket_sampling_bucket_gap|polymarket_clob_bootstrap_timeout|polymarket_sampling_persistence_backpressure|polymarket_clob_consumer_backpressure)$"}[5m])) >= 1) or (sum by (strategy, error_code) (count_over_time({service_name="ingester",strategy="polymarket_btc_five_minute_orderbooks",error_code=~"^(polymarket_clob_closed|polymarket_clob_connect_failed|polymarket_clob_connect_timeout|polymarket_clob_eof|polymarket_clob_read_failed|polymarket_clob_read_timeout|polymarket_clob_write_failed|polymarket_clob_write_timeout|polymarket_clob_pong_timeout|polymarket_clob_io_worker_stopped)$"}[5m])) >= 3)
+                (sum by (strategy, error_code) (count_over_time({service_name="ingester",strategy="polymarket_btc_five_minute_orderbooks",error_code=~"^(polymarket_sampling_bucket_gap|polymarket_clob_bootstrap_timeout|polymarket_sampling_persistence_backpressure|polymarket_clob_consumer_backpressure|polymarket_clob_control_backpressure)$"}[5m])) >= 1) or (sum by (strategy, error_code) (count_over_time({service_name="ingester",strategy="polymarket_btc_five_minute_orderbooks",error_code=~"^(polymarket_clob_closed|polymarket_clob_connect_failed|polymarket_clob_connect_timeout|polymarket_clob_eof|polymarket_clob_read_failed|polymarket_clob_read_timeout|polymarket_clob_write_failed|polymarket_clob_write_timeout|polymarket_clob_pong_timeout|polymarket_clob_io_worker_stopped)$"}[5m])) >= 3)
               instant: true
               intervalMs: 1000
               maxDataPoints: 43200

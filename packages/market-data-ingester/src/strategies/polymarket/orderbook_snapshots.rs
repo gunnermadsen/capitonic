@@ -3691,6 +3691,10 @@ enum ClobIoEvent {
         queued_at: Instant,
     },
     Failed(StrategyError),
+    ControlWrite {
+        elapsed: Duration,
+        failed: bool,
+    },
 }
 
 // A terminal socket event must be delivered exactly once. Polling an ended
@@ -3982,7 +3986,7 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
             }
         };
         let mut active_markets = subscription_markets(&discovered, Utc::now(), &self.config);
-        let (outgoing_sender, mut outgoing_receiver) = mpsc::channel::<Message>(64);
+        let (outgoing_sender, outgoing_receiver) = mpsc::channel::<Message>(64);
         let (io_sender, mut io_receiver) = mpsc::channel::<ClobIoEvent>(WEBSOCKET_EVENT_BUFFER);
         let io_shutdown = CancellationToken::new();
         let worker_shutdown = io_shutdown.clone();
@@ -4028,130 +4032,20 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                 }
                 Ok(Ok((websocket, _))) => websocket,
             };
-            let (mut sink, mut stream) = websocket.split();
-            if let Err(error) =
-                send_websocket_message(&mut sink, Message::Text(subscription.into()), write_timeout)
-                    .await
-            {
-                let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
-                return;
-            }
-            let mut ping = tokio::time::interval_at(Instant::now() + ping_interval, ping_interval);
-            ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            let mut read_deadline = Instant::now() + read_timeout;
-            let mut pong_deadline = None;
-            loop {
-                let disabled_deadline = Instant::now() + Duration::from_secs(86_400);
-                let pong_sleep =
-                    tokio::time::sleep_until(pong_deadline.unwrap_or(disabled_deadline));
-                tokio::pin!(pong_sleep);
-                tokio::select! {
-                    biased;
-                    _ = worker_shutdown.cancelled() => return,
-                    _ = &mut pong_sleep, if pong_deadline.is_some() => {
-                        let _ = io_sender.send(ClobIoEvent::Failed(source_error(
-                            "polymarket_clob_pong_timeout",
-                            "Polymarket CLOB did not acknowledge the oldest text PING",
-                        ))).await;
-                        return;
-                    }
-                    _ = tokio::time::sleep_until(read_deadline) => {
-                        let _ = io_sender.send(ClobIoEvent::Failed(source_error(
-                            "polymarket_clob_read_timeout",
-                            "Polymarket CLOB websocket produced no frames before its read-idle deadline",
-                        ))).await;
-                        return;
-                    }
-                    _ = ping.tick() => {
-                        let sent_at = Instant::now();
-                        if let Err(error) = send_websocket_message(
-                            &mut sink,
-                            Message::Text("PING".into()),
-                            write_timeout,
-                        ).await {
-                            let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
-                            return;
-                        }
-                        pong_deadline.get_or_insert(sent_at + pong_timeout);
-                    }
-                    command = outgoing_receiver.recv() => {
-                        let Some(command) = command else { return; };
-                        if let Err(error) = send_websocket_message(&mut sink, command, write_timeout).await {
-                            let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
-                            return;
-                        }
-                    }
-                    frame = stream.next() => {
-                        read_deadline = Instant::now() + read_timeout;
-                        let received_at = canonical_timestamp(Utc::now());
-                        if frame.as_ref().is_some_and(Result::is_ok) {
-                            // Explicit PONG is preferred, but any inbound frame
-                            // after our text PING proves the socket is live.
-                            pong_deadline = None;
-                        }
-                        let event = match frame {
-                            Some(Ok(Message::Text(text))) => {
-                                let value = text.as_str().trim();
-                                if acknowledge_text_pong(value, &mut pong_deadline) {
-                                    continue;
-                                }
-                                if value.eq_ignore_ascii_case("PING") {
-                                    if let Err(error) = send_websocket_message(
-                                        &mut sink,
-                                        Message::Text("PONG".into()),
-                                        write_timeout,
-                                    ).await {
-                                        let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
-                                        return;
-                                    }
-                                    continue;
-                                }
-                                if value.is_empty() { continue; }
-                                ClobIoEvent::Frame { message: Message::Text(text), received_at, queued_at: Instant::now() }
-                            }
-                            Some(Ok(Message::Binary(bytes))) => ClobIoEvent::Frame {
-                                message: Message::Binary(bytes),
-                                received_at,
-                                queued_at: Instant::now(),
-                            },
-                            Some(Ok(Message::Ping(payload))) => {
-                                if let Err(error) = send_websocket_message(
-                                    &mut sink,
-                                    Message::Pong(payload),
-                                    write_timeout,
-                                ).await {
-                                    let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
-                                    return;
-                                }
-                                continue;
-                            }
-                            Some(Ok(Message::Pong(_))) => continue,
-                            Some(Ok(Message::Close(frame))) => ClobIoEvent::Failed(source_error(
-                                "polymarket_clob_closed",
-                                format!("Polymarket CLOB websocket closed: {frame:?}"),
-                            )),
-                            Some(Ok(_)) => continue,
-                            Some(Err(error)) => ClobIoEvent::Failed(source_error(
-                                "polymarket_clob_read_failed",
-                                format!("failed to read Polymarket CLOB websocket: {error}"),
-                            )),
-                            None => ClobIoEvent::Failed(source_error(
-                                "polymarket_clob_eof",
-                                "Polymarket CLOB websocket ended",
-                            )),
-                        };
-                        // Keep the read-to-enqueue boundary intentionally bare.
-                        // Do not add probes, metrics, logging, parsing, or shared
-                        // locks anywhere on this socket runtime: even periodic
-                        // work in another select branch competes with `stream.next()`
-                        // and can make Polymarket classify us as a slow consumer.
-                        // See `docs/websocket-consumer-latency.md`.
-                        if !enqueue_clob_io_event(&io_sender, event).await {
-                            return;
-                        }
-                    }
-                }
-            }
+            run_clob_socket(
+                websocket,
+                subscription,
+                outgoing_receiver,
+                io_sender,
+                worker_shutdown,
+                ClobSocketTiming {
+                    ping_interval,
+                    pong_timeout,
+                    read_timeout,
+                    write_timeout,
+                },
+            )
+            .await;
         })?;
 
         let mut registry = BookRegistry::new(connection_epoch, &active_markets)?;
@@ -4396,6 +4290,10 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                             );
                             processing_result?;
                         }
+                        Some(ClobIoEvent::ControlWrite { elapsed, failed }) => {
+                            crate::streaming::observe_clob_control_write(STRATEGY_KEY.as_str(), elapsed, failed);
+                            continue;
+                        }
                         Some(ClobIoEvent::Failed(error)) => return Err(error),
                         None => return Err(source_error(
                             "polymarket_clob_io_worker_stopped",
@@ -4615,6 +4513,185 @@ fn acknowledge_text_pong(text: &str, deadline: &mut Option<Instant>) -> bool {
     }
 }
 
+const CLOB_CONTROL_BUFFER: usize = 64;
+
+#[derive(Clone, Copy)]
+struct ClobSocketTiming {
+    ping_interval: Duration,
+    pong_timeout: Duration,
+    read_timeout: Duration,
+    write_timeout: Duration,
+}
+
+fn enqueue_clob_control(
+    sender: &mpsc::Sender<Message>,
+    message: Message,
+) -> Result<(), StrategyError> {
+    sender.try_send(message).map_err(|error| match error {
+        mpsc::error::TrySendError::Full(_) => source_error(
+            "polymarket_clob_control_backpressure",
+            "bounded Polymarket CLOB control write queue is full",
+        ),
+        mpsc::error::TrySendError::Closed(_) => source_error(
+            "polymarket_clob_write_failed",
+            "Polymarket CLOB control writer stopped",
+        ),
+    })
+}
+
+async fn run_clob_socket<S>(
+    websocket: S,
+    subscription: String,
+    mut outgoing_receiver: mpsc::Receiver<Message>,
+    io_sender: mpsc::Sender<ClobIoEvent>,
+    worker_shutdown: CancellationToken,
+    timing: ClobSocketTiming,
+) where
+    S: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+        + futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
+        + Unpin,
+{
+    let ClobSocketTiming {
+        ping_interval,
+        pong_timeout,
+        read_timeout,
+        write_timeout,
+    } = timing;
+    let (mut sink, mut stream) = websocket.split();
+    let (control_sender, mut control_receiver) = mpsc::channel(CLOB_CONTROL_BUFFER);
+    // One ordered writer owns the sink. Its future is polled concurrently with
+    // reads, never awaited inside a read/control branch. Dropping this session
+    // cancels a pending write together with the socket; no writer task survives.
+    let writer = async {
+        let mut command = Message::Text(subscription.into());
+        loop {
+            let started = Instant::now();
+            let result = send_websocket_message(&mut sink, command, write_timeout).await;
+            // Low-frequency control-write evidence only. Optional telemetry must
+            // never wait behind data or turn a full data queue into another fault.
+            let _ = io_sender.try_send(ClobIoEvent::ControlWrite {
+                elapsed: started.elapsed(),
+                failed: result.is_err(),
+            });
+            result?;
+            let Some(next) = control_receiver.recv().await else {
+                return Ok::<(), StrategyError>(());
+            };
+            command = next;
+        }
+    };
+    tokio::pin!(writer);
+    let mut ping = tokio::time::interval_at(Instant::now() + ping_interval, ping_interval);
+    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut read_deadline = Instant::now() + read_timeout;
+    let mut pong_deadline = None;
+    loop {
+        let disabled_deadline = Instant::now() + Duration::from_secs(86_400);
+        let pong_sleep = tokio::time::sleep_until(pong_deadline.unwrap_or(disabled_deadline));
+        tokio::pin!(pong_sleep);
+        tokio::select! {
+            biased;
+            _ = worker_shutdown.cancelled() => return,
+            result = &mut writer => {
+                if let Err(error) = result {
+                    let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
+                }
+                return;
+            },
+            _ = &mut pong_sleep, if pong_deadline.is_some() => {
+                let _ = io_sender.send(ClobIoEvent::Failed(source_error(
+                    "polymarket_clob_pong_timeout",
+                    "Polymarket CLOB did not acknowledge the oldest text PING",
+                ))).await;
+                return;
+            }
+            _ = tokio::time::sleep_until(read_deadline) => {
+                let _ = io_sender.send(ClobIoEvent::Failed(source_error(
+                    "polymarket_clob_read_timeout",
+                    "Polymarket CLOB websocket produced no frames before its read-idle deadline",
+                ))).await;
+                return;
+            }
+            _ = ping.tick() => {
+                let sent_at = Instant::now();
+                if let Err(error) = enqueue_clob_control(&control_sender, Message::Text("PING".into())) {
+                    let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
+                    return;
+                }
+                pong_deadline.get_or_insert(sent_at + pong_timeout);
+            }
+            command = outgoing_receiver.recv() => {
+                let Some(command) = command else { return; };
+                if let Err(error) = enqueue_clob_control(&control_sender, command) {
+                    let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
+                    return;
+                }
+            }
+            frame = stream.next() => {
+                read_deadline = Instant::now() + read_timeout;
+                let received_at = canonical_timestamp(Utc::now());
+                if frame.as_ref().is_some_and(Result::is_ok) {
+                    // Explicit PONG is preferred, but any inbound frame
+                    // after our text PING proves the socket is live.
+                    pong_deadline = None;
+                }
+                let event = match frame {
+                    Some(Ok(Message::Text(text))) => {
+                        let value = text.as_str().trim();
+                        if acknowledge_text_pong(value, &mut pong_deadline) {
+                            continue;
+                        }
+                        if value.eq_ignore_ascii_case("PING") {
+                            if let Err(error) = enqueue_clob_control(&control_sender, Message::Text("PONG".into())) {
+                                let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
+                                return;
+                            }
+                            continue;
+                        }
+                        if value.is_empty() { continue; }
+                        ClobIoEvent::Frame { message: Message::Text(text), received_at, queued_at: Instant::now() }
+                    }
+                    Some(Ok(Message::Binary(bytes))) => ClobIoEvent::Frame {
+                        message: Message::Binary(bytes),
+                        received_at,
+                        queued_at: Instant::now(),
+                    },
+                    Some(Ok(Message::Ping(payload))) => {
+                        if let Err(error) = enqueue_clob_control(&control_sender, Message::Pong(payload)) {
+                            let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
+                            return;
+                        }
+                        continue;
+                    }
+                    Some(Ok(Message::Pong(_))) => continue,
+                    Some(Ok(Message::Close(frame))) => ClobIoEvent::Failed(source_error(
+                        "polymarket_clob_closed",
+                        format!("Polymarket CLOB websocket closed: {frame:?}"),
+                    )),
+                    Some(Ok(_)) => continue,
+                    Some(Err(error)) => ClobIoEvent::Failed(source_error(
+                        "polymarket_clob_read_failed",
+                        format!("failed to read Polymarket CLOB websocket: {error}"),
+                    )),
+                    None => ClobIoEvent::Failed(source_error(
+                        "polymarket_clob_eof",
+                        "Polymarket CLOB websocket ended",
+                    )),
+                };
+                // Keep the read-to-enqueue boundary intentionally bare.
+                // Do not add probes, metrics, logging, parsing, or shared
+                // locks anywhere on this socket runtime: optional blocking
+                // work in another select branch competes with `stream.next()`
+                // and can make Polymarket classify us as a slow consumer.
+                // See `docs/websocket-consumer-latency.md`.
+                if !enqueue_clob_io_event(&io_sender, event).await {
+                    return;
+                }
+            }
+        }
+    }
+}
+
 async fn send_websocket_message<S>(
     sink: &mut S,
     message: Message,
@@ -4695,6 +4772,296 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    #[derive(Default)]
+    struct WriteGate {
+        blocked: std::sync::atomic::AtomicBool,
+        attempts: std::sync::atomic::AtomicUsize,
+        waker: futures_util::task::AtomicWaker,
+    }
+
+    impl WriteGate {
+        fn open(&self) {
+            self.blocked
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            self.waker.wake();
+        }
+    }
+
+    struct GatedSocket {
+        io: tokio::io::DuplexStream,
+        gate: Arc<WriteGate>,
+    }
+
+    impl tokio::io::AsyncRead for GatedSocket {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::pin::Pin::new(&mut self.io).poll_read(cx, buf)
+        }
+    }
+
+    impl tokio::io::AsyncWrite for GatedSocket {
+        fn poll_write(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            self.gate.waker.register(cx.waker());
+            self.gate
+                .attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.gate.blocked.load(std::sync::atomic::Ordering::SeqCst) {
+                return std::task::Poll::Pending;
+            }
+            std::pin::Pin::new(&mut self.io).poll_write(cx, buf)
+        }
+        fn poll_flush(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::pin::Pin::new(&mut self.io).poll_flush(cx)
+        }
+        fn poll_shutdown(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::pin::Pin::new(&mut self.io).poll_shutdown(cx)
+        }
+    }
+
+    async fn clob_socket_pair(
+        blocked: bool,
+    ) -> (
+        tokio_tungstenite::WebSocketStream<GatedSocket>,
+        tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>,
+        Arc<WriteGate>,
+    ) {
+        use tokio_tungstenite::{tungstenite::protocol::Role, WebSocketStream};
+        let (client, server) = tokio::io::duplex(8192);
+        let gate = Arc::new(WriteGate::default());
+        gate.blocked
+            .store(blocked, std::sync::atomic::Ordering::SeqCst);
+        let client = WebSocketStream::from_raw_socket(
+            GatedSocket {
+                io: client,
+                gate: gate.clone(),
+            },
+            Role::Client,
+            None,
+        )
+        .await;
+        let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
+        (client, server, gate)
+    }
+
+    fn test_socket_timing() -> ClobSocketTiming {
+        ClobSocketTiming {
+            ping_interval: Duration::from_secs(60),
+            pong_timeout: Duration::from_secs(120),
+            read_timeout: Duration::from_secs(120),
+            write_timeout: Duration::from_secs(2),
+        }
+    }
+
+    async fn next_data_frame(receiver: &mut mpsc::Receiver<ClobIoEvent>) -> Message {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                match receiver.recv().await {
+                    Some(ClobIoEvent::Frame { message, .. }) => return message,
+                    Some(ClobIoEvent::ControlWrite { .. }) => {}
+                    Some(ClobIoEvent::Failed(error)) => {
+                        panic!("unexpected socket failure: {error}")
+                    }
+                    None => panic!("socket worker ended"),
+                }
+            }
+        })
+        .await
+        .expect("data keeps draining during a stalled write")
+    }
+
+    #[tokio::test]
+    async fn stalled_clob_subscription_drains_frames_then_reports_write_timeout() {
+        let (client, mut server, gate) = clob_socket_pair(true).await;
+        let (_commands, command_receiver) = mpsc::channel(64);
+        let (events, mut receiver) = mpsc::channel(64);
+        let mut timing = test_socket_timing();
+        timing.write_timeout = Duration::from_millis(300);
+        let task = tokio::spawn(run_clob_socket(
+            client,
+            "initial-subscription".into(),
+            command_receiver,
+            events,
+            CancellationToken::new(),
+            timing,
+        ));
+        for n in 0..20 {
+            let message = Message::Text(format!("frame-{n}").into());
+            server.send(message.clone()).await.unwrap();
+            assert_eq!(next_data_frame(&mut receiver).await, message);
+        }
+        assert!(gate.attempts.load(std::sync::atomic::Ordering::SeqCst) > 0);
+        let mut observed_failure = false;
+        let error = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                match receiver.recv().await {
+                    Some(ClobIoEvent::ControlWrite { elapsed, failed }) => {
+                        assert!(failed);
+                        assert!(elapsed >= timing.write_timeout);
+                        observed_failure = true;
+                    }
+                    Some(ClobIoEvent::Failed(error)) => return error,
+                    _ => panic!("expected write timeout"),
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(observed_failure);
+        assert_eq!(error.code, "polymarket_clob_write_timeout");
+        assert_eq!(error.kind, StrategyErrorKind::TransientSource);
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stalled_clob_control_writes_preserve_reads_order_and_pong_responses() {
+        let (client, mut server, gate) = clob_socket_pair(false).await;
+        let (commands, command_receiver) = mpsc::channel(64);
+        let (events, mut receiver) = mpsc::channel(64);
+        let shutdown = CancellationToken::new();
+        let task = tokio::spawn(run_clob_socket(
+            client,
+            "initial-subscription".into(),
+            command_receiver,
+            events,
+            shutdown.clone(),
+            test_socket_timing(),
+        ));
+        assert_eq!(
+            server.next().await.unwrap().unwrap(),
+            Message::Text("initial-subscription".into())
+        );
+        gate.blocked
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        commands
+            .send(Message::Text("subscribe-next".into()))
+            .await
+            .unwrap();
+        commands
+            .send(Message::Text("unsubscribe-old".into()))
+            .await
+            .unwrap();
+        server.send(Message::Text("PING".into())).await.unwrap();
+        server
+            .send(Message::Ping(vec![1, 2, 3].into()))
+            .await
+            .unwrap();
+        for n in 0..20 {
+            let message = Message::Text(format!("book-{n}").into());
+            server.send(message.clone()).await.unwrap();
+            assert_eq!(next_data_frame(&mut receiver).await, message);
+        }
+        gate.open();
+        let messages = tokio::time::timeout(Duration::from_secs(1), async {
+            let mut messages = Vec::new();
+            loop {
+                messages.push(server.next().await.unwrap().unwrap());
+                if messages.contains(&Message::Text("unsubscribe-old".into()))
+                    && messages.contains(&Message::Text("PONG".into()))
+                    && messages.contains(&Message::Pong(vec![1, 2, 3].into()))
+                {
+                    break messages;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let position = |value: &str| {
+            messages
+                .iter()
+                .position(|m| m == &Message::Text(value.to_owned().into()))
+                .unwrap()
+        };
+        assert!(position("subscribe-next") < position("unsubscribe-old"));
+        shutdown.cancel();
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn stalled_periodic_ping_does_not_suspend_clob_reads() {
+        let (client, mut server, gate) = clob_socket_pair(false).await;
+        let (_commands, command_receiver) = mpsc::channel(64);
+        let (events, mut receiver) = mpsc::channel(64);
+        let shutdown = CancellationToken::new();
+        let mut timing = test_socket_timing();
+        timing.ping_interval = Duration::from_millis(20);
+        let task = tokio::spawn(run_clob_socket(
+            client,
+            "subscribe".into(),
+            command_receiver,
+            events,
+            shutdown.clone(),
+            timing,
+        ));
+        assert_eq!(
+            server.next().await.unwrap().unwrap(),
+            Message::Text("subscribe".into())
+        );
+        gate.blocked
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let previous = gate.attempts.load(std::sync::atomic::Ordering::SeqCst);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while gate.attempts.load(std::sync::atomic::Ordering::SeqCst) == previous {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("periodic ping reaches blocked transport");
+        let frame = Message::Text("book-during-ping".into());
+        server.send(frame.clone()).await.unwrap();
+        assert_eq!(next_data_frame(&mut receiver).await, frame);
+        shutdown.cancel();
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stalled_clob_write_cancels_without_waiting_for_write_timeout() {
+        let (client, _server, _) = clob_socket_pair(true).await;
+        let (_commands, command_receiver) = mpsc::channel(64);
+        let (events, _receiver) = mpsc::channel(64);
+        let shutdown = CancellationToken::new();
+        let task = tokio::spawn(run_clob_socket(
+            client,
+            "subscribe".into(),
+            command_receiver,
+            events,
+            shutdown.clone(),
+            test_socket_timing(),
+        ));
+        tokio::task::yield_now().await;
+        shutdown.cancel();
+        tokio::time::timeout(Duration::from_millis(100), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    fn clob_control_queue_overflow_is_bounded_and_recoverable() {
+        let (sender, _receiver) = mpsc::channel(CLOB_CONTROL_BUFFER);
+        for _ in 0..CLOB_CONTROL_BUFFER {
+            enqueue_clob_control(&sender, Message::Text("PING".into())).unwrap();
+        }
+        let error = enqueue_clob_control(&sender, Message::Text("PING".into())).unwrap_err();
+        assert_eq!(error.code, "polymarket_clob_control_backpressure");
+        assert_eq!(error.kind, StrategyErrorKind::TransientSource);
+    }
 
     const GAMMA_FIXTURE: &str =
         include_str!("../../../tests/fixtures/polymarket/gamma_btc_five_minute_event_v1.json");

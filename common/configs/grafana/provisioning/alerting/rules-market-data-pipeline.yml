@@ -72,6 +72,37 @@ groups:
         annotations: {summary: A slow consumer or bounded stream queue dropped market data}
         labels: {service: ingester-worker, family: market_data_pipeline, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
         isPaused: false
+      - uid: mdp_clob_control_write_slow
+        title: CLOB control write exceeded 100 ms
+        condition: C
+        data:
+          - refId: A
+            queryType: instant
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: prometheus
+            model:
+              datasource: {type: prometheus, uid: prometheus}
+              editorMode: code
+              expr: 'sum by (instance, product) (increase(market_data_ingester_clob_control_write_seconds_count{product="polymarket_btc_five_minute_orderbooks"}[5m]) - ignoring(le) increase(market_data_ingester_clob_control_write_seconds_bucket{product="polymarket_btc_five_minute_orderbooks",le="0.1"}[5m]))'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              datasource: {type: __expr__, uid: __expr__}
+              expression: B
+              type: threshold
+              conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}]
+              refId: C
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations: {summary: "CLOB control write exceeded 100 ms on {{ $labels.instance }}", description: "A subscription, ping or pong write took over 100 ms to complete or fail. Measures sink send/flush duration, excluding control-queue wait. Telemetry is best effort under a full raw-frame queue; terminal errors remain in Loki. Socket reads now continue while writes are pending."}
+        labels: {service: ingester-worker, family: market_data_pipeline, severity: warning, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
       - uid: mdp_orderbook_consumer_overload
         title: Orderbook consumer stream overloaded
         condition: C
