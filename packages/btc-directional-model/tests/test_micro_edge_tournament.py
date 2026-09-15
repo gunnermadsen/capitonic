@@ -304,3 +304,28 @@ def test_checkpoint_compatibility_requires_explicit_identity():
     assert identity_matches(old, active)
     assert not identity_matches({"code": "unknown", "data": "same"}, active)
     assert not identity_matches({"code": "original", "data": "changed"}, active)
+
+
+def test_router_tie_break_uses_only_earlier_contribution():
+    from btc_directional_model.micro_edge_reporting import causal_router, rank_scored
+
+    current = opportunities(frame(), np.array([0.8, 0.8, 0.2, 0.2]), "a")
+    current = pl.concat([current, current.with_columns(pl.lit("b").alias("candidate"))])
+    past = current.with_columns(
+        (pl.col("window_start") - pl.duration(days=30)).alias("window_start"),
+        (pl.col("window_end") - pl.duration(days=30)).alias("window_end"),
+        pl.lit(0.2).alias("expected_edge"),
+        pl.when(pl.col("candidate") == "a").then(-2.0).otherwise(2.0).alias("stress_net_pnl"),
+    )
+    scored = causal_router(current, past, return_scores=True)
+    selected = rank_scored(scored)
+    assert selected["candidate"].unique().to_list() == ["b"]
+    changed = current.with_columns(
+        (-pl.col("net_pnl") * 100).alias("net_pnl"),
+        (-pl.col("stress_net_pnl") * 100).alias("stress_net_pnl"),
+        (1 - pl.col("label_up")).alias("label_up"),
+    )
+    other = causal_router(changed, past)
+    assert selected.select("market_id", "candidate", "seconds_elapsed").equals(
+        other.select("market_id", "candidate", "seconds_elapsed")
+    )

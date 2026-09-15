@@ -6,7 +6,7 @@ import numpy as np
 import polars as pl
 
 from .micro_edge_data import END, START
-from .micro_edge_evaluation import metrics, router, select
+from .micro_edge_evaluation import metrics, select
 from .micro_edge_models import recipes
 from .time_bucket_source_preparation import _write_json, _write_parquet
 
@@ -186,10 +186,12 @@ def diagnostic_report(frame, output, pooled, ledgers):
                 "five_second_delayed_stress_pnl": float(delayed["stress_net_pnl"].sum()),
             }
         )
-    full = router(pooled)
+    from .micro_edge_reporting import rank_scored
+
+    full = rank_scored(pooled)
     incremental = []
     for name in ledgers:
-        without = router(pooled.filter(pl.col("candidate") != name))
+        without = rank_scored(pooled.filter(pl.col("candidate") != name))
         new = full.join(without.select("market_id"), on="market_id", how="anti")
         paired = full.join(
             without.select(
@@ -232,6 +234,7 @@ def diagnostic_report(frame, output, pooled, ledgers):
             "latency": latency,
             "router_incremental": incremental,
             "matched_frequency_selection": "highest OOF confidence on evaluation set; descriptive only",
+            "router_incremental_method": "remove one candidate while holding earlier-fold scores and policies fixed",
             "baseline_comparison": "same executable markets, same chronological folds, refitted historical features/estimator; new common OOF calibration/admission, official labels, VWAP5; not an exact reproduction of old target/selection workflow",
         },
     )
@@ -239,6 +242,7 @@ def diagnostic_report(frame, output, pooled, ledgers):
 
 def cutover_refit_diagnostic(frame, output, identity):
     """Post-cutover-only transfer diagnostic; never replaces a full-range final model."""
+    import subprocess
     from pathlib import Path
 
     import joblib
@@ -290,6 +294,11 @@ def cutover_refit_diagnostic(frame, output, identity):
                 {
                     "identity": identity,
                     "sha256": file_sha256(path),
+                    "producing_commit": subprocess.check_output(
+                        ["git", "rev-parse", "HEAD"], text=True
+                    ).strip(),
+                    "artifact_path": str(path),
+                    "qualification_status": "cutover_diagnostic_only_not_deployed",
                     "fit_start": str(f["window_start"][train].min()),
                     "fit_last_end": str(f["window_end"][train].max()),
                     "evaluation_start": str(start),

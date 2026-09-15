@@ -31,6 +31,40 @@ def table(rows, title="Candidate"):
     return "\n".join(out)
 
 
+def causal_router(current, history, *, return_scores=False):
+    """Use earlier router contribution to break equal expected-value contention."""
+    if current.is_empty() or history.is_empty():
+        ranked = current.with_columns(pl.lit(0.0).alias("_training_increment"))
+        return ranked if return_scores else rank_scored(ranked)
+    reference = router(history)
+    value = float(reference["stress_net_pnl"].sum())
+    contributions = {}
+    for candidate in current["candidate"].unique().to_list():
+        without = router(history.filter(pl.col("candidate") != candidate))
+        used = reference.filter(pl.col("candidate") == candidate).height
+        contributions[candidate] = (value - float(without["stress_net_pnl"].sum())) / max(used, 1)
+    ranked = current.with_columns(
+        pl.col("candidate")
+        .replace_strict(contributions, return_dtype=pl.Float64)
+        .alias("_training_increment")
+    )
+    return ranked if return_scores else rank_scored(ranked)
+
+
+def rank_scored(ranked):
+    return ranked.sort(
+        [
+            "window_start",
+            "market_id",
+            "seconds_elapsed",
+            "expected_edge",
+            "_training_increment",
+            "candidate",
+        ],
+        descending=[False, False, False, True, True, False],
+    ).unique("market_id", keep="first", maintain_order=True)
+
+
 def report(frame, output, identity):
     evaluation = frame.filter(pl.col("window_start") >= EVAL_START)
     nmarkets = evaluation["market_id"].n_unique()
@@ -121,6 +155,9 @@ def report(frame, output, identity):
         um = metrics(unrestricted, nmarkets, ndays)
         um.update(name=name, rtds=m["rtds"])
         unrestricted_rows.append(um)
+        predictive_points = predictions.join(
+            evaluation.select("row_id", "seconds_elapsed"), on="row_id", how="left", validate="1:1"
+        )
         for bucket in range(0, 300, 10):
             support = evaluation.filter((pl.col("seconds_elapsed") // 10 * 10) == bucket)
             part = opp.filter(pl.col("bucket") == bucket)
@@ -133,7 +170,9 @@ def report(frame, output, identity):
                 rtds=m["rtds"],
                 bucket=bucket,
                 available_rows=part.height,
-                predictive_rows=support.height,
+                predictive_rows=predictive_points.filter(
+                    (pl.col("seconds_elapsed") // 10 * 10) == bucket
+                ).height,
                 retrospective_edge=bool(bm["net_pnl"] > 0 and bm["stress_net_pnl"] > 0),
                 in_final_allowlist=bucket in finalmeta["bucket_allowlist"],
                 evidence="unavailable"
@@ -142,6 +181,30 @@ def report(frame, output, identity):
                 if bm["trades"] < 100
                 else "larger_sample",
             )
+            points = predictive_points.filter((pl.col("seconds_elapsed") // 10 * 10) == bucket)
+            probabilities = points["probability"].to_numpy()
+            truth = points["label_up"].to_numpy()
+            finite = np.isfinite(probabilities)
+            weeks = independent["window_start"].dt.truncate("1w").n_unique()
+            post_count = independent.filter(
+                pl.col("window_start") >= CUTOVER + timedelta(days=1)
+            ).height
+            bm.update(
+                brier=float(brier_score_loss(truth[finite], probabilities[finite]))
+                if finite.any()
+                else None,
+                log_loss=float(log_loss(truth[finite], probabilities[finite], labels=[0, 1]))
+                if finite.any()
+                else None,
+                active_weeks=weeks,
+                post_cutover_trades=post_count,
+            )
+            if bm["evidence"] != "unavailable":
+                bm["evidence"] = (
+                    "limited"
+                    if bm["trades"] < 100 or weeks < 4 or post_count < 30
+                    else "better_supported"
+                )
             bucket_rows.append(bm)
         for label, start, end in [
             ("pre_cutover", EVAL_START, CUTOVER),
@@ -195,15 +258,19 @@ def report(frame, output, identity):
     baseline_names = [r.name for r in recipes() if r.baseline]
     baseline_router = router(pooled.filter(pl.col("candidate").is_in(baseline_names)))
     pooled = pooled.filter(~pl.col("candidate").is_in(baseline_names))
-    greedy = router(pooled)
+    greedy_parts = []
+    scored_parts = []
     reserved = []
     for fold in sorted(pooled["fold"].unique().to_list()):
         current = pooled.filter(pl.col("fold") == fold)
         history = pooled.filter(
             pl.col("window_end") + pl.duration(minutes=5) < datetime.fromisoformat(fold)
         )
+        current = causal_router(current, history, return_scores=True)
+        scored_parts.append(current)
+        greedy_parts.append(rank_scored(current))
         if history.is_empty():
-            reserved.append(router(current))
+            reserved.append(rank_scored(current))
             continue
         means = history.group_by("bucket").agg(pl.col("stress_net_pnl").mean().alias("value"))
         values = dict(zip(means["bucket"].to_list(), means["value"].to_list(), strict=True))
@@ -217,7 +284,8 @@ def report(frame, output, identity):
             (5 * (pl.col("expected_edge") - 0.01) >= pl.col("_later_value"))
             | (pl.col("_later_value") <= 0)
         ).drop("_later_value")
-        reserved.append(router(current))
+        reserved.append(rank_scored(current))
+    greedy = pl.concat(greedy_parts) if greedy_parts else pooled.head(0)
     reservation = pl.concat(reserved) if reserved else greedy.head(0)
     router_rows = []
     router_buckets = []
@@ -308,6 +376,15 @@ def report(frame, output, identity):
         "predictive": prediction_summary,
         "training_only": True,
         "deployed": False,
+        "leaders": {
+            key: max([r for r in rows if not r["baseline"]], key=lambda r: r[metric] or 0)["name"]
+            for key, metric in [
+                ("profit", "net_pnl"),
+                ("frequency", "trades"),
+                ("win_rate_descriptive", "win_rate"),
+            ]
+        },
+        "baseline_note": "Three distinct historical refits represent four archived tournament origins; baselines are excluded from the new-model routers.",
     }
     _write_json(output / "metrics.json", result)
     text = [
@@ -359,6 +436,8 @@ def report(frame, output, identity):
         "- Cutover indicator uses the supplied August 14 date; transition-day results are shown separately. Official resolved labels are preserved. No synthetic TWAP labels replace official pre-cutover outcomes.",
         "- Optional source gaps remain missing; no global complete-case filtering. RefPrice/TWAP inputs cannot be manufactured beyond authentic source coverage. Kraken L2 uses incremental flow, not a reconstructed full book.",
         "- Book snapshots assume the recorded five-share ask was fillable; no queue-position guarantee. Performance is simulated, not live income.",
+        "- Candidate hypotheses reused earlier tournament findings; these results are not an independent blind confirmation. Day-block intervals do not remove repeated-selection bias.",
+        "- Equal expected-value router contention uses contribution measured on earlier folds; the first fold falls back to the deterministic expected-value rule.",
         "- Runtime export and deployment were not performed. These model artifacts are training outputs and require later UMR compatibility/parity work before runtime use.",
     ]
     (output / "report.md").write_text("\n".join(text) + "\n")
@@ -381,6 +460,58 @@ def report(frame, output, identity):
     (output / "regime-report.md").write_text("\n".join(rtext) + "\n")
     from .micro_edge_diagnostics import cutover_refit_diagnostic, diagnostic_report
 
-    diagnostic_report(frame, output, pooled, ledgers)
+    scored_pool = (
+        pl.concat(scored_parts)
+        if scored_parts
+        else pooled.with_columns(pl.lit(0.0).alias("_training_increment"))
+    )
+    diagnostic_report(frame, output, scored_pool, ledgers)
     cutover_refit_diagnostic(frame, output, identity)
+    coverage_rows = json.loads((output / "source-coverage-summary.json").read_text())
+    q5 = []
+    for side in ("up", "down"):
+        usable = frame.filter(
+            pl.col(f"{side}_ask_vwap_5").is_finite() & pl.col("fee_rate").is_finite()
+        )
+        q5.append(
+            {
+                "side": side,
+                "rows": usable.height,
+                "markets": usable["market_id"].n_unique(),
+                "first": str(usable["observed_at"].min()),
+                "last": str(usable["observed_at"].max()),
+            }
+        )
+    coverage_rows["usable_q5"] = q5
+    _write_json(output / "source-coverage-summary.json", coverage_rows)
+    content = [
+        "# Full-range data coverage",
+        "",
+        f"{frame.height:,} decision rows; {frame['market_id'].n_unique():,} valid resolved markets. June 7 through September 14 inclusive.",
+        "",
+        "Optional presence counts are not an assertion of continuous or executable coverage. Books require side-specific five-share depth and freshness.",
+        "",
+        "| Source | Rows | Markets | First decision | Last decision |",
+        "|---|---:|---:|---|---|",
+    ]
+    content += [
+        f"| {r['source']} | {r['rows']:,} | {r['markets']:,} | {r['first_decision']} | {r['last_decision']} |"
+        for r in coverage_rows["sources"]
+    ]
+    content += [
+        "",
+        "## Usable five-share execution",
+        "",
+        "| Side | Rows | Markets | First | Last |",
+        "|---|---:|---:|---|---|",
+    ]
+    content += [
+        f"| {r['side']} | {r['rows']:,} | {r['markets']:,} | {r['first']} | {r['last']} |"
+        for r in q5
+    ]
+    content += [
+        "",
+        "Day/source/bucket gaps are retained in coverage-day-source-bucket.parquet. June 7–20 initializes supervised fitting; June 21–July 4 initializes causal calibration and policy selection. All eligible dates return to the final directional fits. Waiting auxiliaries use only causal OOF teacher support; their full-range base models are recorded explicitly.",
+    ]
+    (output / "coverage-report.md").write_text("\n".join(content) + "\n")
     print("REPORT COMPLETE", output, flush=True)
