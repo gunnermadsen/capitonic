@@ -34,7 +34,7 @@ use crate::{
         IngesterProfile, IngesterStrategyKey,
     },
     persistence::{
-        BackfillJobEvent, BackfillJobRecord, BackfillRepository, ClaimedBackfillJob,
+        BackfillJobEvent, BackfillJobRecord, BackfillRepository, ClaimedBackfillJob, DrainJobEvent,
         DrainJobRecord, DrainRepository, ProfileRepository, WorkerAllocationSummary, WorkerRecord,
         WorkerRegistration,
     },
@@ -88,6 +88,7 @@ impl ControlApi {
             .route("/drains/:job_id", get(get_drain))
             .route("/drains/:job_id/cancel", post(cancel_drain))
             .route("/drains/:job_id/retry", post(retry_drain))
+            .route("/drains/:job_id/events", get(get_drain_events))
             .route("/datasets/coverage", get(dataset_coverage))
             .route("/workers", get(list_workers))
             .route("/stream/routes", post(resolve_stream_routes))
@@ -312,6 +313,32 @@ async fn retry_drain(
                 "drain job is not retryable",
             )
         })
+}
+
+async fn get_drain_events(
+    State(state): State<ApiState>,
+    Path(job_id): Path<Uuid>,
+    Query(query): Query<BackfillListQuery>,
+) -> Result<Json<Vec<DrainJobEvent>>, ApiError> {
+    if state
+        .drains
+        .get(job_id)
+        .await
+        .map_err(ApiError::internal)?
+        .is_none()
+    {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "drain_not_found",
+            "drain job was not found",
+        ));
+    }
+    state
+        .drains
+        .events(job_id, query.limit.unwrap_or(100))
+        .await
+        .map(Json)
+        .map_err(ApiError::internal)
 }
 
 async fn list_strategies(State(state): State<ApiState>) -> Json<Vec<String>> {
@@ -1196,6 +1223,10 @@ mod tests {
             .iter()
             .find(|target| target.product_key == "binance_futures_btcusdt_open_interest")
             .expect("open-interest coverage target");
+        assert_eq!(
+            open_interest.drain_strategy_key.as_deref(),
+            Some("binance_futures_btcusdt_open_interest")
+        );
         assert!(open_interest
             .gap_strategy_keys
             .iter()
@@ -1214,6 +1245,23 @@ mod tests {
             kraken.backfill_strategy_keys,
             ["kraken_open_interest_backfill"]
         );
+
+        for (product, expected_drain) in [
+            (
+                "binance_futures_btcusdt_l2_one_second_features",
+                "binance_futures_btcusdt_l2_one_second_features",
+            ),
+            (
+                "binance_spot_btcusdt_l2_one_second_features",
+                "binance_spot_btcusdt_l2_one_second_features",
+            ),
+        ] {
+            let target = targets
+                .iter()
+                .find(|target| target.product_key == product)
+                .expect("L2 coverage target");
+            assert_eq!(target.drain_strategy_key.as_deref(), Some(expected_drain));
+        }
     }
 
     #[test]

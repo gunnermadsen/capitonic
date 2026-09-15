@@ -37,7 +37,7 @@ impl BackfillWorkerStrategy for PmdataChainlinkBtcusdRefpriceBackfill {
         &self,
         r: &ValidatedBackfillRequest,
     ) -> Result<Vec<BackfillShard>, BackfillExecutionError> {
-        backfill_support::daily_shards(r, self.descriptor.maximum_shards)
+        backfill_support::published_daily_shards(r, self.descriptor.maximum_shards)
     }
     async fn execute_backfill(
         &self,
@@ -53,14 +53,14 @@ mod tests {
     use crate::domain::StrategyCapability;
     use chrono::{TimeZone, Utc};
     #[test]
-    fn one_hour_backfill_only() {
+    fn closed_daily_backfill_only() {
         let s = PmdataChainlinkBtcusdRefpriceBackfill::new().unwrap();
         assert_eq!(
             s.descriptor().capabilities,
             vec![StrategyCapability::Backfill]
         );
-        let start = Utc.with_ymd_and_hms(2026, 8, 2, 1, 0, 0).unwrap();
-        let r = backfill_support::request(STRATEGY_KEY, start, start + chrono::Duration::hours(1));
+        let start = Utc.with_ymd_and_hms(2026, 8, 2, 0, 0, 0).unwrap();
+        let r = backfill_support::request(STRATEGY_KEY, start, start + chrono::Duration::days(1));
         assert_eq!(
             s.plan_shards(&s.validate_request(&r).unwrap())
                 .unwrap()

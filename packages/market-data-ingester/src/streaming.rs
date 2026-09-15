@@ -74,7 +74,6 @@ struct RealtimePipelineMetrics {
     publication_queue_overflows: u64,
     websocket_queue_delay: LatencyHistogram,
     websocket_interframe: LatencyHistogram,
-    websocket_io_scheduling_delay: LatencyHistogram,
     clob_frame_parse: LatencyHistogram,
     clob_book_apply: LatencyHistogram,
     clob_sample_build: LatencyHistogram,
@@ -484,12 +483,6 @@ pub fn observe_websocket_queue_delay(product_key: &str, duration: Duration) {
 pub fn observe_websocket_frame_processed(product_key: &str) {
     with_pipeline_metrics(product_key, |metrics| {
         metrics.websocket_frames_processed = metrics.websocket_frames_processed.saturating_add(1);
-    });
-}
-
-pub fn observe_websocket_io_scheduling_delay(product_key: &str, duration: Duration) {
-    with_pipeline_metrics(product_key, |metrics| {
-        metrics.websocket_io_scheduling_delay.observe(duration);
     });
 }
 
@@ -916,7 +909,6 @@ impl StreamingMetrics {
         for name in [
             "market_data_ingester_websocket_queue_delay_seconds",
             "market_data_ingester_websocket_interframe_seconds",
-            "market_data_ingester_websocket_io_scheduling_delay_seconds",
             "market_data_ingester_clob_frame_parse_seconds",
             "market_data_ingester_clob_book_apply_seconds",
             "market_data_ingester_clob_sample_build_seconds",
@@ -976,12 +968,6 @@ impl StreamingMetrics {
                 "market_data_ingester_websocket_interframe_seconds",
                 key,
                 &metrics.websocket_interframe,
-            );
-            render_histogram(
-                &mut out,
-                "market_data_ingester_websocket_io_scheduling_delay_seconds",
-                key,
-                &metrics.websocket_io_scheduling_delay,
             );
             render_histogram(
                 &mut out,

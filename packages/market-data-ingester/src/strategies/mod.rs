@@ -250,6 +250,18 @@ pub fn registry() -> Result<StrategyRegistry, StrategyFactoryError> {
                 .map_err(|error| StrategyFactoryError::Construction(error.to_string()))?,
         ),
         Arc::new(
+            drains::BinanceFuturesOpenInterestDrain::from_environment()
+                .map_err(|error| StrategyFactoryError::Construction(error.to_string()))?,
+        ),
+        Arc::new(
+            drains::BinanceFuturesL2OneSecondFeaturesDrain::from_environment()
+                .map_err(|error| StrategyFactoryError::Construction(error.to_string()))?,
+        ),
+        Arc::new(
+            drains::BinanceSpotL2OneSecondFeaturesDrain::from_environment()
+                .map_err(|error| StrategyFactoryError::Construction(error.to_string()))?,
+        ),
+        Arc::new(
             drains::PmdataChainlinkReferencePricesDrain::from_environment()
                 .map_err(|error| StrategyFactoryError::Construction(error.to_string()))?,
         ),
@@ -361,7 +373,10 @@ mod tests {
         assert_eq!(
             drains,
             vec![
+                "binance_futures_btcusdt_l2_one_second_features",
+                "binance_futures_btcusdt_open_interest",
                 "binance_spot_btcusdt_aggregate_trades",
+                "binance_spot_btcusdt_l2_one_second_features",
                 "binance_spot_btcusdt_l2_snapshots",
                 "binance_spot_btcusdt_one_second_ohlcv",
                 "chainlink_btcusd_one_minute_candles",

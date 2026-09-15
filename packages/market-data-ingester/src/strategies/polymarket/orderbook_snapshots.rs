@@ -75,7 +75,6 @@ const MAX_PROVIDER_CLOCK_LEAD_MILLISECONDS: i64 = 5_000;
 const WEBSOCKET_EVENT_BUFFER: usize = 4_096;
 const PERSISTENCE_COMMAND_BUFFER: usize = 32;
 const PUBLICATION_COMMAND_BUFFER: usize = 1_024;
-const IO_SCHEDULING_PROBE_INTERVAL: Duration = Duration::from_millis(100);
 const SLOW_FRAME_PROCESSING_THRESHOLD: Duration = Duration::from_millis(25);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -4028,11 +4027,6 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
             }
             let mut ping = tokio::time::interval_at(Instant::now() + ping_interval, ping_interval);
             ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            let mut scheduling_probe = tokio::time::interval_at(
-                Instant::now() + IO_SCHEDULING_PROBE_INTERVAL,
-                IO_SCHEDULING_PROBE_INTERVAL,
-            );
-            scheduling_probe.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut read_deadline = Instant::now() + read_timeout;
             let mut pong_deadline = None;
             loop {
@@ -4075,12 +4069,6 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                             let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
                             return;
                         }
-                    }
-                    scheduled_at = scheduling_probe.tick() => {
-                        crate::streaming::observe_websocket_io_scheduling_delay(
-                            STRATEGY_KEY.as_str(),
-                            Instant::now().saturating_duration_since(scheduled_at),
-                        );
                     }
                     frame = stream.next() => {
                         read_deadline = Instant::now() + read_timeout;
@@ -4142,6 +4130,10 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                             )),
                         };
                         // Keep the read-to-enqueue boundary intentionally bare.
+                        // Do not add probes, metrics, logging, parsing, or shared
+                        // locks anywhere on this socket runtime: even periodic
+                        // work in another select branch competes with `stream.next()`
+                        // and can make Polymarket classify us as a slow consumer.
                         // See `docs/websocket-consumer-latency.md`.
                         if !enqueue_clob_io_event(&io_sender, event).await {
                             return;

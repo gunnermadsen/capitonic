@@ -71,7 +71,7 @@ impl BackfillWorkerStrategy for BinanceSpotOneSecondOhlcvBackfill {
         &self,
         request: &ValidatedBackfillRequest,
     ) -> Result<Vec<BackfillShard>, BackfillExecutionError> {
-        backfill_support::daily_shards(request, self.descriptor.maximum_shards)
+        backfill_support::published_daily_shards(request, self.descriptor.maximum_shards)
     }
 
     async fn execute_backfill(
