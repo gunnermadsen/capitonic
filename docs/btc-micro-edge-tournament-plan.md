@@ -2,7 +2,7 @@
 
 ## Objective and scope
 
-Build a new generation of executable five-share specialists, each permitted to trade in exactly one selected time bucket. Compare individual specialists first, then combine complementary specialists using the existing router pattern. Seek higher net expectancy and profit factor, fewer losses at comparable frequency, better calibrated confidence, and lower loss-recovery burden. Do not require one model to dominate every metric.
+Train a diverse new generation of five-share models across each model’s full supported decision-time range, then measure where each model has edge. Each model may retain multiple profitable time buckets under one model identity. Compare the model-by-bucket results first, then combine complementary models using the existing router pattern. This supersedes the original one-bucket-per-model requirement. Seek higher net expectancy and profit factor, fewer losses at comparable frequency, better calibrated confidence, and lower loss-recovery burden. Do not require one model to dominate every metric.
 
 This document is a plan only. It does not authorize training, deployment, process changes, database mutations, images, or merges. The user explicitly requested a new worktree for this tournament; the older tournament worktree remains intact as read-only evidence.
 
@@ -43,8 +43,8 @@ Additional findings:
 
 1. Inventory existing Parquet manifests and raw partition metadata for every group above, plus official resolved outcomes and causal TWAP state. Produce day-by-source-by-bucket counts, gaps, source/receive timestamps, label provenance and usable VWAP5 counts. Check overlaps for duplicates or conflicting values.
 2. Recover omitted existing data into the shared preparation path: especially early TWAP beyond August 26 and Kraken L2 August 20–30. Inspect existing database sources only if archives lack the relevant coverage; use bounded date partitions and existing SQL contracts. No full-table diagnostic scans or new backfill infrastructure.
-3. Build one canonical market/decision-time panel over the union of available histories. Keep long-history core rows when optional data are missing. Use actual availability masks and bounded causal age; never interpret unavailable L2 as zero imbalance or carry stale values indefinitely.
-4. Train optional-source challengers on their available support and evaluate their incremental value on matched rows against a source-free baseline. A model requiring absent Kraken/RefPrice/L2 evidence abstains only for that model; another eligible specialist may act. Do not shorten every model to the intersection of all feeds.
+3. Maximize usable evidence rather than demanding uniform coverage. Do not globally drop dates, markets or models because an optional source is absent, a bucket has a small sample, or a coverage repair is incomplete. Build one canonical market/decision-time panel over the union of available histories. Keep long-history core rows when optional data are missing. Use actual availability masks and bounded causal age; never interpret unavailable L2 as zero imbalance or carry stale values indefinitely.
+4. Train models with optional inputs on the full usable history using training-supported missing-value handling and availability indicators. Distinguish genuinely required inputs from optional enrichment; abstention is required only when the missing input makes that particular decision invalid. Train source-dependent challengers on their available support and evaluate their incremental value on matched rows against a source-free baseline. A model declaring Kraken/RefPrice/L2 optional can continue under its tested missing-data behavior; a model genuinely requiring absent evidence abstains only for that model; another eligible specialist may act. Do not shorten every model to the intersection of all feeds.
 5. Separate prediction-only coverage from economic coverage. Official outcomes can supervise directional models where books are absent. Payoff fitting, policy selection and PnL require authentic five-share execution evidence. Do not invent prices or count missing evidence as profitable abstention.
 6. Record per-source latest usable timestamps. If a raw source genuinely ends early, report that limit and use its full available subset; never claim every dataset covers the entire requested range. Missing core/labels/books exclude only affected examples/actions.
 7. Preserve canonical direct Chainlink and PMData source identities; do not silently interchange them. Use source observations available by the decision time and the established shared RTDS semantics. Completed settlement averages are labels only, never early-entry inputs.
@@ -87,21 +87,34 @@ Use at most two suitable estimator/objective variants per recipe: existing regul
 Budget:
 
 - Up to 24 distinct recipe/estimator screens, sharing cached features and fold definitions.
-- Coarse causal screen across eligible five-second buckets; keep at most three promising buckets per recipe/estimator for specialist fitting: up to 72 bucket-specific fits per fold.
-- Up to 24 targeted refinements total across RTDS pairing, settlement normalization, side specialization and calibration: **at most 96 specialist configurations**, not an exhaustive Cartesian grid.
-- Aim for approximately 30–60 materially distinct evaluated specialists if support and resources allow; this is a planning target, not a quota. A smaller honest field is preferable to duplicated or unsupported entrants.
-- Each trained specialist is attached to one bucket only. Multiple descendants of a recipe need different bucket-specific fits and distinct evidence. Keep a single champion per recipe/estimator unless additional descendants add demonstrable router value.
+- Fit each recipe/estimator across all of its usable times, with elapsed time as an input; generate causal predictions at every supported checkpoint. Do not preassign a best bucket or make separate bucket fits the default. Weight rows so denser sampling does not let one market dominate training.
+- Extend the initial field with meaningful RTDS, settlement-normalization, source, side or objective variants. Target 30–60 distinct trained models, with an operational ceiling of 96 configurations if measured resources and genuine hypotheses support it. Reuse predictions for bucket analysis; model-by-bucket cells are not extra models or fits.
+- Evaluate every model in every supported bucket. There is no top-three-bucket cap, one-bucket limit, or forced one-winner-per-family pruning. Multiple disjoint buckets can be retained for the same fitted artifact.
+- Separate model fitting from bucket admission/calibration. Bucket-specific policies may differ, but must share the same underlying model identity unless a separately declared retraining actually occurred.
 - Exact configuration/data/fold hashes reuse existing results only when identical. Compare prediction hashes and trade-ledger overlap to collapse duplicates. Near-identical contenders (e.g. >98% same decisions) need measurable incremental value to remain separate.
 
 Execution budget is calibrated using the first representative fits when training is authorized, not a benchmark now. Start with one training job, bound estimator threads, and permit at most two concurrent jobs after measuring memory. Reserve resources for trading services; stream partitioned Parquet, cache fold features once, cap native thread pools and resume completed fits by hash. Prioritize recipe diversity over extra seeds if the measured budget is tight. Report omitted configurations and actual CPU/wall time; do not promise an unmeasured runtime.
 
-## Time buckets and one-bucket rule
+## Train models first, then discover their useful buckets
 
-Search fixed nonoverlapping five-second buckets `[0,5), [5,10), …, [295,300)`. Seconds are elapsed since market open. Start with the actual supported decision cadence: five seconds for the existing panel. Unsupported checkpoints are coverage work, not zero-performance results.
+Use ten-second reporting/admission buckets `[0,10), [10,20), …, [290,300)` as the primary partition, matching the user's examples. Keep five-second diagnostics within them using actual supported cadence; wider 15/30-second summaries are descriptive and do not count overlapping observations as independent evidence. Seconds are elapsed since market open.
 
-The present combined panel covers 60–240 only; the early builder has 30–150 checkpoints but limited dates. Recover/build the other checkpoints from existing causal sources if supported. If 0–29 or 245–299 lack evidence, explicitly list them as unavailable rather than extrapolating. Within-bucket waiting requires real finer-cadence evidence; otherwise omit that recipe. Do not create synthetic subsecond precision from five-second samples.
+The present combined panel covers 60–240 only; the early builder has 30–150 checkpoints but limited dates. Recover other checkpoints from existing causal sources where available, while allowing supported models and periods to proceed. Mark unsupported cells unavailable rather than zero-performance. Do not demand every model cover every bucket. Within-bucket waiting requires real finer-cadence evidence; otherwise defer that recipe alone.
 
-Select each specialist's best bucket using training-side rolling evidence, never the outer evaluation period. Freeze bucket bounds, cadence, features, side policy, calibration and admission thresholds for that evaluation block. A model cannot move to another bucket in response to the evaluation PnL. Final exported candidates have exactly one fixed bucket; no silently widening a weak bucket to gain trades.
+For every fitted model, generate out-of-fold predictions across all supported times and publish a model × bucket matrix containing net/stress PnL, PF, trades, W/L, compensation ratio, confidence calibration, source coverage and temporal support. Preserve positive, negative, low-sample and unavailable cells in the report. Missing features must not be used to retroactively remove losing trades.
+
+Measure bucket opportunities independently: replay each bucket with at most one entry per market inside that bucket, even if an earlier bucket could have traded. A ledger that already took only the first trade in the whole market cannot reveal the later opportunities it suppressed. Independently replayed buckets may overlap in markets and are not additive portfolio PnL. Also report actual unrestricted-model trade attribution, then a fresh chronological replay restricted to the selected bucket set.
+
+Retain every supported beneficial bucket, including disjoint buckets. Illustrative outputs (not measured results):
+
+| Model identity | Eligible buckets |
+|---|---|
+| Model A | 60–69, 80–89, 110–119 |
+| Model E | 40–49, 80–89, 120–129, 150–159 |
+
+Model A remains one artifact referenced by three policies; Model E remains one artifact referenced by four. Both remain candidates in 80–89. The router resolves contention at execution time. No automatic retraining per bucket and no restriction to a single overall best bucket.
+
+Select the bucket allowlist and admission rules on training-side rolling evidence, then freeze that set for the next outer evaluation block. The final artifact retains its selected multi-bucket allowlist. Report discoveries on the entire observed range as retrospective discoveries; do not imply that choosing buckets after seeing their results made those results prospective.
 
 ## Full-range reuse and honest evaluation
 
@@ -109,10 +122,10 @@ No permanently sealed results. Every tournament uses the same full June 7–Sept
 
 - Initial supervised warm-up: June 7–21. Generate rolling out-of-fold predictions from June 21 onward using only earlier resolved markets.
 - Begin outer evaluation July 5 after two weeks of causal policy/calibration evidence; evaluate weekly to the actual September 14 watermark, with a final partial block when necessary. Earlier dates remain in training and rolling diagnostics. Report the warm-up coverage explicitly.
-- Within each outer training prefix, choose recipes, bucket, hyperparameters, normalization, calibration and admission using only inner chronological predictions. Refit the selected model using that prefix, then replay the next outer block with the frozen policy. Purge any training label whose settlement was not available before the test boundary, and keep all rows of a market in one fold.
+- Within each outer training prefix, choose recipes, bucket allowlists, hyperparameters, normalization, calibration and admission using only inner chronological predictions. Refit the selected model using that prefix, then replay the next outer block with the frozen policy. Purge any training label whose settlement was not available before the test boundary, and keep all rows of a market in one fold.
 - June 7–July 5 is not discarded: it initializes training and selection, and is used in every later refit. July–September outer predictions are stitched once per market for a causal evaluation of the selection procedure.
 - Final models refit on **all eligible June 7–September 14 data**, including dates used for evaluation earlier in the run. Final-fit training performance is labeled in-sample and is not substituted for the stitched causal results.
-- Report both the causal selection-procedure score (bucket may differ between independently frozen folds) and the fixed final bucket's retrospective OOF score. The latter is selection-conditioned, not an unbiased estimate of a newly selected final artifact.
+- Report both the causal selection-procedure score (bucket allowlists may differ between independently frozen folds) and the final bucket allowlist’s retrospective OOF score. The latter is selection-conditioned, not an unbiased estimate of a newly selected final artifact.
 - A second tournament resets neither the source start nor the fit end to an earlier date. Reuse all dates, log newly attempted hypotheses, preserve prior ledgers, and disclose repeated-selection bias. New later data can eventually supply prospective evidence without withholding the requested historical range now.
 
 ## VWAP5 execution and ranking
@@ -123,7 +136,7 @@ Report actual net PnL, stressed net PnL, PF, gross wins/losses, trades, wins/los
 
 Define compensation ratio as **mean absolute losing trade / mean winning trade** (wins needed to recover an average loss; lower is better). Break-even win rate = ratio / (1 + ratio). When either side is absent, report undefined/infinite as appropriate; do not rank a handful of no-loss trades as certain superiority. Confidence improvement means better calibration and precision at matched coverage, not simply bigger predicted probabilities.
 
-Proposed support defaults, fixed before fitting: 100 OOF trades across at least four weekly blocks for a main contender, including 30 post-cutover trades. Smaller samples stay explicitly exploratory. Require positive aggregate stressed expectancy and inspect whether one day or regime supplies the whole gain; no quality quota. Use day-block bootstrap uncertainty and paired comparisons, with resampling restricted to already generated ledgers. Intervals do not erase repeated model selection.
+Support is an evidence label, not a universal exclusion threshold: report every usable model/bucket cell, including fewer than 100 trades, fewer than four weekly blocks, or fewer than 30 post-cutover trades. Use descriptive tiers such as promising/limited support and better-supported; do not discard training rows or hide candidates because a tier is unmet. Retain positive net/stress buckets as candidate edge locations and distinguish uncertain findings from robust evidence. Prefer repeated positive evidence when choosing the default router, but preserve low-sample contenders and report their marginal effect rather than automatically banning them. Inspect whether one day or regime supplies the whole gain; no quality quota. Use day-block bootstrap uncertainty and paired comparisons, with resampling restricted to already generated ledgers. Intervals do not erase repeated model selection.
 
 Keep a Pareto shortlist: candidates that improve one objective without being clearly worse in all the others. Publish profit, loss-control and frequency leaders separately, plus matched-frequency comparisons. Primary ordering among supported candidates: post-cutover stress PnL per eligible calendar day, then full-range stress PnL/day, PF and compensation ratio. Report uncertainty and retain ties rather than arbitrary decimal precision. High PF alone cannot compensate for negligible support.
 
@@ -131,17 +144,17 @@ Keep a Pareto shortlist: candidates that improve one objective without being cle
 
 First report standalone specialists; then replay a router using only their individually selected buckets. Default to at most one entry per market across the router. Earlier fills consume later opportunities, so do not sum standalone ledgers. A skip in one bucket leaves later buckets eligible.
 
-Use at most one active champion per bucket and select it on training-side incremental router expectancy. Same-bucket contention uses calibrated stressed expected value, then a deterministic tie break. Permit no-trade and unfilled buckets. Compare a chronological eligible-first router with one bounded opportunity-cost variant that may reserve a market for a later bucket based solely on information available now. Train any reservation rule inside folds. Report incremental trades, displaced trades, lost later opportunities, source-related abstentions and PnL attribution by bucket.
+Allow several models to qualify for the same bucket and one model to qualify for several buckets. Keep all supported model–bucket associations in the catalog. At a decision timestamp, choose at most one order using calibrated stressed expected value and training-side incremental router evidence, then a deterministic tie break. Do not duplicate model loading or count the same order twice. Permit no-trade and unfilled buckets. Compare a chronological eligible-first router with one bounded opportunity-cost variant that may reserve a market for a later bucket based solely on information available now. Train any reservation rule inside folds. Report incremental trades, displaced trades, lost later opportunities, source-related abstentions and PnL attribution by bucket.
 
 Benchmark against prior four-tournament specialists at five shares on identical covered markets, including terminal PF>2 models. Frozen historical artifacts are only genuinely out-of-sample after their training/selection cutoff; otherwise label replay as contaminated descriptive evidence. For fair full-history comparisons, refit the baseline recipe inside the same chronological folds. Do not compare the new VWAP5 totals directly with historical VWAP50 PnL.
 
 ## Deliverables and stopping point for the eventual run
 
-Deliver one coverage manifest; a unique candidate registry with hypotheses and exclusions; Parquet OOF predictions/trade ledgers; candidate and router metrics by fold, regime, bucket and source availability; model bundles with exact hashes, feature contracts and one-bucket policies; and a concise numerical report with the Pareto shortlist and matched baseline comparisons. Record unsupported inputs and export readiness separately from model performance.
+Deliver one coverage manifest; a unique candidate registry with hypotheses and exclusions; Parquet OOF predictions/trade ledgers; candidate and router metrics by fold, regime, bucket and source availability; model bundles with exact hashes, feature contracts and multi-bucket allowlists and policies; and a concise numerical report with the Pareto shortlist and matched baseline comparisons. Record unsupported inputs and export readiness separately from model performance.
 
 Keep new outputs inside this worktree; reference existing immutable SSD sources. No migrations, new services, source deletion, training-process creation or production deployment. Any later runtime export follows UMR parity, the shared RTDS repository and process_id scoping, preserving existing capital, accounting and market-safety checks. No persistent stop-trading behavior for transient missing inputs.
 
-Stop after the bounded candidate field, fixed-bucket comparison, causal router replay and final full-range refits are reported. Do not launch another tournament automatically.
+Stop after the bounded candidate field, model-by-bucket comparison, causal router replay and final full-range refits are reported. Do not launch another tournament automatically.
 
 ## Evidence paths used for this plan
 
@@ -157,3 +170,13 @@ All relative project paths below resolve from the repository root. Existing resu
 - Runtime compatibility: `docs/unified-model-runtime/README.md` and `docs/unified-model-runtime/rtds-repository.md`.
 
 Planning verification used local manifests, a narrow Parquet column read and SSD directory metadata; no database queries or training were executed. Full raw-source completeness and September 14 intraday coverage remain preparation checks, not asserted facts.
+
+## Previous training code and SSD archive: inspected behavior
+
+- `packages/btc-directional-model/src/btc_directional_model/time_bucket_specialist_tournament.py`, `_slice`, `_fit_model` and `run_tournament`: the prior specialist runner slices fitting and evaluation to a candidate's assigned bucket before fitting. Its estimator is a histogram gradient-boosting regressor with a chronological logistic calibration tail. This is reusable fitting machinery, but its preassigned-bucket orchestration does not implement the clarified train-first, discover-many-buckets design.
+- `packages/btc-directional-model/src/btc_directional_model/historical_signature_replay.py`, `_bucket_results`: groups archived ledgers by tournament/run/candidate and reports each identity across 5/10/15/30-second buckets. This is the closest existing analysis pattern. Its `_screened` filter requires 30 trades, positive net/stress PnL, PF above 1 and repeated evidence or 100 trades. Reuse the summaries, but show unscreened cells too; these descriptive cutoffs are not mandatory data/training exclusions.
+- That replay is explicitly read-only and cannot infer decisions absent from archived trade ledgers. New model evaluation must retain prediction/opportunity ledgers so suppressed later-bucket opportunities can be evaluated directly.
+- `packages/btc-directional-model/src/btc_directional_model/historical_aggregate_tournament.py`: chooses historical donors, then retrains them separately inside ten-second buckets. It is not evidence that a shared fitted model was evaluated everywhere. Do not copy this bucket-first donor restriction into the new tournament.
+- Verified SSD archive root: `/Volumes/docker-data/archives/polymarket-bot-worktrees/time-bucket-specialist-tournament`. Its `archive-manifest.json` records original paths, byte sizes and SHA-256 values. Archived working outputs live under `packages/btc-directional-model/runs/`, and source caches under `packages/btc-directional-model/data/`; the archive does not use a `training-results/` directory. For example, the original run is `runs/btc-time-bucket-specialist-tournament-20260321-20260901/20260913T215700Z/` with `metrics.json`, `report.md`, `tournament.joblib` and checkpoints. Committed summaries also exist in repository `training-results/`. Resolve sources through the archive manifest instead of assuming the old working cache path still exists.
+
+Revision scope: plan only; training code and archived artifacts remain unchanged.
