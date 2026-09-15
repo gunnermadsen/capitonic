@@ -3765,9 +3765,20 @@ where
                 format!("failed to build dedicated Polymarket CLOB I/O runtime: {error}"),
             )
         })?;
+    let worker_shutdown = shutdown.clone();
     let handle = thread::Builder::new()
         .name("polymarket-clob-io".to_owned())
-        .spawn(move || runtime.block_on(worker))
+        .spawn(move || {
+            runtime.block_on(async move {
+                // Session teardown joins this thread before dropping its receiver.
+                // Cancellation must also interrupt a terminal send to a full queue.
+                tokio::select! {
+                    biased;
+                    _ = worker_shutdown.cancelled() => {}
+                    _ = worker => {}
+                }
+            })
+        })
         .map_err(|error| {
             source_error(
                 "polymarket_clob_io_worker_start_failed",
@@ -4760,10 +4771,14 @@ mod tests {
             started_sender
                 .send(thread::current().id())
                 .expect("test receives I/O thread identity");
+            struct NotifyOnDrop(std::sync::mpsc::Sender<()>);
+            impl Drop for NotifyOnDrop {
+                fn drop(&mut self) {
+                    let _ = self.0.send(());
+                }
+            }
+            let _stopped = NotifyOnDrop(stopped_sender);
             worker_shutdown.cancelled().await;
-            stopped_sender
-                .send(())
-                .expect("test receives I/O thread shutdown");
         })
         .expect("dedicated CLOB I/O worker starts");
 
@@ -4775,6 +4790,77 @@ mod tests {
         stopped_receiver
             .recv_timeout(Duration::from_secs(1))
             .expect("dedicated I/O thread stops when its owner is dropped");
+    }
+
+    // Keep the receiver alive throughout teardown, as capture_session does on
+    // bootstrap timeout. A broken join is released before asserting so this
+    // regression fails with a timeout instead of hanging the test process.
+    fn assert_clob_teardown_releases_full_queue(overflow: bool) {
+        let (sender, mut receiver) = mpsc::channel(1);
+        let frame = || ClobIoEvent::Frame {
+            message: Message::Binary(Vec::new().into()),
+            received_at: Utc::now(),
+            queued_at: Instant::now(),
+        };
+        sender
+            .try_send(frame())
+            .unwrap_or_else(|_| panic!("empty queue"));
+        let (blocked_sender, blocked_receiver) = std::sync::mpsc::channel();
+        let worker = spawn_clob_io_worker(CancellationToken::new(), async move {
+            let event = if overflow {
+                frame()
+            } else {
+                ClobIoEvent::Failed(source_error("polymarket_clob_closed", "remote close"))
+            };
+            let send = enqueue_clob_io_event(&sender, event);
+            tokio::pin!(send);
+            assert!(futures_util::poll!(&mut send).is_pending());
+            blocked_sender.send(()).expect("test observes blocked send");
+            send.await;
+        })
+        .expect("socket worker starts");
+        blocked_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("failure send blocks behind the full queue");
+        let (joined_sender, joined_receiver) = std::sync::mpsc::channel();
+        let teardown = thread::spawn(move || {
+            drop(worker);
+            joined_sender.send(()).expect("test observes joined worker");
+        });
+        let joined = joined_receiver.recv_timeout(Duration::from_secs(2));
+        receiver.close();
+        teardown.join().expect("teardown thread finishes");
+        assert!(
+            joined.is_ok(),
+            "socket teardown waited for an undrained receiver"
+        );
+        assert!(matches!(receiver.try_recv(), Ok(ClobIoEvent::Frame { .. })));
+
+        // Teardown must leave a replacement socket worker free to deliver data.
+        let (sender, mut receiver) = mpsc::channel(1);
+        let (sent_sender, sent_receiver) = std::sync::mpsc::channel();
+        let replacement = spawn_clob_io_worker(CancellationToken::new(), async move {
+            assert!(enqueue_clob_io_event(&sender, frame()).await);
+            sent_sender
+                .send(())
+                .expect("test observes replacement data");
+        })
+        .expect("replacement socket worker starts");
+        sent_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("replacement delivers promptly");
+        drop(replacement);
+        assert!(matches!(receiver.try_recv(), Ok(ClobIoEvent::Frame { .. })));
+    }
+
+    #[test]
+    fn clob_io_teardown_cancels_blocked_overflow_and_allows_restart() {
+        assert_clob_teardown_releases_full_queue(true);
+    }
+
+    #[test]
+    fn clob_io_teardown_cancels_blocked_terminal_event_and_allows_restart() {
+        assert_clob_teardown_releases_full_queue(false);
     }
 
     #[tokio::test]
