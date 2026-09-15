@@ -262,3 +262,10 @@ def test_checkpoint_resume_and_future_labels_do_not_change_first_fold(tmp_path, 
     final.write_bytes(original + b"corrupt")
     with pytest.raises(RuntimeError, match="final artifact checkpoint mismatch"):
         runner.run_model(recipe, f, manifest, identity, out)
+
+
+def test_unavailable_teacher_warmup_abstains():
+    model = fit_estimator(np.empty((0, 2)), np.array([]), np.array([]), "wait")
+    probability = predict_estimator(model, np.ones((3, 2)))
+    assert model["untrained"]
+    assert not (probability >= 0).any()

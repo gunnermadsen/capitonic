@@ -110,7 +110,11 @@ def load_panel():
 
 
 def code_identity():
-    return {p.name: file_sha256(p) for p in Path(__file__).parent.glob("micro_edge_*.py")}
+    return {
+        p.name: file_sha256(p)
+        for p in Path(__file__).parent.glob("micro_edge_*.py")
+        if p.name not in ("micro_edge_reporting.py", "micro_edge_diagnostics.py")
+    }
 
 
 def raw_predict(model, x, cost, fee):
@@ -123,7 +127,9 @@ def raw_predict(model, x, cost, fee):
 def base_oof(frame, name, output):
     paths = sorted((output / "checkpoints" / name).glob("*/predictions.parquet"))
     d = pl.concat([pl.read_parquet(p).select("row_id", "probability") for p in paths])
-    joined = frame.select("row_id").join(d, on="row_id", how="left", validate="1:1")
+    joined = frame.select("row_id").join(
+        d, on="row_id", how="left", validate="1:1", maintain_order="left"
+    )
     return joined["probability"].to_numpy()
 
 

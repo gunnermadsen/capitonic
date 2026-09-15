@@ -157,6 +157,13 @@ def market_weights(frame):
 
 
 def fit_estimator(x, y, w, kind, seed=20260915, parameters=None):
+    if not len(y):
+        return {
+            "constant": float("nan"),
+            "columns": np.array([], dtype=int),
+            "kind": kind,
+            "untrained": True,
+        }
     usable = np.flatnonzero(np.sum(np.isfinite(x), axis=0) > 0)
     if not len(usable) or len(np.unique(y)) < 2:
         return {"constant": float(np.average(y, weights=w)), "columns": usable, "kind": kind}

@@ -239,6 +239,8 @@ def diagnostic_report(frame, output, pooled, ledgers):
 
 def cutover_refit_diagnostic(frame, output, identity):
     """Post-cutover-only transfer diagnostic; never replaces a full-range final model."""
+    from pathlib import Path
+
     import joblib
 
     from .core_extract import file_sha256
@@ -254,6 +256,7 @@ def cutover_refit_diagnostic(frame, output, identity):
     )
     from .micro_edge_tournament import dump
 
+    identity = {**identity, "diagnostic_code_sha256": file_sha256(Path(__file__))}
     recipe = next(r for r in recipes() if r.name == "all_dimensions__no_rtds")
     manifest = __import__("json").loads((CACHE / "panel-manifest.json").read_text())
     features = feature_names(recipe, manifest["feature_groups"])
