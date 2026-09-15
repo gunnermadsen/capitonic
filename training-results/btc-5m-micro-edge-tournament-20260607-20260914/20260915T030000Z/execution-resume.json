@@ -1,0 +1,14 @@
+{
+  "native_threads_per_job": 2,
+  "maximum_concurrent_fitting_jobs": 2,
+  "nice_priority": 10,
+  "host_memory_bytes": 38654705664,
+  "host_cpu_count": 12,
+  "observed_single_job_rss_kib": 2631104,
+  "initial_serial_process_cpu_time": "00:12:56.43",
+  "initial_serial_process_elapsed": "00:07:02",
+  "reason": "Use the already planned two-job budget after measured resource validation; disjoint candidate groups, complete checkpoints retained.",
+  "initial_process_exit": "intentional SIGINT for checkpointed reassignment",
+  "sources_log": "../training-source-recipes.log",
+  "objectives_log": "../training-objective-recipes.log"
+}

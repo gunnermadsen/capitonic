@@ -254,7 +254,9 @@ def report(frame, output, identity):
         ),
         reverse=True,
     )
-    pooled = pl.concat(all_admitted).sort(["window_start", "market_id", "seconds_elapsed"])
+    pooled = pl.concat(all_admitted, how="vertical_relaxed").sort(
+        ["window_start", "market_id", "seconds_elapsed"]
+    )
     baseline_names = [r.name for r in recipes() if r.baseline]
     baseline_router = router(pooled.filter(pl.col("candidate").is_in(baseline_names)))
     pooled = pooled.filter(~pl.col("candidate").is_in(baseline_names))

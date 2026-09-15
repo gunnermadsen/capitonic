@@ -1,0 +1,3083 @@
+[
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/path_persistence__no_rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "9b947fbc8ea32be3e6fc1bdd88cc733055c170871581b82cecf3fc4aec6faace",
+    "producing_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": false,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+      },
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "path_persistence__no_rtds",
+    "model_tag": "model/btc-micro-edge-path_persistence__no_rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/path_persistence__no_rtds.parquet",
+        "sha256": "55ef4f30d7a628bcb0af5b9f4228cc1511287d52ef1e694ba19d3f68f3285eae"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/path_persistence__no_rtds.parquet",
+        "sha256": "4a11268e97d723c7facc85b62a890f6d726bcdfc527bb4ef376c4baa80ca2839"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/path_persistence__no_rtds.parquet",
+        "sha256": "bd28099a91c0d2e846c1d0b89835077f3dfa8cc343502a10bdf3888a66814d12"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/path_persistence__rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "a48edef900735e5653a17b381903a3181bd976de5a591829ee46406b2c91d64d",
+    "producing_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": true,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+      },
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "path_persistence__rtds",
+    "model_tag": "model/btc-micro-edge-path_persistence__rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/path_persistence__rtds.parquet",
+        "sha256": "0793e66c691546b23d8dd5166b4b7a39cce393b74281d4fe72178d4e88032bcb"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/path_persistence__rtds.parquet",
+        "sha256": "002b4f2a9db49bc8932405d547dcbc1d7f36e3a01b3e11db1384676e542a4029"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/path_persistence__rtds.parquet",
+        "sha256": "d553d5fddb600b3b17e0556e9291bd3f50628f7cb2be191aec09159d67567bbd"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/reversal_exhaustion__no_rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "e89d5910a4374aa596b903c3cc6458430b6cd96af524d5cd47c5ae6556b61aa7",
+    "producing_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": false,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+      },
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "reversal_exhaustion__no_rtds",
+    "model_tag": "model/btc-micro-edge-reversal_exhaustion__no_rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/reversal_exhaustion__no_rtds.parquet",
+        "sha256": "c3b30d57021e855ce5c073c6530efef84dd336196f80da8572a7881f6d977a48"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/reversal_exhaustion__no_rtds.parquet",
+        "sha256": "d4314c62b658c90c71206e5fdf78c2e6950e150a1cde22970ef82a90482c506c"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/reversal_exhaustion__no_rtds.parquet",
+        "sha256": "91516938cfb3706bce9658e860c995fbd662c00fd61f57bcf2b2bef7ad4ed1f0"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/reversal_exhaustion__rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "996dd4bb50957172eb82494d1d325f3b2c919afc00f6c3c51a4f87afa8a6bb73",
+    "producing_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": true,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+      },
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "reversal_exhaustion__rtds",
+    "model_tag": "model/btc-micro-edge-reversal_exhaustion__rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/reversal_exhaustion__rtds.parquet",
+        "sha256": "570f6a27a8173acf3578fca967df7ca057450b8818be5f5221921a6483c961dd"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/reversal_exhaustion__rtds.parquet",
+        "sha256": "bdb5fd38c7e4fd83229cd137ff5090a5d3cd2d587d85e39f9c7679059699459a"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/reversal_exhaustion__rtds.parquet",
+        "sha256": "d88c128d7d2073a7d544542565974e684bae02d78cb29b6ce30d7ca248953662"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/refprice_dislocation__no_rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "c01c1259dd96eddb6e3b54075a8353c74141d34329fd74d4cdfb960ab0da20b4",
+    "producing_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": false,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+      },
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "refprice_dislocation__no_rtds",
+    "model_tag": "model/btc-micro-edge-refprice_dislocation__no_rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/refprice_dislocation__no_rtds.parquet",
+        "sha256": "15ed6b9fac5f5771fde87f1162b442b40d33a3b357e88cc51236bb5fb8d8805f"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/refprice_dislocation__no_rtds.parquet",
+        "sha256": "5f55dfae3bf3cac726cd9f454dc9ad96015790ba9bbb0280d1c075150aab1f5d"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/refprice_dislocation__no_rtds.parquet",
+        "sha256": "53713be6e4c21685cf5e71b67227713ac8315fea8f6eaa60311f2c43dffa40dc"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/refprice_dislocation__rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "6cd96165f75909d743ec7f8aee857c8a73a80ade477985c248f799703106ceec",
+    "producing_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": true,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+      },
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "refprice_dislocation__rtds",
+    "model_tag": "model/btc-micro-edge-refprice_dislocation__rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/refprice_dislocation__rtds.parquet",
+        "sha256": "42feca8774a627297f79056130219c1ce0de9d9bb00010e564e686812b3ba9ca"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/refprice_dislocation__rtds.parquet",
+        "sha256": "9ea13c9f4412d9e9e6ef2ab9680eaa773d21c854206f27a6c21a02812cda852a"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/refprice_dislocation__rtds.parquet",
+        "sha256": "84fc29403cefea3823672ee5db7a2125ef95feb992d25acd2eb9d1dac77a3c7e"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/partial_twap_bridge__no_rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "a1b1ac1efba39e3e0d4f2cd4c07887ab9dfe8090f93d4e105e9d70317939d548",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": false,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "partial_twap_bridge__no_rtds",
+    "model_tag": "model/btc-micro-edge-partial_twap_bridge__no_rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/partial_twap_bridge__no_rtds.parquet",
+        "sha256": "4bf348b00053ac87d77f2ded7cff928c29e754e03c40d3aaee3a9aed25623634"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/partial_twap_bridge__no_rtds.parquet",
+        "sha256": "23902875d6dd8e87176e444b308bfc26ae4904acbad859cb08ffc8546bb81d65"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/partial_twap_bridge__no_rtds.parquet",
+        "sha256": "f60987dff5a01562cdb9c8b9cd5def86575cd3fdd7996404b8f8ccdc3f59c4a3"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/partial_twap_bridge__rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "85b1980090785ef054182258b0a8facbb97e95e9a8b0f90b91cb7f26578e2faf",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": true,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "partial_twap_bridge__rtds",
+    "model_tag": "model/btc-micro-edge-partial_twap_bridge__rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/partial_twap_bridge__rtds.parquet",
+        "sha256": "db13ce4ad8496343913073df7005e51eee0033f49978d1b69077c3fbe044bdb6"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/partial_twap_bridge__rtds.parquet",
+        "sha256": "a467670b94e3e7f2c5b2998f365ea0ba75487682529d758b9835f5d1793eb233"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/partial_twap_bridge__rtds.parquet",
+        "sha256": "c20d65c8ea3f660a3473ac012b006492d6b5d9582feb860c2cd5dd6e40713e24"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/crossvenue_leadlag__no_rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "aa392918cac334fdc6073f2485311ea2a5054b8a7e3b5115eb107dcc991c1201",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": false,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "crossvenue_leadlag__no_rtds",
+    "model_tag": "model/btc-micro-edge-crossvenue_leadlag__no_rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/crossvenue_leadlag__no_rtds.parquet",
+        "sha256": "ffb65f3f37c8be8b6b0280b44258f43e689efc39f9a4ee9a166563043ce47b83"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/crossvenue_leadlag__no_rtds.parquet",
+        "sha256": "5be99646ceadaaaca0c76d138490daf518f3bccf42f348cf49c5e100d57687c6"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/crossvenue_leadlag__no_rtds.parquet",
+        "sha256": "d0a98dee3276b797e31629d2079bab1764e3592ee20d274aadefdce3c4fb6db5"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/crossvenue_leadlag__rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "5f683c5c8220f7531e6bce03f72d274920be3336e4559f4620d9ec08d2cbef9b",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": true,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "crossvenue_leadlag__rtds",
+    "model_tag": "model/btc-micro-edge-crossvenue_leadlag__rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/crossvenue_leadlag__rtds.parquet",
+        "sha256": "d97f0958ecd8ab202ca2449085e81b3a73e53c43019118f99b591356e53f3bed"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/crossvenue_leadlag__rtds.parquet",
+        "sha256": "74a48a44a0d0b0f6ad078111090c8fcda5624558d8995ae8cd15b27273a9b5d5"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/crossvenue_leadlag__rtds.parquet",
+        "sha256": "c6b31d298447c6bf5c1986c566d6beac87ce32a3a4f6f25eec8c8a371d8636f7"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/flow_persistence__no_rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "7536f09f13627283d0fb36e93137e9bd7ace421e2b239e1a76d82ef6ec0683d0",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": false,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "flow_persistence__no_rtds",
+    "model_tag": "model/btc-micro-edge-flow_persistence__no_rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/flow_persistence__no_rtds.parquet",
+        "sha256": "931a16c47ff0c9255bb6a729a6a2835425097677dcf116e7178248a685909a19"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/flow_persistence__no_rtds.parquet",
+        "sha256": "d6544c68ae4f9800fb0a607e3b6b39dd867f03b88256c86e4c1c1bcef4897646"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/flow_persistence__no_rtds.parquet",
+        "sha256": "73ddd635d64bbcbd38f8ad936579f0fe7c0ae55c5ed8c71a429d8182bdb03932"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/flow_persistence__rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "409e286999575a31b34682e344b541c469043db914231324d163fa2b15c3d73c",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": true,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "flow_persistence__rtds",
+    "model_tag": "model/btc-micro-edge-flow_persistence__rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/flow_persistence__rtds.parquet",
+        "sha256": "067e47b7b4a5391985ca438552985dc0be1ea2dfc0ac3269a0500a349506368b"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/flow_persistence__rtds.parquet",
+        "sha256": "091767448e410c76086b06a0e51c100710b6fe25c45aa9b6f391344fdeaeceaf"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/flow_persistence__rtds.parquet",
+        "sha256": "cb6d6861d01fe374049c80893c21e0ec44322b084a221c62919d3ed7de526df6"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/positioning__no_rtds.joblib",
+    "bucket_allowlist": [
+      10,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "8de99f43c14c29e48e5e6b782f063383336bcbe7de5da0b0d75ca24f6bb4fa96",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": false,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "positioning__no_rtds",
+    "model_tag": "model/btc-micro-edge-positioning__no_rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/positioning__no_rtds.parquet",
+        "sha256": "8e81ec02e038321029424ebe2e5ec000c3abad36f216dfdcde1f65888a75e442"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/positioning__no_rtds.parquet",
+        "sha256": "1d380f1f751eeba7a2ef3d18134e7021f7bd84e5eb6c3ec3406a7c4fc9d5c244"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/positioning__no_rtds.parquet",
+        "sha256": "d1b2fa4b7db6ae941fd1a3d1a1d2e0197210eeeb733b3a4385ba31946f463029"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/positioning__rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "adaf02dd7ba75b985fae571de7a249d542b51aa4b19ed171042d2e7b7902034b",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": true,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "positioning__rtds",
+    "model_tag": "model/btc-micro-edge-positioning__rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/positioning__rtds.parquet",
+        "sha256": "e9622375d5cf81da4d77cf23b5d4cc7be73a0dd65dfb1e0f213852e3b5e711ae"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/positioning__rtds.parquet",
+        "sha256": "680801f4dcddf93345ea02e64b87128de41ab6556d9e84e8b090dae2220f57a7"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/positioning__rtds.parquet",
+        "sha256": "7d04b2d261c3a9770d028893f6a0d1d79083780c2c70ba954be43a59789d13e4"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/liquidity_response__no_rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "32e263912a129527372914d72de9c28f2cffbedffb8875fabd0df8b17f225736",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": false,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "liquidity_response__no_rtds",
+    "model_tag": "model/btc-micro-edge-liquidity_response__no_rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/liquidity_response__no_rtds.parquet",
+        "sha256": "914ca46e20d86ec8b57d3f524028c7d47b3862e41d9feb37cbd231243a099b35"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/liquidity_response__no_rtds.parquet",
+        "sha256": "855aca4e451fdd1c29383df8e73d1be45590b6eb68ea0a8097576aae5e0041ff"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/liquidity_response__no_rtds.parquet",
+        "sha256": "3938efbce4f21ade0253e1a931bc5906a10d60d079af0032e90eedf14c292bd1"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/liquidity_response__rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "9f3c0526ac802cbb0cf7ca328f56b5a509bfba80063a7c29c29dffa630ea396f",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": true,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "liquidity_response__rtds",
+    "model_tag": "model/btc-micro-edge-liquidity_response__rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/liquidity_response__rtds.parquet",
+        "sha256": "cf7f0a7687b38e4f26061a33759bbe4eed3dcf6c82dd8c859ddaf116b2bc1f8d"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/liquidity_response__rtds.parquet",
+        "sha256": "93c12d305d06324a44b310c364a72a0fce401bdc5b76baee79538570e7471d5e"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/liquidity_response__rtds.parquet",
+        "sha256": "21ed918d44a42169b37f63c1ab4bbd18a6a1808ba25e879cf4dd3bcc1fe51320"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/q5_payoff__no_rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 19377,
+    "fit_rows": 850458,
+    "model_artifact_sha256": "85b057bd7afddbd29d999bd9c122337d9134ab2b56d538ca09f737d1348fc9f7",
+    "producing_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": false,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+      },
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "q5_payoff__no_rtds",
+    "model_tag": "model/btc-micro-edge-q5_payoff__no_rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/q5_payoff__no_rtds.parquet",
+        "sha256": "e0ccc79fdef60e29d3ed1ac9c20cbbc73594358e99ab337e0d7a2dbd99dbaf4d"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/q5_payoff__no_rtds.parquet",
+        "sha256": "bff683040791497b67419ab1e4e934ced5cfe6f6127e8fb0eca2a238941525af"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/q5_payoff__no_rtds.parquet",
+        "sha256": "a64f54aa2eda87674a8111a4b1ea96e4a07535b40d4eb2fa244ee98a543c1d00"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/q5_payoff__rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 19377,
+    "fit_rows": 850458,
+    "model_artifact_sha256": "85917c58e99dd0101006725fe77f67983b2d8eb4003a821ed220a665a0cee85d",
+    "producing_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": true,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+      },
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "q5_payoff__rtds",
+    "model_tag": "model/btc-micro-edge-q5_payoff__rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/q5_payoff__rtds.parquet",
+        "sha256": "a57888c848e2f474a7eb86fc5bf7dadbd49e99c57319f072714cbbff92f87acd"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/q5_payoff__rtds.parquet",
+        "sha256": "78a23c8ab2a9868b7697330e0a59609960fee573234d26652d308fa581f90911"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/q5_payoff__rtds.parquet",
+        "sha256": "54cacb8fd8ee094aff04665f97df991f9bef52fa8fc0398f6ca69fdb3bf69c91"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/market_residual__no_rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "3d65b94654f2809540474d8bb1a0202a314838ab6d8164fb96f31568ba4bc9e7",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": false,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "market_residual__no_rtds",
+    "model_tag": "model/btc-micro-edge-market_residual__no_rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/market_residual__no_rtds.parquet",
+        "sha256": "293fc93f7638431e0e53338161120932a7d80e7b51ca1309c2f9378135429e9e"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/market_residual__no_rtds.parquet",
+        "sha256": "2d207f6f1f9c073057c07ac4d34bdd79fbe3c7856a7c2c6f9f2d725359ac0907"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/market_residual__no_rtds.parquet",
+        "sha256": "90f897970a2f36201b9aa52a4cb806447cb398ed4a619c69cd15027d7524389d"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/market_residual__rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "ce9db9a4ae0ab7b21f05b0e0b855dc26385f761b11f0ce2528be64efd3ee4745",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": true,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "market_residual__rtds",
+    "model_tag": "model/btc-micro-edge-market_residual__rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/market_residual__rtds.parquet",
+        "sha256": "d6665531bf5e021f67fe697d716e3bcf5d41fc2a11a8dad5dcaff8325e87e058"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/market_residual__rtds.parquet",
+        "sha256": "2974b22a332530a78f2753cb9757c18f9210e18cf2f24d93e6e6f29388625757"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/market_residual__rtds.parquet",
+        "sha256": "f98aabeb7a4c5bcb1c7db8c2d9c230043fd134c8121a8a7acbf93a7c78e5e012"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/path_linear__no_rtds.joblib",
+    "bucket_allowlist": [
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "d8af1091fd9c0fffe060a95388fe1ca59f2eeb914d063177ec35a7dcb0d771f1",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": false,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "path_linear__no_rtds",
+    "model_tag": "model/btc-micro-edge-path_linear__no_rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/path_linear__no_rtds.parquet",
+        "sha256": "7439db5c11269268bc2ebac6367ab17bad298936af5c35d718071aec5a7143cb"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/path_linear__no_rtds.parquet",
+        "sha256": "be3bcacc0906c94755ac968259bd1a62f163728230d9b30a2235b89a8d2e72da"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/path_linear__no_rtds.parquet",
+        "sha256": "a28697dc6f69bc21feb1f60f83373977f5fe4e10d43c9d519dd3ef97e3f162b9"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/crossvenue_linear__no_rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      60,
+      70,
+      80,
+      90,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "400ced9b34c6ad785d69c0590007457243ffb7fcace799af6122b352219c7d72",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": false,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "crossvenue_linear__no_rtds",
+    "model_tag": "model/btc-micro-edge-crossvenue_linear__no_rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/crossvenue_linear__no_rtds.parquet",
+        "sha256": "76d47de8243d22fca229b90456830a1580a11444724c7db98f236dbb296e6473"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/crossvenue_linear__no_rtds.parquet",
+        "sha256": "2d25d7f908c86acdbc030fd07f874ff6866a0e2cd6e558a920f0158ad99d16f7"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/crossvenue_linear__no_rtds.parquet",
+        "sha256": "200d070dbe6251fea9989ebbcc62e7e75fd65a05f4918522e15e7520ff1b3ab2"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/all_dimensions__no_rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "62dbbd8dd7c303804fd1665c7cda541ddab919fabae6b019c341b3dc3c82eb8b",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": false,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "all_dimensions__no_rtds",
+    "model_tag": "model/btc-micro-edge-all_dimensions__no_rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/all_dimensions__no_rtds.parquet",
+        "sha256": "3cf78df4e86c2b54b7c2dd04023a70636012809bef2d49c1f6b2b7c8989dcc54"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/all_dimensions__no_rtds.parquet",
+        "sha256": "68d11e88c0598cbda068062b201b535d5456351cc08191fbb1fc0125cbfc5569"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/all_dimensions__no_rtds.parquet",
+        "sha256": "d313acc2ce01c316d9c52d5751628df109b8055c951ff375107fa80dbdee1424"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/normalized_boundary__no_rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "539598c8a3f68f492ae7b422351b00554969e580f3402464644a41d4c479c7c6",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": false,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "normalized_boundary__no_rtds",
+    "model_tag": "model/btc-micro-edge-normalized_boundary__no_rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/normalized_boundary__no_rtds.parquet",
+        "sha256": "e23ec661e07329790d02d223635553a04ddd73af59aa4cc9db667a2ee67bbb96"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/normalized_boundary__no_rtds.parquet",
+        "sha256": "42fcf30cd4c2845b05cd4e84dbd53897ce861c9d092bfcbbda0a8a663b074f6c"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/normalized_boundary__no_rtds.parquet",
+        "sha256": "cf344af34bce4ff132ef614a2f8a5d45b33f859de55d8335a7f4bf2d2574c2fa"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/loss_aware__no_rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "cb7cf1d8d7f058dcd7330c261b9e9ba1ff2fa529642d08c1235df6184cdcca76",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": false,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "loss_aware__no_rtds",
+    "model_tag": "model/btc-micro-edge-loss_aware__no_rtds-20260915t030000z",
+    "baseline": false,
+    "base_model_dependency": {
+      "name": "all_dimensions__no_rtds",
+      "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/all_dimensions__no_rtds.joblib",
+      "sha256": "62dbbd8dd7c303804fd1665c7cda541ddab919fabae6b019c341b3dc3c82eb8b"
+    },
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/loss_aware__no_rtds.parquet",
+        "sha256": "a9f6f2e99933152bc2dc3ab051f3db8c0099cd8b14fc3327f2802e59dbf6e04e"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/loss_aware__no_rtds.parquet",
+        "sha256": "9e5bf2df300777046dc3472b06b6ee967202212009b9abe15ac41fdb94d2bcea"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/loss_aware__no_rtds.parquet",
+        "sha256": "8ad5306f7d992dd4d07d3e79a2e7089442a33314f1e7fd0eaf426010e9d12047"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/within_bucket_wait__no_rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-29 16:20:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 17767,
+    "fit_rows": 732487,
+    "model_artifact_sha256": "d754b87bc1996b147d65c0f169ba2aae5b4f6e35b2bdb41d21d4688e1eef7e6f",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": false,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "within_bucket_wait__no_rtds",
+    "model_tag": "model/btc-micro-edge-within_bucket_wait__no_rtds-20260915t030000z",
+    "baseline": false,
+    "base_model_dependency": {
+      "name": "all_dimensions__no_rtds",
+      "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/all_dimensions__no_rtds.joblib",
+      "sha256": "62dbbd8dd7c303804fd1665c7cda541ddab919fabae6b019c341b3dc3c82eb8b"
+    },
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/within_bucket_wait__no_rtds.parquet",
+        "sha256": "4a5403261861dbb748939c72f822868da4c084f1a8de7d1ee53265bbc6ba5919"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/within_bucket_wait__no_rtds.parquet",
+        "sha256": "a1ef2e9342dc7c51144af0f720a181c3377a2c44dab7d0b7aa0b5e0650c8da87"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/within_bucket_wait__no_rtds.parquet",
+        "sha256": "9a449b2b85a6e621d57db584c1f66dc9c8f131743d874e55e82bfc536772638e"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/path_linear__rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "5e816f9f609d689340160ed64bdd76dde69737aeb6a4ee5117033ed8c917db29",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": true,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "path_linear__rtds",
+    "model_tag": "model/btc-micro-edge-path_linear__rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/path_linear__rtds.parquet",
+        "sha256": "e80767b2828c7d7f797b5d289b8259b61683023bbb00406c91edc06163b60b01"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/path_linear__rtds.parquet",
+        "sha256": "768c2d44991882f34632884a4c227c9ed319495440204997550869810c84d938"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/path_linear__rtds.parquet",
+        "sha256": "0d7c065a7009410afb3355336347ff971e1983a61d2c6db2c52815a48ec09ef1"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/crossvenue_linear__rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "46591aa71cc354e03b98f954f809eb5ab25e72c208a766d057b0d0f04b76e946",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": true,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "crossvenue_linear__rtds",
+    "model_tag": "model/btc-micro-edge-crossvenue_linear__rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/crossvenue_linear__rtds.parquet",
+        "sha256": "f5ccca8a350a299c4653870cb4df14cd4d6a75dd4928333af21899663bc0a515"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/crossvenue_linear__rtds.parquet",
+        "sha256": "c13d857cadc8391294232e41810a983955abbf9c6798b5b3edf9f5c56f251674"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/crossvenue_linear__rtds.parquet",
+        "sha256": "8ba4c0c515a089817c508d01aada40901bfc3c754b3cfb2473db657a36e458f1"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/all_dimensions__rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "1f5967bdc0af4eaad3be87cf92375f844f533b4c9329f10ccde2a8122a58a5ac",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": true,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "all_dimensions__rtds",
+    "model_tag": "model/btc-micro-edge-all_dimensions__rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/all_dimensions__rtds.parquet",
+        "sha256": "54bcf6612cacbeaacc409d89c959193af244d4ea3e9e8eacdbd6d58109feb041"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/all_dimensions__rtds.parquet",
+        "sha256": "cb07b9e74317545fc4afd0c608c349207da5c04e7d7f12fa302ab85379402f2f"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/all_dimensions__rtds.parquet",
+        "sha256": "ab3c69c94461065c32e974da1a133cbf3abd896b4ff608b27f962ed982b0f108"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/normalized_boundary__rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "1cf1eb4cfc5cd43a3ae863f06d74a9008e9ea15296681ae24cc40b713a8f934f",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": true,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "normalized_boundary__rtds",
+    "model_tag": "model/btc-micro-edge-normalized_boundary__rtds-20260915t030000z",
+    "baseline": false,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/normalized_boundary__rtds.parquet",
+        "sha256": "cd4deceb04f27ec9033bea2b6a29b3d6f677be5701abd3eac86876ebc49a12d9"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/normalized_boundary__rtds.parquet",
+        "sha256": "f51a6ac1ee44cc030dc05bccc5b43479a910f2105e2698ac240b5e615e88c8c3"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/normalized_boundary__rtds.parquet",
+        "sha256": "96da3c3efc1b1a80d91dace053bc345c3815cfdfcbce729e43b19f45bcd9f279"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/loss_aware__rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 1705440,
+    "model_artifact_sha256": "78560f7a35fe94a220151e3471f495aad19ae53847de40c10e6d0a52c31ef644",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": true,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "loss_aware__rtds",
+    "model_tag": "model/btc-micro-edge-loss_aware__rtds-20260915t030000z",
+    "baseline": false,
+    "base_model_dependency": {
+      "name": "all_dimensions__rtds",
+      "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/all_dimensions__rtds.joblib",
+      "sha256": "1f5967bdc0af4eaad3be87cf92375f844f533b4c9329f10ccde2a8122a58a5ac"
+    },
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/loss_aware__rtds.parquet",
+        "sha256": "973ae6b6b7d89bd3ba5404c6a24d822f1fb116012102ad5b927afcef50b5c8dc"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/loss_aware__rtds.parquet",
+        "sha256": "a3686a85ba42469dc2dae469ba263f7baedd8b461657a9ebc97929c5af4cd64c"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/loss_aware__rtds.parquet",
+        "sha256": "237dd51e133cae2dc5ebb34dd1e8c1145bf36d9120d53c7e3ab6a20a09cf5c21"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/within_bucket_wait__rtds.joblib",
+    "bucket_allowlist": [
+      0,
+      10,
+      20,
+      30,
+      40,
+      50,
+      60,
+      70,
+      80,
+      90,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      210,
+      220,
+      230,
+      240,
+      250,
+      260,
+      270,
+      280,
+      290
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-29 16:20:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 17767,
+    "fit_rows": 732482,
+    "model_artifact_sha256": "5024c43f9de2c6e350f82fcef4edaee40f55293b74fd4df810f5115e1deab4e3",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": true,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "within_bucket_wait__rtds",
+    "model_tag": "model/btc-micro-edge-within_bucket_wait__rtds-20260915t030000z",
+    "baseline": false,
+    "base_model_dependency": {
+      "name": "all_dimensions__rtds",
+      "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/all_dimensions__rtds.joblib",
+      "sha256": "1f5967bdc0af4eaad3be87cf92375f844f533b4c9329f10ccde2a8122a58a5ac"
+    },
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/within_bucket_wait__rtds.parquet",
+        "sha256": "4853a1e57d535c48c789e3661da2b288261f42497035e7432b2164fa29903ccd"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/within_bucket_wait__rtds.parquet",
+        "sha256": "5840cdc179e1d69f3314c4dcf95da6d0751033d12fccda4f64eaa80e0b087ab3"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/within_bucket_wait__rtds.parquet",
+        "sha256": "d8b8a7e6574d97448e77e52bda6353809abb98309d5e1fcc5b5eb2461a53b5f2"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/baseline_20260913T215700Z.joblib",
+    "bucket_allowlist": [
+      210,
+      220,
+      230
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 170544,
+    "model_artifact_sha256": "99d0c0b3879118315a9d75cdea8db1df40121ed3d7d4df973f46c54a451227cd",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": false,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "baseline_20260913T215700Z",
+    "model_tag": "model/btc-micro-edge-baseline_20260913t215700z-20260915t030000z",
+    "baseline": true,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/baseline_20260913T215700Z.parquet",
+        "sha256": "080efc4bd532dde67c2ba232422e1cffb6d7ea09c9cc2e8888d71afa1cac705b"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/baseline_20260913T215700Z.parquet",
+        "sha256": "332b739ba410ff821cc9365df0f8f7aea3870c6a608df8df92e74225af01683d"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/baseline_20260913T215700Z.parquet",
+        "sha256": "144b010d792200e06611fd78be818be1321283637110d305f8d6f916da901d47"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/baseline_20260914T145421Z.joblib",
+    "bucket_allowlist": [
+      210,
+      220,
+      230
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 170544,
+    "model_artifact_sha256": "150f4c691cc94562d07c96653a5093bff2fc067cd4b8d075ff3c5d51c11adf87",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": false,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "baseline_20260914T145421Z",
+    "model_tag": "model/btc-micro-edge-baseline_20260914t145421z-20260915t030000z",
+    "baseline": true,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/baseline_20260914T145421Z.parquet",
+        "sha256": "ab25cea78e74153ff0fe2b461f39b800b118ca669b0b6a2ec3b9a043a1736869"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/baseline_20260914T145421Z.parquet",
+        "sha256": "03d4627cb2f723a732dcc39c3ae5fe122b16f2c330a6539eb5e7fc9730ee3578"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/baseline_20260914T145421Z.parquet",
+        "sha256": "75bd4b5743ff3e49c3ba5420d830eb7aa9030ae91658effe974b4bae1d0b529b"
+      }
+    }
+  },
+  {
+    "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/models/baseline_20260914T171438Z.joblib",
+    "bucket_allowlist": [
+      60,
+      70
+    ],
+    "deployment_status": "not_deployed",
+    "fit_first": "2026-06-07 00:00:00+00:00",
+    "fit_last": "2026-09-14 23:55:00+00:00",
+    "fit_markets": 28424,
+    "fit_rows": 85272,
+    "model_artifact_sha256": "865080e1fe1febc006a8600053a4d9696c5021c33153ad44360bf2a6a11f6f01",
+    "producing_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43",
+    "qualification_status": "trained_evaluated_training_only",
+    "rtds": false,
+    "serialized_prediction_parity": true,
+    "source_identity": {
+      "code": {
+        "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+        "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+        "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+        "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+        "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+        "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+        "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+      },
+      "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+      "compatible_prior_identities": [
+        {
+          "code": {
+            "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+            "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+            "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+            "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+            "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+            "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+            "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+          },
+          "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+          "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+          "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+        }
+      ],
+      "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+      "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+      "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+    },
+    "training_run_id": "20260915T030000Z",
+    "name": "baseline_20260914T171438Z",
+    "model_tag": "model/btc-micro-edge-baseline_20260914t171438z-20260915t030000z",
+    "baseline": true,
+    "evidence": {
+      "trades": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/trades/baseline_20260914T171438Z.parquet",
+        "sha256": "caa2d5bf6169e55eaba26702af213735509ffdd4611398f01743b9b7f3d23299"
+      },
+      "predictions": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/predictions/baseline_20260914T171438Z.parquet",
+        "sha256": "00d22d1b24f73e170c42581092a8563202287aaeae69418ffcbea082408522e1"
+      },
+      "opportunities": {
+        "path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/opportunities/baseline_20260914T171438Z.parquet",
+        "sha256": "ab4a183f730b10353f0736fa8c66c0680cbd6279729adce8ddd8d5bbd678c022"
+      }
+    }
+  }
+]
