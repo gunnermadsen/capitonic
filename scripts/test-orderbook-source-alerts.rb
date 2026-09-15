@@ -6,7 +6,10 @@ path = "#{root}/common/configs/grafana/provisioning/alerting/rules-market-data-p
 document = YAML.respond_to?(:unsafe_load_file) ? YAML.unsafe_load_file(path) : YAML.load_file(path)
 rules = document.fetch('groups').flat_map { |group| group.fetch('rules') }
 source = rules.find { |rule| rule['uid'] == 'mdp_orderbook_source_no_frames' }
-overflow = rules.find { |rule| rule['uid'] == 'mdp_orderbook_raw_queue_overflow' }
+ingester_path = "#{root}/common/configs/grafana/provisioning/alerting/rules-market-data-ingester.yml"
+ingester_document = YAML.respond_to?(:unsafe_load_file) ? YAML.unsafe_load_file(ingester_path) : YAML.load_file(ingester_path)
+overflow = ingester_document.fetch('groups').flat_map { |group| group.fetch('rules') }
+  .find { |rule| rule['uid'] == 'mdi_polymarket_ws_overflow' }
 raise 'missing orderbook alerts' unless source && overflow
 raise 'unexpected stale hold duration' unless source['for'] == '1m'
 raise 'overflow must alert immediately' unless overflow['for'] == '0s'

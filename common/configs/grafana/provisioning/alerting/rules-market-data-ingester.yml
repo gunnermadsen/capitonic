@@ -1079,7 +1079,7 @@ groups:
             model:
               datasource: {type: prometheus, uid: prometheus}
               editorMode: code
-              expr: 'sum(increase(market_data_ingester_websocket_queue_overflow_total{product="polymarket_btc_five_minute_orderbooks"}[5m]))'
+              expr: 'sum by (instance) (increase(market_data_ingester_websocket_queue_overflow_total{product="polymarket_btc_five_minute_orderbooks"}[5m]))'
               instant: true
               refId: A
           - *reduce
@@ -1089,7 +1089,7 @@ groups:
         for: 0s
         annotations:
           summary: 'Polymarket orderbook websocket frame queue overflowed'
-          description: 'At least one source frame could not enter the bounded reader queue in five minutes. The connection is reset explicitly to recover authoritative state.'
+          description: 'A raw CLOB frame could not enter the bounded queue on worker {{ $labels.instance }} within five minutes. Continuity was interrupted; a fresh snapshot epoch is required. This counts raw frame overflows, not publication drops or remote slow-consumer disconnects.'
         labels: {strategy: polymarket_btc_five_minute_orderbooks, condition: websocket_queue_overflow, service: ingester, family: market_data_ingestion, environment: $GRAFANA_ALERT_ENVIRONMENT, severity: critical}
         dashboardUid: market-data-pipeline
         panelId: 35

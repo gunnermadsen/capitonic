@@ -1,5 +1,9 @@
 apiVersion: 1
 
+deleteRules:
+  - orgId: 1
+    uid: mdp_orderbook_raw_queue_overflow
+
 groups:
   - orgId: 1
     name: market-data-pipeline-20s
@@ -451,40 +455,6 @@ groups:
           summary: An ingester worker cannot safely reconcile its durable assignment
           description: At least one worker has failed realtime assignment reconciliation continuously for two minutes; its product ownership must not be treated as ready.
         labels: {service: ingester-worker, family: market_data_pipeline, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
-        isPaused: false
-      - uid: mdp_orderbook_raw_queue_overflow
-        title: Polymarket orderbook raw frame queue overflow
-        condition: C
-        data:
-          - refId: A
-            queryType: instant
-            relativeTimeRange: {from: 300, to: 0}
-            datasourceUid: prometheus
-            model:
-              datasource: {type: prometheus, uid: prometheus}
-              editorMode: code
-              expr: 'sum by (instance) (increase(market_data_ingester_websocket_queue_overflow_total{product="polymarket_btc_five_minute_orderbooks"}[5m]))'
-              instant: true
-              refId: A
-          - refId: B
-            datasourceUid: __expr__
-            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
-          - refId: C
-            datasourceUid: __expr__
-            model:
-              datasource: {type: __expr__, uid: __expr__}
-              expression: B
-              type: threshold
-              conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}]
-              refId: C
-        noDataState: OK
-        execErrState: Error
-        for: 0s
-        annotations:
-          summary: Polymarket orderbook raw frame queue overflow
-          description: 'The bounded raw CLOB frame queue overflowed on worker {{ $labels.instance }} within five minutes. Continuity was interrupted; a fresh snapshot epoch is required. This counts raw frame overflows, not publication drops or remote slow-consumer disconnects.'
-        labels: {service: ingester-worker, family: market_data_pipeline, severity: warning, environment: $GRAFANA_ALERT_ENVIRONMENT}
-        dashboardUid: market-data-pipeline
         isPaused: false
       - uid: mdp_orderbook_source_no_frames
         title: Polymarket orderbook source has stopped producing frames
