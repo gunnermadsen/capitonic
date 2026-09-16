@@ -129,7 +129,7 @@
                   "uid": "prometheus"
                 },
                 "editorMode": "code",
-                "expr": "(polymarket_umr_runtime_ready == bool 0) and on(process_id) (polymarket_umr_enabled == 1)",
+                "expr": "((polymarket_umr_runtime_ready == bool 0) and on(process_id) (polymarket_umr_enabled == 1)) unless on(process_id) polymarket_umr_router_member_info",
                 "instant": true,
                 "range": false,
                 "refId": "A",
@@ -204,7 +204,7 @@
           "for": "5m",
           "annotations": {
             "summary": "UMR enabled process input readiness unavailable",
-            "description": "The selected model has remained unavailable across a full market window. Inspect required inputs and native missing coverage. Recovery remains automatic.",
+            "description": "The selected single-model runtime has remained unavailable across a full market window. Inspect required inputs and native missing coverage. Router processes use the dedicated member inference alert. Recovery remains automatic.",
             "dashboardUid": "unified-model-runtime"
           },
           "labels": {
