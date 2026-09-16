@@ -20,3 +20,6 @@ scripts/sync-aws-secret.mjs
 **/backend.hcl
 **/*.tfstate
 **/*.tfstate.*
+**/training-results/**/*.parquet
+**/training-results/**/*.csv
+**/training-results/**/*.joblib
