@@ -142,6 +142,10 @@ Think of Capitonic as a vision to generate income through systems with automatio
 - Keep all implementation, tests, generated evidence, and related fixes for the feature inside its assigned worktree.
 - Before creating a worktree, run `git worktree list` and confirm that no existing worktree already covers the feature domain.
 
+## Parquet Artifacts in Worktrees
+
+- Do not commit Parquet files from worktrees. Store generated Parquet artifacts outside the repository, such as on the external SSD, and keep only the supporting code and lightweight metadata in Git.
+
 ## Worktree Lifecycle
 
 - Keep a feature worktree until its changes are:
