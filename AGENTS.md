@@ -79,6 +79,53 @@ Think of Capitonic as a vision to generate income through systems with automatio
 - Promote or alias the selected already-built image manifest when one exists. If the user explicitly directs minting and no image exists for the exact committed integration revision, build it with provenance, verify its immutable identity, and mint that image golden. Do not substitute a rebuilt image for a user-selected immutable digest without explicit authorization. Verify the resulting branch, tag, image identity, and embedded provenance.
 - Roll back by deploying a previously annotated immutable golden image. Do not rebuild the old commit and do not reset `development` merely to change the deployed image.
 
+## Safe Image Deployment
+
+- Before deploying any newly built image, inspect active realtime strategies, active backfill jobs, worker allocation units, replica count, and current service health. Preserve enough worker capacity for every enabled realtime strategy plus active backfill allocations; do not assume the existing replica count is sufficient.
+- Add any required worker capacity before replacing existing workers. Verify new workers are registered and healthy before proceeding with the remaining deployment.
+- Deploy the exact prebuilt image without rebuilding it or changing unrelated services. Preserve configured process intent and worker scale unless the verified allocation demand requires additional capacity.
+- Container startup and Docker health checks are necessary but insufficient. A deployment is healthy only after functional checks confirm that every desired realtime profile has a current owner and is `running` and `healthy`, every required market-data product resolves to a current worker route, and required RTDS, orderbook, resolution, contract, and reference-price timestamps advance after deployment.
+- Verify that enabled trading processes automatically resume their market-data subscriptions and runtime eligibility, migrations complete with none pending, observability services remain available, and no new sustained critical alerts, crash loops, route-resolution failures, or ingestion gaps appear during startup.
+- Do not declare deployment complete while any required product reports `no_current_owner`, `owner_unavailable`, stale data, missing publications, or a degraded profile. Continue safe recovery or report the deployment as unhealthy.
+- Record the exact image ID, embedded Git revision, worker-capacity calculation, migration state, functional checks, and unresolved alerts in the deployment result.
+
+### Post-Deployment Verification
+
+- Before replacing containers, record the last known-good golden image IDs, embedded revisions, running service set, worker replica count, active realtime profiles, active backfill allocations, migration state, and material runtime configuration. Keep this rollback tuple available until the new deployment passes every functional check.
+- After deployment, verify in this order:
+  1. Every expected container is running without a restart loop and uses the intended immutable image ID and embedded Git revision.
+  2. Database, migration runner, ingester master, every ingester worker, bot, Prometheus, Grafana, Loki, and Alloy report their expected health or successful completion state.
+  3. Worker capacity still covers all desired realtime profiles and active backfills, and every desired realtime profile has a current lease owner with `observed_state='running'` and `health_status='healthy'`.
+  4. The master resolves every required product to a live worker, and the bot establishes the expected routes without sustained `no_current_owner`, `owner_unavailable`, route-resolution, or stale-product errors.
+  5. Fresh RTDS, orderbook, resolution, contract, Binance, Polygon, and required reference-price timestamps advance after the deployment rather than merely containing old rows.
+  6. Every enabled trading process preserves durable intent, resumes required subscriptions, and becomes eligible automatically when its evidence is healthy without bypassing capital, identity, accounting, order, or market-safety controls.
+  7. Order, fill, reconciliation, settlement, and accounting paths affected by the deployment remain healthy, and Grafana shows no new sustained critical alerts attributable to the deployment.
+- Use bounded, resource-conscious queries and recent log windows for verification. Do not run large diagnostic scans against production tables.
+- Report the deployment as successful only after all applicable checks pass. State exactly which checks were not applicable or could not be completed.
+
+### Automatic Rollback and Recovery
+
+- Treat the deployment as failed when a required container crash-loops, an expected service cannot start, migrations fail, any desired realtime profile remains unowned or degraded, required timestamps stop advancing, the bot cannot establish required routes, enabled trading processes fail to recover eligibility, or new sustained critical alerts are attributable to the deployment.
+- On deployment failure, stop further rollout actions and preserve logs and the failed candidate tuple. Do not mint, move, or alter golden tags to disguise the failure.
+- Automatically roll back affected services to the recorded last known-good immutable golden image IDs and restore the recorded worker replica count and material runtime configuration. Do not rebuild an old commit, use mutable tags as rollback identity, reset Git branches, or change unrelated services.
+- Before rolling back across a database change, verify that the previous golden image is compatible with the current database state. Never reverse or mutate database state outside a separately authorized migration. If compatibility is not proven, leave the database intact, restore only compatible services, and report the rollback as blocked or partial.
+- Recreate only the affected containers, then repeat the complete post-deployment verification sequence against the rollback tuple. A rollback is complete only when functional data flow and process recovery are healthy; running containers alone are not sufficient.
+- If adding capacity or restarting a narrowly affected disposable worker safely restores ownership without changing code, images, durable intent, or data, perform that minimal recovery before a full rollback. Still classify the original deployment as failed and document the capacity defect.
+
+### Failure RCA and Repair Instructions
+
+- Whenever a deployment becomes unhealthy, automatically perform a read-only root-cause analysis after stabilizing or rolling back the stack. Correlate the deployment timestamp with image identities, container events and restart counts, recent bounded logs, profile leases, worker capacity and backfill allocations, route resolution, data freshness, migrations, trading-process recovery, and firing alerts.
+- Clearly separate the root cause from symptoms. Identify the first failed dependency or violated invariant, explain the resulting failure chain, and cite the concrete evidence used. Do not call a deployment healthy merely because containers or HTTP endpoints are alive.
+- Provide a short repair report in direct language using exactly these headings:
+  - `Problem`: one sentence describing what is broken.
+  - `Impact`: which ingestion products, trading processes, or services are affected.
+  - `Cause`: the proven root cause; say `not yet proven` when evidence is incomplete.
+  - `Immediate repair`: numbered commands or actions that restore service safely, including exact targets and required verification.
+  - `Verification`: the observable evidence that proves recovery, including advancing timestamps and cleared route/profile failures.
+  - `Rollback status`: the restored image IDs and revisions, or the precise reason rollback is blocked or partial.
+  - `Permanent hardening`: only the smallest code, configuration, alerting, or deployment change needed to prevent recurrence; do not implement it unless authorized.
+- Make repair instructions executable and unambiguous. Avoid vague directions such as “check the service,” “monitor it,” or “restart if needed”; name the service, condition, exact safe action, and success signal.
+
 ## Branching
 
 - Commit changes in coherent groups organized by feature domain.
