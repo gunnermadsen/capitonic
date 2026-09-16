@@ -322,7 +322,7 @@ impl CachedAccessToken {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 struct OneMinuteCandle {
     open_timestamp: DateTime<Utc>,
     close_timestamp: DateTime<Utc>,
@@ -972,6 +972,20 @@ impl ChainlinkBtcusdOneMinuteOhlcStrategy {
             .commit()
             .await
             .map_err(|error| database_error("chainlink_candle_transaction_commit_failed", error))?;
+        for candle in &page.candles {
+            crate::streaming::publish(
+                STRATEGY_KEY.as_str(),
+                candle.open_timestamp.to_rfc3339(),
+                candle.close_timestamp,
+                candle.received_at,
+                candle.received_at,
+                candle.payload_sha256.clone(),
+                true,
+                candle,
+            )
+            .await;
+        }
+
         if new_gap_count > 0 {
             warn!(
                 strategy = %STRATEGY_KEY,

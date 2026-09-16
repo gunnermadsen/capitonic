@@ -26,6 +26,7 @@ pub use datasets::{dataset_for_strategy, StrategyDatasetBinding, STRATEGY_DATASE
 
 pub fn registry() -> Result<StrategyRegistry, StrategyFactoryError> {
     let factories: Vec<Arc<dyn StrategyFactory>> = vec![
+        Arc::new(kraken::KrakenSpotTradesFactory),
         Arc::new(binance::BinanceSpotAggregateTradesFactory),
         Arc::new(binance::BinanceSpotOneSecondOhlcvFactory),
         Arc::new(binance::BinanceSpotL2SnapshotFactory),

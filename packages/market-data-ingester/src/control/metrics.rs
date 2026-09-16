@@ -345,13 +345,13 @@ mod tests {
             rendered
                 .matches("market_data_ingester_strategy_state{")
                 .count(),
-            11
+            IngesterStrategyKey::ALL.len()
         );
         assert_eq!(
             rendered
                 .matches("market_data_ingester_strategy_last_persistence_timestamp_seconds{")
                 .count(),
-            11
+            IngesterStrategyKey::ALL.len()
         );
         for key in IngesterStrategyKey::ALL {
             assert!(rendered.contains(&format!("strategy=\"{}\"", key.as_str())));

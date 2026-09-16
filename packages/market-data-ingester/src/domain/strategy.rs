@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IngesterStrategyKey {
+    KrakenSpotBtcusdTrades,
     BinanceSpotBtcusdtAggregateTrades,
     BinanceSpotBtcusdtOneSecondOhlcv,
     BinanceSpotBtcusdtL2Snapshots,
@@ -22,7 +23,8 @@ pub enum IngesterStrategyKey {
 }
 
 impl IngesterStrategyKey {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
+        Self::KrakenSpotBtcusdTrades,
         Self::BinanceSpotBtcusdtAggregateTrades,
         Self::BinanceSpotBtcusdtOneSecondOhlcv,
         Self::BinanceSpotBtcusdtL2Snapshots,
@@ -38,6 +40,7 @@ impl IngesterStrategyKey {
 
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::KrakenSpotBtcusdTrades => "kraken_spot_btcusd_trades",
             Self::BinanceSpotBtcusdtAggregateTrades => "binance_spot_btcusdt_aggregate_trades",
             Self::BinanceSpotBtcusdtOneSecondOhlcv => "binance_spot_btcusdt_one_second_ohlcv",
             Self::BinanceSpotBtcusdtL2Snapshots => "binance_spot_btcusdt_l2_snapshots",
