@@ -13,6 +13,9 @@ pub mod features;
 pub mod frozen_early_entry;
 pub mod history;
 pub mod legacy;
+mod time_bucket_feature_names;
+mod time_bucket_features;
+mod time_bucket_specialist;
 pub(crate) mod validation;
 
 pub struct FeatureContext<'a> {
@@ -64,6 +67,10 @@ pub(crate) fn compile(
         .pointer("/contract/adapter")
         .and_then(|v| v.as_str())
     {
+        Some("time_bucket_specialist") => Ok(Box::new(time_bucket_specialist::Adapter::compile(
+            serde_json::from_value(definition)?,
+            names,
+        )?)),
         Some("frozen_early_entry") => Ok(Box::new(frozen_early_entry::Adapter::compile(
             serde_json::from_value(definition)?,
             names,

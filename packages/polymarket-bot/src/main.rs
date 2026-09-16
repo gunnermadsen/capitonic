@@ -1,3 +1,6 @@
+use polymarket_bot::btc::unified_model_runtime::router::{
+    RouterDefinition, PROCESS_SCHEMA_VERSION as ROUTER_PROCESS_SCHEMA_VERSION,
+};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     sync::{
@@ -22,7 +25,6 @@ use polymarket_bot::{
         BtcProcessConfig, BtcProcessRunner, BtcRepository, BtcRuntime, BtcRuntimeConfig,
         BtcRuntimeHandle, BtcStrategyConfig, LiveExecutionLifecycle, PaperExecutionLifecycle,
         PaperPreviewConfig, PaperVenue as BtcPaperVenue, PaperVenueConfig, RuntimeModelSelection,
-        BTC_ASYMMETRIC_VALUE_MODEL_STRATEGY_VERSION, BTC_DIRECTIONAL_MODEL_STRATEGY_VERSION,
     },
     config::AppConfig,
     data_api::DataApiClient,
@@ -42,7 +44,7 @@ use polymarket_bot::{
         TradingProcessLivePreflightResponse, TradingProcessResponse,
         TradingProcessStartPreviewResponse, TradingProcessStatusResponse, TradingProcessesResponse,
     },
-    market_data_stream::{legacy_default_sources, SourceSelector},
+    market_data_stream::SourceSelector,
     models::{
         EffectiveProcessExecutionConfig, ProcessExecutionConfig, TradingProcess,
         TradingProcessConfig,
@@ -58,10 +60,18 @@ use tokio::time::MissedTickBehavior;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-const BTC_PIPELINE_VERSION: &str = "btc_realtime_paper_pipeline_v11";
-const BTC_PROCESS_SCHEMA_VERSION: &str = "btc_realtime_paper_process_v2";
-const SELECTABLE_BTC_PIPELINE_VERSION: &str = "btc_realtime_paper_pipeline_v12";
-const SELECTABLE_BTC_PROCESS_SCHEMA_VERSION: &str = "btc_realtime_paper_process_v3";
+#[cfg(test)]
+use polymarket_bot::btc::{
+    BTC_ASYMMETRIC_VALUE_MODEL_STRATEGY_VERSION, BTC_DIRECTIONAL_MODEL_STRATEGY_VERSION,
+};
+
+#[cfg(test)]
+const BTC_PROCESS_SCHEMA_VERSION: &str = ROUTER_PROCESS_SCHEMA_VERSION;
+const SELECTABLE_BTC_PIPELINE_VERSION: &str = "btc_realtime_paper_pipeline_v13";
+#[cfg(test)]
+const BTC_PIPELINE_VERSION: &str = SELECTABLE_BTC_PIPELINE_VERSION;
+const SELECTABLE_BTC_PROCESS_SCHEMA_VERSION: &str = ROUTER_PROCESS_SCHEMA_VERSION;
+#[cfg(test)]
 const LEGACY_BTC_PROCESS_SCHEMA_VERSION: &str = "btc_realtime_paper_process_v1";
 const BTC_PROCESS_TYPE: &str = "btc_5m";
 const BTC_PROCESS_SCOPE: &str = "realtime_paper";
@@ -235,67 +245,24 @@ enum BtcDefinitionUse {
 }
 
 fn parse_btc_process_control(
-    mut value: serde_json::Value,
-    definition_use: BtcDefinitionUse,
+    value: serde_json::Value,
+    _definition_use: BtcDefinitionUse,
 ) -> Result<BtcRealtimePaperControlConfig, HttpError> {
     let schema_version = value
         .get("schema_version")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| HttpError::bad_request("BTC process schema_version is required"))?;
 
-    if schema_version == LEGACY_BTC_PROCESS_SCHEMA_VERSION {
-        if definition_use != BtcDefinitionUse::DurableResume {
-            return Err(HttpError::bad_request(format!(
-                "BTC process schema_version {LEGACY_BTC_PROCESS_SCHEMA_VERSION} is resume-only; new and explicitly restarted processes must use {BTC_PROCESS_SCHEMA_VERSION} or {SELECTABLE_BTC_PROCESS_SCHEMA_VERSION}"
-            )));
-        }
-        let object = value.as_object_mut().ok_or_else(|| {
-            HttpError::bad_request("BTC process control configuration must be an object")
-        })?;
-        if let Some(retired) = object.remove("ml_shadow") {
-            let retired = retired.as_object().ok_or_else(|| {
-                HttpError::bad_request("legacy ml_shadow compatibility value must be an object")
-            })?;
-            if retired.keys().any(|key| key != "enabled")
-                || retired
-                    .get("enabled")
-                    .is_some_and(|enabled| !enabled.is_boolean())
-            {
-                return Err(HttpError::bad_request(
-                    "legacy ml_shadow compatibility value may contain only a boolean enabled field",
-                ));
-            }
-        }
-        object.insert(
-            "schema_version".to_string(),
-            serde_json::Value::String(BTC_PROCESS_SCHEMA_VERSION.to_string()),
-        );
-    } else if !matches!(
-        schema_version,
-        BTC_PROCESS_SCHEMA_VERSION | SELECTABLE_BTC_PROCESS_SCHEMA_VERSION
-    ) {
-        return Err(HttpError::bad_request(format!(
-            "BTC process schema_version must be {BTC_PROCESS_SCHEMA_VERSION} or {SELECTABLE_BTC_PROCESS_SCHEMA_VERSION}"
-        )));
-    }
-
-    let mut control: BtcRealtimePaperControlConfig =
-        serde_json::from_value(value).map_err(|error| {
-            HttpError::bad_request(format!(
-                "invalid process config.raw.btc_realtime_paper: {error}"
-            ))
-        })?;
-    if control.sources.is_empty() {
-        if definition_use == BtcDefinitionUse::DurableResume {
-            control.sources = legacy_default_sources();
-        } else {
-            return Err(HttpError::bad_request(
-                "BTC process sources are required; update the playbook to version v1.2",
-            ));
-        }
-    } else if control.playbook_version.as_deref() != Some("v1.2") {
+    if schema_version != ROUTER_PROCESS_SCHEMA_VERSION {
         return Err(HttpError::bad_request(
-            "BTC process sources require playbook_version v1.2",
+            "BTC process requires btc_realtime_paper_process_v4",
+        ));
+    }
+    let control: BtcRealtimePaperControlConfig = serde_json::from_value(value)
+        .map_err(|e| HttpError::bad_request(format!("invalid BTC process configuration: {e}")))?;
+    if control.sources.is_empty() || control.playbook_version.as_deref() != Some("v1.2") {
+        return Err(HttpError::bad_request(
+            "BTC process requires global sources and playbook_version v1.2",
         ));
     }
     for source in &control.sources {
@@ -314,166 +281,81 @@ fn parse_btc_process_control(
     Ok(control)
 }
 
+fn resolve_btc_members(
+    control: &BtcRealtimePaperControlConfig,
+) -> Result<Vec<(String, BtcStrategyConfig)>, HttpError> {
+    let overrides = control
+        .strategy
+        .as_object()
+        .ok_or_else(|| HttpError::bad_request("strategy must be an object"))?;
+    for forbidden in [
+        "unified_model",
+        "strategy_version",
+        "feature_schema_version",
+    ] {
+        if overrides.contains_key(forbidden) {
+            return Err(HttpError::bad_request(format!(
+                "strategy.{forbidden} is not configurable"
+            )));
+        }
+    }
+    let router: RouterDefinition = serde_json::from_value(
+        overrides
+            .get("decision_strategy")
+            .cloned()
+            .ok_or_else(|| HttpError::bad_request("missing router selection"))?,
+    )
+    .map_err(|e| HttpError::bad_request(format!("invalid router: {e}")))?;
+    let mut value = serde_json::to_value(BtcStrategyConfig::default())
+        .map_err(|e| HttpError::internal(e.to_string()))?;
+    let object = value.as_object_mut().expect("strategy object");
+    object.insert(
+        "max_directional_feature_age_ms".into(),
+        serde_json::Value::Null,
+    );
+    object.insert("required_model_feeds".into(), serde_json::json!([]));
+    for (key, v) in overrides {
+        if key == "decision_strategy" {
+            continue;
+        }
+        let slot = object
+            .get_mut(key)
+            .ok_or_else(|| HttpError::bad_request(format!("unsupported strategy setting {key}")))?;
+        *slot = v.clone();
+    }
+    let base: BtcStrategyConfig =
+        serde_json::from_value(value).map_err(|e| HttpError::bad_request(e.to_string()))?;
+    let sources = control.sources.iter().map(|s| s.key.as_str()).collect();
+    router
+        .compile_members(&base, &sources)
+        .map_err(|e| HttpError::bad_request(e.to_string()))
+}
+#[cfg(test)]
 fn resolve_btc_strategy(
     control: &BtcRealtimePaperControlConfig,
 ) -> Result<BtcStrategyConfig, HttpError> {
-    let strategy_overrides = control.strategy.as_object().ok_or_else(|| {
-        HttpError::bad_request("btc_realtime_paper.strategy must be a JSON object")
-    })?;
-    let is_selectable_contract = control.schema_version == SELECTABLE_BTC_PROCESS_SCHEMA_VERSION;
-
-    if is_selectable_contract {
-        if !strategy_overrides.contains_key("decision_strategy") {
-            return Err(HttpError::bad_request(format!(
-                "BTC process schema_version {SELECTABLE_BTC_PROCESS_SCHEMA_VERSION} requires strategy.decision_strategy"
-            )));
-        }
-        for compiled_or_legacy_key in ["strategy_version", "feature_schema_version"] {
-            if strategy_overrides.contains_key(compiled_or_legacy_key) {
-                return Err(HttpError::bad_request(format!(
-                    "BTC strategy setting {compiled_or_legacy_key} cannot be supplied with schema_version {SELECTABLE_BTC_PROCESS_SCHEMA_VERSION}"
-                )));
-            }
-        }
-    } else if strategy_overrides.contains_key("decision_strategy") {
-        return Err(HttpError::bad_request(format!(
-            "BTC strategy.decision_strategy requires schema_version {SELECTABLE_BTC_PROCESS_SCHEMA_VERSION}"
-        )));
-    }
-
-    let mut strategy_value = serde_json::to_value(BtcStrategyConfig::default())
-        .map_err(|error| HttpError::internal(error.to_string()))?;
-    let strategy_object = strategy_value
-        .as_object_mut()
-        .ok_or_else(|| HttpError::internal("default BTC strategy did not serialize as object"))?;
-    strategy_object.insert("decision_strategy".to_string(), serde_json::Value::Null);
-    strategy_object.insert("unified_model".to_string(), serde_json::Value::Null);
-    strategy_object.insert(
-        "max_directional_feature_age_ms".to_string(),
-        serde_json::Value::Null,
-    );
-    strategy_object.insert(
-        "required_model_feeds".to_string(),
-        serde_json::Value::Array(Vec::new()),
-    );
-    for (key, value) in strategy_overrides {
-        let Some(slot) = strategy_object.get_mut(key) else {
-            return Err(HttpError::bad_request(format!(
-                "unsupported BTC strategy setting {key}"
-            )));
-        };
-        *slot = value.clone();
-    }
-
-    if is_selectable_contract {
-        let selection: BtcDecisionStrategyConfig = serde_json::from_value(
-            strategy_overrides
-                .get("decision_strategy")
-                .cloned()
-                .expect("selectable contract requires a decision strategy"),
-        )
-        .map_err(|error| {
-            HttpError::bad_request(format!("invalid BTC decision strategy selection: {error}"))
-        })?;
-        let (strategy_version, feature_schema_version) = match &selection {
-            BtcDecisionStrategyConfig::BtcDirectionalModel {
-                model_key,
-                artifact_sha256,
-                feature_schema_sha256,
-            } => {
-                let model = runtime_model(&RuntimeModelSelection {
-                    model_key: model_key.clone(),
-                    artifact_sha256: artifact_sha256.clone(),
-                    feature_schema_sha256: feature_schema_sha256.clone(),
-                })
-                .map_err(|error| {
-                    HttpError::bad_request(format!(
-                        "invalid BTC directional model selection: {error}"
-                    ))
-                })?;
-                (
-                    BTC_DIRECTIONAL_MODEL_STRATEGY_VERSION.to_string(),
-                    model.feature_schema_version().to_string(),
-                )
-            }
-            BtcDecisionStrategyConfig::BtcAsymmetricValueModel {
-                model_key,
-                artifact_sha256,
-                feature_schema_sha256,
-            } => {
-                let model = runtime_model(&RuntimeModelSelection {
-                    model_key: model_key.clone(),
-                    artifact_sha256: artifact_sha256.clone(),
-                    feature_schema_sha256: feature_schema_sha256.clone(),
-                })
-                .map_err(|error| {
-                    HttpError::bad_request(format!(
-                        "invalid BTC asymmetric value model selection: {error}"
-                    ))
-                })?;
-                if !model.is_asymmetric_value() {
-                    return Err(HttpError::bad_request(
-                        "selected model is not an asymmetric value artifact",
-                    ));
-                }
-                (
-                    BTC_ASYMMETRIC_VALUE_MODEL_STRATEGY_VERSION.to_string(),
-                    model.feature_schema_version().to_string(),
-                )
-            }
-        };
-        strategy_object.insert(
-            "strategy_version".to_string(),
-            serde_json::Value::String(strategy_version),
-        );
-        strategy_object.insert(
-            "feature_schema_version".to_string(),
-            serde_json::Value::String(feature_schema_version),
-        );
-    }
-
-    let strategy: BtcStrategyConfig = serde_json::from_value(strategy_value).map_err(|error| {
-        HttpError::bad_request(format!("invalid BTC strategy settings: {error}"))
-    })?;
-    strategy
-        .validate()
-        .map_err(|error| HttpError::bad_request(error.to_string()))?;
-    let directional_model_identity_valid = match strategy.decision_strategy.as_ref() {
-        Some(BtcDecisionStrategyConfig::BtcDirectionalModel {
-            model_key,
-            artifact_sha256,
-            feature_schema_sha256,
-        }) if strategy.strategy_version == BTC_DIRECTIONAL_MODEL_STRATEGY_VERSION => {
-            runtime_model(&RuntimeModelSelection {
-                model_key: model_key.clone(),
-                artifact_sha256: artifact_sha256.clone(),
-                feature_schema_sha256: feature_schema_sha256.clone(),
-            })
-            .is_ok_and(|model| model.feature_schema_version() == strategy.feature_schema_version)
-        }
-        Some(BtcDecisionStrategyConfig::BtcAsymmetricValueModel {
-            model_key,
-            artifact_sha256,
-            feature_schema_sha256,
-        }) if strategy.strategy_version == BTC_ASYMMETRIC_VALUE_MODEL_STRATEGY_VERSION => {
-            runtime_model(&RuntimeModelSelection {
-                model_key: model_key.clone(),
-                artifact_sha256: artifact_sha256.clone(),
-                feature_schema_sha256: feature_schema_sha256.clone(),
-            })
-            .is_ok_and(|model| {
-                model.is_asymmetric_value()
-                    && model.feature_schema_version() == strategy.feature_schema_version
-            })
-        }
-        _ => false,
-    };
-    if !directional_model_identity_valid {
+    Ok(resolve_btc_members(control)?.remove(0).1)
+}
+fn pin_router_config(config: &mut TradingProcessConfig) -> Result<(), HttpError> {
+    let control = config
+        .raw
+        .get_mut("btc_realtime_paper")
+        .ok_or_else(|| HttpError::bad_request("missing BTC process config"))?;
+    if control["schema_version"].as_str() != Some(ROUTER_PROCESS_SCHEMA_VERSION) {
         return Err(HttpError::bad_request(
-            "BTC strategy and feature schema versions are compiled identities and cannot be overridden",
+            "BTC process requires btc_realtime_paper_process_v4",
         ));
     }
-    Ok(strategy)
+    let selected = control
+        .pointer_mut("/strategy/decision_strategy")
+        .ok_or_else(|| HttpError::bad_request("missing router"))?;
+    let mut router: RouterDefinition = serde_json::from_value(selected.clone())
+        .map_err(|e| HttpError::bad_request(e.to_string()))?;
+    router
+        .resolve_pins()
+        .map_err(|e| HttpError::bad_request(e.to_string()))?;
+    *selected = serde_json::to_value(router).map_err(|e| HttpError::internal(e.to_string()))?;
+    Ok(())
 }
 
 fn validate_directional_model_entry_policy(
@@ -863,18 +745,13 @@ fn prepare_btc_start_definition_for_execution(
             }
         }
     }
-    let (pipeline_version, process_schema_version) = match control.schema_version.as_str() {
-        BTC_PROCESS_SCHEMA_VERSION => (BTC_PIPELINE_VERSION, BTC_PROCESS_SCHEMA_VERSION),
-        SELECTABLE_BTC_PROCESS_SCHEMA_VERSION => (
-            SELECTABLE_BTC_PIPELINE_VERSION,
-            SELECTABLE_BTC_PROCESS_SCHEMA_VERSION,
-        ),
-        schema_version => {
-            return Err(HttpError::internal(format!(
-                "resolved unsupported BTC process schema {schema_version}"
-            )))
-        }
-    };
+    if control.schema_version != ROUTER_PROCESS_SCHEMA_VERSION {
+        return Err(HttpError::bad_request("unsupported BTC process schema"));
+    }
+    let (pipeline_version, process_schema_version) = (
+        SELECTABLE_BTC_PIPELINE_VERSION,
+        ROUTER_PROCESS_SCHEMA_VERSION,
+    );
     let run_key = control.next_experiment_key;
     let preregistration_sha256 = control.preregistration_sha256;
     let execution_mode = match execution.mode.as_str() {
@@ -905,7 +782,7 @@ fn prepare_btc_start_definition_for_execution(
             "package_version": env!("CARGO_PKG_VERSION"),
             "compiled_source_identity": COMPILED_SOURCE_IDENTITY,
         },
-        "strategy": &strategy,
+        "strategy": &control.strategy,
         "playbook_version": "v1.2",
         "sources": &sources,
         "runtime": &runtime,
@@ -1047,17 +924,6 @@ fn resume_process_contract_projection(mut config: serde_json::Value) -> serde_js
         }
         raw.remove("playbook_version");
         raw.remove("sources");
-        if raw
-            .get("process_schema_version")
-            .and_then(serde_json::Value::as_str)
-            == Some(LEGACY_BTC_PROCESS_SCHEMA_VERSION)
-        {
-            raw.insert(
-                "process_schema_version".to_string(),
-                serde_json::Value::String(BTC_PROCESS_SCHEMA_VERSION.to_string()),
-            );
-            raw.remove("ml_shadow");
-        }
     }
     config
 }
@@ -1581,7 +1447,25 @@ impl BtcProcessManager {
                 "preregistration_sha256 must be a 64-character hexadecimal digest",
             ));
         }
-        let strategy = resolve_btc_strategy(&control)?;
+        let members = resolve_btc_members(&control)?;
+        for (_, member) in &members {
+            validate_directional_model_entry_policy(
+                member,
+                control.paper.directional_model_entry_policy,
+            )?;
+            validate_btc_entry_timing(member)?;
+            if process.effective_execution().mode == "live"
+                && definition_use != BtcDefinitionUse::InactiveDefinition
+            {
+                validate_btc_live_model_authorization(member)?;
+                validate_btc_live_execution_freshness(member)?;
+            }
+        }
+        let strategy = members
+            .into_iter()
+            .next()
+            .expect("validated nonempty router")
+            .1;
         if process.effective_execution().mode == "live"
             && definition_use != BtcDefinitionUse::InactiveDefinition
         {
@@ -2090,7 +1974,7 @@ impl BtcProcessManager {
             ) run ON true
             WHERE p.process_type = 'btc_5m'
               AND p.process_scope = 'realtime_paper'
-              AND p.config #>> '{raw,btc_realtime_paper,schema_version}' IN ($1, $2, $3)
+              AND p.config #>> '{raw,btc_realtime_paper,schema_version}' = $1
               AND p.enabled
               AND p.status IN ('starting','running','stopping')
               AND p.stopped_at IS NULL
@@ -2098,8 +1982,6 @@ impl BtcProcessManager {
             "#,
         )
         .bind(SELECTABLE_BTC_PROCESS_SCHEMA_VERSION)
-        .bind(BTC_PROCESS_SCHEMA_VERSION)
-        .bind(LEGACY_BTC_PROCESS_SCHEMA_VERSION)
         .fetch_all(&self.pool)
         .await
         .map_err(|error| HttpError::internal(error.to_string()))?;
@@ -3632,8 +3514,9 @@ impl ControlApi for RuntimeControl {
     async fn upsert_trading_process_by_key(
         &self,
         process_key: String,
-        request: control_http::UpsertTradingProcessByKeyRequest,
+        mut request: control_http::UpsertTradingProcessByKeyRequest,
     ) -> Result<TradingProcessResponse, HttpError> {
+        pin_router_config(&mut request.config)?;
         let key = process_key.trim();
         if key.is_empty() {
             return Err(HttpError::bad_request("trading process key is required"));
@@ -3815,8 +3698,11 @@ impl ControlApi for RuntimeControl {
     async fn update_trading_process(
         &self,
         process_id: uuid::Uuid,
-        request: control_http::UpdateTradingProcessRequest,
+        mut request: control_http::UpdateTradingProcessRequest,
     ) -> Result<TradingProcessResponse, HttpError> {
+        if let Some(config) = request.config.as_mut() {
+            pin_router_config(config)?;
+        }
         let name = request.name.as_deref().map(str::trim);
         if matches!(name, Some("")) {
             return Err(HttpError::bad_request(
@@ -4407,6 +4293,18 @@ mod lifecycle_tests {
         assert!(!should_resume_configured_live_entries(&process, &execution));
     }
 
+    fn router_fixture(mut control: BtcRealtimePaperControlConfig) -> BtcRealtimePaperControlConfig {
+        control.schema_version = ROUTER_PROCESS_SCHEMA_VERSION.into();
+        control.sources = polymarket_bot::market_data_stream::legacy_default_sources();
+        control.playbook_version = Some("v1.2".into());
+        let selection = control.strategy["decision_strategy"].clone();
+        control.strategy["decision_strategy"] = serde_json::json!({
+            "type":"unified_model_router","version":1,
+            "routing":{"mode":"first_qualified","tie_break":"array_order"},
+            "models":[{"member_id":"primary","selection":selection}]
+        });
+        control
+    }
     fn prepared_btc_definition_with_default_runtime() -> PreparedBtcStartDefinition {
         prepare_btc_start_definition(ResolvedBtcProcessDefinition {
             control: BtcRealtimePaperControlConfig {
@@ -4507,7 +4405,7 @@ mod lifecycle_tests {
     }
 
     #[test]
-    fn retired_v1_ml_field_is_accepted_only_for_durable_resume() {
+    fn retired_contract_is_rejected_for_durable_resume() {
         let legacy = serde_json::json!({
             "schema_version": LEGACY_BTC_PROCESS_SCHEMA_VERSION,
             "next_experiment_key": "btc-5m-paper-20260713-c",
@@ -4517,12 +4415,11 @@ mod lifecycle_tests {
         assert!(
             parse_btc_process_control(legacy.clone(), BtcDefinitionUse::ExplicitStart).is_err()
         );
-        let resumed = parse_btc_process_control(legacy, BtcDefinitionUse::DurableResume).unwrap();
-        assert_eq!(resumed.schema_version, BTC_PROCESS_SCHEMA_VERSION);
+        assert!(parse_btc_process_control(legacy, BtcDefinitionUse::DurableResume).is_err());
     }
 
     #[test]
-    fn selectable_v3_resolves_native_directional_model_as_the_only_strategy() {
+    fn router_v4_resolves_native_directional_model_as_the_only_strategy() {
         let control = BtcRealtimePaperControlConfig {
             schema_version: SELECTABLE_BTC_PROCESS_SCHEMA_VERSION.to_string(),
             strategy: serde_json::json!({
@@ -4541,7 +4438,7 @@ mod lifecycle_tests {
             ..BtcRealtimePaperControlConfig::default()
         };
 
-        let strategy = resolve_btc_strategy(&control).unwrap();
+        let strategy = resolve_btc_strategy(&router_fixture(control.clone())).unwrap();
 
         assert_eq!(
             strategy.strategy_version,
@@ -4559,7 +4456,7 @@ mod lifecycle_tests {
     }
 
     #[test]
-    fn selectable_v3_resolves_asymmetric_value_model_without_directional_entry_policy() {
+    fn router_v4_resolves_asymmetric_value_model_without_directional_entry_policy() {
         let mut control = BtcRealtimePaperControlConfig {
             schema_version: SELECTABLE_BTC_PROCESS_SCHEMA_VERSION.to_string(),
             strategy: serde_json::json!({
@@ -4589,7 +4486,7 @@ mod lifecycle_tests {
             ..BtcRealtimePaperControlConfig::default()
         };
 
-        let strategy = resolve_btc_strategy(&control).unwrap();
+        let strategy = resolve_btc_strategy(&router_fixture(control.clone())).unwrap();
 
         assert_eq!(
             strategy.strategy_version,
@@ -4614,7 +4511,7 @@ mod lifecycle_tests {
             {"feed": "polymarket_btc5m_clob_execution_v1", "maximum_age_ms": 2000},
             {"feed": "chainlink_btcusd_oracle_v1", "maximum_age_ms": 300000}
         ]);
-        let live_strategy = resolve_btc_strategy(&control).unwrap();
+        let live_strategy = resolve_btc_strategy(&router_fixture(control.clone())).unwrap();
         validate_btc_live_model_authorization(&live_strategy).unwrap();
     }
 
@@ -4665,7 +4562,7 @@ mod lifecycle_tests {
         };
         control.paper.directional_model_entry_policy =
             BtcDirectionalModelEntryPolicy::ExecuteDirectionalPrediction;
-        let strategy = resolve_btc_strategy(&control).unwrap();
+        let strategy = resolve_btc_strategy(&router_fixture(control.clone())).unwrap();
         validate_directional_model_entry_policy(
             &strategy,
             BtcDirectionalModelEntryPolicy::ExecuteDirectionalPrediction,
@@ -5124,12 +5021,7 @@ mod lifecycle_tests {
     fn btc_resume_preserves_frozen_parameters_across_service_rebuilds() {
         let durable = serde_json::json!({
             "raw": {
-                "process_schema_version": LEGACY_BTC_PROCESS_SCHEMA_VERSION,
-                "ml_shadow": {
-                    "ml_a_enabled": true,
-                    "ml_b_enabled": true,
-                    "execution_authority": false
-                },
+                "process_schema_version": ROUTER_PROCESS_SCHEMA_VERSION,
                 "build": {
                     "package_version": "0.1.0",
                     "compiled_source_identity": "tree-sha256:old"
@@ -5169,13 +5061,13 @@ mod lifecycle_tests {
     }
 
     #[test]
-    fn readme_btc_process_contract_matches_v2_parser() {
+    fn readme_btc_process_contract_matches_v4_parser() {
         let readme = include_str!("../../../README.md");
         let contract = readme
-            .split("<!-- btc-5m-process-v2:start -->")
+            .split("<!-- btc-5m-process-v4:start -->")
             .nth(1)
-            .and_then(|tail| tail.split("<!-- btc-5m-process-v2:end -->").next())
-            .expect("README must contain the BTC v2 process contract example")
+            .and_then(|tail| tail.split("<!-- btc-5m-process-v4:end -->").next())
+            .expect("README must contain the BTC v4 process contract example")
             .trim()
             .strip_prefix("```json")
             .and_then(|json| json.trim().strip_suffix("```"))
@@ -5208,6 +5100,58 @@ mod lifecycle_tests {
             last_error: None,
         };
         validate_btc_start_eligibility(&process).unwrap();
+    }
+    #[test]
+    #[ignore = "requires exported SSD model catalog via POLYMARKET_BTC_MODEL_DIR"]
+    fn bucket_router_templates_resolve_global_sources_and_pinned_members() {
+        if std::env::var_os("UMR_BUCKET_EXPORT_ROOT").is_none() {
+            return;
+        }
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("infra/processes");
+        for group in ["early-middle", "middle-late", "broad-coverage"] {
+            let value: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(
+                    directory.join(format!("btc-5m-bucket-router-{group}-q5-20260916.json")),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let mut config: TradingProcessConfig =
+                serde_json::from_value(value["config"].clone()).unwrap();
+            pin_router_config(&mut config).unwrap();
+            let mut control = parse_btc_process_control(
+                config.raw["btc_realtime_paper"].clone(),
+                BtcDefinitionUse::InactiveDefinition,
+            )
+            .unwrap();
+            let members = resolve_btc_members(&control).unwrap();
+            assert_eq!(members.len(), 5);
+            for (_, strategy) in &members {
+                strategy.validate().unwrap();
+                validate_btc_entry_timing(strategy).unwrap();
+                validate_directional_model_entry_policy(
+                    strategy,
+                    control.paper.directional_model_entry_policy,
+                )
+                .unwrap();
+                for binding in &strategy.unified_model.as_ref().unwrap().sources {
+                    assert!(control
+                        .sources
+                        .iter()
+                        .any(|source| source.key == binding.product));
+                }
+            }
+            // A shared stream owned by another process cannot satisfy this process's selector.
+            control
+                .sources
+                .retain(|s| s.key != "kraken_spot_btcusd_trades");
+            assert!(resolve_btc_members(&control).is_err());
+        }
     }
     #[test]
     fn umr_paper_templates_use_existing_process_resolution_and_start_contract() {

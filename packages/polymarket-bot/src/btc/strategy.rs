@@ -1406,8 +1406,8 @@ fn validate_config(config: &BtcStrategyConfig) -> Result<(), BtcRejectReason> {
                     (None, None) => true,
                     _ => false,
                 }) && model.feature_schema_version() == config.feature_schema_version
-                    && policy.minimum_seconds_after_open == config.min_seconds_after_open
-                    && 300 - policy.maximum_seconds_after_open == config.min_seconds_before_close
+                    && config.min_seconds_after_open >= policy.minimum_seconds_after_open
+                    && 300 - config.min_seconds_before_close <= policy.maximum_seconds_after_open
                     && policy.cadence_seconds > 0
                     && config.max_directional_feature_age_ms.is_none_or(|max_age| {
                         max_age > 0 && max_age <= policy.cadence_seconds * 1_000

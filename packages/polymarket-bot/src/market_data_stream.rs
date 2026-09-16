@@ -34,6 +34,9 @@ use proto::{
 };
 
 pub const CONTRACT_VERSION: u32 = 1;
+pub const PRODUCT_DIRECT_REFPRICE: &str = "chainlink_btcusd_reference_price";
+pub const PRODUCT_CANONICAL_CANDLES: &str = "chainlink_btcusd_one_minute_ohlc";
+pub const PRODUCT_KRAKEN_TRADES: &str = "kraken_spot_btcusd_trades";
 pub const PRODUCT_MARKETS: &str = "polymarket_btc_five_minute_market_contracts";
 pub const PRODUCT_BOOKS: &str = "polymarket_btc_five_minute_orderbooks";
 pub const PRODUCT_RESOLUTIONS: &str = "polymarket_btc_five_minute_resolutions";
@@ -121,7 +124,14 @@ const fn default_required() -> bool {
 
 impl SourceSelector {
     pub fn validate(&self) -> Result<()> {
-        if !DEFAULT_BTC_PRODUCTS.contains(&self.key.as_str()) {
+        if !DEFAULT_BTC_PRODUCTS.contains(&self.key.as_str())
+            && ![
+                PRODUCT_KRAKEN_TRADES,
+                PRODUCT_DIRECT_REFPRICE,
+                PRODUCT_CANONICAL_CANDLES,
+            ]
+            .contains(&self.key.as_str())
+        {
             bail!("unsupported BTC market-data source {}", self.key);
         }
         if self.contract_version != CONTRACT_VERSION {
@@ -139,6 +149,9 @@ impl SourceSelector {
     fn effective_maximum_age_ms(&self) -> u64 {
         self.maximum_age_ms.unwrap_or(match self.key.as_str() {
             PRODUCT_BOOKS | PRODUCT_CHAINLINK | PRODUCT_BINANCE_1S => 10_000,
+            PRODUCT_KRAKEN_TRADES => 2_000,
+            PRODUCT_DIRECT_REFPRICE => 5_000,
+            PRODUCT_CANONICAL_CANDLES => 120_000,
             PRODUCT_BINANCE_OPEN_INTEREST => 360_000,
             PRODUCT_TWAP | PRODUCT_POLYGON_ORACLE => 120_000,
             PRODUCT_MARKETS | PRODUCT_RESOLUTIONS => 0,
@@ -830,6 +843,76 @@ impl MarketDataStreamRuntime {
                             available_at: payload.published_at,
                         });
                 }
+            }
+            PRODUCT_DIRECT_REFPRICE => {
+                #[derive(Deserialize)]
+                struct Payload {
+                    source_timestamp: DateTime<Utc>,
+                    valid_from_timestamp: DateTime<Utc>,
+                    price: Decimal,
+                    bid: Decimal,
+                    ask: Decimal,
+                    provider_available_at: Option<DateTime<Utc>>,
+                    received_at: DateTime<Utc>,
+                }
+                let row: Payload = serde_json::from_slice(&event.payload_json)?;
+                if row.price <= Decimal::ZERO || row.bid > row.ask {
+                    bail!("invalid direct RefPrice");
+                }
+                self.state
+                    .write()
+                    .await
+                    .directional_external
+                    .merge_refprice(crate::btc::ChainlinkRefPricePoint {
+                        source_timestamp: row.source_timestamp,
+                        valid_from_timestamp: row.valid_from_timestamp,
+                        price: row.price,
+                        bid: row.bid,
+                        ask: row.ask,
+                        available_at: row.provider_available_at.unwrap_or(row.received_at),
+                    });
+            }
+            PRODUCT_CANONICAL_CANDLES => {
+                #[derive(Deserialize)]
+                struct Payload {
+                    open_timestamp: DateTime<Utc>,
+                    close_timestamp: DateTime<Utc>,
+                    received_at: DateTime<Utc>,
+                    open_price: Decimal,
+                    high_price: Decimal,
+                    low_price: Decimal,
+                    close_price: Decimal,
+                }
+                let row: Payload = serde_json::from_slice(&event.payload_json)?;
+                if row.close_timestamp > row.received_at
+                    || row.low_price <= Decimal::ZERO
+                    || row.high_price < row.low_price
+                {
+                    bail!("invalid canonical Chainlink candle");
+                }
+                self.state
+                    .write()
+                    .await
+                    .directional_external
+                    .merge_canonical_candle(
+                        crate::btc::directional_features::DirectionalChainlinkCandle {
+                            open_timestamp: row.open_timestamp,
+                            close_timestamp: row.close_timestamp,
+                            available_at: row.received_at,
+                            open_price: row.open_price,
+                            high_price: row.high_price,
+                            low_price: row.low_price,
+                            close_price: row.close_price,
+                        },
+                    );
+            }
+            PRODUCT_KRAKEN_TRADES => {
+                let payload = serde_json::from_slice(&event.payload_json)?;
+                let mut state = self.state.write().await;
+                if is_connection_baseline {
+                    state.kraken_trades.clear();
+                }
+                state.kraken_trades.observe(payload, Utc::now())?;
             }
             PRODUCT_BINANCE_1S => {
                 let raw_payload: serde_json::Value = serde_json::from_slice(&event.payload_json)?;

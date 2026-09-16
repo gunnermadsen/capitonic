@@ -410,17 +410,23 @@ fn mounted_catalog_and_paper_playbooks_have_compatible_contracts() {
         assert_eq!(process["enabled"], false);
         assert_eq!(process["config"]["execution"]["live_capital"], false);
         let control = &process["config"]["raw"]["btc_realtime_paper"];
-        let mut strategy_value =
+        let router: super::router::RouterDefinition =
+            serde_json::from_value(control["strategy"]["decision_strategy"].clone()).unwrap();
+        let mut overrides = control["strategy"].as_object().unwrap().clone();
+        overrides.remove("decision_strategy");
+        let mut base =
             serde_json::to_value(crate::btc::strategy::BtcStrategyConfig::default()).unwrap();
-        strategy_value
-            .as_object_mut()
+        base.as_object_mut().unwrap().extend(overrides);
+        let base = serde_json::from_value(base).unwrap();
+        let sources = control["sources"]
+            .as_array()
             .unwrap()
-            .extend(control["strategy"].as_object().unwrap().clone());
-        let mut strategy: crate::btc::strategy::BtcStrategyConfig =
-            serde_json::from_value(strategy_value).unwrap();
-        strategy.strategy_version =
-            crate::btc::directional_model::BTC_DIRECTIONAL_MODEL_STRATEGY_VERSION.into();
-        strategy.feature_schema_version = entry.feature_schema_version.clone().unwrap();
+            .iter()
+            .map(|source| source.as_str().or_else(|| source["key"].as_str()).unwrap())
+            .collect();
+        let members = router.compile_members(&base, &sources).unwrap();
+        assert_eq!(members.len(), 1);
+        let strategy = &members[0].1;
         strategy.validate().unwrap();
         let binding = strategy.unified_model.as_ref().unwrap();
         for source in &binding.sources {
@@ -510,4 +516,33 @@ fn observation_books_preserve_safety_and_recover_after_epoch_change() {
         lookup(&stale_history, &readiness, at),
         Err("stale_received_timestamp")
     );
+}
+
+#[test]
+#[ignore = "requires explicitly exported SSD tournament packages"]
+fn exported_bucket_packages_pass_registration_parity() {
+    let Ok(root) = std::env::var("UMR_BUCKET_EXPORT_ROOT") else {
+        return;
+    };
+    let root = PathBuf::from(root);
+    let records: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("manifests/models.json")).unwrap())
+            .unwrap();
+    let registry = RuntimeModelRegistry::new(root.join("models"));
+    let records = records.as_array().unwrap();
+    assert_eq!(records.len(), 9);
+    for row in records {
+        let selection = RuntimeModelSelection {
+            model_key: row["model_key"].as_str().unwrap().into(),
+            artifact_sha256: row["model_sha256"].as_str().unwrap().into(),
+            feature_schema_sha256: row["feature_schema_sha256"].as_str().unwrap().into(),
+        };
+        let model = registry
+            .load(&selection)
+            .unwrap_or_else(|error| panic!("{}: {error:#}", selection.model_key));
+        assert_eq!(
+            model.unified_adapter().unwrap().contract().adapter,
+            "time_bucket_specialist"
+        );
+    }
 }

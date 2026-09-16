@@ -47,6 +47,7 @@ pub struct DirectionalExternalSourceStatus {
 pub struct DirectionalExternalState {
     pub(crate) rtds: std::sync::Arc<super::rtds_repository::RtdsRepository>,
     pub refprice: VecDeque<ChainlinkRefPricePoint>,
+    pub canonical_candles: VecDeque<super::directional_features::DirectionalChainlinkCandle>,
     pub oracle: VecDeque<PolygonOraclePoint>,
     pub open_interest: VecDeque<BinanceOpenInterestPoint>,
     pub source_status: BTreeMap<&'static str, DirectionalExternalSourceStatus>,
@@ -67,6 +68,47 @@ impl DirectionalExternalState {
             self.record_success("chainlink_mid", tick.received_at);
         }
         Ok(())
+    }
+
+    pub(crate) fn merge_refprice(&mut self, point: ChainlinkRefPricePoint) {
+        if self
+            .refprice
+            .back()
+            .is_some_and(|last| point.source_timestamp < last.source_timestamp)
+        {
+            return;
+        }
+        if self.refprice.back().is_some_and(|last| {
+            point.source_timestamp == last.source_timestamp
+                && point.price == last.price
+                && point.bid == last.bid
+                && point.ask == last.ask
+        }) {
+            return;
+        }
+        self.refprice.push_back(point);
+        while self.refprice.len() > 2048 {
+            self.refprice.pop_front();
+        }
+    }
+    pub(crate) fn merge_canonical_candle(
+        &mut self,
+        candle: super::directional_features::DirectionalChainlinkCandle,
+    ) {
+        if self
+            .canonical_candles
+            .iter()
+            .any(|row| row.open_timestamp == candle.open_timestamp)
+        {
+            return;
+        }
+        self.canonical_candles.push_back(candle);
+        self.canonical_candles
+            .make_contiguous()
+            .sort_by_key(|row| row.open_timestamp);
+        while self.canonical_candles.len() > 64 {
+            self.canonical_candles.pop_front();
+        }
     }
 
     pub fn polygon_oracle_age_seconds(&self, at: DateTime<Utc>) -> Option<i64> {

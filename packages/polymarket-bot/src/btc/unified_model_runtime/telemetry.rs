@@ -39,6 +39,8 @@ pub struct PredictionRecord {
     pub contract_version: &'static str,
     pub process_id: Uuid,
     pub model: RuntimeModelSelection,
+    pub member_id: Option<String>,
+    pub router_disposition: Option<String>,
     pub run_id: Option<Uuid>,
     pub config_hash: String,
     pub execution_mode: String,
@@ -54,8 +56,18 @@ struct Pending {
     market: String,
     record: PredictionRecord,
 }
+#[derive(Clone)]
+struct RouterMember {
+    identity: RuntimeModelSelection,
+    bucket_start: i64,
+    bucket_end: i64,
+    active: bool,
+    ready: bool,
+    counters: BTreeMap<&'static str, u64>,
+}
 #[derive(Clone, Default)]
 struct Process {
+    members: BTreeMap<String, RouterMember>,
     identity: Option<RuntimeModelSelection>,
     risk_identity: Option<RiskStrategySelection>,
     run_id: Option<Uuid>,
@@ -243,6 +255,35 @@ pub fn gauge(id: Uuid, name: &'static str, value: f64) {
         });
     }
 }
+pub fn member_active(id: Uuid, member_id: &str, active: bool) {
+    update(id, |p| {
+        if let Some(member) = p.members.get_mut(member_id) {
+            member.active = active;
+            if !active {
+                member.ready = false;
+            }
+        }
+        p.ready = p
+            .members
+            .values()
+            .any(|member| member.active && member.ready);
+    });
+}
+pub fn member_readiness(id: Uuid, member_id: &str, ready: bool) {
+    update(id, |p| {
+        if let Some(member) = p.members.get_mut(member_id) {
+            if member.ready != ready {
+                tracing::info!(event="umr_member_readiness_changed",process_id=%id,member_id,ready,"UMR member readiness changed");
+            }
+            member.ready = ready;
+        }
+        p.ready = p
+            .members
+            .values()
+            .any(|member| member.active && member.ready);
+    });
+}
+
 pub fn readiness(id: Uuid, value: bool) {
     update(id, |p| {
         if p.ready != value {
@@ -286,6 +327,8 @@ pub fn prediction(
             contract_version: EVALUATION_VERSION,
             process_id: id,
             model: model.clone(),
+            member_id: None,
+            router_disposition: None,
             run_id: p.run_id,
             config_hash: p.config_hash.clone(),
             execution_mode: p.mode.clone(),
@@ -380,6 +423,62 @@ pub fn prediction(
             p.records.pop_front();
         }
         p.latest = Some(record);
+    });
+}
+pub fn register_member(
+    id: Uuid,
+    member: &str,
+    identity: &RuntimeModelSelection,
+    start: i64,
+    end: i64,
+) {
+    update(id, |p| {
+        if p.members.len() < 32 {
+            p.members.insert(
+                member.into(),
+                RouterMember {
+                    identity: identity.clone(),
+                    bucket_start: start,
+                    bucket_end: end,
+                    active: false,
+                    ready: false,
+                    counters: [
+                        "opportunities",
+                        "inferences",
+                        "qualified",
+                        "selected",
+                        "not_selected",
+                    ]
+                    .into_iter()
+                    .map(|k| (k, 0))
+                    .collect(),
+                },
+            );
+        }
+    });
+}
+pub fn member_event(id: Uuid, member: &str, event: &'static str) {
+    update(id, |p| {
+        if let Some(m) = p.members.get_mut(member) {
+            if let Some(n) = m.counters.get_mut(event) {
+                *n += 1;
+            }
+        }
+    });
+}
+pub fn attribute_member(id: Uuid, snapshot: Uuid, member: &str, disposition: &str) {
+    update(id, |p| {
+        for record in p
+            .records
+            .iter_mut()
+            .chain(p.latest.iter_mut())
+            .chain(p.pending.iter_mut().map(|v| &mut v.record))
+        {
+            if record.feature_snapshot_id == snapshot {
+                record.member_id = Some(member.into());
+                record.router_disposition = Some(disposition.into());
+            }
+        }
     });
 }
 pub fn prediction_record(id: Uuid, snapshot_id: Uuid) -> Option<PredictionRecord> {
@@ -513,6 +612,7 @@ pub fn prometheus_metrics() -> String {
                 *id,
                 Process {
                     identity: p.identity.clone(),
+                    members: p.members.clone(),
                     risk_identity: p.risk_identity.clone(),
                     run_id: p.run_id,
                     config_hash: p.config_hash.clone(),
@@ -552,6 +652,25 @@ pub fn prometheus_metrics() -> String {
                 let _=writeln!(out,"# HELP polymarket_umr_{name} UMR process {name}; session-scoped unless stated otherwise.\n# TYPE polymarket_umr_{name} gauge");
             }
             let _ = writeln!(out, "polymarket_umr_{name}{{{labels}}} {value}");
+        }
+        for (member_id, member) in &p.members {
+            if declared.insert("router_member_info".into()) {
+                out.push_str("# HELP polymarket_umr_router_member_info Immutable router member and bucket identity.\n# TYPE polymarket_umr_router_member_info gauge\n");
+                out.push_str("# HELP polymarket_umr_router_member_events_total Member opportunity and arbitration transitions.\n# TYPE polymarket_umr_router_member_events_total counter\n");
+            }
+            let _=writeln!(out,"polymarket_umr_router_member_info{{{labels},member_id=\"{}\",model_key=\"{}\",artifact_sha256=\"{}\",bucket_start=\"{}\",bucket_end=\"{}\"}} 1",escaped(member_id),escaped(&member.identity.model_key),escaped(&member.identity.artifact_sha256),member.bucket_start,member.bucket_end);
+            if declared.insert("router_member_ready".into()) {
+                out.push_str("# HELP polymarket_umr_router_member_ready Active member inference readiness.\n# TYPE polymarket_umr_router_member_ready gauge\n");
+            }
+            let _ = writeln!(
+                out,
+                "polymarket_umr_router_member_ready{{{labels},member_id=\"{}\"}} {}",
+                escaped(member_id),
+                u8::from(member.active && member.ready)
+            );
+            for (event, count) in &member.counters {
+                let _=writeln!(out,"polymarket_umr_router_member_events_total{{{labels},member_id=\"{}\",event=\"{}\"}} {count}",escaped(member_id),event);
+            }
         }
         if let Some(m) = p.identity {
             if declared.insert("model_info".into()) {
@@ -604,4 +723,29 @@ pub fn prometheus_metrics() -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod router_tests {
+    use super::*;
+    #[test]
+    fn an_unready_member_does_not_poison_a_ready_member() {
+        let id = Uuid::new_v4();
+        let identity = RuntimeModelSelection {
+            model_key: "test".into(),
+            artifact_sha256: "a".repeat(64),
+            feature_schema_sha256: "b".repeat(64),
+        };
+        for name in ["first", "second"] {
+            register_member(id, name, &identity, 60, 89);
+            member_active(id, name, true);
+        }
+        member_readiness(id, "first", true);
+        member_readiness(id, "second", false);
+        assert!(registry().lock().unwrap().processes[&id].ready);
+        member_active(id, "first", false);
+        assert!(!registry().lock().unwrap().processes[&id].ready);
+        member_readiness(id, "second", true);
+        assert!(registry().lock().unwrap().processes[&id].ready);
+    }
 }

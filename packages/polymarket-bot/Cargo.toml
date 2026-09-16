@@ -36,7 +36,7 @@ polymarket_client_sdk_v2 = { version = "0.6.0-canary.1", features = ["clob", "ws
 rust_decimal = { version = "1.36", features = ["serde-with-str"] }
 rust_decimal_macros = "1.36"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
 sha2 = "0.10"
 sha3 = "0.11"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "chrono", "json", "uuid", "rust_decimal", "macros"] }
