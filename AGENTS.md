@@ -189,6 +189,45 @@ Think of Capitonic as a vision to generate income through systems with automatio
 - Keep all implementation, tests, generated evidence, and related fixes for the feature inside its assigned worktree.
 - Before creating a worktree, run `git worktree list` and confirm that no existing worktree already covers the feature domain.
 
+## Worktree Environment Initialization
+
+- Immediately after creating any worktree, symlink every top-level runtime `.env` file from the main worktree into the new worktree. The main worktree remains the single source of truth; never copy secret values or create independent worktree environment files.
+- Exclude `.env.example` and other `*.example` templates. Do not run Docker Compose, application commands, tests that require runtime credentials, or deployment commands from the new worktree until the links have been created and verified.
+- Run the following from the main worktree, replacing `<feature-domain>` with the worktree directory name:
+
+```bash
+set -eu
+main_worktree="$(git rev-parse --show-toplevel)"
+worktree_path="$main_worktree/worktress/<feature-domain>"
+
+for env_file in "$main_worktree"/.env "$main_worktree"/.env.*; do
+  [ -f "$env_file" ] || continue
+  case "$env_file" in
+    *.example) continue ;;
+  esac
+  ln -s "$env_file" "$worktree_path/$(basename "$env_file")"
+done
+```
+
+- Verify every runtime environment file resolves to the main worktree before using the worktree:
+
+```bash
+set -eu
+main_worktree="$(git rev-parse --show-toplevel)"
+worktree_path="$main_worktree/worktress/<feature-domain>"
+
+for env_file in "$main_worktree"/.env "$main_worktree"/.env.*; do
+  [ -f "$env_file" ] || continue
+  case "$env_file" in
+    *.example) continue ;;
+  esac
+  link="$worktree_path/$(basename "$env_file")"
+  [ -L "$link" ]
+  [ "$(readlink "$link")" = "$env_file" ]
+  [ -r "$link" ]
+done
+```
+
 ## Worktree Data Artifact Storage
 
 - Before starting training, backtesting, or a data experiment in a worktree, create its run directory under `/Volumes/docker-data/polymarket-bot/artifacts/<activity>/<domain>/<workflow>/<run-id>/`, where `<activity>` is `training`, `backtests`, or `data-tests`, names use lowercase kebab-case, and `<run-id>` is a UTC `YYYYMMDDTHHMMSSZ` timestamp.
