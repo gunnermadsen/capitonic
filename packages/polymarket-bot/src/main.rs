@@ -337,11 +337,7 @@ fn resolve_legacy_btc_strategy(
             "strategy.decision_strategy requires {SELECTABLE_BTC_PROCESS_SCHEMA_VERSION}"
         )));
     }
-    for key in [
-        "strategy_version",
-        "feature_schema_version",
-        "unified_model",
-    ] {
+    for key in ["strategy_version", "feature_schema_version"] {
         if selectable && overrides.contains_key(key) {
             return Err(HttpError::bad_request(format!(
                 "strategy.{key} is a compiled identity"
@@ -4634,6 +4630,65 @@ mod lifecycle_tests {
             Some(BtcDecisionStrategyConfig::BtcDirectionalModel { .. })
         ));
         assert_eq!(strategy.max_directional_feature_age_ms, Some(5_000));
+    }
+
+    #[test]
+    fn selectable_v3_resume_accepts_the_frozen_unified_model_binding() {
+        let mut control = BtcRealtimePaperControlConfig {
+            schema_version: SELECTABLE_BTC_PROCESS_SCHEMA_VERSION.to_string(),
+            strategy: serde_json::json!({
+                "decision_strategy": {
+                    "type": "btc_directional_model",
+                    "model_key": "btc-5m-official-high-precision-loss-veto-umr-20260902",
+                    "artifact_sha256":
+                        "28b0a12d847e32e85dbbca4049f4d3b0f279d9627c7570115c331fc937abe6a4",
+                    "feature_schema_sha256":
+                        "1dc570456cbbf20373b4f5d142fb9dd7c0e30a55032211497c5ed7070ab0fc95"
+                },
+                "target_size": "5",
+                "min_seconds_after_open": 60,
+                "min_seconds_before_close": 211,
+                "max_directional_feature_age_ms": 5000,
+                "min_entry_price": "0.01",
+                "max_entry_price": "0.99"
+            }),
+            ..BtcRealtimePaperControlConfig::default()
+        };
+        let model = runtime_model(&RuntimeModelSelection {
+            model_key: "btc-5m-official-high-precision-loss-veto-umr-20260902".into(),
+            artifact_sha256: "28b0a12d847e32e85dbbca4049f4d3b0f279d9627c7570115c331fc937abe6a4"
+                .into(),
+            feature_schema_sha256:
+                "1dc570456cbbf20373b4f5d142fb9dd7c0e30a55032211497c5ed7070ab0fc95".into(),
+        })
+        .unwrap();
+        let adapter = model.unified_adapter().unwrap();
+        let binding = polymarket_bot::btc::unified_model_runtime::contract::ProcessBinding {
+            version: polymarket_bot::btc::unified_model_runtime::contract::CONTRACT_VERSION.into(),
+            sources: adapter
+                .contract()
+                .inputs
+                .iter()
+                .filter(|input| {
+                    adapter
+                        .supported_products()
+                        .contains(&input.product.as_str())
+                })
+                .map(
+                    |input| polymarket_bot::btc::unified_model_runtime::contract::SourceBinding {
+                        slot: input.slot.clone(),
+                        product: input.product.clone(),
+                        semantics: input.semantics.clone(),
+                    },
+                )
+                .collect(),
+            policy: adapter.policy(),
+        };
+        binding.validate(adapter, 5.0).unwrap();
+        control.strategy["unified_model"] = serde_json::to_value(&binding).unwrap();
+
+        let resolved = resolve_legacy_btc_strategy(&control).unwrap();
+        assert_eq!(resolved.unified_model.as_ref(), Some(&binding));
     }
 
     #[test]
