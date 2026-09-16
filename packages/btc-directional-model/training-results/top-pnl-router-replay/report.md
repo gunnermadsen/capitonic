@@ -38,4 +38,4 @@ First qualifying entry per market. Same-second conflicts use frozen PnL rank. Al
 - Recorded VWAP ladder fillability is assumed. Queue position, live latency, capital constraints and competing portfolio positions are not newly simulated. Net PnL includes original fees and reserve; stress adds original per-share slippage.
 - No model tag, runtime export, database mutation, image build, deployment or merge performed.
 
-Detailed inputs and identities: [router-manifest.json](router-manifest.json). Complete metrics and parity checks: [metrics.json](metrics.json). Trade-level evidence is stored in the accompanying Parquet files.
+Detailed inputs and identities: [router-manifest.json](router-manifest.json). Complete metrics and parity checks: [metrics.json](metrics.json). The external trade-level and prediction evidence is mapped in [parquet-archive.md](parquet-archive.md).
