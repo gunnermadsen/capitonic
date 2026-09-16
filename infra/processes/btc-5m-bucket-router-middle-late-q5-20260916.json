@@ -147,7 +147,8 @@
             }
           ]
         },
-        "next_experiment_key": "btc-5m-bucket-router-middle-late-q5-20260916-run"
+        "next_experiment_key": "btc-5m-bucket-router-middle-late-q5-20260916-run",
+        "preregistration_sha256": "e4137ce64160758e9067231dfa6a0e283dfb60ef10a96ae410cf0cac77f84ad4"
       }
     }
   },

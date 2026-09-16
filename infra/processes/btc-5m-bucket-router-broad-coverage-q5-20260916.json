@@ -147,7 +147,8 @@
             }
           ]
         },
-        "next_experiment_key": "btc-5m-bucket-router-broad-coverage-q5-20260916-run"
+        "next_experiment_key": "btc-5m-bucket-router-broad-coverage-q5-20260916-run",
+        "preregistration_sha256": "3fc748ef8f67b744d8b7f14a5b97e3fc2f715d460276e5f8e1d4680f9c355592"
       }
     }
   },
