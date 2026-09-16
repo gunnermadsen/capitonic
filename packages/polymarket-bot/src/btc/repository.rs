@@ -253,6 +253,8 @@ pub struct BtcSettlementRecord {
     pub settlement_id: Uuid,
     pub execution_mode: String,
     pub order_id: String,
+    pub member_id: Option<String>,
+    pub model_attribution: Option<serde_json::Value>,
     pub market_id: String,
     pub token_id: String,
     pub fill_ids: serde_json::Value,
@@ -793,19 +795,25 @@ SELECT
 "#;
 
 const LOAD_PENDING_SETTLEMENTS_SQL: &str = r#"
-SELECT settlement_id, run_id, process_id, execution_mode, order_id, market_id, token_id,
-  fill_ids,
-  official_outcome, official_winning_token_id,
-  official_resolution_received_at, official_resolution_source,
-  filled_size, entry_notional, entry_fees, payout, net_pnl,
-  credit_status, credited_at, credit_attempts, credit_evidence,
-  created_at, updated_at
-FROM polymarket.btc_paper_settlement_ledger
-WHERE process_id = $1
-  AND execution_mode = $3
-  AND ($3 = 'live' OR run_id = $2)
-  AND credit_status = 'pending'
-ORDER BY official_resolution_received_at, order_id, settlement_id
+SELECT ledger.settlement_id, ledger.run_id, ledger.process_id, ledger.execution_mode,
+  ledger.order_id,
+  NULLIF(order_record.raw_payload #>> '{request,metadata,router,member_id}', '') AS member_id,
+  order_record.raw_payload #> '{request,metadata,router}' AS model_attribution,
+  ledger.market_id, ledger.token_id, ledger.fill_ids,
+  ledger.official_outcome, ledger.official_winning_token_id,
+  ledger.official_resolution_received_at, ledger.official_resolution_source,
+  ledger.filled_size, ledger.entry_notional, ledger.entry_fees, ledger.payout, ledger.net_pnl,
+  ledger.credit_status, ledger.credited_at, ledger.credit_attempts, ledger.credit_evidence,
+  ledger.created_at, ledger.updated_at
+FROM polymarket.btc_paper_settlement_ledger ledger
+LEFT JOIN polymarket.orders order_record
+  ON order_record.process_id = ledger.process_id
+ AND order_record.order_id = ledger.order_id
+WHERE ledger.process_id = $1
+  AND ledger.execution_mode = $3
+  AND ($3 = 'live' OR ledger.run_id = $2)
+  AND ledger.credit_status = 'pending'
+ORDER BY ledger.official_resolution_received_at, ledger.order_id, ledger.settlement_id
 "#;
 
 const MARK_SETTLEMENT_RECOGNIZED_SQL: &str = r#"
@@ -3047,6 +3055,8 @@ fn live_zero_payout_settlement_evidence(
         "process_id": record.process_id,
         "run_id": record.run_id,
         "order_id": record.order_id,
+        "model_member_id": record.member_id,
+        "model_attribution": record.model_attribution,
         "market_id": record.market_id,
         "token_id": record.token_id,
         "fill_ids": record.fill_ids,
@@ -4052,7 +4062,7 @@ mod tests {
         let pending = LOAD_PENDING_SETTLEMENTS_SQL.to_ascii_lowercase();
         assert!(pending.contains("process_id = $1"));
         assert!(pending.contains("execution_mode = $3"));
-        assert!(pending.contains("$3 = 'live' or run_id = $2"));
+        assert!(pending.contains("$3 = 'live' or ledger.run_id = $2"));
         assert!(!pending.contains("experiment_id"));
 
         let recognized = MARK_SETTLEMENT_RECOGNIZED_SQL.to_ascii_lowercase();
@@ -4406,6 +4416,8 @@ mod tests {
             settlement_id: Uuid::from_u128(1),
             execution_mode: "paper".to_string(),
             order_id: "order".to_string(),
+            member_id: Some("legacy_primary".to_string()),
+            model_attribution: Some(serde_json::json!({"member_id":"legacy_primary"})),
             market_id: "market".to_string(),
             token_id: "up-token".to_string(),
             fill_ids: serde_json::json!([Uuid::from_u128(4)]),
@@ -4425,6 +4437,13 @@ mod tests {
             created_at: at,
             updated_at: at,
         }
+    }
+
+    #[test]
+    fn pending_settlement_load_recovers_durable_model_attribution() {
+        assert!(LOAD_PENDING_SETTLEMENTS_SQL.contains("{request,metadata,router,member_id}"));
+        assert!(LOAD_PENDING_SETTLEMENTS_SQL.contains("AS model_attribution"));
+        assert!(LOAD_PENDING_SETTLEMENTS_SQL.contains("polymarket.orders"));
     }
 
     #[test]

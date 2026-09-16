@@ -278,6 +278,7 @@ fn telemetry_retains_decision_identity_and_resolves_once() {
         feature_schema_sha256: "b".repeat(64),
     };
     telemetry::register(id, run, "test-config", "paper", Some(&selection));
+    telemetry::register_member(id, "legacy_primary", &selection, 60, 89);
     let mut snapshots = Vec::new();
     for index in 0..3 {
         let snapshot = Uuid::new_v4();
@@ -299,6 +300,7 @@ fn telemetry_retains_decision_identity_and_resolves_once() {
             0.001,
             None,
         );
+        telemetry::attribute_member(id, snapshot, "legacy_primary", "selected");
     }
     assert_eq!(
         telemetry::prediction_record(id, snapshots[0])
@@ -318,6 +320,12 @@ fn telemetry_retains_decision_identity_and_resolves_once() {
     assert_eq!(scoped(&first), scoped(&telemetry::prometheus_metrics()));
     assert!(first.contains(&format!(
         "polymarket_umr_brier_count{{process_id=\"{id}\"}} 3"
+    )));
+    assert!(first.contains(&format!(
+        "polymarket_umr_model_member_brier_count{{process_id=\"{id}\",member_id=\"legacy_primary\"}} 3"
+    )));
+    assert!(first.contains(&format!(
+        "polymarket_umr_model_member_prediction_outcomes_total{{process_id=\"{id}\",member_id=\"legacy_primary\",outcome=\"correct\"}} 3"
     )));
     assert!(!first.contains("market_id="));
 }

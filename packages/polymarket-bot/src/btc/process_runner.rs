@@ -1048,6 +1048,12 @@ impl BtcProcessRunner {
             &self.router_members[selected].member_id,
             "selected",
         );
+        umr_telemetry::member_decision_second(
+            self.config.process_id,
+            &self.router_members[selected].member_id,
+            (proposal.decision.evaluated_at - market.window_start).num_milliseconds() as f64
+                / 1_000.0,
+        );
         umr_telemetry::attribute_member(
             self.config.process_id,
             proposal.snapshot.snapshot_id,
@@ -1492,6 +1498,16 @@ impl BtcProcessRunner {
             );
         }
         if directional_model_feature_error.is_some() {
+            if let Some(error) = directional_model_feature_error.as_ref() {
+                umr_telemetry::member_feature_failure(
+                    self.config.process_id,
+                    &member.member_id,
+                    error
+                        .get("detail")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("missing_source_data"),
+                );
+            }
             decision.action = BtcDecisionAction::NoTrade;
             decision.reject_reason = Some(BtcRejectReason::DirectionalFeaturesUnavailable);
             decision.fair_value = None;
@@ -1502,6 +1518,16 @@ impl BtcProcessRunner {
         }
         if decision.prediction.is_some() {
             umr_telemetry::member_event(self.config.process_id, &member.member_id, "inferences");
+            let feature_as_of = snapshot
+                .directional_model
+                .as_ref()
+                .map(|features| features.feature_as_of)
+                .unwrap_or(snapshot.observed_at);
+            umr_telemetry::member_feature_second(
+                self.config.process_id,
+                &member.member_id,
+                (feature_as_of - snapshot.window_start).num_milliseconds() as f64 / 1_000.0,
+            );
             umr_telemetry::attribute_member(
                 self.config.process_id,
                 snapshot.snapshot_id,
@@ -1704,7 +1730,25 @@ impl BtcProcessRunner {
             self.config.run_id,
             fee_rate,
         )?;
-        order_metadata["router"] = serde_json::json!({"member_id":member.member_id,"mode":"first_qualified","tie_break":"array_order"});
+        let member_identity = directional_model_selection(&member.strategy)
+            .context("selected member is missing immutable model identity")?;
+        let feature_as_of = snapshot
+            .directional_model
+            .as_ref()
+            .map(|features| features.feature_as_of)
+            .unwrap_or(snapshot.observed_at);
+        order_metadata["router"] = serde_json::json!({
+            "member_id": member.member_id,
+            "model_key": member_identity.model_key,
+            "artifact_sha256": member_identity.artifact_sha256,
+            "feature_schema_sha256": member_identity.feature_schema_sha256,
+            "bucket_start": member.strategy.min_seconds_after_open,
+            "bucket_end": 300 - member.strategy.min_seconds_before_close,
+            "feature_second": (feature_as_of - snapshot.window_start).num_milliseconds() as f64 / 1_000.0,
+            "decision_second": (decision.evaluated_at - snapshot.window_start).num_milliseconds() as f64 / 1_000.0,
+            "mode": "first_qualified",
+            "tie_break": "array_order"
+        });
         let client_order_id = Uuid::new_v5(
             &Uuid::NAMESPACE_URL,
             format!("btc-paper-order:{}", intent.intent_id).as_bytes(),
@@ -1834,6 +1878,15 @@ impl BtcProcessRunner {
                     (observed_at - market.window_start).num_milliseconds() as f64 / 1000.0,
                     quoted,
                 );
+                umr_telemetry::member_fill(
+                    self.config.process_id,
+                    &member.member_id,
+                    price,
+                    size,
+                    fee,
+                    (observed_at - market.window_start).num_milliseconds() as f64 / 1_000.0,
+                    quoted,
+                );
             }
         }
         let primary_order = report
@@ -1844,6 +1897,7 @@ impl BtcProcessRunner {
         let filled = primary_state == OrderState::Filled;
         let execution_status = decision_execution_status(primary_state);
         umr_telemetry::event(self.config.process_id, "execution", execution_status);
+        umr_telemetry::member_order(self.config.process_id, &member.member_id, execution_status);
         if filled {
             umr_telemetry::gauge(
                 self.config.process_id,

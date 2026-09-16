@@ -5212,6 +5212,143 @@
           "sort": "desc"
         }
       }
+    },
+    {
+      "id": 88,
+      "title": "Per-model performance",
+      "type": "row",
+      "gridPos": { "x": 0, "y": 337, "w": 24, "h": 1 }
+    },
+    {
+      "id": 89,
+      "title": "Per-model realized net PnL",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Session-scoped realized net PnL attributed to the selected model member at settlement.",
+      "gridPos": { "x": 0, "y": 338, "w": 12, "h": 8 },
+      "targets": [{
+        "refId": "A",
+        "expr": "(polymarket_umr_model_member_realized_pnl_usd{process_id=~\"$process\"} and on(process_id,member_id) (sum by(process_id,member_id)(polymarket_umr_model_member_trade_outcomes_total{process_id=~\"$process\"}) > 0)) * on(process_id,member_id) group_left(model_key,bucket_start,bucket_end) polymarket_umr_model_member_info{process_id=~\"$process\"}",
+        "legendFormat": "{{model_key}} · {{member_id}} · {{bucket_start}}-{{bucket_end}}s",
+        "range": true
+      }],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 4 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 90,
+      "title": "Per-model return on settled capital",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "100 × realized net PnL / settled entry notional. Interpret only with the settled-trade sample count.",
+      "gridPos": { "x": 12, "y": 338, "w": 12, "h": 8 },
+      "targets": [{
+        "refId": "A",
+        "expr": "((100 * polymarket_umr_model_member_realized_pnl_usd{process_id=~\"$process\"} / polymarket_umr_model_member_settled_entry_notional_usd{process_id=~\"$process\"}) and on(process_id,member_id) (polymarket_umr_model_member_settled_entry_notional_usd{process_id=~\"$process\"} > 0)) * on(process_id,member_id) group_left(model_key) polymarket_umr_model_member_info{process_id=~\"$process\"}",
+        "legendFormat": "{{model_key}} · {{member_id}}",
+        "range": true
+      }],
+      "fieldConfig": { "defaults": { "unit": "percent", "decimals": 2 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 91,
+      "title": "Per-model prediction quality",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Resolved-prediction Brier score for every evaluated member, including members not selected for execution.",
+      "gridPos": { "x": 0, "y": 346, "w": 12, "h": 8 },
+      "targets": [{
+        "refId": "A",
+        "expr": "((polymarket_umr_model_member_brier_sum{process_id=~\"$process\"} / polymarket_umr_model_member_brier_count{process_id=~\"$process\"}) and on(process_id,member_id) (polymarket_umr_model_member_brier_count{process_id=~\"$process\"} > 0)) * on(process_id,member_id) group_left(model_key) polymarket_umr_model_member_info{process_id=~\"$process\"}",
+        "legendFormat": "{{model_key}} · {{member_id}}",
+        "range": true
+      }],
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 4, "min": 0, "max": 1 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 92,
+      "title": "Per-model settled trade outcomes",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Settled win/loss/push totals attributed only to the selected and executed member.",
+      "gridPos": { "x": 12, "y": 346, "w": 12, "h": 8 },
+      "targets": [{
+        "refId": "A",
+        "expr": "polymarket_umr_model_member_trade_outcomes_total{process_id=~\"$process\"} * on(process_id,member_id) group_left(model_key) polymarket_umr_model_member_info{process_id=~\"$process\"}",
+        "legendFormat": "{{model_key}} · {{member_id}} · {{outcome}}",
+        "range": true
+      }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 93,
+      "title": "Per-model execution economics",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Fill fees and quote-to-fill slippage attributed to the selected member.",
+      "gridPos": { "x": 0, "y": 354, "w": 24, "h": 8 },
+      "targets": [
+        { "refId": "A", "expr": "polymarket_umr_model_member_fill_fees_usd{process_id=~\"$process\"} * on(process_id,member_id) group_left(model_key) polymarket_umr_model_member_info{process_id=~\"$process\"}", "legendFormat": "{{model_key}} · fees", "range": true },
+        { "refId": "B", "expr": "polymarket_umr_model_member_slippage_notional_usd{process_id=~\"$process\"} * on(process_id,member_id) group_left(model_key) polymarket_umr_model_member_info{process_id=~\"$process\"}", "legendFormat": "{{model_key}} · slippage", "range": true }
+      ],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 4 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 94,
+      "title": "Model bucket assurance",
+      "type": "row",
+      "gridPos": { "x": 0, "y": 362, "w": 24, "h": 1 }
+    },
+    {
+      "id": 95,
+      "title": "Actual feature second versus claimed bucket",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Actual inference feature second alongside the immutable claimed start/end boundaries for each model member.",
+      "gridPos": { "x": 0, "y": 363, "w": 24, "h": 8 },
+      "targets": [
+        { "refId": "A", "expr": "(polymarket_umr_model_member_last_feature_second{process_id=~\"$process\"} and on(process_id,member_id) (polymarket_umr_model_member_feature_second_count{process_id=~\"$process\"} > 0)) * on(process_id,member_id) group_left(model_key) polymarket_umr_model_member_info{process_id=~\"$process\"}", "legendFormat": "{{model_key}} · actual", "range": true },
+        { "refId": "B", "expr": "polymarket_umr_model_member_bucket_start_seconds{process_id=~\"$process\"} * on(process_id,member_id) group_left(model_key) polymarket_umr_model_member_info{process_id=~\"$process\"}", "legendFormat": "{{model_key}} · bucket start", "range": true },
+        { "refId": "C", "expr": "polymarket_umr_model_member_bucket_end_seconds{process_id=~\"$process\"} * on(process_id,member_id) group_left(model_key) polymarket_umr_model_member_info{process_id=~\"$process\"}", "legendFormat": "{{model_key}} · bucket end", "range": true }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 1 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 96,
+      "title": "Bucket compliance outcomes",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Inference evaluations classified as inside, early, or late relative to the immutable model bucket.",
+      "gridPos": { "x": 0, "y": 371, "w": 12, "h": 8 },
+      "targets": [{
+        "refId": "A",
+        "expr": "sum by(process_id,member_id,result)(rate(polymarket_umr_model_member_bucket_evaluations_total{process_id=~\"$process\"}[$__rate_interval])) * on(process_id,member_id) group_left(model_key) polymarket_umr_model_member_info{process_id=~\"$process\"}",
+        "legendFormat": "{{model_key}} · {{result}}",
+        "range": true
+      }],
+      "fieldConfig": { "defaults": { "unit": "ops", "decimals": 3 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 97,
+      "title": "Per-model activity funnel",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Uniform opportunity, inference, qualification and selection activity for singleton and multi-model processes.",
+      "gridPos": { "x": 12, "y": 371, "w": 12, "h": 8 },
+      "targets": [{
+        "refId": "A",
+        "expr": "sum by(process_id,member_id,event)(rate(polymarket_umr_model_member_activity_events_total{process_id=~\"$process\"}[$__rate_interval])) * on(process_id,member_id) group_left(model_key) polymarket_umr_model_member_info{process_id=~\"$process\"}",
+        "legendFormat": "{{model_key}} · {{event}}",
+        "range": true
+      }],
+      "fieldConfig": { "defaults": { "unit": "ops", "decimals": 3 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
     }
   ]
 }

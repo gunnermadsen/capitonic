@@ -140,6 +140,8 @@ impl BtcExecutionLifecycle for PaperExecutionLifecycle {
                 "process_id": settlement.process_id,
                 "run_id": settlement.run_id,
                 "order_id": settlement.order_id,
+                "model_member_id": settlement.member_id,
+                "model_attribution": settlement.model_attribution,
                 "market_id": settlement.market_id,
                 "token_id": settlement.token_id,
                 "fill_ids": settlement.fill_ids,
@@ -167,6 +169,13 @@ impl BtcExecutionLifecycle for PaperExecutionLifecycle {
                 use rust_decimal::prelude::ToPrimitive;
                 super::unified_model_runtime::telemetry::settlement(
                     process_id,
+                    settlement.net_pnl.to_f64().unwrap_or(0.0),
+                    settlement.entry_fees.to_f64().unwrap_or(0.0),
+                );
+                super::unified_model_runtime::telemetry::member_settlement(
+                    process_id,
+                    settlement.member_id.as_deref(),
+                    settlement.entry_notional.to_f64().unwrap_or(0.0),
                     settlement.net_pnl.to_f64().unwrap_or(0.0),
                     settlement.entry_fees.to_f64().unwrap_or(0.0),
                 );
@@ -262,6 +271,19 @@ impl BtcExecutionLifecycle for LiveExecutionLifecycle {
                         )
                         .await?;
                     if recognized {
+                        use rust_decimal::prelude::ToPrimitive;
+                        super::unified_model_runtime::telemetry::settlement(
+                            process_id,
+                            settlement.net_pnl.to_f64().unwrap_or(0.0),
+                            settlement.entry_fees.to_f64().unwrap_or(0.0),
+                        );
+                        super::unified_model_runtime::telemetry::member_settlement(
+                            process_id,
+                            settlement.member_id.as_deref(),
+                            settlement.entry_notional.to_f64().unwrap_or(0.0),
+                            settlement.net_pnl.to_f64().unwrap_or(0.0),
+                            settlement.entry_fees.to_f64().unwrap_or(0.0),
+                        );
                         info!(
                             process_id = %process_id,
                             run_id = %settlement.run_id,
