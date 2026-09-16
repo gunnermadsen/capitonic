@@ -9,8 +9,9 @@ Run: `20260915T030000Z`. Training only; no runtime deployment.
 - [Metrics and uncertainty](metrics.json)
 - [Verified model artifact provenance](model-provenance.json)
 - [Final verification](verification.json)
+- [External Parquet archive and purpose mapping](parquet-archive.md)
 
-All 35 trained artifacts, chronological fold checkpoints, predictions and actual VWAP5 trade ledgers remain in `/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z`. The provenance files identify their absolute paths and SHA-256 hashes. Parquet reports in this directory retain the numerical tables. Model artifacts are referenced rather than copied into Git.
+All 35 trained artifacts, chronological fold checkpoints, predictions and actual VWAP5 trade ledgers remain in `/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z`. The provenance files identify their absolute paths and SHA-256 hashes. The numerical Parquet tables are stored in the external archive mapped above. Model artifacts are referenced rather than copied into Git.
 
 Full-range final directional fitting spans June 7–September 14 inclusive. Chronological evaluation spans July 5–September 14 after supervised and calibration warm-up. Waiting auxiliaries require causal teacher support; their underlying directional models use the full range. Final full-range artifacts are not independently tested after fitting; reported performance comes from the earlier chronological fold models.
 
