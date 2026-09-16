@@ -286,19 +286,21 @@ done
 - A one-off historical drain is copy-only: it may read source tables and write canonical Parquet, but it must not mutate its database sources. Source removal happens only through a separately guarded database migration after complete manifest validation.
 
 # Database and migrations
-- all non trading process database mutations or changes must be executed through database migrations.
-- Do not create or apply database migrations without explicit user permission; first provide a narrow, unambiguous summary of the proposed migration.
-- all diagnostic database queries to read the database must be optimized for performance to prevent database crashes.
-- do not scan large tables without considering performance ramifications.
-- use the db-migrate microservice job to apply migrations
-- apply migrations by creating new migration files inside packages/db-migrate/src/migrations
-- always confirm a migration was already applied before running migrations.
-- never create trading processes through migrations. always use the api endpoint for trading  process creation or modification.
-- apply migrations by recreating the container:
+- The `db-migrate` TypeScript service is the exclusive database-migration authority. Every schema change, constraint, index, extension, database-owned function, trigger, role or grant change, data correction, reference-data mutation, and other non-runtime database alteration must be implemented as a TypeORM migration in `packages/db-migrate/src/migrations` and applied by the `db-migrate` container.
+- Never alter the database with a one-off SQL, shell, Python, Rust, JavaScript, or TypeScript script; an interactive `psql` command; ORM schema synchronization; application startup code; another service container; or a host-side migration command. Do not create temporary migration scripts outside `packages/db-migrate/src/migrations`.
+- Normal application persistence through established runtime contracts is not a migration. Do not use this distinction to bypass TypeORM migrations for schema changes, backfills, cleanup, corrections, or administrative data mutations.
+- Do not create, edit, or apply a migration without explicit user permission. Before requesting permission, provide a narrow, unambiguous summary of the exact database effect, affected tables or objects, data-mutation scope, rollback behavior, and expected locking or operational risk.
+- Permission to create a migration does not imply permission to apply it. Permission to apply one migration does not authorize later migrations or a nonstandard execution path.
+- A non-`db-migrate` database alteration is prohibited unless the user explicitly authorizes that exact exceptional operation and execution method after the risks are disclosed. General debugging, implementation, deployment, or repair permission is not an exception. Without exact authorization, fail closed.
+- Before applying migrations, confirm the intended TypeORM migration files are committed, inspect the pending migration list, and verify each migration has not already been applied. After application, verify the migration ledger and expected schema state.
+- Apply migrations only by recreating the `db-migrate` container from the project Compose configuration. Do not run TypeORM migration commands directly on the host or from another container:
 
 ```bash
 docker compose up -d --force-recreate --no-deps db-migrate
 ```
+
+- Never create trading processes through migrations. Create or modify trading processes only through the established API endpoint.
+- All diagnostic database reads must be optimized for conservative resource usage. Do not scan large tables without considering performance ramifications.
 
 # Diagnostics
 - Conservative query resource usage when performing diagnostics in the database.
