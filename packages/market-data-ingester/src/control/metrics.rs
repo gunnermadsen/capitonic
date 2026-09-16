@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::Utc;
 use prometheus_client::{
     encoding::{text::encode, EncodeLabelSet},
     metrics::{family::Family, gauge::Gauge},
@@ -39,6 +40,14 @@ pub fn render(
     let worker_allocated = Family::<WorkerLabels, Gauge<i64>>::default();
     let worker_realtime = Family::<WorkerLabels, Gauge<i64>>::default();
     let worker_backfills = Family::<WorkerLabels, Gauge<i64>>::default();
+    let realtime_profiles_desired = Gauge::<i64>::default();
+    let realtime_profiles_owned = Gauge::<i64>::default();
+    let realtime_profiles_healthy = Gauge::<i64>::default();
+    let worker_realtime_slots_total = Gauge::<i64>::default();
+    let worker_realtime_slots_available = Gauge::<i64>::default();
+    let worker_capacity_units_total = Gauge::<i64>::default();
+    let worker_capacity_units_available = Gauge::<i64>::default();
+    let backfill_capacity_units_active = Gauge::<i64>::default();
 
     registry.register(
         "liveness",
@@ -80,9 +89,77 @@ pub fn render(
         "Unix timestamp of the latest durable persistence for each ingester strategy, or zero before first persistence.",
         last_persistence.clone(),
     );
+    registry.register(
+        "realtime_profiles_desired",
+        "Desired running realtime strategy profiles.",
+        realtime_profiles_desired.clone(),
+    );
+    registry.register(
+        "realtime_profiles_owned",
+        "Desired realtime profiles with a current worker lease.",
+        realtime_profiles_owned.clone(),
+    );
+    registry.register(
+        "realtime_profiles_healthy",
+        "Desired realtime profiles that are running, healthy, and currently leased.",
+        realtime_profiles_healthy.clone(),
+    );
+    registry.register(
+        "worker_realtime_slots_total",
+        "Total realtime slots registered by fresh active workers.",
+        worker_realtime_slots_total.clone(),
+    );
+    registry.register(
+        "worker_realtime_slots_available",
+        "Realtime slots that also have enough free capacity for a standard realtime profile.",
+        worker_realtime_slots_available.clone(),
+    );
+    registry.register(
+        "worker_capacity_units_total",
+        "Total allocation capacity units registered by fresh active workers.",
+        worker_capacity_units_total.clone(),
+    );
+    registry.register(
+        "worker_capacity_units_available",
+        "Unallocated capacity units on fresh active workers.",
+        worker_capacity_units_available.clone(),
+    );
+    registry.register(
+        "backfill_capacity_units_active",
+        "Allocation capacity units currently leased by active backfills.",
+        backfill_capacity_units_active.clone(),
+    );
 
     liveness.set(1);
     readiness.set(i64::from(ready));
+    let now = Utc::now();
+    let desired = profiles
+        .iter()
+        .filter(|profile| profile.desired_state == crate::domain::DesiredState::Running)
+        .collect::<Vec<_>>();
+    realtime_profiles_desired.set(i64::try_from(desired.len()).unwrap_or(i64::MAX));
+    realtime_profiles_owned.set(
+        i64::try_from(
+            desired
+                .iter()
+                .filter(|profile| profile.lease_is_current(now))
+                .count(),
+        )
+        .unwrap_or(i64::MAX),
+    );
+    realtime_profiles_healthy.set(
+        i64::try_from(
+            desired
+                .iter()
+                .filter(|profile| {
+                    profile.lease_is_current(now)
+                        && profile.observed_state == crate::domain::ObservedState::Running
+                        && profile.health_status == crate::domain::HealthStatus::Healthy
+                })
+                .count(),
+        )
+        .unwrap_or(i64::MAX),
+    );
     for profile in profiles {
         let strategy = profile.strategy_key.as_str().to_owned();
         strategy_state
@@ -118,6 +195,43 @@ pub fn render(
             .get_or_create(&labels)
             .set(allocation.backfill_leases);
     }
+    worker_realtime_slots_total.set(
+        allocations
+            .iter()
+            .map(|allocation| i64::from(allocation.realtime_slot_limit))
+            .sum(),
+    );
+    worker_realtime_slots_available.set(
+        allocations
+            .iter()
+            .filter(|allocation| {
+                allocation.realtime_leases < i64::from(allocation.realtime_slot_limit)
+                    && allocation.allocated_units + 2 <= i64::from(allocation.capacity_units)
+            })
+            .count()
+            .try_into()
+            .unwrap_or(i64::MAX),
+    );
+    worker_capacity_units_total.set(
+        allocations
+            .iter()
+            .map(|allocation| i64::from(allocation.capacity_units))
+            .sum(),
+    );
+    worker_capacity_units_available.set(
+        allocations
+            .iter()
+            .map(|allocation| {
+                (i64::from(allocation.capacity_units) - allocation.allocated_units).max(0)
+            })
+            .sum(),
+    );
+    backfill_capacity_units_active.set(
+        allocations
+            .iter()
+            .map(|allocation| allocation.backfill_units)
+            .sum(),
+    );
 
     let mut body = String::new();
     encode(&mut body, &registry)?;
@@ -243,5 +357,38 @@ mod tests {
             assert!(rendered.contains(&format!("strategy=\"{}\"", key.as_str())));
         }
         assert!(!rendered.contains("error_code="));
+    }
+
+    #[test]
+    fn renders_aggregate_cutover_capacity_metrics() {
+        let allocations = vec![
+            WorkerAllocationRecord {
+                worker_id: "realtime-worker".to_owned(),
+                capacity_units: 4,
+                realtime_slot_limit: 1,
+                allocated_units: 2,
+                realtime_leases: 1,
+                backfill_leases: 0,
+                backfill_units: 0,
+            },
+            WorkerAllocationRecord {
+                worker_id: "backfill-worker".to_owned(),
+                capacity_units: 4,
+                realtime_slot_limit: 1,
+                allocated_units: 3,
+                realtime_leases: 0,
+                backfill_leases: 1,
+                backfill_units: 3,
+            },
+        ];
+
+        let rendered = render(&[], &allocations, true).expect("metrics render");
+
+        assert!(rendered.contains("market_data_ingester_realtime_profiles_desired 0"));
+        assert!(rendered.contains("market_data_ingester_worker_realtime_slots_total 2"));
+        assert!(rendered.contains("market_data_ingester_worker_realtime_slots_available 0"));
+        assert!(rendered.contains("market_data_ingester_worker_capacity_units_total 8"));
+        assert!(rendered.contains("market_data_ingester_worker_capacity_units_available 3"));
+        assert!(rendered.contains("market_data_ingester_backfill_capacity_units_active 3"));
     }
 }

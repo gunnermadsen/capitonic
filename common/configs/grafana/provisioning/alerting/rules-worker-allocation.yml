@@ -99,3 +99,73 @@ groups:
         annotations: {summary: Desired realtime strategies lack distinct worker allocations}
         labels: {service: ingester, family: worker_allocation, severity: warning, environment: $GRAFANA_ALERT_ENVIRONMENT}
         isPaused: false
+      - uid: ingester_realtime_health_deficit
+        title: Desired realtime profiles are not healthy
+        condition: C
+        data:
+          - refId: A
+            queryType: instant
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: prometheus
+            model:
+              datasource: {type: prometheus, uid: prometheus}
+              editorMode: code
+              expr: 'market_data_ingester_realtime_profiles_desired - market_data_ingester_realtime_profiles_healthy'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              datasource: {type: __expr__, uid: __expr__}
+              expression: B
+              type: threshold
+              conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}]
+              refId: C
+        noDataState: Alerting
+        execErrState: Error
+        for: 2m
+        annotations:
+          summary: One or more desired realtime ingestion profiles are not healthy
+          description: Compare desired, owned, and healthy aggregate profiles before declaring a deployment healthy.
+        labels: {service: ingester, family: worker_allocation, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        dashboardUid: market-data-pipeline
+        panelId: 61
+        isPaused: false
+      - uid: ingester_realtime_headroom_exhausted
+        title: Realtime worker headroom exhausted during active backfill
+        condition: C
+        data:
+          - refId: A
+            queryType: instant
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: prometheus
+            model:
+              datasource: {type: prometheus, uid: prometheus}
+              editorMode: code
+              expr: '(market_data_ingester_worker_realtime_slots_available < 1) and (market_data_ingester_backfill_capacity_units_active > 0)'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              datasource: {type: __expr__, uid: __expr__}
+              expression: B
+              type: threshold
+              conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}]
+              refId: C
+        noDataState: Alerting
+        execErrState: Error
+        for: 1m
+        annotations:
+          summary: No worker can admit another realtime profile while backfills consume capacity
+          description: Add verified worker capacity before an image cutover or worker replacement.
+        labels: {service: ingester, family: worker_allocation, severity: warning, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        dashboardUid: market-data-pipeline
+        panelId: 63
+        isPaused: false
