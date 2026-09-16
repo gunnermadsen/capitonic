@@ -942,6 +942,110 @@
             "environment": "$GRAFANA_ALERT_ENVIRONMENT"
           },
           "isPaused": false
+        },
+        {
+          "uid": "umr_router_member_no_inference",
+          "title": "UMR router member opportunities without inference",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "prometheus",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "model": {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "prometheus"
+                },
+                "editorMode": "code",
+                "expr": "(sum by(process_id,member_id)(increase(polymarket_umr_router_member_events_total{event=\"opportunities\"}[5m])) >= 3) and on(process_id,member_id) (sum by(process_id,member_id)(increase(polymarket_umr_router_member_events_total{event=\"inferences\"}[5m])) == 0)",
+                "instant": true,
+                "range": false,
+                "refId": "A",
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "relativeTimeRange": {
+                "from": 0,
+                "to": 0
+              },
+              "model": {
+                "datasource": {
+                  "type": "__expr__",
+                  "uid": "__expr__"
+                },
+                "expression": "A",
+                "reducer": "last",
+                "settings": {
+                  "mode": "dropNN"
+                },
+                "type": "reduce",
+                "refId": "B"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "relativeTimeRange": {
+                "from": 0,
+                "to": 0
+              },
+              "model": {
+                "datasource": {
+                  "type": "__expr__",
+                  "uid": "__expr__"
+                },
+                "expression": "B",
+                "type": "threshold",
+                "refId": "C",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "params": [
+                        0
+                      ],
+                      "type": "gt"
+                    },
+                    "operator": {
+                      "type": "and"
+                    },
+                    "query": {
+                      "params": [
+                        "C"
+                      ]
+                    },
+                    "reducer": {
+                      "params": [],
+                      "type": "last"
+                    },
+                    "type": "query"
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "5m",
+          "annotations": {
+            "summary": "UMR router member opportunities without inference",
+            "description": "A scheduled member has opportunities but no inference. Inspect selected-source readiness and member feature errors.",
+            "dashboardUid": "unified-model-runtime"
+          },
+          "labels": {
+            "family": "umr",
+            "service": "polymarket-bot",
+            "severity": "warning",
+            "environment": "$GRAFANA_ALERT_ENVIRONMENT"
+          },
+          "isPaused": false
         }
       ]
     }

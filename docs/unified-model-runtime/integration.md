@@ -17,8 +17,8 @@ The exported package preserves the original source artifact and run/commit prove
 1. Export into a staging directory and run source-to-runtime parity checks.
 2. Publish the complete immutable directory under the configured model mount. Never overwrite an active package's contents.
 3. Inspect authenticated `GET /admin/models`. Compatibility describes package capability; process readiness also requires valid bindings and actual data.
-4. Select the returned model key, artifact checksum and feature checksum in the existing trading-process configuration.
-5. Supply `strategy.unified_model` with the contract version, compatible source bindings and the frozen qualified policy. `scripts/prepare-umr-process.py` consumes a saved catalog response, an existing paper playbook template, the selected model/process keys, display name and reviewed preregistration hash. It writes a new disabled definition without API mutations. The same procedure handles every supported capability; it cannot silently substitute unsupported streams. The five supplied definitions are already prepared.
+4. Select model keys in `strategy.decision_strategy.models`, with router version 1, `first_qualified` routing and `array_order` ties. The definition API pins the immutable artifact and feature checksums.
+5. Select all required shared streams once in the existing process-level `sources` array. UMR derives bindings and validates frozen package policies internally. Do not add `strategy.unified_model` or per-model source arrays. `scripts/prepare-umr-process.py` prepares a disabled strict-v4 single-member definition from the existing catalog and playbook; multiple members use the same contract.
 6. Run the existing start-preview and inspect configuration, model, feed, history and execution eligibility.
 7. Create/update/start the process only through existing trading-process APIs. New champions are paper-only.
 8. Verify inference, admission, execution and official outcomes through the standard UMR dashboard and durable decision records. Lack of a qualifying trade is not permission to loosen frozen thresholds.

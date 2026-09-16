@@ -1,0 +1,196 @@
+{
+  "name": "BTC 5m bucket router broad-coverage Q5 paper",
+  "process_type": "btc_5m",
+  "process_scope": "realtime_paper",
+  "process_key": "btc-5m-bucket-router-broad-coverage-q5-20260916",
+  "enabled": false,
+  "status": "created",
+  "config": {
+    "execution": {
+      "mode": "paper",
+      "execute_signals": true,
+      "live_capital": false
+    },
+    "raw": {
+      "btc_realtime_paper": {
+        "schema_version": "btc_realtime_paper_process_v4",
+        "playbook_version": "v1.2",
+        "sources": [
+          {
+            "key": "binance_spot_btcusdt_one_second_ohlcv",
+            "required": true,
+            "contract_version": 1,
+            "require_sequence_integrity": true
+          },
+          {
+            "key": "polymarket_btc_five_minute_orderbooks",
+            "required": true,
+            "contract_version": 1,
+            "require_sequence_integrity": true
+          },
+          {
+            "key": "polygon_chainlink_btcusd_oracle",
+            "required": false,
+            "contract_version": 1,
+            "require_sequence_integrity": false,
+            "maximum_age_ms": 600000
+          },
+          {
+            "key": "chainlink_btcusd_reference_price",
+            "required": true,
+            "contract_version": 1,
+            "require_sequence_integrity": true,
+            "maximum_age_ms": 5000
+          },
+          {
+            "key": "chainlink_btcusd_one_minute_ohlc",
+            "required": true,
+            "contract_version": 1,
+            "require_sequence_integrity": true,
+            "maximum_age_ms": 120000
+          },
+          {
+            "key": "binance_futures_btcusdt_open_interest",
+            "required": true,
+            "contract_version": 1,
+            "require_sequence_integrity": true,
+            "maximum_age_ms": 360000
+          },
+          {
+            "key": "kraken_spot_btcusd_trades",
+            "required": true,
+            "contract_version": 1,
+            "require_sequence_integrity": true,
+            "maximum_age_ms": 2000
+          },
+          {
+            "key": "polymarket_btc_five_minute_market_contracts",
+            "required": true,
+            "contract_version": 1,
+            "require_sequence_integrity": true
+          },
+          {
+            "key": "polymarket_btc_five_minute_resolutions",
+            "required": true,
+            "contract_version": 1,
+            "require_sequence_integrity": true
+          }
+        ],
+        "strategy": {
+          "decision_strategy": {
+            "type": "unified_model_router",
+            "version": 1,
+            "routing": {
+              "mode": "first_qualified",
+              "tie_break": "array_order"
+            },
+            "models": [
+              {
+                "member_id": "member_1",
+                "selection": {
+                  "type": "btc_directional_model",
+                  "model_key": "btc-5m-t2-time-specialist-65-69--with-rtds-candles-q5"
+                }
+              },
+              {
+                "member_id": "member_3",
+                "selection": {
+                  "type": "btc_directional_model",
+                  "model_key": "btc-5m-t2-crossvenue-110-119--without-rtds-candles-q5"
+                }
+              },
+              {
+                "member_id": "member_5",
+                "selection": {
+                  "type": "btc_directional_model",
+                  "model_key": "btc-5m-t3-price-time-150-169--without-rtds-candles-q5"
+                }
+              },
+              {
+                "member_id": "member_6",
+                "selection": {
+                  "type": "btc_directional_model",
+                  "model_key": "btc-5m-t2-multivenue-185-209--without-rtds-candles-q5"
+                }
+              },
+              {
+                "member_id": "member_7",
+                "selection": {
+                  "type": "btc_directional_model",
+                  "model_key": "btc-5m-t2-kraken-terminal-210-239--without-rtds-candles-q5"
+                }
+              }
+            ]
+          },
+          "target_size": "5",
+          "min_seconds_after_open": 65,
+          "min_seconds_before_close": 61,
+          "max_reference_age_ms": 2000,
+          "max_directional_feature_age_ms": 1000,
+          "max_chainlink_open_delay_ms": 5000,
+          "max_book_age_ms": 2000,
+          "max_source_skew_ms": 1000,
+          "max_fee_age_ms": 3600000,
+          "min_entry_price": "0.01",
+          "max_entry_price": "0.99",
+          "max_depth_participation": "0.25",
+          "volatility_floor_per_sqrt_second": "0.00005",
+          "probability_floor": "0.01",
+          "basis_lead_weight": "0.25",
+          "momentum_1s_weight": "0.05",
+          "momentum_5s_weight": "0.10",
+          "momentum_30s_weight": "0.10",
+          "max_lead_sigma_fraction": "0.25",
+          "base_probability_uncertainty": "0.015",
+          "basis_uncertainty_weight": "1",
+          "feed_age_uncertainty_per_second": "0.002",
+          "max_probability_uncertainty": "0.10",
+          "spread_reserve_fraction": "0.10",
+          "slippage_reserve_bps": "25",
+          "latency_reserve_per_share": "0.005",
+          "min_net_edge_per_share": "0.015",
+          "min_net_edge_usd": "0.02",
+          "max_fee_rate": "1"
+        },
+        "runtime": {
+          "strategy_interval_ms": 1000,
+          "official_resolution_audit_grace_secs": 120,
+          "official_resolution_watch_retention_secs": 3600
+        },
+        "paper": {
+          "arrival_latency_ms": 150,
+          "visible_depth_haircut": "0.80",
+          "starting_collateral_usd": "1000",
+          "directional_model_entry_policy": "execute_directional_prediction",
+          "stress_previews": [
+            {
+              "scenario_key": "latency_300ms_depth_65pct",
+              "arrival_latency_ms": 300,
+              "visible_depth_haircut": "0.65"
+            },
+            {
+              "scenario_key": "latency_600ms_depth_50pct",
+              "arrival_latency_ms": 600,
+              "visible_depth_haircut": "0.50"
+            }
+          ]
+        },
+        "next_experiment_key": "btc-5m-bucket-router-broad-coverage-q5-20260916-run"
+      }
+    }
+  },
+  "metadata": {
+    "strategy_family": "btc_5m_bucket_router",
+    "deployment_scope": "paper_only",
+    "production_qualified": false,
+    "umr_contract": "capitonic-unified-model-runtime-v1",
+    "replay_manifest": "/Volumes/docker-data/polymarket-bot/artifacts/backtests/unified-model-router/bucket-qualification/20260916T205041Z/manifests/models.json",
+    "model_keys": [
+      "btc-5m-t2-time-specialist-65-69--with-rtds-candles-q5",
+      "btc-5m-t2-crossvenue-110-119--without-rtds-candles-q5",
+      "btc-5m-t3-price-time-150-169--without-rtds-candles-q5",
+      "btc-5m-t2-multivenue-185-209--without-rtds-candles-q5",
+      "btc-5m-t2-kraken-terminal-210-239--without-rtds-candles-q5"
+    ]
+  }
+}

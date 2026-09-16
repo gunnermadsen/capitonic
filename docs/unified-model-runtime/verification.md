@@ -103,3 +103,9 @@ Grafana serves the 75-panel provisioned dashboard including the new failure-caus
 Unrelated startup observations: Q5 and distilled fair value each reported one missing causal Polygon oracle round at market open immediately after restart, then recovered. These were recorded without changes. The existing strict Clippy findings and optional model-data limitations remain unchanged.
 
 Reproduction, all-target test logs, deployment/model/config comparisons, Prometheus snapshots and bounded Loki results are retained locally under `target/orderbook-evidence/` in this defect worktree.
+
+## Bucket router qualification
+
+The nine Q5 exports and three first-qualified replays are recorded at `/Volumes/docker-data/polymarket-bot/artifacts/backtests/unified-model-router/bucket-qualification/20260916T205041Z`. `manifests/models.json` pins the original T2/T3 artifacts, runtime identities, frozen policies and 128 reference cases per package. `metrics/routers.json` records the three five-member replay results; trade ledgers remain Parquet on the SSD. No training was performed. Each individual Q5 replay matches its original tournament confirmation trade count and PnL. These model selections used historical results, so the router replay is not an independent holdout or live-fill qualification.
+
+The local Compose deployment uses the single SSD-backed catalog `/Volumes/docker-data/polymarket-bot/runtime-models`, containing both existing packages and the nine immutable exports. Process-level `sources` remains the sole feed selector. The router derives internal adapter bindings and rejects missing required selectors.

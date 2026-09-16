@@ -214,9 +214,9 @@ Wallet-wide entry enable is intentionally rejected.
 
 ## BTC Five-Minute Chainlink Process Contract
 
-Legacy Chainlink definitions and existing durable processes use
-`btc_realtime_paper_process_v2`; new definitions that need explicit strategy
-selection use the v3 contract below. The stable identity is
+Active definitions use the strict `btc_realtime_paper_process_v4` router contract.
+Historic process records remain frozen; active older definitions must be migrated
+through the process API before starting this runtime. The stable identity is
 `process_type=btc_5m`, `process_scope=realtime_paper`, plus a unique
 `process_key`. Paper definitions execute approved signals and never permit live
 capital; live definitions use the same strategy/runtime contract and change
@@ -224,13 +224,13 @@ only the process-owned execution venue. Unknown fields inside
 `config.raw.btc_realtime_paper` are rejected. In particular, the retired
 `ml_shadow` setting is not part of this contract.
 
-Save the following request body as `btc-process-v2.json`. Replace the process
+Save the following request body as `btc-process-v4.json`. Replace the process
 name, `next_experiment_key`, and preregistration digest before creating a real
 process. The digest must be exactly 64 hexadecimal characters. The existing
 `next_experiment_key` field is the legacy compatibility name for the immutable
 run key; lifecycle and record ownership still belong to `process_id`.
 
-<!-- btc-5m-process-v2:start -->
+<!-- btc-5m-process-v4:start -->
 ```json
 {
   "name": "BTC 5m Chainlink paper",
@@ -246,7 +246,7 @@ run key; lifecycle and record ownership still belong to `process_id`.
     },
     "raw": {
       "btc_realtime_paper": {
-        "schema_version": "btc_realtime_paper_process_v2",
+        "schema_version": "btc_realtime_paper_process_v4",
         "playbook_version": "v1.2",
         "sources": [
           "polymarket_btc_five_minute_market_contracts",
@@ -259,7 +259,25 @@ run key; lifecycle and record ownership still belong to `process_id`.
         ],
         "next_experiment_key": "btc-5m-chainlink-paper-example-v1",
         "preregistration_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "strategy": {},
+        "strategy": {
+          "decision_strategy": {
+            "type": "unified_model_router",
+            "version": 1,
+            "routing": {
+              "mode": "first_qualified",
+              "tie_break": "array_order"
+            },
+            "models": [
+              {
+                "member_id": "primary",
+                "selection": {
+                  "type": "btc_directional_model",
+                  "model_key": "btc-5m-official-vwap-admission-umr-20260902"
+                }
+              }
+            ]
+          }
+        },
         "runtime": {
           "strategy_interval_ms": 1000,
           "official_resolution_audit_grace_secs": 120,
@@ -288,7 +306,7 @@ run key; lifecycle and record ownership still belong to `process_id`.
   "metadata": {}
 }
 ```
-<!-- btc-5m-process-v2:end -->
+<!-- btc-5m-process-v4:end -->
 
 Entry admission is optional. When `entry_admission` is absent, BTC process
 behavior and its frozen process configuration are unchanged. When the following
@@ -308,10 +326,12 @@ is no passive mode or environment-variable control:
 
 ## Selectable BTC Decision Strategies
 
-`btc_realtime_paper_process_v3` requires an explicit
-`strategy.decision_strategy`. The supported selectors are the ML-backed
-`btc_directional_model` and `btc_asymmetric_value_model` contracts. Each
-selection pins the model key, artifact SHA-256, and feature-schema SHA-256.
+`btc_realtime_paper_process_v4` requires an explicit
+`strategy.decision_strategy` router with one or more ordered model members.
+Member selectors support `btc_directional_model` and `btc_asymmetric_value_model`.
+The process API resolves artifact and feature-schema SHA-256 pins from the mounted
+catalog when both are omitted. Runtime startup requires those persisted pins.
+Sources are declared once in the process-level `sources` array.
 Runtime readiness, execution validation, entry admission, accounting, and
 settlement remain downstream of model evaluation and are unchanged by strategy
 selection.
@@ -383,7 +403,7 @@ PROCESS_ID="$({
     "http://127.0.0.1:${POLYMARKET_HTTP_HOST_PORT:-8098}/admin/trading-processes/by-key/${PROCESS_KEY}" \
     -H "Authorization: Bearer ${POLYMARKET_HTTP_ADMIN_TOKEN}" \
     -H "Content-Type: application/json" \
-    --data @btc-process-v2.json
+    --data @btc-process-v4.json
 } | jq -r '.process.process_id')"
 
 curl -fsS \
