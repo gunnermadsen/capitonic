@@ -1,0 +1,1556 @@
+{
+  "baseline_comparison": "same executable markets, same chronological folds, refitted historical features/estimator; new common OOF calibration/admission, official labels, VWAP5; not an exact reproduction of old target/selection workflow",
+  "latency": [
+    {
+      "five_second_delayed_pnl": -561.2308664233798,
+      "five_second_delayed_stress_pnl": -1002.4308664233786,
+      "later_book_supported_trades": 8824,
+      "name": "path_persistence__no_rtds",
+      "original_same_rows_pnl": 194.2891875178382,
+      "original_trades": 9379
+    },
+    {
+      "five_second_delayed_pnl": -349.7361991274721,
+      "five_second_delayed_stress_pnl": -764.036199127471,
+      "later_book_supported_trades": 8286,
+      "name": "path_persistence__rtds",
+      "original_same_rows_pnl": 405.76513176183823,
+      "original_trades": 8818
+    },
+    {
+      "five_second_delayed_pnl": -661.4470982714934,
+      "five_second_delayed_stress_pnl": -1114.6470982714918,
+      "later_book_supported_trades": 9064,
+      "name": "reversal_exhaustion__no_rtds",
+      "original_same_rows_pnl": 68.60454759578596,
+      "original_trades": 9655
+    },
+    {
+      "five_second_delayed_pnl": -344.6764005344271,
+      "five_second_delayed_stress_pnl": -778.7764005344259,
+      "later_book_supported_trades": 8682,
+      "name": "reversal_exhaustion__rtds",
+      "original_same_rows_pnl": 473.52068189889866,
+      "original_trades": 9239
+    },
+    {
+      "five_second_delayed_pnl": -464.4418509334643,
+      "five_second_delayed_stress_pnl": -890.941850933463,
+      "later_book_supported_trades": 8530,
+      "name": "refprice_dislocation__no_rtds",
+      "original_same_rows_pnl": 175.1784435226438,
+      "original_trades": 9082
+    },
+    {
+      "five_second_delayed_pnl": -489.4503014480459,
+      "five_second_delayed_stress_pnl": -921.1003014480445,
+      "later_book_supported_trades": 8633,
+      "name": "refprice_dislocation__rtds",
+      "original_same_rows_pnl": 278.14418614656927,
+      "original_trades": 9186
+    },
+    {
+      "five_second_delayed_pnl": -314.53853591780046,
+      "five_second_delayed_stress_pnl": -726.1385359177992,
+      "later_book_supported_trades": 8232,
+      "name": "partial_twap_bridge__no_rtds",
+      "original_same_rows_pnl": 260.9410361629302,
+      "original_trades": 8759
+    },
+    {
+      "five_second_delayed_pnl": -509.64565161308826,
+      "five_second_delayed_stress_pnl": -945.295651613087,
+      "later_book_supported_trades": 8713,
+      "name": "partial_twap_bridge__rtds",
+      "original_same_rows_pnl": 253.37793513398825,
+      "original_trades": 9263
+    },
+    {
+      "five_second_delayed_pnl": -503.1530245569213,
+      "five_second_delayed_stress_pnl": -926.20302455692,
+      "later_book_supported_trades": 8461,
+      "name": "crossvenue_leadlag__no_rtds",
+      "original_same_rows_pnl": 243.16745877538955,
+      "original_trades": 9024
+    },
+    {
+      "five_second_delayed_pnl": -417.90640955884857,
+      "five_second_delayed_stress_pnl": -837.6064095588474,
+      "later_book_supported_trades": 8394,
+      "name": "crossvenue_leadlag__rtds",
+      "original_same_rows_pnl": 347.14717546827774,
+      "original_trades": 8933
+    },
+    {
+      "five_second_delayed_pnl": -480.92586152439765,
+      "five_second_delayed_stress_pnl": -899.6258615243961,
+      "later_book_supported_trades": 8374,
+      "name": "flow_persistence__no_rtds",
+      "original_same_rows_pnl": 240.6789309926304,
+      "original_trades": 8901
+    },
+    {
+      "five_second_delayed_pnl": -366.8893846472753,
+      "five_second_delayed_stress_pnl": -788.4893846472737,
+      "later_book_supported_trades": 8432,
+      "name": "flow_persistence__rtds",
+      "original_same_rows_pnl": 401.32660462151716,
+      "original_trades": 8962
+    },
+    {
+      "five_second_delayed_pnl": -253.46035085211614,
+      "five_second_delayed_stress_pnl": -627.5103508521152,
+      "later_book_supported_trades": 7481,
+      "name": "positioning__no_rtds",
+      "original_same_rows_pnl": 291.81026155485034,
+      "original_trades": 7994
+    },
+    {
+      "five_second_delayed_pnl": -512.1902193719578,
+      "five_second_delayed_stress_pnl": -898.1902193719567,
+      "later_book_supported_trades": 7720,
+      "name": "positioning__rtds",
+      "original_same_rows_pnl": 134.19892931600066,
+      "original_trades": 8221
+    },
+    {
+      "five_second_delayed_pnl": -500.4057670900801,
+      "five_second_delayed_stress_pnl": -949.4057670900786,
+      "later_book_supported_trades": 8980,
+      "name": "liquidity_response__no_rtds",
+      "original_same_rows_pnl": 196.2415343904725,
+      "original_trades": 9561
+    },
+    {
+      "five_second_delayed_pnl": -357.8751641745707,
+      "five_second_delayed_stress_pnl": -771.5751641745695,
+      "later_book_supported_trades": 8274,
+      "name": "liquidity_response__rtds",
+      "original_same_rows_pnl": 382.70559036396185,
+      "original_trades": 8835
+    },
+    {
+      "five_second_delayed_pnl": -155.06167267834525,
+      "five_second_delayed_stress_pnl": -311.16167267834464,
+      "later_book_supported_trades": 3122,
+      "name": "q5_payoff__no_rtds",
+      "original_same_rows_pnl": 155.53728258637722,
+      "original_trades": 3332
+    },
+    {
+      "five_second_delayed_pnl": -119.4232866660342,
+      "five_second_delayed_stress_pnl": -231.82328666603382,
+      "later_book_supported_trades": 2248,
+      "name": "q5_payoff__rtds",
+      "original_same_rows_pnl": 15.427642499515828,
+      "original_trades": 2411
+    },
+    {
+      "five_second_delayed_pnl": -581.6392372761036,
+      "five_second_delayed_stress_pnl": -965.3892372761026,
+      "later_book_supported_trades": 7675,
+      "name": "market_residual__no_rtds",
+      "original_same_rows_pnl": 70.69527366838896,
+      "original_trades": 8191
+    },
+    {
+      "five_second_delayed_pnl": -466.60702372140054,
+      "five_second_delayed_stress_pnl": -878.1070237213995,
+      "later_book_supported_trades": 8230,
+      "name": "market_residual__rtds",
+      "original_same_rows_pnl": 259.20071599871176,
+      "original_trades": 8773
+    },
+    {
+      "five_second_delayed_pnl": -452.2971157380029,
+      "five_second_delayed_stress_pnl": -839.2471157380016,
+      "later_book_supported_trades": 7739,
+      "name": "path_linear__no_rtds",
+      "original_same_rows_pnl": 298.46573330800186,
+      "original_trades": 8223
+    },
+    {
+      "five_second_delayed_pnl": -365.9799321934287,
+      "five_second_delayed_stress_pnl": -746.6299321934277,
+      "later_book_supported_trades": 7613,
+      "name": "crossvenue_linear__no_rtds",
+      "original_same_rows_pnl": 372.3836483523455,
+      "original_trades": 8136
+    },
+    {
+      "five_second_delayed_pnl": -102.25188532943129,
+      "five_second_delayed_stress_pnl": -430.7518853294304,
+      "later_book_supported_trades": 6570,
+      "name": "all_dimensions__no_rtds",
+      "original_same_rows_pnl": 345.34459570200136,
+      "original_trades": 7043
+    },
+    {
+      "five_second_delayed_pnl": -142.39586047972531,
+      "five_second_delayed_stress_pnl": -504.2958604797244,
+      "later_book_supported_trades": 7238,
+      "name": "normalized_boundary__no_rtds",
+      "original_same_rows_pnl": 354.3533347343445,
+      "original_trades": 7744
+    },
+    {
+      "five_second_delayed_pnl": -318.0333728764816,
+      "five_second_delayed_stress_pnl": -559.5333728764809,
+      "later_book_supported_trades": 4830,
+      "name": "loss_aware__no_rtds",
+      "original_same_rows_pnl": -54.229302799168906,
+      "original_trades": 5250
+    },
+    {
+      "five_second_delayed_pnl": 27.081955586554386,
+      "five_second_delayed_stress_pnl": -283.7180444134449,
+      "later_book_supported_trades": 6216,
+      "name": "within_bucket_wait__no_rtds",
+      "original_same_rows_pnl": 533.107486376766,
+      "original_trades": 6624
+    },
+    {
+      "five_second_delayed_pnl": -434.1610309179433,
+      "five_second_delayed_stress_pnl": -816.711030917942,
+      "later_book_supported_trades": 7651,
+      "name": "path_linear__rtds",
+      "original_same_rows_pnl": 247.6865128190055,
+      "original_trades": 8187
+    },
+    {
+      "five_second_delayed_pnl": -334.5561103220473,
+      "five_second_delayed_stress_pnl": -664.0061103220467,
+      "later_book_supported_trades": 6589,
+      "name": "crossvenue_linear__rtds",
+      "original_same_rows_pnl": 242.61529226034204,
+      "original_trades": 7039
+    },
+    {
+      "five_second_delayed_pnl": -201.9982255471053,
+      "five_second_delayed_stress_pnl": -557.6982255471046,
+      "later_book_supported_trades": 7114,
+      "name": "all_dimensions__rtds",
+      "original_same_rows_pnl": 305.30343996589966,
+      "original_trades": 7609
+    },
+    {
+      "five_second_delayed_pnl": -156.29023628414134,
+      "five_second_delayed_stress_pnl": -540.2902362841404,
+      "later_book_supported_trades": 7680,
+      "name": "normalized_boundary__rtds",
+      "original_same_rows_pnl": 320.1746057522252,
+      "original_trades": 8158
+    },
+    {
+      "five_second_delayed_pnl": 2.9256888892793285,
+      "five_second_delayed_stress_pnl": -233.12431111071996,
+      "later_book_supported_trades": 4721,
+      "name": "loss_aware__rtds",
+      "original_same_rows_pnl": 292.5912006429078,
+      "original_trades": 5095
+    },
+    {
+      "five_second_delayed_pnl": -290.29093148457156,
+      "five_second_delayed_stress_pnl": -597.140931484571,
+      "later_book_supported_trades": 6137,
+      "name": "within_bucket_wait__rtds",
+      "original_same_rows_pnl": 245.53205099057544,
+      "original_trades": 6517
+    },
+    {
+      "five_second_delayed_pnl": -23.157286884041973,
+      "five_second_delayed_stress_pnl": -88.25728688404189,
+      "later_book_supported_trades": 1302,
+      "name": "baseline_20260913T215700Z",
+      "original_same_rows_pnl": 84.28191913878544,
+      "original_trades": 1402
+    },
+    {
+      "five_second_delayed_pnl": 14.725511933909708,
+      "five_second_delayed_stress_pnl": -40.5244880660902,
+      "later_book_supported_trades": 1105,
+      "name": "baseline_20260914T145421Z",
+      "original_same_rows_pnl": 120.47321740258482,
+      "original_trades": 1181
+    },
+    {
+      "five_second_delayed_pnl": -70.06001986134797,
+      "five_second_delayed_stress_pnl": -113.0100198613478,
+      "later_book_supported_trades": 859,
+      "name": "baseline_20260914T171438Z",
+      "original_same_rows_pnl": -16.548689953424038,
+      "original_trades": 904
+    }
+  ],
+  "matched_baselines": [
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "path_persistence__no_rtds",
+      "new_trades": 8494,
+      "paired_day_95_high": -95.87156645932195,
+      "paired_day_95_low": -1076.5122857267143,
+      "stress_delta": -580.6403428804088
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "path_persistence__no_rtds",
+      "new_trades": 8494,
+      "paired_day_95_high": -136.30986995280836,
+      "paired_day_95_low": -1121.4320949101598,
+      "stress_delta": -614.9368919783229
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "path_persistence__no_rtds",
+      "new_trades": 9109,
+      "paired_day_95_high": 289.09947247943575,
+      "paired_day_95_low": -719.0191249184392,
+      "stress_delta": -227.55994166328907
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "path_persistence__rtds",
+      "new_trades": 7989,
+      "paired_day_95_high": 155.15469208205528,
+      "paired_day_95_low": -748.8323405089945,
+      "stress_delta": -298.0134627122944
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "path_persistence__rtds",
+      "new_trades": 7989,
+      "paired_day_95_high": 117.2454482431677,
+      "paired_day_95_low": -772.3399243194847,
+      "stress_delta": -332.31001181020855
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "path_persistence__rtds",
+      "new_trades": 8570,
+      "paired_day_95_high": 627.5975660879446,
+      "paired_day_95_low": -453.8386539293319,
+      "stress_delta": 86.78437426194262
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "reversal_exhaustion__no_rtds",
+      "new_trades": 8785,
+      "paired_day_95_high": -38.014819017151936,
+      "paired_day_95_low": -1048.2512923137785,
+      "stress_delta": -501.1200510336713
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "reversal_exhaustion__no_rtds",
+      "new_trades": 8785,
+      "paired_day_95_high": -82.95024029775192,
+      "paired_day_95_low": -1051.4227981705276,
+      "stress_delta": -535.4166001315855
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "reversal_exhaustion__no_rtds",
+      "new_trades": 9364,
+      "paired_day_95_high": 295.6103632453203,
+      "paired_day_95_low": -724.8080305862011,
+      "stress_delta": -197.6729441548655
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "reversal_exhaustion__rtds",
+      "new_trades": 8377,
+      "paired_day_95_high": 191.04194420410607,
+      "paired_day_95_low": -829.937439988172,
+      "stress_delta": -285.27468131804096
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "reversal_exhaustion__rtds",
+      "new_trades": 8377,
+      "paired_day_95_high": 142.4444588181907,
+      "paired_day_95_low": -825.4530098895484,
+      "stress_delta": -319.57123041595503
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "reversal_exhaustion__rtds",
+      "new_trades": 8989,
+      "paired_day_95_high": 706.5432661444214,
+      "paired_day_95_low": -494.1601845974764,
+      "stress_delta": 135.50868481540357
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "refprice_dislocation__no_rtds",
+      "new_trades": 8213,
+      "paired_day_95_high": -80.24020986105285,
+      "paired_day_95_low": -942.9999712465664,
+      "stress_delta": -497.774868960363
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "refprice_dislocation__no_rtds",
+      "new_trades": 8213,
+      "paired_day_95_high": -126.05266983156592,
+      "paired_day_95_low": -985.7669170396031,
+      "stress_delta": -532.0714180582772
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "refprice_dislocation__no_rtds",
+      "new_trades": 8819,
+      "paired_day_95_high": 302.445288366107,
+      "paired_day_95_low": -649.7438547336966,
+      "stress_delta": -160.80969655381213
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "refprice_dislocation__rtds",
+      "new_trades": 8351,
+      "paired_day_95_high": 29.574408092024044,
+      "paired_day_95_low": -894.2076525890297,
+      "stress_delta": -445.75828387532545
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "refprice_dislocation__rtds",
+      "new_trades": 8351,
+      "paired_day_95_high": -39.6104596598712,
+      "paired_day_95_low": -928.8288767616517,
+      "stress_delta": -480.0548329732396
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "refprice_dislocation__rtds",
+      "new_trades": 8932,
+      "paired_day_95_high": 457.38131175283905,
+      "paired_day_95_low": -604.2654868258645,
+      "stress_delta": -80.01004363541888
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "partial_twap_bridge__no_rtds",
+      "new_trades": 7850,
+      "paired_day_95_high": 24.473584088004205,
+      "paired_day_95_low": -886.1746834091489,
+      "stress_delta": -408.18908476553804
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "partial_twap_bridge__no_rtds",
+      "new_trades": 7850,
+      "paired_day_95_high": -29.786670782957835,
+      "paired_day_95_low": -905.4931268064508,
+      "stress_delta": -442.4856338634521
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "partial_twap_bridge__no_rtds",
+      "new_trades": 8481,
+      "paired_day_95_high": 379.1910838063635,
+      "paired_day_95_low": -647.0143108365021,
+      "stress_delta": -136.57435397035903
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "partial_twap_bridge__rtds",
+      "new_trades": 8390,
+      "paired_day_95_high": -1.8157733649023156,
+      "paired_day_95_low": -831.0090551388407,
+      "stress_delta": -436.65249749679805
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "partial_twap_bridge__rtds",
+      "new_trades": 8390,
+      "paired_day_95_high": -33.03431191458476,
+      "paired_day_95_low": -854.9806612391794,
+      "stress_delta": -470.94904659471223
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "partial_twap_bridge__rtds",
+      "new_trades": 8997,
+      "paired_day_95_high": 425.90593589816723,
+      "paired_day_95_low": -569.3679161166508,
+      "stress_delta": -81.5754202410391
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "crossvenue_leadlag__no_rtds",
+      "new_trades": 8148,
+      "paired_day_95_high": -119.45713322548418,
+      "paired_day_95_low": -1080.1194848214222,
+      "stress_delta": -560.5326847667184
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "crossvenue_leadlag__no_rtds",
+      "new_trades": 8148,
+      "paired_day_95_high": -138.33851953183407,
+      "paired_day_95_low": -1088.0249472297926,
+      "stress_delta": -594.8292338646324
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "crossvenue_leadlag__no_rtds",
+      "new_trades": 8753,
+      "paired_day_95_high": 308.8321936600621,
+      "paired_day_95_low": -740.093184799386,
+      "stress_delta": -200.8628565361828
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "crossvenue_leadlag__rtds",
+      "new_trades": 8128,
+      "paired_day_95_high": 7.681925874536014,
+      "paired_day_95_low": -933.3827535143802,
+      "stress_delta": -450.0770993479107
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "crossvenue_leadlag__rtds",
+      "new_trades": 8128,
+      "paired_day_95_high": -24.484681396246586,
+      "paired_day_95_low": -941.5690805027078,
+      "stress_delta": -484.373648445825
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "crossvenue_leadlag__rtds",
+      "new_trades": 8700,
+      "paired_day_95_high": 529.714658397901,
+      "paired_day_95_low": -598.5239295502072,
+      "stress_delta": -28.65651581136794
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "flow_persistence__no_rtds",
+      "new_trades": 8076,
+      "paired_day_95_high": -55.48082053411395,
+      "paired_day_95_low": -1024.6004874936955,
+      "stress_delta": -525.8943114650134
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "flow_persistence__no_rtds",
+      "new_trades": 8076,
+      "paired_day_95_high": -125.65018528502604,
+      "paired_day_95_low": -1053.8160901803487,
+      "stress_delta": -560.1908605629276
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "flow_persistence__no_rtds",
+      "new_trades": 8688,
+      "paired_day_95_high": 320.19061739874854,
+      "paired_day_95_low": -713.7882196965186,
+      "stress_delta": -173.7778273078107
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "flow_persistence__rtds",
+      "new_trades": 8132,
+      "paired_day_95_high": 69.7307615814944,
+      "paired_day_95_low": -828.7783228493399,
+      "stress_delta": -370.9823035163706
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "flow_persistence__rtds",
+      "new_trades": 8132,
+      "paired_day_95_high": 43.129641147916004,
+      "paired_day_95_low": -837.2514763326581,
+      "stress_delta": -405.27885261428474
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "flow_persistence__rtds",
+      "new_trades": 8722,
+      "paired_day_95_high": 553.1822332845092,
+      "paired_day_95_low": -515.6624706277207,
+      "stress_delta": 17.292962890300018
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "positioning__no_rtds",
+      "new_trades": 7285,
+      "paired_day_95_high": 139.76051168216907,
+      "paired_day_95_low": -835.4948901051408,
+      "stress_delta": -338.77089431053224
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "positioning__no_rtds",
+      "new_trades": 7285,
+      "paired_day_95_high": 131.3746746146811,
+      "paired_day_95_low": -865.3504573168473,
+      "stress_delta": -373.0674434084463
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "positioning__no_rtds",
+      "new_trades": 7782,
+      "paired_day_95_high": 543.7103583130149,
+      "paired_day_95_low": -520.6597925806398,
+      "stress_delta": 3.8916298867038392
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "positioning__rtds",
+      "new_trades": 7425,
+      "paired_day_95_high": -145.34764707649848,
+      "paired_day_95_low": -1136.7062664310577,
+      "stress_delta": -631.7416005304336
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "positioning__rtds",
+      "new_trades": 7425,
+      "paired_day_95_high": -173.61871639179597,
+      "paired_day_95_low": -1155.5421382638929,
+      "stress_delta": -666.0381496283478
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "positioning__rtds",
+      "new_trades": 7995,
+      "paired_day_95_high": 378.74736425510395,
+      "paired_day_95_low": -769.8068659551324,
+      "stress_delta": -217.245587304542
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "liquidity_response__no_rtds",
+      "new_trades": 8755,
+      "paired_day_95_high": -170.51702576921696,
+      "paired_day_95_low": -1193.498396923664,
+      "stress_delta": -656.2848807538173
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "liquidity_response__no_rtds",
+      "new_trades": 8755,
+      "paired_day_95_high": -236.366520397617,
+      "paired_day_95_low": -1212.8401400158864,
+      "stress_delta": -690.5814298517319
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "liquidity_response__no_rtds",
+      "new_trades": 9337,
+      "paired_day_95_high": 314.21459175609107,
+      "paired_day_95_low": -879.662049439784,
+      "stress_delta": -241.05070432402874
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "liquidity_response__rtds",
+      "new_trades": 7990,
+      "paired_day_95_high": 42.69097219483801,
+      "paired_day_95_low": -957.5583138548891,
+      "stress_delta": -453.5934484514659
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "liquidity_response__rtds",
+      "new_trades": 7990,
+      "paired_day_95_high": -24.653251591901782,
+      "paired_day_95_low": -994.5487082076661,
+      "stress_delta": -487.88999754938004
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "liquidity_response__rtds",
+      "new_trades": 8591,
+      "paired_day_95_high": 581.6845244791491,
+      "paired_day_95_low": -600.0212093858468,
+      "stress_delta": 14.93486527160971
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "q5_payoff__no_rtds",
+      "new_trades": 3150,
+      "paired_day_95_high": 139.10455918486775,
+      "paired_day_95_low": -500.6313762964256,
+      "stress_delta": -156.6340349604369
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "q5_payoff__no_rtds",
+      "new_trades": 3150,
+      "paired_day_95_high": 101.5691948738354,
+      "paired_day_95_low": -523.2760594693888,
+      "stress_delta": -190.93058405835092
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "q5_payoff__no_rtds",
+      "new_trades": 3292,
+      "paired_day_95_high": 355.6503221447098,
+      "paired_day_95_low": -296.39858650108283,
+      "stress_delta": 54.50705983592267
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "q5_payoff__rtds",
+      "new_trades": 2284,
+      "paired_day_95_high": 89.05474375401886,
+      "paired_day_95_low": -549.5249691466654,
+      "stress_delta": -204.05154691203424
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "q5_payoff__rtds",
+      "new_trades": 2284,
+      "paired_day_95_high": 59.930603063588805,
+      "paired_day_95_low": -554.8138410811622,
+      "stress_delta": -238.3480960099487
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "q5_payoff__rtds",
+      "new_trades": 2382,
+      "paired_day_95_high": 233.565998318681,
+      "paired_day_95_low": -373.95376554651017,
+      "stress_delta": -55.27107362556224
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "market_residual__no_rtds",
+      "new_trades": 7440,
+      "paired_day_95_high": -46.84898888673513,
+      "paired_day_95_low": -972.1888735881467,
+      "stress_delta": -489.62463377418356
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "market_residual__no_rtds",
+      "new_trades": 7440,
+      "paired_day_95_high": -131.74798168499692,
+      "paired_day_95_low": -923.181469322616,
+      "stress_delta": -523.9211828720978
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "market_residual__no_rtds",
+      "new_trades": 7987,
+      "paired_day_95_high": 289.912430963592,
+      "paired_day_95_low": -569.7035171111796,
+      "stress_delta": -154.16528470147063
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "market_residual__rtds",
+      "new_trades": 7983,
+      "paired_day_95_high": -44.91349844250455,
+      "paired_day_95_low": -970.2065652267456,
+      "stress_delta": -500.3784943804368
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "market_residual__rtds",
+      "new_trades": 7983,
+      "paired_day_95_high": -132.47431653101276,
+      "paired_day_95_low": -971.106884361048,
+      "stress_delta": -534.6750434783509
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "market_residual__rtds",
+      "new_trades": 8553,
+      "paired_day_95_high": 445.42019716451307,
+      "paired_day_95_low": -562.4057781010545,
+      "stress_delta": -74.88091231709008
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "path_linear__no_rtds",
+      "new_trades": 7464,
+      "paired_day_95_high": -37.906943653890664,
+      "paired_day_95_low": -943.9316180718893,
+      "stress_delta": -473.6828373366344
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "path_linear__no_rtds",
+      "new_trades": 7464,
+      "paired_day_95_high": -105.2491301758414,
+      "paired_day_95_low": -945.435102038683,
+      "stress_delta": -507.97938643454796
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "path_linear__no_rtds",
+      "new_trades": 8018,
+      "paired_day_95_high": 382.8564668883687,
+      "paired_day_95_low": -515.0096557634255,
+      "stress_delta": -69.63987184728782
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "crossvenue_linear__no_rtds",
+      "new_trades": 7319,
+      "paired_day_95_high": 122.18889704291885,
+      "paired_day_95_low": -697.8642622501525,
+      "stress_delta": -296.58985913044785
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "crossvenue_linear__no_rtds",
+      "new_trades": 7319,
+      "paired_day_95_high": 67.55540306831422,
+      "paired_day_95_low": -751.3299418114041,
+      "stress_delta": -330.886408228362
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "crossvenue_linear__no_rtds",
+      "new_trades": 7844,
+      "paired_day_95_high": 530.3433074247129,
+      "paired_day_95_low": -502.0686378257053,
+      "stress_delta": 33.558574974552556
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "all_dimensions__no_rtds",
+      "new_trades": 6458,
+      "paired_day_95_high": 249.19930397586836,
+      "paired_day_95_low": -620.5213004052467,
+      "stress_delta": -158.01477904600543
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "all_dimensions__no_rtds",
+      "new_trades": 6458,
+      "paired_day_95_high": 172.6775913692357,
+      "paired_day_95_low": -604.3822318215706,
+      "stress_delta": -192.31132814391884
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "all_dimensions__no_rtds",
+      "new_trades": 6878,
+      "paired_day_95_high": 608.6400943013606,
+      "paired_day_95_low": -331.714732610736,
+      "stress_delta": 170.05839301812009
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "normalized_boundary__no_rtds",
+      "new_trades": 7070,
+      "paired_day_95_high": 19.13992322445143,
+      "paired_day_95_low": -795.1502105727876,
+      "stress_delta": -374.5344276393521
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "normalized_boundary__no_rtds",
+      "new_trades": 7070,
+      "paired_day_95_high": -19.475609486681076,
+      "paired_day_95_low": -823.7547041496236,
+      "stress_delta": -408.8309767372664
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "normalized_boundary__no_rtds",
+      "new_trades": 7548,
+      "paired_day_95_high": 494.58008680277976,
+      "paired_day_95_low": -466.1775772607285,
+      "stress_delta": 12.772936806013774
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "loss_aware__no_rtds",
+      "new_trades": 4842,
+      "paired_day_95_high": -166.9513518672855,
+      "paired_day_95_low": -842.5236517068544,
+      "stress_delta": -483.20778330806803
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "loss_aware__no_rtds",
+      "new_trades": 4842,
+      "paired_day_95_high": -213.78095393825157,
+      "paired_day_95_low": -859.8081912008263,
+      "stress_delta": -517.504332405982
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "loss_aware__no_rtds",
+      "new_trades": 5112,
+      "paired_day_95_high": 124.02284495055062,
+      "paired_day_95_low": -731.2671856823367,
+      "stress_delta": -277.9861016982108
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14412,
+      "name": "within_bucket_wait__no_rtds",
+      "new_trades": 6013,
+      "paired_day_95_high": 267.57147238405804,
+      "paired_day_95_low": -502.3206402728571,
+      "stress_delta": -81.8848393097453
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14412,
+      "name": "within_bucket_wait__no_rtds",
+      "new_trades": 6013,
+      "paired_day_95_high": 206.20271262571617,
+      "paired_day_95_low": -524.0430298134041,
+      "stress_delta": -116.18138840765981
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15862,
+      "name": "within_bucket_wait__no_rtds",
+      "new_trades": 6442,
+      "paired_day_95_high": 740.3371366269179,
+      "paired_day_95_low": -147.5148919903582,
+      "stress_delta": 301.02184783547204
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "path_linear__rtds",
+      "new_trades": 7437,
+      "paired_day_95_high": -77.52993052542406,
+      "paired_day_95_low": -959.695158699516,
+      "stress_delta": -483.5967215973785
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "path_linear__rtds",
+      "new_trades": 7437,
+      "paired_day_95_high": -145.25220357070853,
+      "paired_day_95_low": -967.3722207669457,
+      "stress_delta": -517.8932706952917
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "path_linear__rtds",
+      "new_trades": 7983,
+      "paired_day_95_high": 291.23621633922284,
+      "paired_day_95_low": -629.5901461310419,
+      "stress_delta": -146.84358139065034
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "crossvenue_linear__rtds",
+      "new_trades": 6303,
+      "paired_day_95_high": -9.386885191886757,
+      "paired_day_95_low": -871.8388739558771,
+      "stress_delta": -416.3099817251366
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "crossvenue_linear__rtds",
+      "new_trades": 6303,
+      "paired_day_95_high": -14.984553282963706,
+      "paired_day_95_low": -896.036269767508,
+      "stress_delta": -450.6065308230505
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "crossvenue_linear__rtds",
+      "new_trades": 6775,
+      "paired_day_95_high": 458.26183898804334,
+      "paired_day_95_low": -559.6256941513958,
+      "stress_delta": -25.651839372500262
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "all_dimensions__rtds",
+      "new_trades": 6925,
+      "paired_day_95_high": -12.319719826045803,
+      "paired_day_95_low": -856.2575993993879,
+      "stress_delta": -409.92449535194527
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "all_dimensions__rtds",
+      "new_trades": 6925,
+      "paired_day_95_high": -65.1565275384122,
+      "paired_day_95_low": -884.5340813211654,
+      "stress_delta": -444.2210444498595
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "all_dimensions__rtds",
+      "new_trades": 7426,
+      "paired_day_95_high": 514.9336908360094,
+      "paired_day_95_low": -479.1520240473183,
+      "stress_delta": 32.13212399242411
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "normalized_boundary__rtds",
+      "new_trades": 7353,
+      "paired_day_95_high": 33.33033070840188,
+      "paired_day_95_low": -934.2951284408296,
+      "stress_delta": -447.232208877615
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "normalized_boundary__rtds",
+      "new_trades": 7353,
+      "paired_day_95_high": -39.872768596380716,
+      "paired_day_95_low": -951.9645024678382,
+      "stress_delta": -481.52875797552906
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "normalized_boundary__rtds",
+      "new_trades": 7950,
+      "paired_day_95_high": 465.66305253294405,
+      "paired_day_95_low": -553.416733980723,
+      "stress_delta": -66.38069190578457
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "loss_aware__rtds",
+      "new_trades": 4674,
+      "paired_day_95_high": 125.68841367377114,
+      "paired_day_95_low": -448.27440717479976,
+      "stress_delta": -165.6995474306949
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "loss_aware__rtds",
+      "new_trades": 4674,
+      "paired_day_95_high": 76.47623746087862,
+      "paired_day_95_low": -452.95293609451664,
+      "stress_delta": -199.99609652860852
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15864,
+      "name": "loss_aware__rtds",
+      "new_trades": 4971,
+      "paired_day_95_high": 397.702041368871,
+      "paired_day_95_low": -266.6105807715961,
+      "stress_delta": 47.03005447964374
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "within_bucket_wait__rtds",
+      "new_trades": 5916,
+      "paired_day_95_high": -31.123669653548443,
+      "paired_day_95_low": -831.4281708931331,
+      "stress_delta": -407.5268422929038
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "within_bucket_wait__rtds",
+      "new_trades": 5916,
+      "paired_day_95_high": -75.56413423998767,
+      "paired_day_95_low": -879.3272934280926,
+      "stress_delta": -441.82339139081824
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 904,
+      "common_executable_markets": 15862,
+      "name": "within_bucket_wait__rtds",
+      "new_trades": 6337,
+      "paired_day_95_high": 454.59648453416725,
+      "paired_day_95_low": -552.7672851418339,
+      "stress_delta": -33.90328807918655
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1181,
+      "common_executable_markets": 14413,
+      "name": "baseline_20260913T215700Z",
+      "new_trades": 1402,
+      "paired_day_95_high": 87.38459203092141,
+      "paired_day_95_low": -163.9976941603774,
+      "stress_delta": -34.29654909791426
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 793,
+      "common_executable_markets": 14184,
+      "name": "baseline_20260913T215700Z",
+      "new_trades": 1376,
+      "paired_day_95_high": 333.3280821469216,
+      "paired_day_95_low": -137.77703579692164,
+      "stress_delta": 103.40660408195109
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1402,
+      "common_executable_markets": 14413,
+      "name": "baseline_20260914T145421Z",
+      "new_trades": 1181,
+      "paired_day_95_high": 163.99769416037685,
+      "paired_day_95_low": -87.3845920309216,
+      "stress_delta": 34.296549097914145
+    },
+    {
+      "baseline": "baseline_20260914T171438Z",
+      "baseline_trades": 793,
+      "common_executable_markets": 14184,
+      "name": "baseline_20260914T145421Z",
+      "new_trades": 1155,
+      "paired_day_95_high": 336.32336608705566,
+      "paired_day_95_low": -52.84108992240627,
+      "stress_delta": 147.27564405966544
+    },
+    {
+      "baseline": "baseline_20260913T215700Z",
+      "baseline_trades": 1376,
+      "common_executable_markets": 14184,
+      "name": "baseline_20260914T171438Z",
+      "new_trades": 793,
+      "paired_day_95_high": 137.77703579692147,
+      "paired_day_95_low": -333.3280821469217,
+      "stress_delta": -103.40660408195113
+    },
+    {
+      "baseline": "baseline_20260914T145421Z",
+      "baseline_trades": 1155,
+      "common_executable_markets": 14184,
+      "name": "baseline_20260914T171438Z",
+      "new_trades": 793,
+      "paired_day_95_high": 52.84108992240612,
+      "paired_day_95_low": -336.32336608705566,
+      "stress_delta": -147.2756440596654
+    }
+  ],
+  "matched_frequency_selection": "highest OOF confidence on evaluation set; descriptive only",
+  "router_incremental": [
+    {
+      "displaced_later_trades": 119,
+      "displaced_trades": 399,
+      "incremental_markets": 12,
+      "name": "path_persistence__no_rtds",
+      "router_pnl_delta_when_included": 20.705750045005857
+    },
+    {
+      "displaced_later_trades": 25,
+      "displaced_trades": 184,
+      "incremental_markets": 5,
+      "name": "path_persistence__rtds",
+      "router_pnl_delta_when_included": 8.834948527626807
+    },
+    {
+      "displaced_later_trades": 130,
+      "displaced_trades": 551,
+      "incremental_markets": 13,
+      "name": "reversal_exhaustion__no_rtds",
+      "router_pnl_delta_when_included": -11.479789146094049
+    },
+    {
+      "displaced_later_trades": 185,
+      "displaced_trades": 624,
+      "incremental_markets": 28,
+      "name": "reversal_exhaustion__rtds",
+      "router_pnl_delta_when_included": 37.55560172146659
+    },
+    {
+      "displaced_later_trades": 68,
+      "displaced_trades": 344,
+      "incremental_markets": 9,
+      "name": "refprice_dislocation__no_rtds",
+      "router_pnl_delta_when_included": -0.605954455758706
+    },
+    {
+      "displaced_later_trades": 143,
+      "displaced_trades": 556,
+      "incremental_markets": 11,
+      "name": "refprice_dislocation__rtds",
+      "router_pnl_delta_when_included": -33.6789067314005
+    },
+    {
+      "displaced_later_trades": 469,
+      "displaced_trades": 750,
+      "incremental_markets": 110,
+      "name": "partial_twap_bridge__no_rtds",
+      "router_pnl_delta_when_included": -63.408210845576605
+    },
+    {
+      "displaced_later_trades": 495,
+      "displaced_trades": 852,
+      "incremental_markets": 58,
+      "name": "partial_twap_bridge__rtds",
+      "router_pnl_delta_when_included": -0.5798020880638433
+    },
+    {
+      "displaced_later_trades": 3,
+      "displaced_trades": 303,
+      "incremental_markets": 2,
+      "name": "crossvenue_leadlag__no_rtds",
+      "router_pnl_delta_when_included": -5.451235059834858
+    },
+    {
+      "displaced_later_trades": 7,
+      "displaced_trades": 262,
+      "incremental_markets": 1,
+      "name": "crossvenue_leadlag__rtds",
+      "router_pnl_delta_when_included": -1.951280083134634
+    },
+    {
+      "displaced_later_trades": 5,
+      "displaced_trades": 109,
+      "incremental_markets": 4,
+      "name": "flow_persistence__no_rtds",
+      "router_pnl_delta_when_included": -5.036599994543963
+    },
+    {
+      "displaced_later_trades": 10,
+      "displaced_trades": 135,
+      "incremental_markets": 1,
+      "name": "flow_persistence__rtds",
+      "router_pnl_delta_when_included": 8.03107992224409
+    },
+    {
+      "displaced_later_trades": 120,
+      "displaced_trades": 341,
+      "incremental_markets": 12,
+      "name": "positioning__no_rtds",
+      "router_pnl_delta_when_included": 3.9889885231852986
+    },
+    {
+      "displaced_later_trades": 153,
+      "displaced_trades": 525,
+      "incremental_markets": 8,
+      "name": "positioning__rtds",
+      "router_pnl_delta_when_included": -21.645777551271067
+    },
+    {
+      "displaced_later_trades": 408,
+      "displaced_trades": 900,
+      "incremental_markets": 28,
+      "name": "liquidity_response__no_rtds",
+      "router_pnl_delta_when_included": -32.7345278643071
+    },
+    {
+      "displaced_later_trades": 171,
+      "displaced_trades": 562,
+      "incremental_markets": 25,
+      "name": "liquidity_response__rtds",
+      "router_pnl_delta_when_included": 10.560990188678261
+    },
+    {
+      "displaced_later_trades": 522,
+      "displaced_trades": 585,
+      "incremental_markets": 31,
+      "name": "q5_payoff__no_rtds",
+      "router_pnl_delta_when_included": -63.27377658206956
+    },
+    {
+      "displaced_later_trades": 124,
+      "displaced_trades": 149,
+      "incremental_markets": 51,
+      "name": "q5_payoff__rtds",
+      "router_pnl_delta_when_included": -40.75033352766184
+    },
+    {
+      "displaced_later_trades": 242,
+      "displaced_trades": 490,
+      "incremental_markets": 16,
+      "name": "market_residual__no_rtds",
+      "router_pnl_delta_when_included": -54.90733618315994
+    },
+    {
+      "displaced_later_trades": 254,
+      "displaced_trades": 514,
+      "incremental_markets": 33,
+      "name": "market_residual__rtds",
+      "router_pnl_delta_when_included": -46.76608596153085
+    },
+    {
+      "displaced_later_trades": 157,
+      "displaced_trades": 676,
+      "incremental_markets": 14,
+      "name": "path_linear__no_rtds",
+      "router_pnl_delta_when_included": -36.057241545023885
+    },
+    {
+      "displaced_later_trades": 135,
+      "displaced_trades": 368,
+      "incremental_markets": 16,
+      "name": "crossvenue_linear__no_rtds",
+      "router_pnl_delta_when_included": -85.83249728390933
+    },
+    {
+      "displaced_later_trades": 61,
+      "displaced_trades": 173,
+      "incremental_markets": 5,
+      "name": "all_dimensions__no_rtds",
+      "router_pnl_delta_when_included": -6.4022915628737564
+    },
+    {
+      "displaced_later_trades": 231,
+      "displaced_trades": 549,
+      "incremental_markets": 17,
+      "name": "normalized_boundary__no_rtds",
+      "router_pnl_delta_when_included": 19.814601421635757
+    },
+    {
+      "displaced_later_trades": 717,
+      "displaced_trades": 906,
+      "incremental_markets": 107,
+      "name": "loss_aware__no_rtds",
+      "router_pnl_delta_when_included": -139.2685009901296
+    },
+    {
+      "displaced_later_trades": 253,
+      "displaced_trades": 343,
+      "incremental_markets": 86,
+      "name": "within_bucket_wait__no_rtds",
+      "router_pnl_delta_when_included": -2.9916629127894794
+    },
+    {
+      "displaced_later_trades": 114,
+      "displaced_trades": 508,
+      "incremental_markets": 13,
+      "name": "path_linear__rtds",
+      "router_pnl_delta_when_included": -15.755009627379991
+    },
+    {
+      "displaced_later_trades": 134,
+      "displaced_trades": 483,
+      "incremental_markets": 7,
+      "name": "crossvenue_linear__rtds",
+      "router_pnl_delta_when_included": -30.44590679970554
+    },
+    {
+      "displaced_later_trades": 57,
+      "displaced_trades": 174,
+      "incremental_markets": 5,
+      "name": "all_dimensions__rtds",
+      "router_pnl_delta_when_included": -19.307602937798947
+    },
+    {
+      "displaced_later_trades": 297,
+      "displaced_trades": 561,
+      "incremental_markets": 87,
+      "name": "normalized_boundary__rtds",
+      "router_pnl_delta_when_included": -11.374550368066366
+    },
+    {
+      "displaced_later_trades": 136,
+      "displaced_trades": 271,
+      "incremental_markets": 33,
+      "name": "loss_aware__rtds",
+      "router_pnl_delta_when_included": 45.44923451282091
+    },
+    {
+      "displaced_later_trades": 118,
+      "displaced_trades": 174,
+      "incremental_markets": 16,
+      "name": "within_bucket_wait__rtds",
+      "router_pnl_delta_when_included": -40.44266960546361
+    },
+    {
+      "displaced_later_trades": 0,
+      "displaced_trades": 0,
+      "incremental_markets": 0,
+      "name": "baseline_20260913T215700Z",
+      "router_pnl_delta_when_included": 0.0
+    },
+    {
+      "displaced_later_trades": 0,
+      "displaced_trades": 0,
+      "incremental_markets": 0,
+      "name": "baseline_20260914T145421Z",
+      "router_pnl_delta_when_included": 0.0
+    },
+    {
+      "displaced_later_trades": 0,
+      "displaced_trades": 0,
+      "incremental_markets": 0,
+      "name": "baseline_20260914T171438Z",
+      "router_pnl_delta_when_included": 0.0
+    }
+  ],
+  "router_incremental_method": "remove one candidate while holding earlier-fold scores and policies fixed"
+}

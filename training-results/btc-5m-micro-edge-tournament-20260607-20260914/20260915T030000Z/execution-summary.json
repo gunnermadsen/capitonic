@@ -1,0 +1,26 @@
+{
+  "training_artifacts": 35,
+  "new_candidates": 32,
+  "historical_refits": 3,
+  "fold_checkpoints": 455,
+  "omitted_planned_candidates": [],
+  "first_saved_fold_utc": "2026-09-15T03:10:24.831604+00:00",
+  "last_saved_final_model_utc": "2026-09-15T05:02:26.029372+00:00",
+  "artifact_generation_span_seconds": 6721.19776725769,
+  "span_definition": "First saved main-run fold to last saved final model, excluding initial preparation and pre-first-fold fitting; includes checkpointed interruption and resumption.",
+  "total_cpu_seconds": null,
+  "cpu_accounting_limitation": "Complete per-process CPU accounting was not retained across interrupted and exited workers; partial measurements are in execution-resume.json.",
+  "maximum_concurrent_fitting_jobs": 2,
+  "native_threads_per_job": 2,
+  "nice_priority": 10,
+  "host_memory_gib": 36,
+  "observed_combined_worker_rss_gib": 5.5,
+  "execution_notes": [
+    "Checkpoints retained during worker reassignment.",
+    "Local empty histogram-bin compatibility guard preserved sparse features and all training rows.",
+    "The completed baseline worker slot handled the final waiting candidate and then four post-cutover diagnostic fits.",
+    "Saved waiting folds were subsequently reused by the original worker without fitting them again.",
+    "Report-only mixed Float32/Float64 concatenation corrected without changing predictions or fits."
+  ],
+  "verification": "35 artifacts and 455 fold models/predictions verified; Q5 economic ledgers and final composed reload parity passed; 38 tests passed."
+}

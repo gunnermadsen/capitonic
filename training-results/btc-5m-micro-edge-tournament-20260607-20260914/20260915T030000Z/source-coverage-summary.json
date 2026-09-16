@@ -1,0 +1,103 @@
+{
+  "end_exclusive": "2026-09-15 00:00:00+00:00",
+  "label_embargo_minutes": 5,
+  "labels": "polymarket.btc_interval_markets official_outcome; validation_status valid",
+  "markets": 28424,
+  "rows": 1705440,
+  "sources": [
+    {
+      "first_decision": "2026-07-22 00:00:10+00:00",
+      "last_decision": "2026-09-14 23:59:00+00:00",
+      "markets": 12032,
+      "rows": 368201,
+      "source": "binance_prints"
+    },
+    {
+      "first_decision": "2026-06-07 00:00:00+00:00",
+      "last_decision": "2026-09-14 23:59:55+00:00",
+      "markets": 28266,
+      "rows": 1695888,
+      "source": "candles"
+    },
+    {
+      "first_decision": "2026-06-07 00:00:00+00:00",
+      "last_decision": "2026-09-14 23:59:55+00:00",
+      "markets": 28424,
+      "rows": 1705440,
+      "source": "core"
+    },
+    {
+      "first_decision": "2026-06-07 00:00:05+00:00",
+      "last_decision": "2026-09-14 23:59:55+00:00",
+      "markets": 19482,
+      "rows": 974884,
+      "source": "execution"
+    },
+    {
+      "first_decision": "2026-06-07 00:00:00+00:00",
+      "last_decision": "2026-08-30 16:53:10+00:00",
+      "markets": 24323,
+      "rows": 694212,
+      "source": "kraken"
+    },
+    {
+      "first_decision": "2026-06-07 00:00:05+00:00",
+      "last_decision": "2026-08-19 10:00:00+00:00",
+      "markets": 17363,
+      "rows": 1041435,
+      "source": "kraken_l2"
+    },
+    {
+      "first_decision": "2026-07-03 00:05:05+00:00",
+      "last_decision": "2026-09-14 23:59:55+00:00",
+      "markets": 20935,
+      "rows": 1256099,
+      "source": "open_interest"
+    },
+    {
+      "first_decision": "2026-06-07 00:01:00+00:00",
+      "last_decision": "2026-09-14 23:59:55+00:00",
+      "markets": 28424,
+      "rows": 1364352,
+      "source": "oracle"
+    },
+    {
+      "first_decision": "2026-06-07 05:48:20+00:00",
+      "last_decision": "2026-08-26 23:59:55+00:00",
+      "markets": 23050,
+      "rows": 1233160,
+      "source": "refprice"
+    },
+    {
+      "first_decision": "2026-06-07 00:00:00+00:00",
+      "last_decision": "2026-08-02 00:00:00+00:00",
+      "markets": 14834,
+      "rows": 888313,
+      "source": "spot_l2"
+    },
+    {
+      "first_decision": "2026-06-07 05:50:00+00:00",
+      "last_decision": "2026-08-27 00:00:00+00:00",
+      "markets": 23100,
+      "rows": 1377010,
+      "source": "twap"
+    }
+  ],
+  "start": "2026-06-07 00:00:00+00:00",
+  "usable_q5": [
+    {
+      "first": "2026-06-07 00:00:05+00:00",
+      "last": "2026-09-14 23:59:55+00:00",
+      "markets": 19377,
+      "rows": 850458,
+      "side": "up"
+    },
+    {
+      "first": "2026-06-07 00:00:05+00:00",
+      "last": "2026-09-14 23:59:55+00:00",
+      "markets": 19373,
+      "rows": 850277,
+      "side": "down"
+    }
+  ]
+}

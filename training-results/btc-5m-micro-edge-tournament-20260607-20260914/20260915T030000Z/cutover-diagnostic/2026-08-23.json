@@ -1,0 +1,41 @@
+{
+  "artifact_path": "/Users/gunnermadsen/development/polymarket-bot/worktress/btc-micro-edge-tournament/packages/btc-directional-model/runs/btc-micro-edge-20260607-20260914/20260915T030000Z/cutover-diagnostic/2026-08-23.joblib",
+  "evaluation_start": "2026-08-23 00:00:00+00:00",
+  "fit_last_end": "2026-08-22 23:50:00+00:00",
+  "fit_start": "2026-08-15 00:00:00+00:00",
+  "identity": {
+    "code": {
+      "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+      "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+      "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+      "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+      "micro_edge_models.py": "bd8a945a44b1b64a90aa94173d80ba502f1654eccde82da32f8723ad067a9f98",
+      "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+      "micro_edge_tournament.py": "4ff5246d98b85e6c2142e9089794c9a930ce1e65f634a3280e815b2499289def"
+    },
+    "compatibility_reason": "Only empty histogram subsamples receive a zero-threshold vector; old successful fits unchanged, verified exact prediction parity. Data, features, labels, sampling, parameters and fold boundaries unchanged. Existing checkpoints retain original producing identities.",
+    "compatible_prior_identities": [
+      {
+        "code": {
+          "baseline_registry": "062dee864fcc67a1cf85b66cca7e78e16b2059b28d652ff08a9d46123d8f3828",
+          "micro_edge_data.py": "5e52516b7164020ca56744247c416142694e6e562d2e70f5714c69322aaf923a",
+          "micro_edge_evaluation.py": "7f114da4071d52cb37ce68ec46f141a63811ec5b968f866d5f575a31485ac619",
+          "micro_edge_execution.py": "76c714522007606f977b3fc0d4ca42ad49cf13f595da2cb771902258a87e3a3c",
+          "micro_edge_models.py": "9e4b0d85880e8ce9b0931d0dda5cfb75f45393d0893ad0e47d01f0495151827e",
+          "micro_edge_sources.py": "cafafaea05229c40569a793d8aca3dc94f74518098ed9386b3253c9b6cd4669a",
+          "micro_edge_tournament.py": "3c6fe2381d3dde5ade4c51076b3528d7f5fc6ac47641232d5490ee79b9759618"
+        },
+        "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+        "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+        "source_commit": "0c7d50ce4b8b247d0435a0ac5a32adbeff171b2e"
+      }
+    ],
+    "diagnostic_code_sha256": "4ddff93aea2b205bd45d213df7a4d6467d0640ab604faff503a150f6d3e885d6",
+    "execution_manifest": "5d623bcb3efb775f83301fd00dc1b20a4dddba751fd2514f9f4f6a14af582999",
+    "panel_manifest": "25224cf3f8d57f5e83516edcb686e43fa8310440e9809f871dd79f78c32b3a87",
+    "source_commit": "1abec4bde28d54e5f52d28ed13c9d4c9b38c6e43"
+  },
+  "producing_commit": "7179000b5b6dd025ca08e252b2160a08d5c07f05",
+  "qualification_status": "cutover_diagnostic_only_not_deployed",
+  "sha256": "b27d3415ae47d90f7e1a799ab66b1c1a6f5a7bbb7f522078d7093354e1e54e5b"
+}
