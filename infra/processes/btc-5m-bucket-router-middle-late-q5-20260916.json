@@ -156,7 +156,7 @@
     "deployment_scope": "paper_only",
     "production_qualified": false,
     "umr_contract": "capitonic-unified-model-runtime-v1",
-    "replay_manifest": "/Volumes/docker-data/polymarket-bot/artifacts/backtests/unified-model-router/bucket-qualification/20260916T222236Z/manifests/models.json",
+    "replay_manifest": "docs/unified-model-runtime/evidence/bucket-router-models-20260916.json",
     "model_keys": [
       "btc-5m-t1-bridge-aware-specialist--without-rtds-candles-q5",
       "btc-5m-t2-extended-official-75-89--without-rtds-candles-q5",
