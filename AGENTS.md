@@ -142,9 +142,13 @@ Think of Capitonic as a vision to generate income through systems with automatio
 - Keep all implementation, tests, generated evidence, and related fixes for the feature inside its assigned worktree.
 - Before creating a worktree, run `git worktree list` and confirm that no existing worktree already covers the feature domain.
 
-## Parquet Artifacts in Worktrees
+## Worktree Data Artifact Storage
 
-- Do not commit Parquet files from worktrees. Store generated Parquet artifacts outside the repository, such as on the external SSD, and keep only the supporting code and lightweight metadata in Git.
+- Before starting training, backtesting, or a data experiment in a worktree, create its run directory under `/Volumes/docker-data/polymarket-bot/artifacts/<activity>/<domain>/<workflow>/<run-id>/`, where `<activity>` is `training`, `backtests`, or `data-tests`, names use lowercase kebab-case, and `<run-id>` is a UTC `YYYYMMDDTHHMMSSZ` timestamp.
+- Store generated data and run artifacts on the external SSD, not in the repository or worktree. This includes Parquet, CSV, Arrow, JSONL, database extracts, model binaries, predictions, trade ledgers, checkpoints, plots, logs, and other bulky generated outputs. Source code, configuration, tests, and lightweight provenance or result summaries remain in Git.
+- Organize each run by purpose using only the directories it needs: `inputs/`, `datasets/`, `models/`, `predictions/`, `trades/`, `metrics/`, `diagnostics/`, `manifests/`, and `logs/`. Add more specific subdirectories beneath these when a run compares multiple models or purposes.
+- Every run directory must contain a `README.md` or manifest recording the activity, domain, workflow, run ID, source branch and commit, purpose, model or strategy identity, command or entrypoint, source-data identity, and the meaning of each artifact directory. Keep a lightweight pointer to that record with the related code or report in Git.
+- Do not commit generated Parquet, CSV, or other run-data artifacts. If the external SSD is unavailable, stop before generating them rather than silently writing them into a worktree; use another location only when the user explicitly approves it.
 
 ## Worktree Lifecycle
 
