@@ -1,7 +1,4 @@
-//! Kraken realtime and historical ingestion strategies.
-
-mod spot_trades;
-pub use spot_trades::KrakenSpotTradesFactory;
+//! Kraken historical ingestion strategies.
 
 macro_rules! define_kraken_futures_strategy {
     ($type_name:ident, $key:literal, $name:literal, $description:literal, $dataset:ident, time) => {

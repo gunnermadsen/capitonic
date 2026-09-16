@@ -29,32 +29,11 @@
             "require_sequence_integrity": true
           },
           {
-            "key": "kraken_spot_btcusd_trades",
-            "required": true,
-            "contract_version": 1,
-            "require_sequence_integrity": true,
-            "maximum_age_ms": 2000
-          },
-          {
             "key": "polygon_chainlink_btcusd_oracle",
             "required": false,
             "contract_version": 1,
             "require_sequence_integrity": false,
             "maximum_age_ms": 600000
-          },
-          {
-            "key": "chainlink_btcusd_reference_price",
-            "required": true,
-            "contract_version": 1,
-            "require_sequence_integrity": true,
-            "maximum_age_ms": 5000
-          },
-          {
-            "key": "binance_futures_btcusdt_open_interest",
-            "required": true,
-            "contract_version": 1,
-            "require_sequence_integrity": true,
-            "maximum_age_ms": 360000
           },
           {
             "key": "polymarket_btc_five_minute_market_contracts",
@@ -82,42 +61,42 @@
                 "member_id": "member_4",
                 "selection": {
                   "type": "btc_directional_model",
-                  "model_key": "btc-5m-t3-kraken-120-149--without-rtds-candles-q5"
+                  "model_key": "btc-5m-t1-bridge-aware-specialist--without-rtds-candles-q5"
                 }
               },
               {
                 "member_id": "member_5",
                 "selection": {
                   "type": "btc_directional_model",
-                  "model_key": "btc-5m-t3-price-time-150-169--without-rtds-candles-q5"
+                  "model_key": "btc-5m-t2-extended-official-75-89--without-rtds-candles-q5"
                 }
               },
               {
                 "member_id": "member_6",
                 "selection": {
                   "type": "btc_directional_model",
-                  "model_key": "btc-5m-t2-multivenue-185-209--without-rtds-candles-q5"
+                  "model_key": "btc-5m-t2-dual-head-75-89--without-rtds-candles-q5"
                 }
               },
               {
                 "member_id": "member_7",
                 "selection": {
                   "type": "btc_directional_model",
-                  "model_key": "btc-5m-t2-kraken-terminal-210-239--without-rtds-candles-q5"
+                  "model_key": "btc-5m-t4-extended-specialist-official--without-rtds-candles-q5"
                 }
               },
               {
                 "member_id": "member_8",
                 "selection": {
                   "type": "btc_directional_model",
-                  "model_key": "btc-5m-t2-settlement-terminal-210-239--without-rtds-candles-q5"
+                  "model_key": "btc-5m-t4-specialist-dual-head--without-rtds-candles-q5"
                 }
               }
             ]
           },
           "target_size": "5",
-          "min_seconds_after_open": 120,
-          "min_seconds_before_close": 61,
+          "min_seconds_after_open": 60,
+          "min_seconds_before_close": 210,
           "max_reference_age_ms": 2000,
           "max_directional_feature_age_ms": 1000,
           "max_chainlink_open_delay_ms": 5000,
@@ -177,13 +156,13 @@
     "deployment_scope": "paper_only",
     "production_qualified": false,
     "umr_contract": "capitonic-unified-model-runtime-v1",
-    "replay_manifest": "/Volumes/docker-data/polymarket-bot/artifacts/backtests/unified-model-router/bucket-qualification/20260916T205041Z/manifests/models.json",
+    "replay_manifest": "/Volumes/docker-data/polymarket-bot/artifacts/backtests/unified-model-router/bucket-qualification/20260916T222236Z/manifests/models.json",
     "model_keys": [
-      "btc-5m-t3-kraken-120-149--without-rtds-candles-q5",
-      "btc-5m-t3-price-time-150-169--without-rtds-candles-q5",
-      "btc-5m-t2-multivenue-185-209--without-rtds-candles-q5",
-      "btc-5m-t2-kraken-terminal-210-239--without-rtds-candles-q5",
-      "btc-5m-t2-settlement-terminal-210-239--without-rtds-candles-q5"
+      "btc-5m-t1-bridge-aware-specialist--without-rtds-candles-q5",
+      "btc-5m-t2-extended-official-75-89--without-rtds-candles-q5",
+      "btc-5m-t2-dual-head-75-89--without-rtds-candles-q5",
+      "btc-5m-t4-extended-specialist-official--without-rtds-candles-q5",
+      "btc-5m-t4-specialist-dual-head--without-rtds-candles-q5"
     ]
   }
 }

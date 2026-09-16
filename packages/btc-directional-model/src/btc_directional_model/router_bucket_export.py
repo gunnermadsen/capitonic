@@ -1,6 +1,6 @@
-"""Export approved frozen bucket specialists and replay three Q5 routers; no fitting."""
+"""Export approved frozen bucket specialists and compose three Q5 routers; no fitting."""
 from __future__ import annotations
-import argparse, hashlib, json, re
+import argparse, hashlib, json
 from pathlib import Path
 import joblib
 import numpy as np
@@ -11,30 +11,41 @@ from .runtime_export import canonical_json_bytes, write_immutable_directory
 from .time_bucket_specialist_tournament import _opportunities, _select_trades, Policy
 
 RUNS = {
+ 't1': ('btc-5m-time-bucket-specialist-tournament-20260321-20260901','btc-time-bucket-specialist-tournament-20260321-20260901','20260913T215700Z','1987c3d1e5a82bae587574f4f5bd44a5027cbe25b1f6cb992d0da38c410ea6a6'),
  't2': ('btc-5m-micro-bucket-router-tournament-20260321-20260901','btc-micro-bucket-router-tournament-20260321-20260901','20260914T002735Z','bd50ab8b9bbd0270762115de7831bb78bb4538f7db0a9e3ac53e32c48ee9dfea'),
  't3': ('btc-5m-amalgamated-bucket-tournament-20260321-20260901','btc-amalgamated-bucket-tournament-20260321-20260901','20260914T145421Z','b5a9e33b024959d72980adc22678625f2205355b7e48156af842df3698fae803'),
+ 't4': ('btc-5m-time-bucket-specialist-tournament-20260321-20260914','btc-time-bucket-specialist-tournament-20260321-20260914','20260914T171438Z','6cabcb197f4c6feda26716c0a61863339e0efa32c084b1ee57749ff0c6640e13'),
 }
 MODELS = [
- ('t2','time_specialist_60_64__with_rtds_candles'),('t2','time_specialist_65_69__with_rtds_candles'),
- ('t2','time_specialist_70_74__without_rtds_candles'),('t2','crossvenue_110_119__without_rtds_candles'),
- ('t3','kraken_120_149__without_rtds_candles'),('t3','price_time_150_169__without_rtds_candles'),
- ('t2','multivenue_185_209__without_rtds_candles'),('t2','kraken_terminal_210_239__without_rtds_candles'),
- ('t2','settlement_terminal_210_239__without_rtds_candles'),
+ ('t2','bridge_aware_60_64__without_rtds_candles',60,64),
+ ('t2','bridge_aware_65_69__without_rtds_candles',65,69),
+ ('t2','bridge_aware_70_74__without_rtds_candles',70,74),
+ ('t4','bridge_aware_specialist__without_rtds_candles',60,74),
+ ('t3','bridge_aware_60_74__without_rtds_candles',60,74),
+ ('t1','bridge_aware_specialist__without_rtds_candles',60,74),
+ ('t2','extended_official_75_89__without_rtds_candles',75,89),
+ ('t2','dual_head_75_89__without_rtds_candles',75,89),
+ ('t4','extended_specialist_official__without_rtds_candles',75,89),
+ ('t4','specialist_dual_head__without_rtds_candles',75,89),
+ ('t1','extended_specialist_official__without_rtds_candles',75,89),
+ ('t1','specialist_dual_head__without_rtds_candles',75,89),
+ ('t3','price_control_terminal_210_239__without_rtds_candles',210,239),
+ ('t2','price_control_terminal_210_239__without_rtds_candles',210,239),
+ ('t1','price_control_terminal__without_rtds_candles',210,239),
 ]
-GROUPS={'early-middle':[0,1,2,3,4], 'middle-late':[4,5,6,7,8], 'broad-coverage':[1,3,5,6,7]}
+GROUPS={'early-middle':[0,1,2,3,4], 'middle-late':[5,6,7,8,9], 'broad-coverage':[10,11,12,13,14]}
 SCHEMA='btc-5m-payoff-aware-time-bucket-specialist-features-v1'
 KEYS=['market_id','window_start','observed_at','seconds_elapsed']
 
 def contract(names):
     def has(prefix): return any(n.startswith(prefix) for n in names)
+    unsupported=('chainlink_ref_','chainlink_candle_','binance_oi_','kraken_')
+    if any(n.startswith(unsupported) or n in {'refprice_margin_bps','sensor_source_age_seconds'} for n in names):
+        raise ValueError('model requires an unavailable realtime source')
     recipes=[
       ('btc_seconds','binance_spot_btcusdt_one_second_ohlcv','binance_closed_seconds_prewindow_open_v1',True,301,5000,True),
       ('execution_book','polymarket_btc_five_minute_orderbooks','causal_vwap_five_shares_v1',True,2,2000,True),
       ('oracle','polygon_chainlink_btcusd_oracle','causal_oracle_rounds_v1',False,600,600000,has(('oracle_','binance_oracle_'))),
-      ('refprice','chainlink_btcusd_reference_price','causal_signed_refprice_tournament_v1',True,125,5000,has('chainlink_ref_')),
-      ('candles','chainlink_btcusd_one_minute_ohlc','chainlink_ohlc_close_available_120s_v1',True,3660,120000,has('chainlink_candle_')),
-      ('open_interest','binance_futures_btcusdt_open_interest','binance_futures_five_minute_open_interest_v1',True,3900,360000,has('binance_oi_')),
-      ('kraken','kraken_spot_btcusd_trades','kraken_spot_sparse_trade_seconds_v1',True,121,2000,has('kraken_')),
     ]
     return dict(version='capitonic-unified-model-runtime-v1',adapter='time_bucket_specialist',adapter_version=1,
       inputs=[dict(slot=s,product=p,semantics=r,required=req,lookback_seconds=h,maximum_age_ms=a) for s,p,r,req,h,a,use in recipes if use],
@@ -50,13 +61,15 @@ def metrics(frame):
 
 def export(source, archive, output):
     output.mkdir(parents=True,exist_ok=True)
-    loaded={};records=[];qualified=[];feature_names=set();panel_cache={}
+    for directory in ('models','metrics','manifests'):
+        (output/directory).mkdir(exist_ok=True)
+    loaded={};records=[];feature_names=set()
     manifest=dict(activity='backtests',domain='unified-model-router',workflow='bucket-qualification',run_id=output.name,
-       source_branch='feature/unified-model-router',purpose='Immutable Q5 exports and first-qualified array-order replay of approved groups',
+       source_branch='feature/unified-model-router',purpose='Immutable Q5 exports and first-qualified array-order composition of approved groups',
        entrypoint='python -m btc_directional_model.router_bucket_export',training_performed=False,
-       directories=dict(models='immutable UMR packages',trades='router replay Parquet',metrics='numerical replay summaries',manifests='source/model identities'))
+       directories=dict(models='immutable UMR packages',metrics='per-member Q5 evidence and router compositions',manifests='source/model identities'))
     (output/'README.md').write_text('# Router bucket qualification\n\n'+json.dumps(manifest,indent=2)+'\n')
-    for index,(run,name) in enumerate(MODELS):
+    for index,(run,name,start,end) in enumerate(MODELS):
         folder,old_folder,run_id,sha=RUNS[run]
         work=archive/'runs'/old_folder/run_id
         if run not in loaded:
@@ -66,20 +79,19 @@ def export(source, archive, output):
         artifact,report=loaded[run];result=report['candidate_results'][name];model=artifact['models'][name]
         local=[n for i,n in enumerate(model.features) if i not in model.neutralized_columns]
         names=local+[n for n in ['up_ask_vwap_5','down_ask_vwap_5','fee_rate'] if n not in local];feature_names.update(names)
-        start,end=map(int,re.search(r'_(\d+)_(\d+)__',name).groups())
         frozen=result['policy'];policy=dict(start_second=start,end_second=end,side=frozen['side'],minimum_confidence=frozen['minimum_confidence'],minimum_edge=frozen['minimum_edge'],maximum_share_cost=frozen['maximum_share_cost'],execution_reserve_per_share=.005)
         key=f'btc-5m-{run}-{name.replace("_","-")}-q5'
         calibration=dict(slope=float(model.calibrator.coef_[0,0]),intercept=float(model.calibrator.intercept_[0])) if model.calibrator is not None else dict(slope=1.,intercept=0.)
         definition=dict(contract=contract(names),outcome=_histogram(model.estimator,local,names,'regression'),calibration=calibration,policy=policy)
         payload=_base_model(key,SCHEMA,names,sha,dict(kind='unified',definition=definition,prediction_policy=dict(type='first_confidence_crossing',minimum_seconds_after_open=start,maximum_seconds_after_open=end,cadence_seconds=1,early_end_second=None,early_cadence_seconds=None,late_start_second=None)))
         payload['provenance'].update(candidate=name,source_training_run=run_id,producing_commit=report['source_commit'],frozen_policy=frozen,qualified_quantity=5,quantity_basis='existing_confirmation_capacity_5',export_is_training=False)
-        panel_path=work/'early-causal-panel.parquet' if result['dataset']=='early_causal_panel' else Path(report['source_contract']['paths']['evaluation_panel'])
+        panel_path=source/folder/run_id/'datasets/early-causal-panel.parquet'
         scan=pl.scan_parquet(panel_path)
         available=set(scan.collect_schema().names()); missing=set(names)-available
         if missing:raise ValueError(f'{name}: missing panel features {missing}')
         sample=scan.filter(pl.col('seconds_elapsed').is_between(start,end) & pl.col('fee_rate').is_not_null() & pl.col('up_ask_vwap_5').is_not_null() & pl.col('down_ask_vwap_5').is_not_null()).select(list(dict.fromkeys(KEYS+names))).head(128).collect(engine='streaming')
         if sample.is_empty():
-            sample=pl.scan_parquet(work/'early-causal-panel.parquet').filter(pl.col('seconds_elapsed').is_between(start,end) & pl.col('fee_rate').is_not_null() & pl.col('up_ask_vwap_5').is_not_null() & pl.col('down_ask_vwap_5').is_not_null()).select(list(dict.fromkeys(KEYS+names))).head(128).collect(engine='streaming')
+            sample=pl.scan_parquet(source/'evaluation-panel.parquet').filter(pl.col('seconds_elapsed').is_between(start,end) & pl.col('fee_rate').is_not_null() & pl.col('up_ask_vwap_5').is_not_null() & pl.col('down_ask_vwap_5').is_not_null()).select(list(dict.fromkeys(KEYS+names))).head(128).collect(engine='streaming')
         x=sample.select(local).to_numpy().astype(float);raw=np.clip(model.estimator.predict(x),1e-6,1-1e-6)
         probabilities=model.calibrator.predict_proba(np.log(raw/(1-raw)).reshape(-1,1))[:,1] if model.calibrator is not None else raw
         vectors=[]
@@ -92,27 +104,25 @@ def export(source, archive, output):
         data=canonical_json_bytes(payload);gold=canonical_json_bytes(dict(schema_version='capitonic-btc-payoff-aware-golden-vectors-v1',model_key=key,feature_schema_sha256=payload['features']['schema_sha256'],vectors=vectors))
         model_manifest=dict(schema_version='capitonic-btc-directional-runtime-manifest-v1',model_key=key,model_file='model.json',model_sha256=hashlib.sha256(data).hexdigest(),golden_vectors_file='golden-vectors.json',golden_vectors_sha256=hashlib.sha256(gold).hexdigest(),feature_schema_version=SCHEMA,feature_schema_sha256=payload['features']['schema_sha256'],source_freeze_manifest_sha256=file_sha256(work/'metrics.json'),source_training_model_sha256=sha,deployment_scope='paper_only',production_qualified=False,live_capital_allowed=False)
         write_immutable_directory(output/'models'/key,{'model.json':data,'manifest.json':canonical_json_bytes(model_manifest),'golden-vectors.json':gold})
-        records.append(dict(index=index,tournament=run,candidate=name,**model_manifest,policy=policy,contract=definition['contract'],reference_cases=len(vectors),original_q5_confirmation=result['confirmation_capacity']['5']))
-        predictions=pl.read_parquet(work/'checkpoints'/f'{name}-predictions.parquet')
-        # Use the tournament's actual confirmation orderbook capacity evidence.
-        execution=pl.scan_parquet(str(work/'confirmation-execution'/'*.parquet')).with_columns(*[((pl.col('observed_at')-pl.col(f'{side}_provider_received_at')).dt.total_microseconds()/1e6).alias(f'pm_{side}_book_age_seconds') for side in ['up','down']]).collect(engine='streaming')
+        evidence=(result.get('confirmation_capacity') or result.get('sealed_capacity'))['5']
+        evidence_period='confirmation' if result.get('confirmation_capacity') else 'sealed'
+        records.append(dict(index=index,tournament=run,candidate=name,**model_manifest,policy=policy,contract=definition['contract'],reference_cases=len(vectors),q5_evidence_period=evidence_period,original_q5_evidence=evidence))
         raw_config={'execution':{'freshness_seconds':2.0,'execution_reserve_per_share':.005,'stress_slippage_per_share':.01}}
-        opportunities=_opportunities(execution,predictions,5,raw_config)
-        frame=_select_trades(opportunities,Policy(policy['side'],5,policy['minimum_edge'],policy['minimum_confidence'],policy['maximum_share_cost']),raw_config)
-        actual=metrics(frame)
-        expected=result['confirmation_capacity']['5']
-        if actual['trades']!=expected['trades'] or abs(actual['net_pnl']-expected['net_pnl'])>1e-7:
-            raise ValueError(f"{name}: archived Q5 replay mismatch: {actual} vs {expected}")
-        frame=frame.with_columns(pl.lit(index).alias('member_index'),pl.col('selected_probability').alias('confidence'),(pl.col('side')=='up').alias('up'),pl.col('share_cost').alias('cost'),pl.col('fee_per_share').alias('fee'))
-        qualified.append(frame.select(KEYS+['member_index','probability','confidence','up','cost','fee','net_pnl','stress_net_pnl']))
+        if result.get('confirmation_capacity'):
+            predictions=pl.read_parquet(work/'checkpoints'/f'{name}-predictions.parquet')
+            # Use the tournament's actual confirmation orderbook capacity evidence.
+            execution=pl.scan_parquet(str(work/'confirmation-execution'/'*.parquet')).with_columns(*[((pl.col('observed_at')-pl.col(f'{side}_provider_received_at')).dt.total_microseconds()/1e6).alias(f'pm_{side}_book_age_seconds') for side in ['up','down']]).collect(engine='streaming')
+            opportunities=_opportunities(execution,predictions,5,raw_config)
+            frame=_select_trades(opportunities,Policy(policy['side'],5,policy['minimum_edge'],policy['minimum_confidence'],policy['maximum_share_cost']),raw_config)
+            actual=metrics(frame)
+            if actual['trades']!=evidence['trades'] or abs(actual['net_pnl']-evidence['net_pnl'])>1e-7:
+                raise ValueError(f"{name}: archived Q5 replay mismatch: {actual} vs {evidence}")
         print(f'exported {key}: {len(vectors)} reference cases',flush=True)
     reports={}
     for group,indices in GROUPS.items():
-        all_rows=pl.concat([qualified[i] for i in indices]);priority={i:order for order,i in enumerate(indices)}
-        all_rows=all_rows.with_columns(pl.col('member_index').replace_strict(priority).alias('priority'))
-        trades=all_rows.sort(['market_id','observed_at','priority']).unique('market_id',keep='first',maintain_order=True).sort('observed_at')
-        trades.write_parquet(output/'trades'/f'{group}.parquet')
-        reports[group]=dict(**metrics(trades),models=[records[i]['model_key'] for i in indices],quantity=5,period='2026-08-26/2026-09-01',limitations=['Model selection used these historic results; this is not an independent holdout.','Replay uses archived opportunities and execution capacity, not measured live fills.'])
+        reports[group]=dict(models=[records[i]['model_key'] for i in indices],quantity=5,
+          member_q5_evidence=[dict(model_key=records[i]['model_key'],period=records[i]['q5_evidence_period'],metrics=records[i]['original_q5_evidence']) for i in indices],
+          composition_replay='not_performed_mixed_evidence_periods',limitations=['Model selection used these historic results; this is not an independent holdout.','The four tournaments do not retain a common-period Q5 trade ledger, so aggregate router PnL is intentionally not reported.','Archived opportunities and capacity evidence are not measured live fills.'])
     (output/'manifests/models.json').write_bytes(canonical_json_bytes(records))
     (output/'metrics/routers.json').write_bytes(canonical_json_bytes(reports))
     return feature_names

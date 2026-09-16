@@ -530,7 +530,7 @@ fn exported_bucket_packages_pass_registration_parity() {
             .unwrap();
     let registry = RuntimeModelRegistry::new(root.join("models"));
     let records = records.as_array().unwrap();
-    assert_eq!(records.len(), 9);
+    assert_eq!(records.len(), 15);
     for row in records {
         let selection = RuntimeModelSelection {
             model_key: row["model_key"].as_str().unwrap().into(),

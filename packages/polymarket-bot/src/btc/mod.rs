@@ -9,7 +9,6 @@ pub mod execution_guard;
 pub mod execution_lifecycle;
 pub mod feed_contract;
 pub mod feeds;
-pub mod kraken_trades;
 pub mod live_execution;
 pub mod market;
 pub mod paper;

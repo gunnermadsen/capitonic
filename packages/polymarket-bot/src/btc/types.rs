@@ -702,8 +702,6 @@ pub struct RealtimeState {
     /// public realtime-state JSON contract.
     #[serde(skip)]
     pub binance_one_second_window: BinanceOneSecondWindow,
-    #[serde(skip)]
-    pub kraken_trades: super::kraken_trades::KrakenTradeWindow,
     /// Compact, inference-only Binance spot L2 feature history. The reconstructed
     /// full-depth book remains task-local and is never cloned into realtime state.
     #[serde(skip)]

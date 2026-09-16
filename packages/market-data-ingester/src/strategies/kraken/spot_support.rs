@@ -54,7 +54,7 @@ impl KrakenSpotTradeConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct KrakenSpotTrade {
     pub trade_id: i64,
     pub timestamp_ns: i64,

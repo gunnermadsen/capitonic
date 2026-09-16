@@ -2130,39 +2130,6 @@ impl BtcRepository {
             .transpose()
     }
 
-    /// Bounded startup hydration for the existing canonical OHLC product.
-    pub(crate) async fn load_canonical_chainlink_candles(
-        &self,
-        end: DateTime<Utc>,
-    ) -> Result<Vec<super::directional_features::DirectionalChainlinkCandle>> {
-        #[derive(sqlx::FromRow)]
-        struct Row {
-            open_timestamp: DateTime<Utc>,
-            close_timestamp: DateTime<Utc>,
-            received_at: DateTime<Utc>,
-            open_price: Decimal,
-            high_price: Decimal,
-            low_price: Decimal,
-            close_price: Decimal,
-        }
-        let rows=sqlx::query_as::<_,Row>("SELECT open_timestamp,close_timestamp,received_at,open_price,high_price,low_price,close_price FROM market_data.chainlink_btcusd_one_minute_candles WHERE open_timestamp >= $1 AND close_timestamp <= $2 AND received_at <= $2 ORDER BY open_timestamp DESC LIMIT 64")
-            .bind(end-chrono::Duration::minutes(63)).bind(end).fetch_all(&self.pool).await?;
-        Ok(rows
-            .into_iter()
-            .map(
-                |r| super::directional_features::DirectionalChainlinkCandle {
-                    open_timestamp: r.open_timestamp,
-                    close_timestamp: r.close_timestamp,
-                    available_at: r.received_at,
-                    open_price: r.open_price,
-                    high_price: r.high_price,
-                    low_price: r.low_price,
-                    close_price: r.close_price,
-                },
-            )
-            .collect())
-    }
-
     /// Hydrates the bounded RTDS midpoint history used to construct closed Chainlink candles.
     /// Duplicate reconnect deliveries are collapsed by source timestamp, retaining the first
     /// causally received value exactly as the historical training source does.

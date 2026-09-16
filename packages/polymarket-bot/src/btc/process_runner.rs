@@ -551,31 +551,37 @@ impl BtcProcessRunner {
             .frozen_process_config
             .pointer("/raw")
             .context("router requires frozen process configuration")?;
-        let definition: super::unified_model_runtime::router::RouterDefinition =
-            serde_json::from_value(
-                control
-                    .pointer("/strategy/decision_strategy")
-                    .context("missing router definition")?
-                    .clone(),
-            )?;
-        let sources = control["sources"]
-            .as_array()
-            .context("missing process sources")?;
-        let keys = sources
-            .iter()
-            .filter_map(|s| s.as_str().or_else(|| s["key"].as_str()))
-            .collect();
-        let mut base = config.strategy.clone();
-        base.min_seconds_after_open = control
-            .pointer("/strategy/min_seconds_after_open")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(15);
-        base.min_seconds_before_close = control
-            .pointer("/strategy/min_seconds_before_close")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(20);
-        let router_members = definition
-            .compile_members(&base, &keys)?
+        let member_strategies = if control["process_schema_version"].as_str()
+            == Some(super::unified_model_runtime::router::PROCESS_SCHEMA_VERSION)
+        {
+            let definition: super::unified_model_runtime::router::RouterDefinition =
+                serde_json::from_value(
+                    control
+                        .pointer("/strategy/decision_strategy")
+                        .context("missing router definition")?
+                        .clone(),
+                )?;
+            let sources = control["sources"]
+                .as_array()
+                .context("missing process sources")?;
+            let keys = sources
+                .iter()
+                .filter_map(|s| s.as_str().or_else(|| s["key"].as_str()))
+                .collect();
+            let mut base = config.strategy.clone();
+            base.min_seconds_after_open = control
+                .pointer("/strategy/min_seconds_after_open")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(15);
+            base.min_seconds_before_close = control
+                .pointer("/strategy/min_seconds_before_close")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(20);
+            definition.compile_members(&base, &keys)?
+        } else {
+            vec![("legacy_primary".into(), config.strategy.clone())]
+        };
+        let router_members = member_strategies
             .into_iter()
             .map(|(member_id, strategy)| {
                 let model = runtime_model(

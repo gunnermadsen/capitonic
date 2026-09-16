@@ -499,46 +499,6 @@ impl ProfileRepository {
         Ok(updated.is_some())
     }
 
-    /// Runtime health for the stream-only product. This does not claim durable
-    /// facts, advance persistence watermarks, or write a trade checkpoint.
-    pub async fn record_stream_progress(
-        &self,
-        key: IngesterStrategyKey,
-        owner: &str,
-        token: Uuid,
-        generation: i64,
-        source_at: Option<DateTime<Utc>>,
-    ) -> Result<bool> {
-        anyhow::ensure!(
-            key == IngesterStrategyKey::KrakenSpotBtcusdTrades,
-            "persistent strategies must use durable progress"
-        );
-        let updated = sqlx::query_scalar::<_, String>(
-            r#"
-            UPDATE ingester.profiles
-            SET last_source_event_at = COALESCE($5, last_source_event_at),
-                last_provider_available_at = COALESCE($5, last_provider_available_at),
-                observed_state = CASE WHEN $5::timestamptz >= now() - interval '10 seconds'
-                    THEN 'running' ELSE 'degraded' END,
-                health_status = CASE WHEN $5::timestamptz >= now() - interval '10 seconds'
-                    THEN 'healthy' ELSE 'degraded' END,
-                updated_at = now()
-            WHERE strategy_key = $1 AND lease_owner = $2 AND lease_token = $3
-                AND lease_expires_at > now() AND desired_state = 'running'
-                AND desired_generation = $4 AND applied_generation = $4
-            RETURNING strategy_key
-            "#,
-        )
-        .bind(key.as_str())
-        .bind(owner)
-        .bind(token)
-        .bind(generation)
-        .bind(source_at)
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(updated.is_some())
-    }
-
     pub async fn mark_degraded(
         &self,
         key: IngesterStrategyKey,

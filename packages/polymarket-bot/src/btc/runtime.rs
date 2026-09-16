@@ -36,40 +36,6 @@ use super::{
     },
 };
 
-async fn hydrate_canonical_candles(
-    repository: BtcRepository,
-    state: Arc<RwLock<RealtimeState>>,
-    mut sources: watch::Receiver<Vec<SourceSelector>>,
-    shutdown: CancellationToken,
-) {
-    loop {
-        if sources
-            .borrow()
-            .iter()
-            .any(|s| s.key == crate::market_data_stream::PRODUCT_CANONICAL_CANDLES)
-        {
-            match repository
-                .load_canonical_chainlink_candles(Utc::now())
-                .await
-            {
-                Ok(rows) => {
-                    let mut state = state.write().await;
-                    for row in rows {
-                        state.directional_external.merge_canonical_candle(row);
-                    }
-                    if state.directional_external.canonical_candles.len() >= 61 {
-                        return;
-                    }
-                }
-                Err(error) => {
-                    tracing::warn!(%error,"canonical Chainlink candle hydration deferred")
-                }
-            }
-        }
-        tokio::select! {_=shutdown.cancelled()=>return, _=sources.changed()=>{}, _=sleep(StdDuration::from_secs(30))=>{}}
-    }
-}
-
 const DIRECTIONAL_CHAINLINK_HYDRATION_RETRY_MAX_DELAY: StdDuration = StdDuration::from_secs(300);
 const DIRECTIONAL_OPEN_INTEREST_BOOTSTRAP_POINTS: usize = 13;
 const DIRECTIONAL_OPEN_INTEREST_BOOTSTRAP_LOOKBACK_MINUTES: i64 = 70;
@@ -605,24 +571,12 @@ impl BtcRuntime {
             let _ = stream_shutdown_rx.changed().await;
             watch_shutdown.cancel();
         });
-        let canonical_hydration = hydrate_canonical_candles(
-            self.repository.clone(),
-            state.clone(),
-            sources_rx.clone(),
-            stream_shutdown.clone(),
-        );
         let mut tasks = vec![spawn_runtime_task(
             "market_data_grpc",
             stream_runtime.run(sources_rx, stream_shutdown_task),
             running.clone(),
             metrics.clone(),
         )];
-        tasks.push(spawn_runtime_task(
-            "canonical_chainlink_candle_hydration",
-            canonical_hydration,
-            running.clone(),
-            metrics.clone(),
-        ));
         if binance_one_second_hydration_failed {
             tasks.push(spawn_runtime_task(
                 "binance_one_second_hydration",

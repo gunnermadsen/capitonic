@@ -157,7 +157,7 @@ services:
     build:
       context: .
       dockerfile: packages/db-migrate/Dockerfile
-    image: ${DB_MIGRATE_IMAGE:-polymarket/db-migrate:latest}
+    image: polymarket/db-migrate:latest
     container_name: db-migrate
     hostname: db-migrate
     mem_limit: 256m
