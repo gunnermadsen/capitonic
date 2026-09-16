@@ -160,9 +160,11 @@ pub struct WorkerRecord {
 pub struct WorkerAllocationRecord {
     pub worker_id: String,
     pub capacity_units: i32,
+    pub realtime_slot_limit: i32,
     pub allocated_units: i64,
     pub realtime_leases: i64,
     pub backfill_leases: i64,
+    pub backfill_units: i64,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -553,10 +555,11 @@ impl BackfillRepository {
     pub async fn list_worker_allocations(&self) -> Result<Vec<WorkerAllocationRecord>> {
         Ok(sqlx::query_as(
             r#"
-            SELECT worker.worker_id, worker.capacity_units,
+            SELECT worker.worker_id, worker.capacity_units, worker.realtime_slot_limit,
               COALESCE(realtime.units,0) + COALESCE(backfill.units,0) AS allocated_units,
               COALESCE(realtime.leases,0) AS realtime_leases,
-              COALESCE(backfill.leases,0) AS backfill_leases
+              COALESCE(backfill.leases,0) AS backfill_leases,
+              COALESCE(backfill.units,0) AS backfill_units
             FROM ingester.workers worker
             LEFT JOIN LATERAL (
               SELECT count(*)::bigint AS leases, count(*)::bigint * 2 AS units

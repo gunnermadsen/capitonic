@@ -41,6 +41,41 @@ groups:
         annotations: {summary: One or more selector-required bot-to-worker routes are unavailable}
         labels: {service: polymarket-bot, family: market_data_pipeline, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
         isPaused: false
+      - uid: mdp_required_product_resolution_deficit
+        title: Required market-data products unresolved
+        condition: C
+        data:
+          - refId: A
+            queryType: instant
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: prometheus
+            model:
+              datasource: {type: prometheus, uid: prometheus}
+              editorMode: code
+              expr: 'clamp_min(max(polymarket_market_data_required_products) - max(polymarket_market_data_resolved_products), 0)'
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              datasource: {type: __expr__, uid: __expr__}
+              expression: B
+              type: threshold
+              conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}]
+              refId: C
+        noDataState: Alerting
+        execErrState: Error
+        for: 30s
+        annotations:
+          summary: One or more required products have no current resolvable worker route
+          description: Inspect the bounded unresolved-product reason and realtime profile ownership before deployment handoff.
+        labels: {service: polymarket-bot, family: market_data_pipeline, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        dashboardUid: market-data-pipeline
+        panelId: 62
+        isPaused: false
       - uid: mdp_stream_drop
         title: Market-data stream dropped events
         condition: C

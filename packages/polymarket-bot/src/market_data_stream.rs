@@ -201,6 +201,8 @@ struct RouteRejection {
 pub struct StreamMetrics {
     connections: AtomicI64,
     desired_connections: AtomicI64,
+    required_products: AtomicI64,
+    resolved_products: AtomicI64,
     reconnects: AtomicU64,
     events: AtomicU64,
     duplicates: AtomicU64,
@@ -210,6 +212,8 @@ pub struct StreamMetrics {
     last_event_micros: AtomicI64,
     products: Mutex<BTreeMap<String, ProductStreamMetrics>>,
     product_ready: Mutex<BTreeMap<String, bool>>,
+    required_product_keys: Mutex<BTreeSet<String>>,
+    unresolved_products: Mutex<BTreeMap<String, i64>>,
     route_failures: Mutex<BTreeMap<String, u64>>,
     retained_books: AtomicU64,
 }
@@ -503,6 +507,7 @@ impl MarketDataStreamRuntime {
             .filter(|selector| selector.required)
             .map(|selector| selector.key.as_str())
             .collect::<BTreeSet<_>>();
+        self.metrics.set_resolution_snapshot(&required, &response);
         let required_unresolved = response
             .unresolved
             .iter()
@@ -1155,6 +1160,40 @@ struct OpenInterestPayload {
 }
 
 impl StreamMetrics {
+    fn set_resolution_snapshot(&self, required: &BTreeSet<&str>, response: &RouteResponse) {
+        self.required_products.store(
+            i64::try_from(required.len()).unwrap_or(i64::MAX),
+            Ordering::Relaxed,
+        );
+        *self
+            .required_product_keys
+            .lock()
+            .expect("required products lock") =
+            required.iter().map(|key| (*key).to_owned()).collect();
+        let resolved = response
+            .routes
+            .iter()
+            .flat_map(|route| route.products.iter())
+            .filter(|product| required.contains(product.key.as_str()))
+            .count();
+        self.resolved_products.store(
+            i64::try_from(resolved).unwrap_or(i64::MAX),
+            Ordering::Relaxed,
+        );
+        let mut unresolved = BTreeMap::new();
+        for rejection in response
+            .unresolved
+            .iter()
+            .filter(|rejection| required.contains(rejection.product.key.as_str()))
+        {
+            *unresolved.entry(rejection.reason.clone()).or_insert(0) += 1;
+        }
+        *self
+            .unresolved_products
+            .lock()
+            .expect("unresolved products lock") = unresolved;
+    }
+
     fn set_product_ready(&self, product: &str, ready: bool) {
         self.product_ready
             .lock()
@@ -1187,6 +1226,37 @@ impl StreamMetrics {
             self.last_event_micros.load(Ordering::Relaxed) as f64 / 1_000_000.0)
         ;
         output.push_str(&format!("# HELP polymarket_market_data_retained_books Books retained after market-contract reconciliation.\n# TYPE polymarket_market_data_retained_books gauge\npolymarket_market_data_retained_books {}\n", self.retained_books.load(Ordering::Relaxed)));
+        let required_keys = self
+            .required_product_keys
+            .lock()
+            .expect("required products lock");
+        let ready_products = self
+            .product_ready
+            .lock()
+            .expect("stream readiness lock")
+            .iter()
+            .filter(|(product, ready)| **ready && required_keys.contains(product.as_str()))
+            .count();
+        output.push_str(&format!(
+            "# HELP polymarket_market_data_required_products Selector-required market-data products.\n# TYPE polymarket_market_data_required_products gauge\npolymarket_market_data_required_products {}\n\
+# HELP polymarket_market_data_resolved_products Required products resolved to a current worker route.\n# TYPE polymarket_market_data_resolved_products gauge\npolymarket_market_data_resolved_products {}\n\
+# HELP polymarket_market_data_ready_products Required products currently reported ready.\n# TYPE polymarket_market_data_ready_products gauge\npolymarket_market_data_ready_products {}\n",
+            self.required_products.load(Ordering::Relaxed),
+            self.resolved_products.load(Ordering::Relaxed),
+            ready_products
+        ));
+        drop(required_keys);
+        output.push_str("# HELP polymarket_market_data_unresolved_products Required products unresolved by bounded reason.\n# TYPE polymarket_market_data_unresolved_products gauge\n");
+        for (reason, value) in self
+            .unresolved_products
+            .lock()
+            .expect("unresolved products lock")
+            .iter()
+        {
+            output.push_str(&format!(
+                "polymarket_market_data_unresolved_products{{reason=\"{reason}\"}} {value}\n"
+            ));
+        }
         output.push_str("# HELP polymarket_market_data_product_events_applied_total Canonical events applied by selected product.\n# TYPE polymarket_market_data_product_events_applied_total counter\n");
         let products = self.products.lock().expect("stream metrics lock");
         for (key, metrics) in products.iter() {
@@ -1874,6 +1944,27 @@ mod tests {
         metrics.desired_connections.store(4, Ordering::Relaxed);
         metrics.set_product_ready(PRODUCT_BINANCE_1S, false);
         metrics.observe_route_failure("required_product_stale");
+        metrics.set_resolution_snapshot(
+            &BTreeSet::from([PRODUCT_BINANCE_1S, PRODUCT_BOOKS]),
+            &RouteResponse {
+                routes: vec![WorkerRoute {
+                    worker_id: "worker-1".to_owned(),
+                    endpoint: "http://worker-1:50051".to_owned(),
+                    source_revision: "test".to_owned(),
+                    products: vec![RouteProduct {
+                        key: PRODUCT_BOOKS.to_owned(),
+                        contract_version: CONTRACT_VERSION,
+                    }],
+                }],
+                unresolved: vec![RouteRejection {
+                    product: RouteProduct {
+                        key: PRODUCT_BINANCE_1S.to_owned(),
+                        contract_version: CONTRACT_VERSION,
+                    },
+                    reason: "no_current_owner".to_owned(),
+                }],
+            },
+        );
         let rendered = metrics.render_prometheus();
         assert!(rendered.contains("polymarket_market_data_grpc_desired_connections 4"));
         assert!(rendered.contains(&format!(
@@ -1882,6 +1973,11 @@ mod tests {
         assert!(rendered.contains(
             "polymarket_market_data_route_failures_total{reason=\"required_product_stale\"} 1"
         ));
+        assert!(rendered.contains("polymarket_market_data_required_products 2"));
+        assert!(rendered.contains("polymarket_market_data_resolved_products 1"));
+        assert!(rendered.contains("polymarket_market_data_ready_products 0"));
+        assert!(rendered
+            .contains("polymarket_market_data_unresolved_products{reason=\"no_current_owner\"} 1"));
     }
 
     #[test]
