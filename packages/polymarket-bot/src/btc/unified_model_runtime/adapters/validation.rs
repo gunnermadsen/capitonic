@@ -58,7 +58,7 @@ pub(crate) fn verify(model: &RuntimeDirectionalModel, bytes: &[u8]) -> Result<()
                 .context("reference expected output missing")?;
             ensure!(
                 actual.is_finite() && (actual - expected).abs() < 1e-12,
-                "model reference parity failed: {} {name}",
+                "model reference parity failed: {} {name}: actual={actual:.17} expected={expected:.17}",
                 model.model_key()
             );
         }
@@ -66,6 +66,12 @@ pub(crate) fn verify(model: &RuntimeDirectionalModel, bytes: &[u8]) -> Result<()
             serde_json::to_value(score.action)? == case["expected"]["action"],
             "model reference action parity failed"
         );
+        if let Some(accepted) = case.pointer("/source/accepted").and_then(|v| v.as_bool()) {
+            ensure!(
+                score.accepted == accepted,
+                "model admission acceptance parity failed"
+            );
+        }
         if let Some(adapter) = model.unified_adapter() {
             let result = serde_json::to_value(
                 adapter.evaluate(&values, seconds.context("reference clock missing")?)?,

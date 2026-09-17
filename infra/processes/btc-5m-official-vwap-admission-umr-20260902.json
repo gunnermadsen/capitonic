@@ -13,7 +13,7 @@
     },
     "raw": {
       "btc_realtime_paper": {
-        "schema_version": "btc_realtime_paper_process_v3",
+        "schema_version": "btc_realtime_paper_process_v4",
         "playbook_version": "v1.2",
         "sources": [
           "polymarket_btc_five_minute_market_contracts",
@@ -30,10 +30,23 @@
         ],
         "strategy": {
           "decision_strategy": {
-            "type": "btc_directional_model",
-            "model_key": "btc-5m-official-vwap-admission-umr-20260902",
-            "artifact_sha256": "50cde2b43532409c0045bb426357ed80d175f8355364b4e13766ffffad49e40c",
-            "feature_schema_sha256": "905be90aafbf1dcef0dc7b26c40c158a31d90d8259c3395ae8d0e06d73c30147"
+            "type": "unified_model_router",
+            "version": 1,
+            "routing": {
+              "mode": "first_qualified",
+              "tie_break": "array_order"
+            },
+            "models": [
+              {
+                "member_id": "primary",
+                "selection": {
+                  "type": "btc_directional_model",
+                  "model_key": "btc-5m-official-vwap-admission-umr-20260902",
+                  "artifact_sha256": "50cde2b43532409c0045bb426357ed80d175f8355364b4e13766ffffad49e40c",
+                  "feature_schema_sha256": "905be90aafbf1dcef0dc7b26c40c158a31d90d8259c3395ae8d0e06d73c30147"
+                }
+              }
+            ]
           },
           "target_size": "5",
           "min_seconds_after_open": 60,
@@ -63,38 +76,7 @@
           "latency_reserve_per_share": "0.005",
           "min_net_edge_per_share": "0.015",
           "min_net_edge_usd": "0.02",
-          "max_fee_rate": "1",
-          "unified_model": {
-            "version": "capitonic-unified-model-runtime-v1",
-            "sources": [
-              {
-                "slot": "btc_seconds",
-                "product": "binance_spot_btcusdt_one_second_ohlcv",
-                "semantics": "binance_closed_seconds_prewindow_open_v1"
-              },
-              {
-                "slot": "execution_book",
-                "product": "polymarket_btc_five_minute_orderbooks",
-                "semantics": "causal_vwap_five_shares_v1"
-              },
-              {
-                "slot": "oracle",
-                "product": "polygon_chainlink_btcusd_oracle",
-                "semantics": "causal_oracle_rounds_v1"
-              }
-            ],
-            "policy": {
-              "minimum_confidence": null,
-              "minimum_edge": null,
-              "maximum_share_cost": 0.95,
-              "minimum_admission_probability": 0.75,
-              "minimum_predicted_stress_edge": -0.02,
-              "maximum_predicted_loss": 0.25,
-              "maximum_temporal_std": null,
-              "minimum_temporal_agreement": null,
-              "execution_reserve_per_share": 0.005
-            }
-          }
+          "max_fee_rate": "1"
         },
         "runtime": {
           "strategy_interval_ms": 1000,

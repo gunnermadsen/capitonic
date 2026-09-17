@@ -39,6 +39,8 @@ pub struct PredictionRecord {
     pub contract_version: &'static str,
     pub process_id: Uuid,
     pub model: RuntimeModelSelection,
+    pub member_id: Option<String>,
+    pub router_disposition: Option<String>,
     pub run_id: Option<Uuid>,
     pub config_hash: String,
     pub execution_mode: String,
@@ -54,8 +56,52 @@ struct Pending {
     market: String,
     record: PredictionRecord,
 }
+#[derive(Clone)]
+struct RouterMember {
+    identity: RuntimeModelSelection,
+    bucket_start: i64,
+    bucket_end: i64,
+    active: bool,
+    ready: bool,
+    counters: BTreeMap<&'static str, u64>,
+    performance: MemberPerformance,
+}
+#[derive(Clone, Default)]
+struct MemberPerformance {
+    prediction_outcomes: BTreeMap<&'static str, u64>,
+    order_outcomes: BTreeMap<String, u64>,
+    trade_outcomes: BTreeMap<&'static str, u64>,
+    bucket_evaluations: BTreeMap<&'static str, u64>,
+    feature_failures: BTreeMap<String, u64>,
+    brier_sum: f64,
+    brier_count: u64,
+    calibration_count: [u64; 10],
+    calibration_probability_sum: [f64; 10],
+    calibration_up_outcomes: [u64; 10],
+    feature_second_sum: f64,
+    feature_second_count: u64,
+    last_feature_second: f64,
+    decision_second_sum: f64,
+    decision_second_count: u64,
+    last_decision_second: f64,
+    entry_second_sum: f64,
+    entry_second_count: u64,
+    last_entry_second: f64,
+    fill_notional_usd: f64,
+    filled_shares: f64,
+    fill_fees_usd: f64,
+    slippage_notional_usd: f64,
+    settled_entry_notional_usd: f64,
+    settlement_fees_usd: f64,
+    realized_pnl_usd: f64,
+    gross_profit_usd: f64,
+    gross_loss_usd: f64,
+    equity_high_usd: f64,
+    max_drawdown_usd: f64,
+}
 #[derive(Clone, Default)]
 struct Process {
+    members: BTreeMap<String, RouterMember>,
     identity: Option<RuntimeModelSelection>,
     risk_identity: Option<RiskStrategySelection>,
     run_id: Option<Uuid>,
@@ -190,10 +236,9 @@ pub fn enabled(id: Uuid, value: bool) {
 pub fn event(id: Uuid, metric: &'static str, reason: &str) {
     update(id, |p| increment(p, metric, reason));
 }
-/// Classify errors without placing arbitrary diagnostic text in metric labels.
-pub fn failure(id: Uuid, stage: &'static str, detail: &str) {
+fn bounded_failure_reason(detail: &str) -> &'static str {
     let lower = detail.to_ascii_lowercase();
-    let reason = if lower.contains("schema") || lower.contains("width") {
+    if lower.contains("schema") || lower.contains("width") {
         "schema_mismatch"
     } else if lower.contains("nonfinite") || lower.contains("non_finite") {
         "non_finite_output"
@@ -209,7 +254,11 @@ pub fn failure(id: Uuid, stage: &'static str, detail: &str) {
         "missing_source_data"
     } else {
         "invalid_value"
-    };
+    }
+}
+/// Classify errors without placing arbitrary diagnostic text in metric labels.
+pub fn failure(id: Uuid, stage: &'static str, detail: &str) {
+    let reason = bounded_failure_reason(detail);
     event(
         id,
         if stage == "features" {
@@ -243,6 +292,35 @@ pub fn gauge(id: Uuid, name: &'static str, value: f64) {
         });
     }
 }
+pub fn member_active(id: Uuid, member_id: &str, active: bool) {
+    update(id, |p| {
+        if let Some(member) = p.members.get_mut(member_id) {
+            member.active = active;
+            if !active {
+                member.ready = false;
+            }
+        }
+        p.ready = p
+            .members
+            .values()
+            .any(|member| member.active && member.ready);
+    });
+}
+pub fn member_readiness(id: Uuid, member_id: &str, ready: bool) {
+    update(id, |p| {
+        if let Some(member) = p.members.get_mut(member_id) {
+            if member.ready != ready {
+                tracing::info!(event="umr_member_readiness_changed",process_id=%id,member_id,ready,"UMR member readiness changed");
+            }
+            member.ready = ready;
+        }
+        p.ready = p
+            .members
+            .values()
+            .any(|member| member.active && member.ready);
+    });
+}
+
 pub fn readiness(id: Uuid, value: bool) {
     update(id, |p| {
         if p.ready != value {
@@ -286,6 +364,8 @@ pub fn prediction(
             contract_version: EVALUATION_VERSION,
             process_id: id,
             model: model.clone(),
+            member_id: None,
+            router_disposition: None,
             run_id: p.run_id,
             config_hash: p.config_hash.clone(),
             execution_mode: p.mode.clone(),
@@ -382,6 +462,186 @@ pub fn prediction(
         p.latest = Some(record);
     });
 }
+pub fn register_member(
+    id: Uuid,
+    member: &str,
+    identity: &RuntimeModelSelection,
+    start: i64,
+    end: i64,
+) {
+    update(id, |p| {
+        if p.members.len() < 32 {
+            p.members.insert(
+                member.into(),
+                RouterMember {
+                    identity: identity.clone(),
+                    bucket_start: start,
+                    bucket_end: end,
+                    active: false,
+                    ready: false,
+                    counters: [
+                        "opportunities",
+                        "inferences",
+                        "qualified",
+                        "selected",
+                        "not_selected",
+                    ]
+                    .into_iter()
+                    .map(|k| (k, 0))
+                    .collect(),
+                    performance: MemberPerformance {
+                        prediction_outcomes: [("correct", 0), ("incorrect", 0)].into(),
+                        trade_outcomes: [("win", 0), ("loss", 0), ("push", 0)].into(),
+                        bucket_evaluations: [("inside", 0), ("early", 0), ("late", 0)].into(),
+                        ..Default::default()
+                    },
+                },
+            );
+        }
+    });
+}
+pub fn member_event(id: Uuid, member: &str, event: &'static str) {
+    update(id, |p| {
+        if let Some(m) = p.members.get_mut(member) {
+            if let Some(n) = m.counters.get_mut(event) {
+                *n += 1;
+            }
+        }
+    });
+}
+pub fn member_feature_failure(id: Uuid, member: &str, reason: &str) {
+    let reason = bounded_failure_reason(reason);
+    update(id, |p| {
+        if let Some(m) = p.members.get_mut(member) {
+            *m.performance
+                .feature_failures
+                .entry(reason.to_string())
+                .or_default() += 1;
+        }
+    });
+}
+pub fn member_feature_second(id: Uuid, member: &str, value: f64) {
+    if !value.is_finite() || value < 0.0 {
+        return;
+    }
+    update(id, |p| {
+        if let Some(m) = p.members.get_mut(member) {
+            let result = if value < m.bucket_start as f64 {
+                "early"
+            } else if value > m.bucket_end as f64 {
+                "late"
+            } else {
+                "inside"
+            };
+            *m.performance.bucket_evaluations.entry(result).or_default() += 1;
+            m.performance.feature_second_sum += value;
+            m.performance.feature_second_count += 1;
+            m.performance.last_feature_second = value;
+        }
+    });
+}
+pub fn member_decision_second(id: Uuid, member: &str, value: f64) {
+    if !value.is_finite() || value < 0.0 {
+        return;
+    }
+    update(id, |p| {
+        if let Some(m) = p.members.get_mut(member) {
+            m.performance.decision_second_sum += value;
+            m.performance.decision_second_count += 1;
+            m.performance.last_decision_second = value;
+        }
+    });
+}
+pub fn member_order(id: Uuid, member: &str, state: &str) {
+    let state = match state {
+        "filled" | "rejected" | "submitted" => state,
+        _ => "other",
+    };
+    update(id, |p| {
+        if let Some(m) = p.members.get_mut(member) {
+            *m.performance
+                .order_outcomes
+                .entry(state.to_string())
+                .or_default() += 1;
+        }
+    });
+}
+#[allow(clippy::too_many_arguments)]
+pub fn member_fill(
+    id: Uuid,
+    member: &str,
+    price: f64,
+    size: f64,
+    fee: f64,
+    entry_second: f64,
+    quoted: f64,
+) {
+    if [price, size, fee, entry_second, quoted]
+        .into_iter()
+        .any(|value| !value.is_finite() || value < 0.0)
+    {
+        return;
+    }
+    update(id, |p| {
+        if let Some(m) = p.members.get_mut(member) {
+            m.performance.fill_notional_usd += price * size;
+            m.performance.filled_shares += size;
+            m.performance.fill_fees_usd += fee;
+            m.performance.slippage_notional_usd += (price - quoted) * size;
+            m.performance.entry_second_sum += entry_second;
+            m.performance.entry_second_count += 1;
+            m.performance.last_entry_second = entry_second;
+        }
+    });
+}
+pub fn member_settlement(id: Uuid, member: Option<&str>, entry_notional: f64, pnl: f64, fees: f64) {
+    let Some(member) = member else { return };
+    if !entry_notional.is_finite() || entry_notional < 0.0 || !pnl.is_finite() || !fees.is_finite()
+    {
+        return;
+    }
+    update(id, |p| {
+        if let Some(m) = p.members.get_mut(member) {
+            let outcome = if pnl > 0.0 {
+                "win"
+            } else if pnl < 0.0 {
+                "loss"
+            } else {
+                "push"
+            };
+            *m.performance.trade_outcomes.entry(outcome).or_default() += 1;
+            m.performance.settled_entry_notional_usd += entry_notional;
+            m.performance.settlement_fees_usd += fees;
+            m.performance.realized_pnl_usd += pnl;
+            if pnl >= 0.0 {
+                m.performance.gross_profit_usd += pnl;
+            } else {
+                m.performance.gross_loss_usd += pnl.abs();
+            }
+            m.performance.equity_high_usd = m
+                .performance
+                .equity_high_usd
+                .max(m.performance.realized_pnl_usd);
+            let drawdown = m.performance.equity_high_usd - m.performance.realized_pnl_usd;
+            m.performance.max_drawdown_usd = m.performance.max_drawdown_usd.max(drawdown);
+        }
+    });
+}
+pub fn attribute_member(id: Uuid, snapshot: Uuid, member: &str, disposition: &str) {
+    update(id, |p| {
+        for record in p
+            .records
+            .iter_mut()
+            .chain(p.latest.iter_mut())
+            .chain(p.pending.iter_mut().map(|v| &mut v.record))
+        {
+            if record.feature_snapshot_id == snapshot {
+                record.member_id = Some(member.into());
+                record.router_disposition = Some(disposition.into());
+            }
+        }
+    });
+}
 pub fn prediction_record(id: Uuid, snapshot_id: Uuid) -> Option<PredictionRecord> {
     let r = registry().lock().ok()?;
     r.processes
@@ -399,6 +659,7 @@ pub fn resolve(market: &str, up: bool) {
     };
     for p in r.processes.values_mut() {
         let mut retained = VecDeque::new();
+        let mut member_outcomes = Vec::new();
         while let Some(item) = p.pending.pop_front() {
             if item.market != market {
                 retained.push_back(item);
@@ -417,8 +678,25 @@ pub fn resolve(market: &str, up: bool) {
             p.calibration_count[bin] += 1;
             p.calibration_sum[bin] += probability;
             p.calibration_outcomes[bin] += u64::from(up);
+            if let Some(member_id) = item.record.member_id {
+                member_outcomes.push((member_id, probability, correct, bin));
+            }
         }
         p.pending = retained;
+        for (member_id, probability, correct, bin) in member_outcomes {
+            if let Some(member) = p.members.get_mut(&member_id) {
+                *member
+                    .performance
+                    .prediction_outcomes
+                    .entry(if correct { "correct" } else { "incorrect" })
+                    .or_default() += 1;
+                member.performance.brier_sum += (probability - f64::from(up)).powi(2);
+                member.performance.brier_count += 1;
+                member.performance.calibration_count[bin] += 1;
+                member.performance.calibration_probability_sum[bin] += probability;
+                member.performance.calibration_up_outcomes[bin] += u64::from(up);
+            }
+        }
     }
 }
 pub fn fill(id: Uuid, price: f64, size: f64, fee: f64, entry_second: f64, quoted: f64) {
@@ -513,6 +791,7 @@ pub fn prometheus_metrics() -> String {
                 *id,
                 Process {
                     identity: p.identity.clone(),
+                    members: p.members.clone(),
                     risk_identity: p.risk_identity.clone(),
                     run_id: p.run_id,
                     config_hash: p.config_hash.clone(),
@@ -552,6 +831,168 @@ pub fn prometheus_metrics() -> String {
                 let _=writeln!(out,"# HELP polymarket_umr_{name} UMR process {name}; session-scoped unless stated otherwise.\n# TYPE polymarket_umr_{name} gauge");
             }
             let _ = writeln!(out, "polymarket_umr_{name}{{{labels}}} {value}");
+        }
+        for (member_id, member) in &p.members {
+            if declared.insert("router_member_info".into()) {
+                out.push_str("# HELP polymarket_umr_router_member_info Immutable router member and bucket identity.\n# TYPE polymarket_umr_router_member_info gauge\n");
+                out.push_str("# HELP polymarket_umr_router_member_events_total Member opportunity and arbitration transitions.\n# TYPE polymarket_umr_router_member_events_total counter\n");
+            }
+            let _=writeln!(out,"polymarket_umr_router_member_info{{{labels},member_id=\"{}\",model_key=\"{}\",artifact_sha256=\"{}\",bucket_start=\"{}\",bucket_end=\"{}\"}} 1",escaped(member_id),escaped(&member.identity.model_key),escaped(&member.identity.artifact_sha256),member.bucket_start,member.bucket_end);
+            if declared.insert("router_member_ready".into()) {
+                out.push_str("# HELP polymarket_umr_router_member_ready Active member inference readiness.\n# TYPE polymarket_umr_router_member_ready gauge\n");
+            }
+            let _ = writeln!(
+                out,
+                "polymarket_umr_router_member_ready{{{labels},member_id=\"{}\"}} {}",
+                escaped(member_id),
+                u8::from(member.active && member.ready)
+            );
+            for (event, count) in &member.counters {
+                let _=writeln!(out,"polymarket_umr_router_member_events_total{{{labels},member_id=\"{}\",event=\"{}\"}} {count}",escaped(member_id),event);
+            }
+            let member_labels = format!("{labels},member_id=\"{}\"", escaped(member_id));
+            if declared.insert("model_member_info".into()) {
+                out.push_str("# HELP polymarket_umr_model_member_info Immutable model-member identity and claimed evaluation bucket; emitted for singleton and router processes.\n# TYPE polymarket_umr_model_member_info gauge\n");
+                out.push_str("# HELP polymarket_umr_model_member_active Whether the member is currently inside its claimed evaluation bucket.\n# TYPE polymarket_umr_model_member_active gauge\n");
+                out.push_str("# HELP polymarket_umr_model_member_ready Whether an active member has healthy inputs and produced an inference.\n# TYPE polymarket_umr_model_member_ready gauge\n");
+                out.push_str("# HELP polymarket_umr_model_member_bucket_start_seconds Immutable claimed evaluation bucket start in seconds after market open.\n# TYPE polymarket_umr_model_member_bucket_start_seconds gauge\n");
+                out.push_str("# HELP polymarket_umr_model_member_bucket_end_seconds Immutable claimed evaluation bucket end in seconds after market open.\n# TYPE polymarket_umr_model_member_bucket_end_seconds gauge\n");
+                out.push_str("# HELP polymarket_umr_model_member_activity_events_total Session-scoped member opportunity and arbitration transitions.\n# TYPE polymarket_umr_model_member_activity_events_total counter\n");
+                out.push_str("# HELP polymarket_umr_model_member_prediction_outcomes_total Session-scoped resolved prediction outcomes.\n# TYPE polymarket_umr_model_member_prediction_outcomes_total counter\n");
+                out.push_str("# HELP polymarket_umr_model_member_order_outcomes_total Session-scoped execution order outcomes attributed to the selected member.\n# TYPE polymarket_umr_model_member_order_outcomes_total counter\n");
+                out.push_str("# HELP polymarket_umr_model_member_trade_outcomes_total Session-scoped settled economic outcomes attributed to the selected member.\n# TYPE polymarket_umr_model_member_trade_outcomes_total counter\n");
+                out.push_str("# HELP polymarket_umr_model_member_bucket_evaluations_total Session-scoped inference evaluations classified against the immutable claimed bucket.\n# TYPE polymarket_umr_model_member_bucket_evaluations_total counter\n");
+                out.push_str("# HELP polymarket_umr_model_member_feature_failures_total Session-scoped feature failures by bounded reason.\n# TYPE polymarket_umr_model_member_feature_failures_total counter\n");
+            }
+            let identity_labels = format!(
+                "{member_labels},model_key=\"{}\",artifact_sha256=\"{}\",feature_schema_sha256=\"{}\",bucket_start=\"{}\",bucket_end=\"{}\"",
+                escaped(&member.identity.model_key),
+                escaped(&member.identity.artifact_sha256),
+                escaped(&member.identity.feature_schema_sha256),
+                member.bucket_start,
+                member.bucket_end
+            );
+            let _ = writeln!(
+                out,
+                "polymarket_umr_model_member_info{{{identity_labels}}} 1"
+            );
+            let _ = writeln!(
+                out,
+                "polymarket_umr_model_member_active{{{member_labels}}} {}",
+                u8::from(member.active)
+            );
+            let _ = writeln!(
+                out,
+                "polymarket_umr_model_member_ready{{{member_labels}}} {}",
+                u8::from(member.active && member.ready)
+            );
+            let _ = writeln!(
+                out,
+                "polymarket_umr_model_member_bucket_start_seconds{{{member_labels}}} {}",
+                member.bucket_start
+            );
+            let _ = writeln!(
+                out,
+                "polymarket_umr_model_member_bucket_end_seconds{{{member_labels}}} {}",
+                member.bucket_end
+            );
+            for (event, count) in &member.counters {
+                let _ = writeln!(out, "polymarket_umr_model_member_activity_events_total{{{member_labels},event=\"{event}\"}} {count}");
+            }
+            for (outcome, count) in &member.performance.prediction_outcomes {
+                let _ = writeln!(out, "polymarket_umr_model_member_prediction_outcomes_total{{{member_labels},outcome=\"{outcome}\"}} {count}");
+            }
+            for (state, count) in &member.performance.order_outcomes {
+                let _ = writeln!(out, "polymarket_umr_model_member_order_outcomes_total{{{member_labels},state=\"{}\"}} {count}", escaped(state));
+            }
+            for (outcome, count) in &member.performance.trade_outcomes {
+                let _ = writeln!(out, "polymarket_umr_model_member_trade_outcomes_total{{{member_labels},outcome=\"{outcome}\"}} {count}");
+            }
+            for (result, count) in &member.performance.bucket_evaluations {
+                let _ = writeln!(out, "polymarket_umr_model_member_bucket_evaluations_total{{{member_labels},result=\"{result}\"}} {count}");
+            }
+            for (reason, count) in &member.performance.feature_failures {
+                let _ = writeln!(out, "polymarket_umr_model_member_feature_failures_total{{{member_labels},reason=\"{}\"}} {count}", escaped(reason));
+            }
+            for (name, value) in [
+                ("brier_sum", member.performance.brier_sum),
+                ("brier_count", member.performance.brier_count as f64),
+                ("feature_second_sum", member.performance.feature_second_sum),
+                (
+                    "feature_second_count",
+                    member.performance.feature_second_count as f64,
+                ),
+                (
+                    "last_feature_second",
+                    member.performance.last_feature_second,
+                ),
+                (
+                    "decision_second_sum",
+                    member.performance.decision_second_sum,
+                ),
+                (
+                    "decision_second_count",
+                    member.performance.decision_second_count as f64,
+                ),
+                (
+                    "last_decision_second",
+                    member.performance.last_decision_second,
+                ),
+                ("entry_second_sum", member.performance.entry_second_sum),
+                (
+                    "entry_second_count",
+                    member.performance.entry_second_count as f64,
+                ),
+                ("last_entry_second", member.performance.last_entry_second),
+                ("fill_notional_usd", member.performance.fill_notional_usd),
+                ("filled_shares", member.performance.filled_shares),
+                ("fill_fees_usd", member.performance.fill_fees_usd),
+                (
+                    "slippage_notional_usd",
+                    member.performance.slippage_notional_usd,
+                ),
+                (
+                    "settled_entry_notional_usd",
+                    member.performance.settled_entry_notional_usd,
+                ),
+                (
+                    "settlement_fees_usd",
+                    member.performance.settlement_fees_usd,
+                ),
+                ("realized_pnl_usd", member.performance.realized_pnl_usd),
+                ("gross_profit_usd", member.performance.gross_profit_usd),
+                ("gross_loss_usd", member.performance.gross_loss_usd),
+                ("max_drawdown_usd", member.performance.max_drawdown_usd),
+            ] {
+                if declared.insert(format!("model_member_{name}")) {
+                    let _ = writeln!(out, "# HELP polymarket_umr_model_member_{name} Session-scoped per-model member {name}.\n# TYPE polymarket_umr_model_member_{name} gauge");
+                }
+                let _ = writeln!(
+                    out,
+                    "polymarket_umr_model_member_{name}{{{member_labels}}} {value}"
+                );
+            }
+            for bin in 0..10 {
+                for (name, value) in [
+                    (
+                        "calibration_count",
+                        member.performance.calibration_count[bin] as f64,
+                    ),
+                    (
+                        "calibration_probability_sum",
+                        member.performance.calibration_probability_sum[bin],
+                    ),
+                    (
+                        "calibration_up_outcomes",
+                        member.performance.calibration_up_outcomes[bin] as f64,
+                    ),
+                ] {
+                    if declared.insert(format!("model_member_{name}")) {
+                        let _ = writeln!(out, "# HELP polymarket_umr_model_member_{name} Session-scoped per-model resolved calibration evidence.\n# TYPE polymarket_umr_model_member_{name} gauge");
+                    }
+                    let _ = writeln!(out, "polymarket_umr_model_member_{name}{{{member_labels},bin=\"{bin}\"}} {value}");
+                }
+            }
         }
         if let Some(m) = p.identity {
             if declared.insert("model_info".into()) {
@@ -604,4 +1045,67 @@ pub fn prometheus_metrics() -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod router_tests {
+    use super::*;
+    #[test]
+    fn an_unready_member_does_not_poison_a_ready_member() {
+        let id = Uuid::new_v4();
+        let identity = RuntimeModelSelection {
+            model_key: "test".into(),
+            artifact_sha256: "a".repeat(64),
+            feature_schema_sha256: "b".repeat(64),
+        };
+        for name in ["first", "second"] {
+            register_member(id, name, &identity, 60, 89);
+            member_active(id, name, true);
+        }
+        member_readiness(id, "first", true);
+        member_readiness(id, "second", false);
+        assert!(registry().lock().unwrap().processes[&id].ready);
+        member_active(id, "first", false);
+        assert!(!registry().lock().unwrap().processes[&id].ready);
+        member_readiness(id, "second", true);
+        assert!(registry().lock().unwrap().processes[&id].ready);
+    }
+
+    #[test]
+    fn singleton_member_exports_bucket_execution_and_settlement_evidence() {
+        let id = Uuid::new_v4();
+        let identity = RuntimeModelSelection {
+            model_key: "singleton".into(),
+            artifact_sha256: "a".repeat(64),
+            feature_schema_sha256: "b".repeat(64),
+        };
+        register_member(id, "legacy_primary", &identity, 60, 89);
+        member_active(id, "legacy_primary", true);
+        member_readiness(id, "legacy_primary", true);
+        for second in [59.0, 60.0, 89.0, 90.0] {
+            member_feature_second(id, "legacy_primary", second);
+        }
+        member_decision_second(id, "legacy_primary", 61.0);
+        member_order(id, "legacy_primary", "filled");
+        member_fill(id, "legacy_primary", 0.4, 5.0, 0.02, 62.0, 0.39);
+        member_settlement(id, Some("legacy_primary"), 2.0, 2.98, 0.02);
+
+        let metrics = prometheus_metrics();
+        let scoped = metrics
+            .lines()
+            .filter(|line| line.contains(&id.to_string()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(scoped.contains("polymarket_umr_model_member_info"));
+        assert!(scoped.contains("model_key=\"singleton\""));
+        assert!(scoped.contains("bucket_start=\"60\""));
+        assert!(scoped.contains("bucket_end=\"89\""));
+        assert!(scoped.contains("result=\"inside\"} 2"));
+        assert!(scoped.contains("result=\"early\"} 1"));
+        assert!(scoped.contains("result=\"late\"} 1"));
+        assert!(scoped.contains("state=\"filled\"} 1"));
+        assert!(scoped.contains("outcome=\"win\"} 1"));
+        assert!(scoped.contains("polymarket_umr_model_member_realized_pnl_usd"));
+        assert!(scoped.contains("polymarket_umr_model_member_entry_second_count"));
+    }
 }

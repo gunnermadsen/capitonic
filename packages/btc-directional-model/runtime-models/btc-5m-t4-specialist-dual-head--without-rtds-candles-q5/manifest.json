@@ -1,0 +1,15 @@
+{
+  "deployment_scope": "paper_only",
+  "feature_schema_sha256": "488bf90ae86cb10d84ebcf8c0a509e005057db8ca2bbf8bc0b02885cf0a01992",
+  "feature_schema_version": "btc-5m-payoff-aware-time-bucket-specialist-features-v1",
+  "golden_vectors_file": "golden-vectors.json",
+  "golden_vectors_sha256": "0ed4bf2106423a7d1f06cff4f4bd1ba6e04f2f8061e866b6e1356b7af900bdc1",
+  "live_capital_allowed": false,
+  "model_file": "model.json",
+  "model_key": "btc-5m-t4-specialist-dual-head--without-rtds-candles-q5",
+  "model_sha256": "b60788b4c5224bf0e26a45c099df7a0216c7ffd1ef610b5eafb86b9011a9b6b7",
+  "production_qualified": false,
+  "schema_version": "capitonic-btc-directional-runtime-manifest-v1",
+  "source_freeze_manifest_sha256": "9a80d51c4b5416687b922a0e8589dbd5bff7a8a0b255863280864e7e36904619",
+  "source_training_model_sha256": "6cabcb197f4c6feda26716c0a61863339e0efa32c084b1ee57749ff0c6640e13"
+}

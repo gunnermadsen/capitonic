@@ -17,7 +17,7 @@ def prepare(catalog, template, model_key, process_key, name, preregistration_sha
     model = matches[0]
     contract = model['contract']
     if not model.get('policy') or not contract.get('qualified_trade_size'):
-        raise ValueError('This capability requires its established legacy process procedure')
+        raise ValueError('This helper requires a package with qualified size and policy')
     result = copy.deepcopy(template)
     control = result['config']['raw']['btc_realtime_paper']
     strategy = control['strategy']
@@ -34,13 +34,14 @@ def prepare(catalog, template, model_key, process_key, name, preregistration_sha
     for key in ('process_id', 'id', 'created_at', 'updated_at', 'active_run_id'):
         result.pop(key, None)
     result['config']['execution'].update(mode='paper', execute_signals=True, live_capital=False)
-    strategy['decision_strategy'] = dict(type='btc_directional_model', **model['selection'])
+    control['schema_version'] = 'btc_realtime_paper_process_v4'
+    strategy['decision_strategy'] = dict(type='unified_model_router', version=1, routing=dict(mode='first_qualified', tie_break='array_order'), models=[dict(member_id='primary', selection=dict(type='btc_directional_model', model_key=model_key))])
     strategy.pop('feature_schema_version', None)
     strategy.pop('strategy_version', None)
     strategy['target_size'] = str(contract['qualified_trade_size'])
     strategy['min_seconds_after_open'] = model['schedule']['minimum_seconds_after_open']
     strategy['min_seconds_before_close'] = 300 - model['schedule']['maximum_seconds_after_open']
-    strategy['unified_model'] = dict(version=contract['version'], sources=bindings, policy=model['policy'])
+    strategy.pop('unified_model', None)
     control['preregistration_sha256'] = preregistration_sha256
     control['next_experiment_key'] = process_key + '-run'  # Existing run-key alias, not experiment ownership.
     metadata = result.setdefault('metadata', {})

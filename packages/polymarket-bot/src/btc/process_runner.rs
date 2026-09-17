@@ -416,6 +416,42 @@ struct EntryAdmissionEvaluation {
     evidence: serde_json::Value,
 }
 
+struct RouterMemberRuntime {
+    member_id: String,
+    strategy: BtcStrategyConfig,
+    max_feature_age_ms: Option<i64>,
+    runtime: StdMutex<DirectionalModelProcessRuntime>,
+    session: StdMutex<Option<Box<dyn super::unified_model_runtime::adapters::FeatureSession>>>,
+}
+impl RouterMemberRuntime {
+    fn claim_directional_model_candidate(
+        &self,
+        market_id: &str,
+        feature_as_of: DateTime<Utc>,
+    ) -> Result<Option<DirectionalModelCandidateLease<'_>>> {
+        let claim = self
+            .runtime
+            .lock()
+            .map_err(|_| anyhow::anyhow!("BTC directional model process lock was poisoned"))?
+            .claim(market_id, feature_as_of);
+        Ok(claim.map(
+            |(feature_as_of, requires_rehydration)| DirectionalModelCandidateLease {
+                runtime: &self.runtime,
+                market_id: market_id.to_string(),
+                feature_as_of,
+                requires_rehydration,
+                completed: false,
+            },
+        ))
+    }
+}
+struct PreparedTradeProposal<'a> {
+    snapshot: BtcFeatureSnapshot,
+    decision: BtcDecision,
+    feature_hash: String,
+    candidate: Option<DirectionalModelCandidateLease<'a>>,
+}
+
 pub struct BtcProcessRunner {
     repository: BtcRepository,
     store: Store,
@@ -423,14 +459,12 @@ pub struct BtcProcessRunner {
     execution_lifecycle: Arc<dyn BtcExecutionLifecycle>,
     book_registry: Arc<tokio::sync::RwLock<BookRegistry>>,
     config: BtcProcessConfig,
-    max_directional_feature_age_ms: Option<i64>,
     initialized: OnceCell<()>,
     loss_regime_admission: Mutex<Option<LossRegimeAdmissionRuntime>>,
     high_water_mark_entry_submission: Mutex<()>,
     execution_reconcile_started_at: Mutex<Option<Instant>>,
-    directional_model_runtime: StdMutex<DirectionalModelProcessRuntime>,
-    unified_session:
-        StdMutex<Option<Box<dyn super::unified_model_runtime::adapters::FeatureSession>>>,
+    router_members: Vec<RouterMemberRuntime>,
+    router_observation: Mutex<()>,
     risk_model: Option<Arc<RuntimeRiskModel>>,
     primary_persistence_state: Option<Arc<RwLock<RealtimeState>>>,
 }
@@ -490,8 +524,6 @@ impl BtcProcessRunner {
             );
         }
         config.strategy.validate()?;
-        let max_directional_feature_age_ms =
-            config.strategy.effective_max_directional_feature_age_ms()?;
         if config.strategy.attribution().is_none() {
             anyhow::bail!("BTC execution run strategy attribution is invalid");
         }
@@ -515,10 +547,55 @@ impl BtcProcessRunner {
                 );
             }
         }
-        let unified_session = directional_model_selection(&config.strategy)
-            .map(|selection| runtime_model(&selection))
-            .transpose()?
-            .and_then(|model| model.unified_adapter().map(|a| a.new_session()));
+        let control = config
+            .frozen_process_config
+            .pointer("/raw")
+            .context("router requires frozen process configuration")?;
+        let member_strategies = if control["process_schema_version"].as_str()
+            == Some(super::unified_model_runtime::router::PROCESS_SCHEMA_VERSION)
+        {
+            let definition: super::unified_model_runtime::router::RouterDefinition =
+                serde_json::from_value(
+                    control
+                        .pointer("/strategy/decision_strategy")
+                        .context("missing router definition")?
+                        .clone(),
+                )?;
+            let sources = control["sources"]
+                .as_array()
+                .context("missing process sources")?;
+            let keys = sources
+                .iter()
+                .filter_map(|s| s.as_str().or_else(|| s["key"].as_str()))
+                .collect();
+            let mut base = config.strategy.clone();
+            base.min_seconds_after_open = control
+                .pointer("/strategy/min_seconds_after_open")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(15);
+            base.min_seconds_before_close = control
+                .pointer("/strategy/min_seconds_before_close")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(20);
+            definition.compile_members(&base, &keys)?
+        } else {
+            vec![("legacy_primary".into(), config.strategy.clone())]
+        };
+        let router_members = member_strategies
+            .into_iter()
+            .map(|(member_id, strategy)| {
+                let model = runtime_model(
+                    &directional_model_selection(&strategy).context("missing member model")?,
+                )?;
+                Ok(RouterMemberRuntime {
+                    member_id,
+                    max_feature_age_ms: strategy.effective_max_directional_feature_age_ms()?,
+                    strategy,
+                    runtime: StdMutex::new(DirectionalModelProcessRuntime::default()),
+                    session: StdMutex::new(model.unified_adapter().map(|a| a.new_session())),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         umr_telemetry::register(
             config.process_id,
             config.run_id,
@@ -526,6 +603,16 @@ impl BtcProcessRunner {
             execution_lifecycle.mode().as_str(),
             directional_model_selection(&config.strategy).as_ref(),
         );
+        for member in &router_members {
+            umr_telemetry::register_member(
+                config.process_id,
+                &member.member_id,
+                &directional_model_selection(&member.strategy)
+                    .context("missing member identity")?,
+                member.strategy.min_seconds_after_open,
+                300 - member.strategy.min_seconds_before_close,
+            );
+        }
         umr_telemetry::register_risk(config.process_id, config.risk_strategies.first());
         Ok(Self {
             repository,
@@ -541,11 +628,10 @@ impl BtcProcessRunner {
             ),
             high_water_mark_entry_submission: Mutex::new(()),
             config,
-            max_directional_feature_age_ms,
             initialized: OnceCell::new(),
             execution_reconcile_started_at: Mutex::new(None),
-            directional_model_runtime: StdMutex::new(DirectionalModelProcessRuntime::default()),
-            unified_session: StdMutex::new(unified_session),
+            router_members,
+            router_observation: Mutex::new(()),
             risk_model,
             primary_persistence_state: None,
         })
@@ -567,29 +653,9 @@ impl BtcProcessRunner {
         self.execution_lifecycle.mode()
     }
 
-    fn claim_directional_model_candidate(
-        &self,
-        market_id: &str,
-        feature_as_of: DateTime<Utc>,
-    ) -> Result<Option<DirectionalModelCandidateLease<'_>>> {
-        let claim = self
-            .directional_model_runtime
-            .lock()
-            .map_err(|_| anyhow::anyhow!("BTC directional model process lock was poisoned"))?
-            .claim(market_id, feature_as_of);
-        Ok(claim.map(
-            |(feature_as_of, requires_rehydration)| DirectionalModelCandidateLease {
-                runtime: &self.directional_model_runtime,
-                market_id: market_id.to_string(),
-                feature_as_of,
-                requires_rehydration,
-                completed: false,
-            },
-        ))
-    }
-
     async fn insert_process_strategy_decision(
         &self,
+        strategy_version: &str,
         market_id: &str,
         decision: &BtcDecision,
         entry_admission_evidence: Option<&serde_json::Value>,
@@ -603,7 +669,7 @@ impl BtcProcessRunner {
                 self.config.run_id,
                 &self.config.config_hash,
                 market_id,
-                &self.config.strategy.strategy_version,
+                strategy_version,
                 decision,
                 entry_admission_evidence,
                 order_plan_id,
@@ -904,6 +970,9 @@ impl BtcProcessRunner {
     }
 
     async fn observe(&self, observation: StrategyObservation) -> Result<()> {
+        let Ok(_router_guard) = self.router_observation.try_lock() else {
+            return Ok(());
+        };
         if !self.primary_persistence_available().await {
             umr_telemetry::readiness(self.config.process_id, false);
             umr_telemetry::event(self.config.process_id, "skipped", "persistence_unavailable");
@@ -931,15 +1000,107 @@ impl BtcProcessRunner {
         }
 
         let Some(market) = observation.state.current_market.as_ref() else {
-            umr_telemetry::event(self.config.process_id, "skipped", "no_market");
             return Ok(());
+        };
+        let started = Instant::now();
+        let mut proposals = Vec::new();
+        for (index, member) in self.router_members.iter().enumerate() {
+            let elapsed = (observation.readiness.checked_at - market.window_start).num_seconds();
+            umr_telemetry::member_active(
+                self.config.process_id,
+                &member.member_id,
+                elapsed >= member.strategy.min_seconds_after_open
+                    && elapsed <= 300 - member.strategy.min_seconds_before_close,
+            );
+            if let Some(proposal) = self.prepare_member_proposal(member, &observation).await? {
+                proposals.push((index, proposal));
+            }
+        }
+        umr_telemetry::duration(
+            self.config.process_id,
+            "router",
+            started.elapsed().as_secs_f64(),
+        );
+        // Opportunity time precedes array priority; completion order never selects a member.
+        proposals.sort_by_key(|(index, p)| {
+            (
+                p.snapshot
+                    .directional_model
+                    .as_ref()
+                    .map(|f| f.feature_as_of)
+                    .unwrap_or(p.snapshot.observed_at),
+                *index,
+            )
+        });
+        if proposals.is_empty() {
+            return Ok(());
+        }
+        let (selected, proposal) = proposals.remove(0);
+        if !proposals.is_empty() {
+            umr_telemetry::event(
+                self.config.process_id,
+                "router_overlap",
+                "multiple_qualified",
+            );
+        }
+        umr_telemetry::member_event(
+            self.config.process_id,
+            &self.router_members[selected].member_id,
+            "selected",
+        );
+        umr_telemetry::member_decision_second(
+            self.config.process_id,
+            &self.router_members[selected].member_id,
+            (proposal.decision.evaluated_at - market.window_start).num_milliseconds() as f64
+                / 1_000.0,
+        );
+        umr_telemetry::attribute_member(
+            self.config.process_id,
+            proposal.snapshot.snapshot_id,
+            &self.router_members[selected].member_id,
+            "selected",
+        );
+        for (index, mut unselected) in proposals {
+            umr_telemetry::member_event(
+                self.config.process_id,
+                &self.router_members[index].member_id,
+                "not_selected",
+            );
+            umr_telemetry::attribute_member(
+                self.config.process_id,
+                unselected.snapshot.snapshot_id,
+                &self.router_members[index].member_id,
+                "not_selected",
+            );
+            self.insert_process_strategy_decision(
+                &self.router_members[index].strategy.strategy_version,
+                &market.market_id,
+                &unselected.decision,
+                Some(&serde_json::json!({"router":{"disposition":"not_selected"}})),
+                None,
+                "router_not_selected",
+            )
+            .await?;
+            complete_directional_model_candidate(&mut unselected.candidate, false)?;
+        }
+        self.execute_router_proposal(&self.router_members[selected], proposal, &observation)
+            .await
+    }
+
+    async fn prepare_member_proposal<'a>(
+        &self,
+        member: &'a RouterMemberRuntime,
+        observation: &StrategyObservation,
+    ) -> Result<Option<PreparedTradeProposal<'a>>> {
+        let Some(market) = observation.state.current_market.as_ref() else {
+            umr_telemetry::event(self.config.process_id, "skipped", "no_market");
+            return Ok(None);
         };
         // Keep durable point-in-time inputs on the same immutable observation boundary used by
         // runtime readiness. Initialization, reconciliation and admission must not move the
         // feature timestamp forward while feeds continue advancing.
         let observed_at = observation.readiness.checked_at;
-        let scoped_readiness =
-            process_runtime_readiness(&self.config.strategy, &observation.readiness);
+        let scoped_readiness = process_runtime_readiness(&member.strategy, &observation.readiness);
         for reason in &scoped_readiness.reasons {
             umr_telemetry::event(
                 self.config.process_id,
@@ -948,9 +1109,9 @@ impl BtcProcessRunner {
             );
         }
         if !scoped_readiness.ready {
-            umr_telemetry::readiness(self.config.process_id, false);
+            umr_telemetry::member_readiness(self.config.process_id, &member.member_id, false);
         }
-        let directional_selection = directional_model_selection(&self.config.strategy);
+        let directional_selection = directional_model_selection(&member.strategy);
         let mut directional_candidate = None;
         let mut directional_opening_reference = None;
         let feature_started = Instant::now();
@@ -963,13 +1124,17 @@ impl BtcProcessRunner {
                     .back()
                     .map(|candle| candle.close_timestamp)
                 else {
-                    umr_telemetry::readiness(self.config.process_id, false);
+                    umr_telemetry::member_readiness(
+                        self.config.process_id,
+                        &member.member_id,
+                        false,
+                    );
                     umr_telemetry::event(
                         self.config.process_id,
                         "skipped",
                         "binance_history_unavailable",
                     );
-                    return Ok(());
+                    return Ok(None);
                 };
                 let model = runtime_model(selection)
                     .context("failed to resolve configured BTC directional model")?;
@@ -982,29 +1147,34 @@ impl BtcProcessRunner {
                     )
                 else {
                     umr_telemetry::event(self.config.process_id, "skipped", "outside_schedule");
-                    return Ok(());
+                    return Ok(None);
                 };
                 if feature_as_of > observed_at {
                     umr_telemetry::event(self.config.process_id, "skipped", "future_candidate");
-                    return Ok(());
+                    return Ok(None);
                 }
                 if !policy.accepts(candidate_seconds_elapsed) {
-                    return Ok(());
+                    return Ok(None);
                 }
                 let Some(candidate) =
-                    self.claim_directional_model_candidate(&market.market_id, feature_as_of)?
+                    member.claim_directional_model_candidate(&market.market_id, feature_as_of)?
                 else {
                     umr_telemetry::event(
                         self.config.process_id,
                         "skipped",
                         "candidate_already_claimed",
                     );
-                    return Ok(());
+                    return Ok(None);
                 };
+                umr_telemetry::member_event(
+                    self.config.process_id,
+                    &member.member_id,
+                    "opportunities",
+                );
                 umr_telemetry::event(self.config.process_id, "opportunities", "scheduled");
                 umr_telemetry::eligible_market(self.config.process_id, &market.market_id);
-                if let Some(session) = self
-                    .unified_session
+                if let Some(session) = member
+                    .session
                     .lock()
                     .map_err(|_| anyhow::anyhow!("UMR session lock poisoned"))?
                     .as_mut()
@@ -1014,7 +1184,7 @@ impl BtcProcessRunner {
                 let feature_as_of = candidate.feature_as_of();
                 let candidate_seconds_elapsed = (feature_as_of - market.window_start).num_seconds();
                 if !policy.accepts(candidate_seconds_elapsed) {
-                    return Ok(());
+                    return Ok(None);
                 }
                 if candidate.requires_rehydration() {
                     let has_entry = self
@@ -1024,7 +1194,7 @@ impl BtcProcessRunner {
                     candidate.mark_rehydrated()?;
                     if has_entry {
                         candidate.complete(true)?;
-                        return Ok(());
+                        return Ok(None);
                     }
                 }
                 if model.unified_adapter().is_none()
@@ -1036,7 +1206,7 @@ impl BtcProcessRunner {
                             market,
                             feature_as_of,
                             chrono::Duration::milliseconds(
-                                self.config.strategy.max_chainlink_open_delay_ms,
+                                member.strategy.max_chainlink_open_delay_ms,
                             ),
                         )
                         .await?;
@@ -1095,8 +1265,8 @@ impl BtcProcessRunner {
                 market,
                 observed_at,
                 snapshot_identity_at,
-                chrono::Duration::milliseconds(self.config.strategy.max_reference_age_ms),
-                chrono::Duration::milliseconds(self.config.strategy.max_book_age_ms),
+                chrono::Duration::milliseconds(member.strategy.max_reference_age_ms),
+                chrono::Duration::milliseconds(member.strategy.max_book_age_ms),
             )?
         } else {
             let clob_connection_id = observation_clob_connection_id(market, &observation.readiness);
@@ -1104,11 +1274,9 @@ impl BtcProcessRunner {
                 .load_point_in_time_inputs(
                     market,
                     observed_at,
-                    chrono::Duration::milliseconds(
-                        self.config.strategy.max_chainlink_open_delay_ms,
-                    ),
-                    chrono::Duration::milliseconds(self.config.strategy.max_reference_age_ms),
-                    chrono::Duration::milliseconds(self.config.strategy.max_book_age_ms),
+                    chrono::Duration::milliseconds(member.strategy.max_chainlink_open_delay_ms),
+                    chrono::Duration::milliseconds(member.strategy.max_reference_age_ms),
+                    chrono::Duration::milliseconds(member.strategy.max_book_age_ms),
                     clob_connection_id,
                 )
                 .await?
@@ -1121,11 +1289,12 @@ impl BtcProcessRunner {
             market,
             observed_at,
             &inputs,
-            self.config.strategy.target_size,
-            &self.config.strategy.feature_schema_version,
+            member.strategy.target_size,
+            &member.strategy.feature_schema_version,
             snapshot_identity_at,
             directional_model,
         );
+        snapshot.snapshot_id = Uuid::new_v5(&snapshot.snapshot_id, member.member_id.as_bytes());
         if let Some(selection) = directional_selection.as_ref() {
             let model = runtime_model(selection)
                 .context("failed to resolve configured BTC model for feature construction")?;
@@ -1153,8 +1322,7 @@ impl BtcProcessRunner {
                         let context = super::unified_model_runtime::adapters::FeatureContext {
                             state: &observation.state,
                             names: model.feature_names(),
-                            binding: self
-                                .config
+                            binding: member
                                 .strategy
                                 .unified_model
                                 .as_ref()
@@ -1172,8 +1340,8 @@ impl BtcProcessRunner {
                                 .and_then(|v| v.to_f64())
                                 .context("UMR fee unavailable")?,
                         };
-                        let values = self
-                            .unified_session
+                        let values = member
+                            .session
                             .lock()
                             .map_err(|_| anyhow::anyhow!("UMR session lock poisoned"))?
                             .as_mut()
@@ -1305,7 +1473,7 @@ impl BtcProcessRunner {
         }
         let decision_started = Instant::now();
         let mut decision = DeterministicBtcStrategy::evaluate_with_directional_model_entry_policy(
-            &self.config.strategy,
+            &member.strategy,
             &snapshot,
             self.config.directional_model_entry_policy,
         );
@@ -1314,9 +1482,10 @@ impl BtcProcessRunner {
             "strategy",
             decision_started.elapsed().as_secs_f64(),
         );
-        enforce_runtime_readiness(&mut decision, &observation.readiness, &self.config.strategy);
-        umr_telemetry::readiness(
+        enforce_runtime_readiness(&mut decision, &observation.readiness, &member.strategy);
+        umr_telemetry::member_readiness(
             self.config.process_id,
+            &member.member_id,
             scoped_readiness.ready
                 && directional_model_feature_error.is_none()
                 && decision.prediction.is_some(),
@@ -1329,6 +1498,16 @@ impl BtcProcessRunner {
             );
         }
         if directional_model_feature_error.is_some() {
+            if let Some(error) = directional_model_feature_error.as_ref() {
+                umr_telemetry::member_feature_failure(
+                    self.config.process_id,
+                    &member.member_id,
+                    error
+                        .get("detail")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("missing_source_data"),
+                );
+            }
             decision.action = BtcDecisionAction::NoTrade;
             decision.reject_reason = Some(BtcRejectReason::DirectionalFeaturesUnavailable);
             decision.fair_value = None;
@@ -1336,6 +1515,28 @@ impl BtcProcessRunner {
             decision.down_edge = None;
             decision.approved_intent = None;
             decision.prediction = None;
+        }
+        if decision.prediction.is_some() {
+            umr_telemetry::member_event(self.config.process_id, &member.member_id, "inferences");
+            let feature_as_of = snapshot
+                .directional_model
+                .as_ref()
+                .map(|features| features.feature_as_of)
+                .unwrap_or(snapshot.observed_at);
+            umr_telemetry::member_feature_second(
+                self.config.process_id,
+                &member.member_id,
+                (feature_as_of - snapshot.window_start).num_milliseconds() as f64 / 1_000.0,
+            );
+            umr_telemetry::attribute_member(
+                self.config.process_id,
+                snapshot.snapshot_id,
+                &member.member_id,
+                "evaluated",
+            );
+        }
+        if decision.approved_intent.is_some() {
+            umr_telemetry::member_event(self.config.process_id, &member.member_id, "qualified");
         }
         let existing_process_entry = if decision.approved_intent.is_some() {
             self.repository
@@ -1351,7 +1552,7 @@ impl BtcProcessRunner {
         }
         let feature_hash = sha256_json(&snapshot)?;
         let quality_flags =
-            snapshot_quality_flags(&snapshot, &observation.readiness, &self.config.strategy);
+            snapshot_quality_flags(&snapshot, &observation.readiness, &member.strategy);
         let readiness_status = if quality_flags.is_empty() {
             "ready"
         } else {
@@ -1365,6 +1566,7 @@ impl BtcProcessRunner {
                 &feature_hash,
                 readiness_status,
                 &serde_json::json!({
+                    "router_member_id": member.member_id,
                     "runtime_readiness": observation.readiness,
                     "chainlink_quality_ok": snapshot.chainlink_quality_ok,
                     "binance_quality_ok": snapshot.binance_quality_ok,
@@ -1374,11 +1576,12 @@ impl BtcProcessRunner {
             )
             .await?;
         if !feature_inserted && directional_selection.is_none() {
-            return Ok(());
+            return Ok(None);
         }
 
-        let Some(intent) = decision.approved_intent.clone() else {
+        if decision.approved_intent.is_none() {
             self.insert_process_strategy_decision(
+                &member.strategy.strategy_version,
                 &snapshot.market_id,
                 &decision,
                 None,
@@ -1390,11 +1593,42 @@ impl BtcProcessRunner {
                 &mut directional_candidate,
                 existing_process_entry,
             )?;
-            return Ok(());
-        };
+            return Ok(None);
+        }
 
+        Ok(Some(PreparedTradeProposal {
+            snapshot,
+            decision,
+            feature_hash,
+            candidate: directional_candidate,
+        }))
+    }
+
+    async fn execute_router_proposal(
+        &self,
+        member: &RouterMemberRuntime,
+        proposal: PreparedTradeProposal<'_>,
+        observation: &StrategyObservation,
+    ) -> Result<()> {
+        let PreparedTradeProposal {
+            snapshot,
+            decision,
+            feature_hash,
+            candidate: mut directional_candidate,
+        } = proposal;
+        let market = observation
+            .state
+            .current_market
+            .as_ref()
+            .context("missing router market")?;
+        let observed_at = observation.readiness.checked_at;
+        let intent = decision
+            .approved_intent
+            .clone()
+            .context("router selected an unqualified proposal")?;
         if !self.config.execution_enabled {
             self.insert_process_strategy_decision(
+                &member.strategy.strategy_version,
                 &snapshot.market_id,
                 &decision,
                 None,
@@ -1433,6 +1667,7 @@ impl BtcProcessRunner {
                         Some(error.to_string()),
                     );
                     self.insert_process_strategy_decision(
+                        &member.strategy.strategy_version,
                         &snapshot.market_id,
                         &decision,
                         Some(&evidence),
@@ -1453,6 +1688,7 @@ impl BtcProcessRunner {
             .is_some_and(|evaluation| evaluation.disposition == AdmissionDisposition::Defer)
         {
             self.insert_process_strategy_decision(
+                &member.strategy.strategy_version,
                 &snapshot.market_id,
                 &decision,
                 entry_admission_evidence,
@@ -1468,6 +1704,7 @@ impl BtcProcessRunner {
             .is_some_and(|evaluation| evaluation.disposition == RiskDisposition::Defer)
         {
             self.insert_process_strategy_decision(
+                &member.strategy.strategy_version,
                 &snapshot.market_id,
                 &decision,
                 entry_admission_evidence,
@@ -1484,8 +1721,8 @@ impl BtcProcessRunner {
             format!("btc-paper-plan:{}", intent.intent_id).as_bytes(),
         );
         let fee_rate = snapshot.fee_rate.unwrap_or_default();
-        let order_metadata = btc_entry_order_metadata(
-            &self.config.strategy,
+        let mut order_metadata = btc_entry_order_metadata(
+            &member.strategy,
             &intent,
             decision.prediction.as_ref(),
             decision.decision_id,
@@ -1493,6 +1730,25 @@ impl BtcProcessRunner {
             self.config.run_id,
             fee_rate,
         )?;
+        let member_identity = directional_model_selection(&member.strategy)
+            .context("selected member is missing immutable model identity")?;
+        let feature_as_of = snapshot
+            .directional_model
+            .as_ref()
+            .map(|features| features.feature_as_of)
+            .unwrap_or(snapshot.observed_at);
+        order_metadata["router"] = serde_json::json!({
+            "member_id": member.member_id,
+            "model_key": member_identity.model_key,
+            "artifact_sha256": member_identity.artifact_sha256,
+            "feature_schema_sha256": member_identity.feature_schema_sha256,
+            "bucket_start": member.strategy.min_seconds_after_open,
+            "bucket_end": 300 - member.strategy.min_seconds_before_close,
+            "feature_second": (feature_as_of - snapshot.window_start).num_milliseconds() as f64 / 1_000.0,
+            "decision_second": (decision.evaluated_at - snapshot.window_start).num_milliseconds() as f64 / 1_000.0,
+            "mode": "first_qualified",
+            "tie_break": "array_order"
+        });
         let client_order_id = Uuid::new_v5(
             &Uuid::NAMESPACE_URL,
             format!("btc-paper-order:{}", intent.intent_id).as_bytes(),
@@ -1516,8 +1772,8 @@ impl BtcProcessRunner {
             &feature_hash,
             fee_rate,
             BtcExecutionFreshnessBounds {
-                max_reference_age_ms: self.config.strategy.max_reference_age_ms,
-                max_directional_feature_age_ms: self.max_directional_feature_age_ms,
+                max_reference_age_ms: member.strategy.max_reference_age_ms,
+                max_directional_feature_age_ms: member.max_feature_age_ms,
             },
         )?;
         reference_execution_guard.insert_into_metadata(&mut request.metadata)?;
@@ -1525,6 +1781,7 @@ impl BtcProcessRunner {
             return Ok(());
         }
         self.insert_process_strategy_decision(
+            &member.strategy.strategy_version,
             &snapshot.market_id,
             &decision,
             entry_admission_evidence,
@@ -1621,6 +1878,15 @@ impl BtcProcessRunner {
                     (observed_at - market.window_start).num_milliseconds() as f64 / 1000.0,
                     quoted,
                 );
+                umr_telemetry::member_fill(
+                    self.config.process_id,
+                    &member.member_id,
+                    price,
+                    size,
+                    fee,
+                    (observed_at - market.window_start).num_milliseconds() as f64 / 1_000.0,
+                    quoted,
+                );
             }
         }
         let primary_order = report
@@ -1631,6 +1897,7 @@ impl BtcProcessRunner {
         let filled = primary_state == OrderState::Filled;
         let execution_status = decision_execution_status(primary_state);
         umr_telemetry::event(self.config.process_id, "execution", execution_status);
+        umr_telemetry::member_order(self.config.process_id, &member.member_id, execution_status);
         if filled {
             umr_telemetry::gauge(
                 self.config.process_id,

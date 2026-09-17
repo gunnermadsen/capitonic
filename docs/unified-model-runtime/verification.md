@@ -103,3 +103,9 @@ Grafana serves the 75-panel provisioned dashboard including the new failure-caus
 Unrelated startup observations: Q5 and distilled fair value each reported one missing causal Polygon oracle round at market open immediately after restart, then recovered. These were recorded without changes. The existing strict Clippy findings and optional model-data limitations remain unchanged.
 
 Reproduction, all-target test logs, deployment/model/config comparisons, Prometheus snapshots and bounded Loki results are retained locally under `target/orderbook-evidence/` in this defect worktree.
+
+## Bucket router qualification
+
+The three disabled Q5 router templates select fifteen models from the four archived tournaments. Every selected model uses the existing Binance one-second, Polymarket orderbook and optional Polygon oracle paths; models requiring realtime Chainlink RefPrice, canonical Chainlink candles, Binance open interest or Kraken trades are excluded. The exporter verifies the four source artifact hashes, preserves each frozen policy and writes immutable reference vectors without fitting.
+
+The fifteen immutable packages are committed under `packages/btc-directional-model/runtime-models` and copied into the bot image at build time. The bot service has no runtime model bind mount and does not depend on the external SSD. `evidence/bucket-router-models-20260916.json` pins source and runtime identities, while `evidence/bucket-router-compositions-20260916.json` records the three five-member first-qualified compositions. The compositions combine archived tournament evidence periods and are neither an independent holdout nor live-fill qualification. Process-level `sources` remains the sole feed selector, and the adapter rejects unavailable realtime feature families during package registration.

@@ -358,8 +358,6 @@ services:
       POLYMARKET_GRAFANA_LIVE_ENABLED: "true"
       POLYMARKET_GRAFANA_LIVE_PUSH_URL: "http://grafana:3000/api/live/push/polymarket"
       POLYMARKET_GRAFANA_LIVE_PUBLISH_INTERVAL_MS: "1000"
-    volumes:
-      - ./packages/btc-directional-model/runtime-models:/usr/local/share/polymarket-bot/models:ro
     ports:
       - "127.0.0.1:${POLYMARKET_HTTP_HOST_PORT:-8098}:8097"
     depends_on:

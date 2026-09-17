@@ -4,6 +4,7 @@ pub mod adapters;
 pub mod catalog;
 pub mod contract;
 pub mod risk;
+pub mod router;
 pub mod telemetry;
 #[cfg(test)]
 mod tests;
