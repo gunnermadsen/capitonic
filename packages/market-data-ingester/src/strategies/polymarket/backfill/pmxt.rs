@@ -25,6 +25,7 @@ use tokio::{
     task::JoinHandle,
     time::timeout,
 };
+use uuid::Uuid;
 
 use super::types::{
     ArchiveCancellation, ArchiveDownloadLimits, ArchiveParseSummary, BtcOrderbookArchiveEvent,
@@ -233,7 +234,6 @@ pub async fn download_archive(
                 path: final_path,
                 sha256: digest.sha256,
                 compressed_bytes: digest.bytes,
-                reused_cache: true,
             }));
         }
         fs::remove_file(&final_path)
@@ -241,7 +241,8 @@ pub async fn download_archive(
             .with_context(|| format!("failed to remove invalid {}", final_path.display()))?;
     }
 
-    let partial_path = cache_directory.join(format!("{}.part", spec.file_name));
+    let partial_path = cache_directory.join(format!("{}.{}.part", spec.file_name, Uuid::new_v4()));
+    let _partial_cleanup = PartialArchiveCleanup(partial_path.clone());
     let mut last_error = None;
     for _ in 0..PMXT_DOWNLOAD_ATTEMPTS {
         match download_archive_once(client, spec, &partial_path, limits, cancellation).await {
@@ -254,7 +255,6 @@ pub async fn download_archive(
                     path: final_path,
                     sha256: digest.sha256,
                     compressed_bytes: digest.bytes,
-                    reused_cache: false,
                 }));
             }
             Err(error) => {
@@ -266,6 +266,24 @@ pub async fn download_archive(
         }
     }
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("PMXT archive download failed")))
+}
+
+struct PartialArchiveCleanup(PathBuf);
+
+impl Drop for PartialArchiveCleanup {
+    fn drop(&mut self) {
+        match std::fs::remove_file(&self.0) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => tracing::warn!(
+                event = "pmxt_archive_cleanup_failed",
+                error_code = "pmxt_archive_partial_cleanup",
+                path = %self.0.display(),
+                %error,
+                "failed to remove PMXT partial archive"
+            ),
+        }
+    }
 }
 
 async fn fetch_object_identity(
@@ -828,6 +846,32 @@ mod tests {
         .unwrap();
         server.await.unwrap();
         assert_eq!(archive.compressed_bytes, 3);
-        assert_eq!(tokio::fs::read(archive.path).await.unwrap(), b"abc");
+        assert_eq!(tokio::fs::read(&archive.path).await.unwrap(), b"abc");
+    }
+
+    #[test]
+    fn partial_archive_guard_removes_abandoned_downloads() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("archive.parquet.lease.part");
+        std::fs::write(&path, b"partial").unwrap();
+        {
+            let _cleanup = PartialArchiveCleanup(path.clone());
+        }
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn downloaded_archive_removes_cache_file_on_drop() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("archive.parquet");
+        std::fs::write(&path, b"complete").unwrap();
+        {
+            let _archive = DownloadedArchive {
+                path: path.clone(),
+                sha256: "0".repeat(64),
+                compressed_bytes: 8,
+            };
+        }
+        assert!(!path.exists());
     }
 }

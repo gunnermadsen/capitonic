@@ -296,6 +296,7 @@ services:
       CRYPTOHFT_BASE_URL: "https://api.cryptohftdata.com"
       COINAPI_API_ORIGIN: "https://api-ncsa.coinapi.io"
       INGESTER_BINANCE_CACHE_DIRECTORY: "/var/lib/binance-l2/binance-public"
+      INGESTER_PMXT_CACHE_DIRECTORY: "/var/lib/pmxt-cache"
       INGESTER_BINANCE_AGG_TRADE_LAKE_ROOT: "/var/lib/binance-aggregate-trades"
       INGESTER_POLYMARKET_ORDERBOOK_LAKE_ROOT: "/var/lib/polymarket-orderbooks"
       INGESTER_CRYPTOHFT_ARCHIVE_ROOT: "/var/lib/binance-l2"
@@ -315,6 +316,7 @@ services:
       FRED_API_KEY: "${FRED_API_KEY:-}"
       INGESTER_WEATHER_RAW_ROOT: "/var/lib/weather/raw"
     volumes:
+      - ${PMXT_CACHE_ROOT:-/Volumes/docker-data/polymarket-bot/pmxt-cache}:/var/lib/pmxt-cache
       - ${WEATHER_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/temperature-expectancy}:/var/lib/weather
       - ${BINANCE_L2_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/binance-l2}:/var/lib/binance-l2
       - ${BINANCE_AGG_TRADE_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/binance-aggregate-trades}:/var/lib/binance-aggregate-trades
