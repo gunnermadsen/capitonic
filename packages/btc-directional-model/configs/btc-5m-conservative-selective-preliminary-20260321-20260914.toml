@@ -5,35 +5,135 @@ training_only = true
 paper_only = true
 live_capital_allowed = false
 random_seed = 20260917
+stability_seeds = [20260917, 20260929, 20261013]
+minimum_fit_days = 28
+calibration_days = 7
+selection_days = 7
+test_days = 14
 
 [source]
 panel = "/Volumes/docker-data/archives/polymarket-bot-worktrees/time-bucket-specialist-tournament/packages/btc-directional-model/data/btc-full-coverage-vwap-admission-20260321-20260914/vwap-admission-panel.parquet"
 panel_sha256 = "f11e3bc597dfd546d667c5f610791fd48feab0015217c64278fc06e46612bffa"
-
-[windows]
-fit_start = "2026-03-21T00:00:00Z"
-fit_end = "2026-08-01T00:00:00Z"
-calibration_end = "2026-08-10T00:00:00Z"
-selection_end = "2026-08-21T00:00:00Z"
-sealed_end = "2026-09-01T00:00:00Z"
-confirmation_end = "2026-09-14T00:00:00Z"
+source_start = "2026-03-21T00:00:00Z"
+sealed_start = "2026-08-24T00:00:00Z"
+source_end = "2026-09-14T00:00:00Z"
+expected_markets = 50602
+expected_rows = 1872274
+expected_checkpoints_per_market = 37
 
 [model]
-learning_rate = 0.05
-max_iter = 180
-max_leaf_nodes = 15
-min_samples_leaf = 120
-l2_regularization = 4.0
+learning_rate = 0.03
+max_iter = 300
 max_bins = 127
+
+[calibration]
+safety_floor = 0.02
+reliability_bins = 10
 
 [policy]
 quantity = 5
-confidence_thresholds = [0.75, 0.80, 0.85, 0.90, 0.93, 0.95, 0.97]
-minimum_edges = [0.00, 0.02, 0.04, 0.06, 0.08, 0.10]
-maximum_share_costs = [0.70, 0.80, 0.90]
-minimum_selection_trades = 8
-minimum_selection_precision = 0.75
+confidence_floors = [0.72, 0.76, 0.80, 0.84, 0.88]
+minimum_stressed_edges = [0.03, 0.05, 0.08, 0.10]
+maximum_share_costs = [0.55, 0.60, 0.65]
+minimum_selection_trades = 5
+minimum_selection_precision = 0.70
 maximum_compensation_ratio = 2.0
 execution_reserve_per_share = 0.005
-stress_slippage_per_share = 0.01
+stress_slippage_per_share = 0.010
 
+[qualification]
+minimum_historical_trades = 60
+minimum_historical_weeks = 8
+minimum_precision = 0.78
+minimum_historical_wilson = 0.68
+maximum_ece = 0.04
+maximum_selected_ece = 0.07
+minimum_stressed_profit_factor = 1.50
+maximum_compensation_ratio = 2.0
+maximum_losing_streak = 3
+maximum_best_day_positive_pnl_share = 0.25
+minimum_positive_month_fraction = 0.70
+
+[[models]]
+name = "price_l7_leaf100_l2_4"
+max_leaf_nodes = 7
+min_samples_leaf = 100
+l2_regularization = 4.0
+include_aggregate_volume = false
+
+[[models]]
+name = "price_l7_leaf200_l2_8"
+max_leaf_nodes = 7
+min_samples_leaf = 200
+l2_regularization = 8.0
+include_aggregate_volume = false
+
+[[models]]
+name = "price_l7_leaf400_l2_16"
+max_leaf_nodes = 7
+min_samples_leaf = 400
+l2_regularization = 16.0
+include_aggregate_volume = false
+
+[[models]]
+name = "price_l15_leaf100_l2_8"
+max_leaf_nodes = 15
+min_samples_leaf = 100
+l2_regularization = 8.0
+include_aggregate_volume = false
+
+[[models]]
+name = "price_l15_leaf200_l2_8"
+max_leaf_nodes = 15
+min_samples_leaf = 200
+l2_regularization = 8.0
+include_aggregate_volume = false
+
+[[models]]
+name = "price_l15_leaf400_l2_4"
+max_leaf_nodes = 15
+min_samples_leaf = 400
+l2_regularization = 4.0
+include_aggregate_volume = false
+
+[[models]]
+name = "price_l31_leaf100_l2_16"
+max_leaf_nodes = 31
+min_samples_leaf = 100
+l2_regularization = 16.0
+include_aggregate_volume = false
+
+[[models]]
+name = "price_l31_leaf200_l2_4"
+max_leaf_nodes = 31
+min_samples_leaf = 200
+l2_regularization = 4.0
+include_aggregate_volume = false
+
+[[models]]
+name = "price_l31_leaf400_l2_8"
+max_leaf_nodes = 31
+min_samples_leaf = 400
+l2_regularization = 8.0
+include_aggregate_volume = false
+
+[[models]]
+name = "volume_l7_leaf200_l2_8"
+max_leaf_nodes = 7
+min_samples_leaf = 200
+l2_regularization = 8.0
+include_aggregate_volume = true
+
+[[models]]
+name = "volume_l15_leaf200_l2_8"
+max_leaf_nodes = 15
+min_samples_leaf = 200
+l2_regularization = 8.0
+include_aggregate_volume = true
+
+[[models]]
+name = "volume_l31_leaf200_l2_8"
+max_leaf_nodes = 31
+min_samples_leaf = 200
+l2_regularization = 8.0
+include_aggregate_volume = true
