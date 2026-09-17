@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, path::PathBuf, sync::Arc, time::Duration};
 use anyhow::{bail, Context as _, Result as AnyResult};
 use chrono::{DateTime, Duration as ChronoDuration, Timelike, Utc};
 use reqwest::Client;
-use rust_decimal::Decimal;
+use rust_decimal::{Decimal, RoundingStrategy};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{Postgres, QueryBuilder, Row, Transaction};
@@ -419,7 +419,7 @@ struct ReferenceFact<'a> {
 }
 
 pub(super) fn normalize_reference_value(value: Decimal) -> Decimal {
-    value.round_dp(10)
+    value.round_dp_with_strategy(10, RoundingStrategy::MidpointAwayFromZero)
 }
 
 async fn persist_reference_fact(
