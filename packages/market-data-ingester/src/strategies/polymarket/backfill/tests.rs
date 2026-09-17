@@ -110,3 +110,24 @@ fn gamma_reference_values_match_the_durable_numeric_scale() {
         "66134.3959342008".parse::<Decimal>().unwrap()
     );
 }
+
+#[test]
+fn gamma_reference_midpoints_match_existing_postgres_rounding() {
+    for (source, durable) in [
+        ("70636.27506812985", "70636.2750681299"),
+        ("68953.73318371625", "68953.7331837163"),
+    ] {
+        assert_eq!(
+            normalize_reference_value(source.parse::<Decimal>().unwrap()),
+            durable.parse::<Decimal>().unwrap()
+        );
+    }
+}
+
+#[test]
+fn gamma_reference_normalization_preserves_real_conflicts() {
+    assert_ne!(
+        normalize_reference_value("70636.27506812984".parse::<Decimal>().unwrap()),
+        "70636.2750681299".parse::<Decimal>().unwrap()
+    );
+}
