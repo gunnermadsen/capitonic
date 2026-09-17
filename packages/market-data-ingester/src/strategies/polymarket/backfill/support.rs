@@ -1446,6 +1446,7 @@ impl BackfillSupport {
             &self.cache_directory,
             &ArchiveDownloadLimits {
                 maximum_compressed_bytes: 2 * 1024 * 1024 * 1024,
+                request_timeout: Duration::from_secs(30 * 60),
                 chunk_idle_timeout: Duration::from_secs(60),
             },
             &cancellation,
@@ -1533,6 +1534,7 @@ impl BackfillSupport {
                 &self.cache_directory,
                 &ArchiveDownloadLimits {
                     maximum_compressed_bytes: 2 * 1024 * 1024 * 1024,
+                    request_timeout: Duration::from_secs(30 * 60),
                     chunk_idle_timeout: Duration::from_secs(60),
                 },
                 &cancellation,

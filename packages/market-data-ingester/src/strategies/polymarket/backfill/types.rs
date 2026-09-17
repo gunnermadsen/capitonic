@@ -149,6 +149,7 @@ pub struct BtcExecutionSnapshot {
 #[derive(Debug, Clone)]
 pub struct ArchiveDownloadLimits {
     pub maximum_compressed_bytes: u64,
+    pub request_timeout: Duration,
     pub chunk_idle_timeout: Duration,
 }
 

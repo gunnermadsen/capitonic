@@ -32,7 +32,9 @@ pub const fn realtime_profile(key: IngesterStrategyKey) -> WorkloadProfile {
 
 pub fn backfill_profile(strategy_key: &str) -> WorkloadProfile {
     match strategy_key {
-        "pmxt_polymarket_orderbook_archives_backfill" => WorkloadProfile {
+        "pmxt_polymarket_orderbook_archives_backfill"
+        | "polymarket_btc_five_minute_orderbook_events_backfill"
+        | "polymarket_btc_five_minute_execution_snapshots_backfill" => WorkloadProfile {
             capacity_units: 4,
             isolation: IsolationClass::Exclusive,
         },
@@ -125,6 +127,24 @@ mod tests {
         assert_eq!(candidate.isolation, IsolationClass::Exclusive);
         assert!(admits_backfill(4, None, 0, candidate));
         assert!(!admits_backfill(4, None, 2, candidate));
+    }
+
+    #[test]
+    fn btc_pmxt_archive_backfills_are_exclusive() {
+        for strategy_key in [
+            "polymarket_btc_five_minute_orderbook_events_backfill",
+            "polymarket_btc_five_minute_execution_snapshots_backfill",
+        ] {
+            let candidate = backfill_profile(strategy_key);
+            assert_eq!(candidate.capacity_units, 4, "{strategy_key}");
+            assert_eq!(
+                candidate.isolation,
+                IsolationClass::Exclusive,
+                "{strategy_key}"
+            );
+            assert!(admits_backfill(4, None, 0, candidate), "{strategy_key}");
+            assert!(!admits_backfill(4, None, 2, candidate), "{strategy_key}");
+        }
     }
 
     #[test]
