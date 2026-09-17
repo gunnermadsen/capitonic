@@ -70,6 +70,10 @@ def _effect(feature: str, cohort: pl.DataFrame, reference: pl.DataFrame) -> dict
     }
 
 
+def _optional_float(value: Any) -> float | None:
+    return float(value) if value is not None else None
+
+
 def analyze(input_path: Path, output: Path) -> dict[str, Any]:
     frame = add_streak_ids(pl.read_parquet(input_path))
     losses = frame.filter(~pl.col("won"))
@@ -96,13 +100,13 @@ def analyze(input_path: Path, output: Path) -> dict[str, Any]:
             "duration_hours": (end - start).total_seconds() / 3600,
             "sides": part.group_by("side").len().sort("side").to_dicts(),
             "folds": sorted(part["fold"].unique().to_list()),
-            "mean_volatility_60s_bps": float(vol.mean()),
+            "mean_volatility_60s_bps": _optional_float(vol.mean()),
             "volatility_regime": (
                 "calm" if float(vol.mean()) <= quantiles["btc_realized_volatility_60s_bps"]["q25"]
                 else "volatile" if float(vol.mean()) >= quantiles["btc_realized_volatility_60s_bps"]["q75"]
                 else "normal"
             ),
-            "mean_volatility_shock_30_vs_120": float(shock.mean()),
+            "mean_volatility_shock_30_vs_120": _optional_float(shock.mean()),
             "mean_confidence": float(part["confidence"].mean()),
             "mean_share_cost": float(part["share_cost"].mean()),
             "mean_entry_second": float(part["seconds_elapsed"].mean()),
