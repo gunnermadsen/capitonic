@@ -1,0 +1,39 @@
+[training]
+profile = "btc_5m_conservative_selective_preliminary"
+model_family = "btc-5m-conservative-selective"
+training_only = true
+paper_only = true
+live_capital_allowed = false
+random_seed = 20260917
+
+[source]
+panel = "/Volumes/docker-data/archives/polymarket-bot-worktrees/time-bucket-specialist-tournament/packages/btc-directional-model/data/btc-full-coverage-vwap-admission-20260321-20260914/vwap-admission-panel.parquet"
+panel_sha256 = "f11e3bc597dfd546d667c5f610791fd48feab0015217c64278fc06e46612bffa"
+
+[windows]
+fit_start = "2026-03-21T00:00:00Z"
+fit_end = "2026-08-01T00:00:00Z"
+calibration_end = "2026-08-10T00:00:00Z"
+selection_end = "2026-08-21T00:00:00Z"
+sealed_end = "2026-09-01T00:00:00Z"
+confirmation_end = "2026-09-14T00:00:00Z"
+
+[model]
+learning_rate = 0.05
+max_iter = 180
+max_leaf_nodes = 15
+min_samples_leaf = 120
+l2_regularization = 4.0
+max_bins = 127
+
+[policy]
+quantity = 5
+confidence_thresholds = [0.75, 0.80, 0.85, 0.90, 0.93, 0.95, 0.97]
+minimum_edges = [0.00, 0.02, 0.04, 0.06, 0.08, 0.10]
+maximum_share_costs = [0.70, 0.80, 0.90]
+minimum_selection_trades = 8
+minimum_selection_precision = 0.75
+maximum_compensation_ratio = 2.0
+execution_reserve_per_share = 0.005
+stress_slippage_per_share = 0.01
+
