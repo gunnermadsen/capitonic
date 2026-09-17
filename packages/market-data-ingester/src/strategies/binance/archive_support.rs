@@ -2,6 +2,7 @@
 #![allow(clippy::type_complexity)]
 
 use std::{
+    collections::HashMap,
     fs::File,
     io::BufReader,
     path::{Component, Path, PathBuf},
@@ -26,7 +27,9 @@ use tokio::{
 };
 use zip::ZipArchive;
 
-use super::types::{BinanceAggregateTradeRecord, BinanceOneSecondKlineRecord};
+use super::types::{
+    decimal_fits_numeric_30_10, BinanceAggregateTradeRecord, BinanceOneSecondKlineRecord,
+};
 
 pub const BINANCE_ARCHIVE_PROVIDER: &str = "binance_public_data";
 pub const BINANCE_SYMBOL: &str = "BTCUSDT";
@@ -133,6 +136,7 @@ pub struct DownloadedArchive {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ArchiveParseSummary {
     pub records: u64,
+    pub duplicate_records: u64,
     pub batches: u64,
     pub maximum_batch_records: usize,
     pub minimum_timestamp: Option<DateTime<Utc>>,
@@ -155,6 +159,11 @@ impl ArchiveParseSummary {
     fn observe_batch(&mut self, records: usize) {
         self.batches = self.batches.saturating_add(1);
         self.maximum_batch_records = self.maximum_batch_records.max(records);
+    }
+
+    fn observe_duplicate(&mut self) {
+        self.records = self.records.saturating_add(1);
+        self.duplicate_records = self.duplicate_records.saturating_add(1);
     }
 }
 
@@ -302,6 +311,19 @@ pub async fn download_archive_with_cancellation(
             let _ = fs::remove_file(&partial_path).await;
             Err(error)
         }
+    }
+}
+
+pub async fn remove_downloaded_archive(path: &Path) -> Result<()> {
+    match fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "failed to remove consumed Binance archive {}",
+                path.display()
+            )
+        }),
     }
 }
 
@@ -564,6 +586,7 @@ fn parse_one_second_kline_archive(
     let mut batch = Vec::with_capacity(batch_records);
     let mut summary = ArchiveParseSummary::default();
     let mut previous_open = None;
+    let mut seen = HashMap::<DateTime<Utc>, String>::new();
     for (ordinal, record) in reader.byte_records().enumerate() {
         cancellation.check()?;
         let record = record.with_context(|| format!("invalid kline CSV row {}", ordinal + 1))?;
@@ -589,10 +612,22 @@ fn parse_one_second_kline_archive(
             .context("CSV ignore was not a valid decimal")?;
         validate_kline(&row)?;
         require_archive_date(row.open_timestamp, spec.date)?;
+        let payload_sha256 = row.canonical_payload_sha256();
+        if let Some(existing_sha256) = seen.get(&row.open_timestamp) {
+            if existing_sha256 != &payload_sha256 {
+                bail!(
+                    "kline timestamp {} contained conflicting duplicate facts",
+                    row.open_timestamp
+                );
+            }
+            summary.observe_duplicate();
+            continue;
+        }
         if previous_open.is_some_and(|previous| row.open_timestamp <= previous) {
-            bail!("kline open timestamps were not strictly increasing");
+            bail!("kline open timestamps contained an unseen backward timestamp");
         }
         previous_open = Some(row.open_timestamp);
+        seen.insert(row.open_timestamp, payload_sha256);
         summary.observe(row.open_timestamp);
         batch.push(row);
         if batch.len() == batch_records {
@@ -660,6 +695,20 @@ fn validate_archive_entry_name(entry_name: &str, expected_entry_name: &str) -> R
 }
 
 fn validate_kline(row: &BinanceOneSecondKlineRecord) -> Result<()> {
+    for (field, value) in [
+        ("open_price", &row.open_price),
+        ("high_price", &row.high_price),
+        ("low_price", &row.low_price),
+        ("close_price", &row.close_price),
+        ("base_volume", &row.base_volume),
+        ("quote_volume", &row.quote_volume),
+        ("taker_buy_base_volume", &row.taker_buy_base_volume),
+        ("taker_buy_quote_volume", &row.taker_buy_quote_volume),
+    ] {
+        if !decimal_fits_numeric_30_10(value) {
+            bail!("one-second kline {field} exceeded numeric(30,10)");
+        }
+    }
     if row.open_price <= Decimal::ZERO
         || row.high_price <= Decimal::ZERO
         || row.low_price <= Decimal::ZERO
@@ -992,6 +1041,108 @@ mod tests {
         let (mut receiver, handle) = spawn_one_second_kline_parser(invalid, spec, 100).unwrap();
         assert!(receiver.recv().await.is_none());
         assert!(handle.await.unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn kline_parser_deduplicates_identical_repeated_prefixes() {
+        let directory = TempDir::new().unwrap();
+        let spec = BinanceArchiveSpec::new(
+            "https://example.test",
+            BinanceArchiveKind::OneSecondKlines,
+            date(),
+        );
+        let row = |second: u32, close_price: &str| {
+            let open = micros(second, 0);
+            let close = open + 999_999;
+            format!("{open},60000,60002,59999,{close_price},2,{close},120000,3,1,60000,0\n")
+        };
+        let csv = format!(
+            "{}{}{}{}{}",
+            row(0, "60001"),
+            row(1, "60001"),
+            row(0, "60001"),
+            row(1, "60001"),
+            row(2, "60001")
+        );
+        let path = write_zip(&directory, &spec.entry_name, &csv);
+        let (mut receiver, handle) = spawn_one_second_kline_parser(path, spec, 10).unwrap();
+        let rows = receiver.recv().await.unwrap();
+        assert_eq!(rows.len(), 3);
+        assert!(receiver.recv().await.is_none());
+        let summary = handle.await.unwrap().unwrap();
+        assert_eq!(summary.records, 5);
+        assert_eq!(summary.duplicate_records, 2);
+    }
+
+    #[tokio::test]
+    async fn kline_parser_rejects_conflicting_duplicate_timestamp() {
+        let directory = TempDir::new().unwrap();
+        let spec = BinanceArchiveSpec::new(
+            "https://example.test",
+            BinanceArchiveKind::OneSecondKlines,
+            date(),
+        );
+        let open = micros(0, 0);
+        let close = open + 999_999;
+        let csv = format!(
+            "{open},60000,60002,59999,60001,2,{close},120000,3,1,60000,0\n{open},60000,60002,59999,60000,2,{close},120000,3,1,60000,0\n"
+        );
+        let path = write_zip(&directory, &spec.entry_name, &csv);
+        let (mut receiver, handle) = spawn_one_second_kline_parser(path, spec, 10).unwrap();
+        assert!(receiver.recv().await.is_none());
+        let error = handle.await.unwrap().unwrap_err().to_string();
+        assert!(error.contains("conflicting duplicate facts"));
+    }
+
+    #[tokio::test]
+    async fn kline_parser_rejects_unseen_backward_timestamp() {
+        let directory = TempDir::new().unwrap();
+        let spec = BinanceArchiveSpec::new(
+            "https://example.test",
+            BinanceArchiveKind::OneSecondKlines,
+            date(),
+        );
+        let later = micros(1, 0);
+        let earlier = micros(0, 0);
+        let csv = format!(
+            "{later},60000,60002,59999,60001,2,{},120000,3,1,60000,0\n{earlier},60000,60002,59999,60001,2,{},120000,3,1,60000,0\n",
+            later + 999_999,
+            earlier + 999_999
+        );
+        let path = write_zip(&directory, &spec.entry_name, &csv);
+        let (mut receiver, handle) = spawn_one_second_kline_parser(path, spec, 10).unwrap();
+        assert!(receiver.recv().await.is_none());
+        let error = handle.await.unwrap().unwrap_err().to_string();
+        assert!(error.contains("unseen backward timestamp"));
+    }
+
+    #[tokio::test]
+    async fn kline_parser_rejects_decimal_precision_postgres_would_round() {
+        let directory = TempDir::new().unwrap();
+        let spec = BinanceArchiveSpec::new(
+            "https://example.test",
+            BinanceArchiveKind::OneSecondKlines,
+            date(),
+        );
+        let open = micros(0, 0);
+        let close = open + 999_999;
+        let csv =
+            format!("{open},60000.00000000001,60002,59999,60001,2,{close},120000,3,1,60000,0\n");
+        let path = write_zip(&directory, &spec.entry_name, &csv);
+        let (mut receiver, handle) = spawn_one_second_kline_parser(path, spec, 10).unwrap();
+        assert!(receiver.recv().await.is_none());
+        let error = handle.await.unwrap().unwrap_err().to_string();
+        assert!(error.contains("exceeded numeric(30,10)"));
+    }
+
+    #[tokio::test]
+    async fn consumed_archive_cleanup_is_idempotent() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("archive.zip");
+        std::fs::write(&path, b"archive").unwrap();
+        remove_downloaded_archive(&path).await.unwrap();
+        assert!(!path.exists());
+        remove_downloaded_archive(&path).await.unwrap();
     }
 
     #[test]

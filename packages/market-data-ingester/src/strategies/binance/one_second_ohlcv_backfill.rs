@@ -138,7 +138,11 @@ impl BackfillWorkerStrategy for BinanceSpotOneSecondOhlcvBackfill {
         let parsed = parser
             .await
             .map_err(|error| backfill_support::source_error(error.to_string()))?
+            .map_err(backfill_support::source_error);
+        archive_support::remove_downloaded_archive(&downloaded.path)
+            .await
             .map_err(backfill_support::source_error)?;
+        let parsed = parsed?;
         persist(
             &context,
             artifact_id,
@@ -154,7 +158,7 @@ impl BackfillWorkerStrategy for BinanceSpotOneSecondOhlcvBackfill {
                 .map_err(|_| backfill_support::integrity("record count overflow"))?,
             &shard,
             json!({
-                "provider": BINANCE_ARCHIVE_PROVIDER, "source_day_records": parsed.records, "records_verified": records.len(), "reused_cache": downloaded.reused_cache,
+                "provider": BINANCE_ARCHIVE_PROVIDER, "source_day_records": parsed.records, "source_duplicate_records": parsed.duplicate_records, "records_verified": records.len(), "reused_cache": downloaded.reused_cache,
             }),
         ))
     }

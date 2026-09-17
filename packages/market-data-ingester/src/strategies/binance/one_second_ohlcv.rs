@@ -30,6 +30,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use super::types::decimal_fits_numeric_30_10;
+
 use crate::{
     domain::{
         CaptureArtifact, IngesterProfile, IngesterStrategyKey, RealtimeWorkerStrategy,
@@ -2240,14 +2242,7 @@ fn validate_decimal_wire(value: &str, field: &str) -> Result<(), StrategyError> 
 }
 
 fn validate_numeric_storage_bound(value: &Decimal, field: &str) -> Result<(), StrategyError> {
-    let canonical = canonical_decimal(value);
-    let integer_digits = canonical
-        .split_once('.')
-        .map_or(canonical.as_str(), |(integer, _)| integer)
-        .trim_start_matches('0')
-        .len()
-        .max(1);
-    if value.normalize().scale() > 10 || integer_digits > 20 {
+    if !decimal_fits_numeric_30_10(value) {
         return Err(source_error(
             "binance_ohlcv_decimal_out_of_range",
             format!("Binance one-second kline {field} exceeds numeric(30,10)"),

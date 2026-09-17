@@ -254,7 +254,7 @@ services:
       BINANCE_FUTURES_DATA_BASE_URL: "https://fapi.binance.com"
       CRYPTOHFT_BASE_URL: "https://api.cryptohftdata.com"
       COINAPI_API_ORIGIN: "https://api-ncsa.coinapi.io"
-      INGESTER_BINANCE_CACHE_DIRECTORY: "/var/lib/binance-l2/binance-public"
+      INGESTER_BINANCE_CACHE_DIRECTORY: "/tmp/ingester-binance-cache"
       INGESTER_BINANCE_AGG_TRADE_LAKE_ROOT: "/var/lib/binance-aggregate-trades"
       INGESTER_POLYMARKET_ORDERBOOK_LAKE_ROOT: "/var/lib/polymarket-orderbooks"
       INGESTER_BINANCE_ONE_SECOND_OHLCV_LAKE_ROOT: "/var/lib/binance-one-second-ohlcv"
