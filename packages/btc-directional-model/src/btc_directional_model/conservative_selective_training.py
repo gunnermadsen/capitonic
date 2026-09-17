@@ -431,7 +431,7 @@ def run(config: Path, output: Path) -> None:
             ),
             "trades": len(alternate_decisions),
         })
-    stability_passed = all(
+    stability_passed = final_policy is not None and all(
         row["admission_jaccard"] >= 0.80 and row["direction_agreement"] >= 0.90
         for row in stability
     )
