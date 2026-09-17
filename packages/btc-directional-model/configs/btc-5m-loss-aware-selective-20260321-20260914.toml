@@ -1,0 +1,67 @@
+[training]
+profile = "btc_5m_loss_aware_selective"
+training_only = true
+paper_only = true
+live_capital_allowed = false
+random_seed = 20260918
+minimum_fit_days = 28
+calibration_days = 7
+selection_days = 7
+test_days = 14
+minimum_risk_fit_days = 28
+
+[source]
+panel = "/Volumes/docker-data/archives/polymarket-bot-worktrees/time-bucket-specialist-tournament/packages/btc-directional-model/data/btc-full-coverage-vwap-admission-20260321-20260914/vwap-admission-panel.parquet"
+panel_sha256 = "f11e3bc597dfd546d667c5f610791fd48feab0015217c64278fc06e46612bffa"
+source_start = "2026-03-21T00:00:00Z"
+source_end = "2026-09-14T00:00:00Z"
+expected_markets = 50602
+expected_rows = 1872274
+expected_checkpoints_per_market = 37
+
+[directional]
+learning_rate = 0.03
+max_iter = 300
+max_bins = 127
+max_leaf_nodes = 31
+min_samples_leaf = 200
+l2_regularization = 4.0
+calibration_safety_floor = 0.02
+
+[risk]
+learning_rate = 0.04
+max_iter = 220
+max_bins = 127
+max_leaf_nodes = 7
+min_samples_leaf = 80
+l2_regularization = 8.0
+calibration_days = 7
+streak_loss_weight = 1.5
+severity_weight_cap = 3.0
+risk_thresholds = [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
+
+[candidate]
+confidence_floor = 0.65
+minimum_stressed_edge = 0.00
+maximum_share_cost = 0.65
+
+[policy]
+quantity = 5
+confidence_floors = [0.72, 0.76, 0.80, 0.84, 0.88]
+minimum_stressed_edges = [0.03, 0.05, 0.08, 0.10]
+maximum_share_costs = [0.55, 0.60, 0.65]
+minimum_selection_trades = 5
+minimum_selection_precision = 0.70
+maximum_compensation_ratio = 2.0
+execution_reserve_per_share = 0.005
+stress_slippage_per_share = 0.010
+
+[qualification]
+minimum_trades = 60
+minimum_weeks = 8
+minimum_precision = 0.78
+minimum_wilson = 0.68
+minimum_stressed_profit_factor = 1.50
+maximum_compensation_ratio = 2.0
+maximum_losing_streak = 3
+minimum_stress_pnl_retention = 0.95
