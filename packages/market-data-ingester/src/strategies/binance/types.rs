@@ -5,6 +5,17 @@ pub use crate::domain::{
     BinanceAggregateTradeRecord, BinanceBtcusdtOpenInterestRecord, BinanceOneSecondKlineRecord,
 };
 
+pub fn decimal_fits_numeric_30_10(value: &Decimal) -> bool {
+    let canonical = value.normalize().to_string();
+    let integer_digits = canonical
+        .split_once('.')
+        .map_or(canonical.as_str(), |(integer, _)| integer)
+        .trim_start_matches('0')
+        .len()
+        .max(1);
+    value.normalize().scale() <= 10 && integer_digits <= 20
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct BinanceL2OneSecondFeature {
     pub symbol: String,
