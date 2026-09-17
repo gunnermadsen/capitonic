@@ -320,3 +320,11 @@ docker compose up -d --force-recreate --no-deps db-migrate
 - Follow [the UMR architecture and adapter contracts](docs/unified-model-runtime/README.md) and its instrumentation/integration standards when changing model inference, feature bindings or monitoring.
 - Preserve frozen model behavior, existing process identities, version compatibility and stable observability semantics. New models reuse supported packages or add a thin adapter inside the UMR module; do not rewrite shared execution, ingestion or dashboards per model.
 - Verify feature/prediction/admission parity and automatic process-scoped recovery before changing a deployed adapter. Never silently substitute data semantics or bypass existing order/accounting controls.
+
+## Ingester Worker Scaling
+
+- Create and manage ingester workers only by scaling the existing `ingester-worker` service in the repository’s Docker Compose project.
+- Never create ingester workers with `docker run`, `docker compose run`, manual container creation, or any mechanism outside the Compose project.
+- Never create purpose-specific worker services, container names, deployment names, or worker variants. All ingester workers must use the standard `ingester-worker` service name and existing runtime contract.
+- Worker scaling is an operational action only. Do not modify source code, Dockerfiles, Compose files, environment files, or configuration to scale workers.
+- Do not introduce a parallel worker standard or contract. If the existing `ingester-worker` service cannot perform the requested work through ordinary Compose scaling, stop and report the incompatibility instead of creating or modifying infrastructure.
