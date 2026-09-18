@@ -171,13 +171,15 @@ pub async fn execute(
         outcome.objects_published += 1;
         outcome.bytes_written += publication.byte_size;
         if request.mode.removes_source_data() && chunk.range_end <= request.cutoff {
-            outcome.rows_removed +=
-                sqlx::query_scalar::<_, i64>("SELECT ingester.remove_verified_drain_chunk($1,$2)")
-                    .bind(publication.object_id)
-                    .bind(&publication.sha256)
-                    .fetch_one(&context.pool)
-                    .await
-                    .map_err(db_error)?;
+            outcome.rows_removed += sqlx::query_scalar::<_, i64>(
+                "SELECT ingester.remove_verified_drain_chunk($1,$2,$3)",
+            )
+            .bind(publication.object_id)
+            .bind(&publication.sha256)
+            .bind(context.job_id)
+            .fetch_one(&context.pool)
+            .await
+            .map_err(db_error)?;
         }
     }
     outcome.summary = json!({
