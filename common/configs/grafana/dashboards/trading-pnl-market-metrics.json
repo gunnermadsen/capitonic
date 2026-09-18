@@ -1588,7 +1588,7 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 5,
+        "w": 3,
         "x": 0,
         "y": 1
       },
@@ -1750,8 +1750,8 @@
       },
       "gridPos": {
         "h": 15,
-        "w": 10,
-        "x": 5,
+        "w": 12,
+        "x": 3,
         "y": 1
       },
       "hideTimeOverride": true,
@@ -1984,7 +1984,7 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 5,
+        "w": 3,
         "x": 0,
         "y": 6
       },
@@ -2072,7 +2072,7 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 5,
+        "w": 3,
         "x": 0,
         "y": 11
       },
@@ -2193,7 +2193,7 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 11,
+        "h": 7,
         "w": 24,
         "x": 0,
         "y": 17
@@ -2299,9 +2299,9 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 5,
+        "w": 3,
         "x": 0,
-        "y": 28
+        "y": 24
       },
       "id": 25,
       "options": {
@@ -2382,7 +2382,7 @@
               "viz": false
             },
             "insertNulls": false,
-            "lineInterpolation": "linear",
+            "lineInterpolation": "smooth",
             "lineWidth": 2,
             "pointSize": 5,
             "scaleDistribution": {
@@ -2419,10 +2419,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 20,
-        "w": 10,
-        "x": 5,
-        "y": 28
+        "h": 23,
+        "w": 12,
+        "x": 3,
+        "y": 24
       },
       "id": 1,
       "options": {
@@ -2431,8 +2431,10 @@
             "lastNotNull"
           ],
           "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
+          "placement": "right",
+          "showLegend": true,
+          "sortBy": "Last *",
+          "sortDesc": true
         },
         "tooltip": {
           "hideZeros": false,
@@ -2450,7 +2452,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH bounds AS MATERIALIZED (\n  SELECT $__timeFrom()::timestamptz AS from_ts,$__timeTo()::timestamptz AS to_ts\n), buckets AS MATERIALIZED (\n  SELECT generate_series(date_bin('5 minutes',from_ts,timestamptz '1970-01-01'),to_ts,interval '5 minutes') AS time FROM bounds\n  UNION SELECT to_ts FROM bounds\n), selected_process AS NOT MATERIALIZED (\n  SELECT p.process_id,p.name,p.created_at FROM polymarket.trading_processes p\n  WHERE (${pnl_scope:sqlstring}='All processes' OR p.process_id=(${process_id:sqlstring})::uuid)\n    AND p.process_type='btc_5m' AND p.process_scope='realtime_paper' AND p.status<>'completed'\n), filled_orders AS MATERIALIZED (\n  SELECT o.process_id,o.order_id,o.market_id,o.token_id,SUM(f.size)::numeric AS filled_size,\n         SUM(f.price*f.size)::numeric AS entry_cost,SUM(f.fee)::numeric AS entry_fees,MAX(f.timestamp_utc) AS filled_at,\n         BOOL_AND(f.source='live') AS is_live\n  FROM selected_process p JOIN polymarket.orders o USING(process_id)\n  JOIN polymarket.fills f ON f.order_id=o.order_id AND f.process_id=o.process_id AND f.source IN ('paper','live')\n  WHERE o.side='buy'\n  GROUP BY o.process_id,o.order_id,o.market_id,o.token_id\n), recognized_exits AS MATERIALIZED (\n  SELECT e.process_id,e.order_id,x.timestamp_utc AS realized_at,x.price AS exit_price,x.size AS exit_size,\n         (x.raw_payload#>>'{reconciliation,net_proceeds}')::numeric AS net_proceeds\n  FROM filled_orders e JOIN polymarket.account_trades x ON x.linked_order_id=e.order_id AND x.token_id=e.token_id\n  WHERE e.is_live AND x.side='sell' AND x.applied_exit_size=x.size AND x.applied_exit_size=e.filled_size\n    AND x.raw_payload#>>'{reconciliation,kind}'='manual_live_full_exit'\n    AND x.raw_payload#>>'{reconciliation,process_id}'=e.process_id::text\n    AND x.raw_payload#>>'{reconciliation,order_id}'=e.order_id\n    AND x.raw_payload#>>'{reconciliation,net_proceeds}'~'^[0-9]+([.][0-9]+)?$'\n), realized AS MATERIALIZED (\n  SELECT e.process_id,e.order_id,x.realized_at,(x.net_proceeds-e.entry_cost-e.entry_fees)::numeric AS net_pnl\n  FROM filled_orders e JOIN recognized_exits x USING(process_id,order_id)\n  UNION ALL\n  SELECT e.process_id,e.order_id,m.official_resolution_received_at,\n    (CASE WHEN e.token_id=m.official_winning_token_id THEN e.filled_size ELSE 0::numeric END-e.entry_cost-e.entry_fees)::numeric\n  FROM filled_orders e JOIN polymarket.btc_interval_markets m ON m.market_id=e.market_id\n  WHERE m.official_outcome IN ('up','down') AND m.official_winning_token_id IS NOT NULL\n    AND m.official_resolution_received_at IS NOT NULL AND m.official_resolution_received_at<=(SELECT to_ts FROM bounds)\n    AND NOT EXISTS (SELECT 1 FROM recognized_exits x WHERE x.process_id=e.process_id AND x.order_id=e.order_id)\n), opening_balance AS (\n  SELECT r.process_id,SUM(r.net_pnl)::numeric AS opening_pnl\n  FROM realized r CROSS JOIN bounds b\n  WHERE r.realized_at<=date_bin('5 minutes',b.from_ts,timestamptz '1970-01-01')\n  GROUP BY r.process_id\n), bucket_deltas AS (\n  SELECT r.process_id,LEAST(\n           date_bin('5 minutes',r.realized_at,timestamptz '1970-01-01')\n           + CASE WHEN r.realized_at=date_bin('5 minutes',r.realized_at,timestamptz '1970-01-01')\n                  THEN interval '0' ELSE interval '5 minutes' END,\n           b.to_ts) AS time,\n         SUM(r.net_pnl)::numeric AS net_pnl\n  FROM realized r CROSS JOIN bounds b\n  WHERE r.realized_at>date_bin('5 minutes',b.from_ts,timestamptz '1970-01-01')\n    AND r.realized_at<=b.to_ts\n  GROUP BY r.process_id,2\n), series AS (\n  SELECT p.process_id,p.name,b.time,\n         COALESCE(o.opening_pnl,0::numeric)\n         + SUM(COALESCE(d.net_pnl,0::numeric)) OVER (\n             PARTITION BY p.process_id ORDER BY b.time ROWS UNBOUNDED PRECEDING\n           ) AS value\n  FROM selected_process p JOIN buckets b ON b.time>=p.created_at\n  LEFT JOIN opening_balance o USING(process_id)\n  LEFT JOIN bucket_deltas d ON d.process_id=p.process_id AND d.time=b.time\n)\nSELECT time,name||' ['||left(process_id::text,8)||']' AS metric,value::double precision\nFROM series ORDER BY time,metric;",
+          "rawSql": "WITH bounds AS MATERIALIZED (\n  SELECT $__timeFrom()::timestamptz AS from_ts,$__timeTo()::timestamptz AS to_ts\n), buckets AS MATERIALIZED (\n  SELECT generate_series(date_bin('5 minutes',from_ts,timestamptz '1970-01-01'),to_ts,interval '5 minutes') AS time FROM bounds\n  UNION SELECT to_ts FROM bounds\n), selected_process AS NOT MATERIALIZED (\n  SELECT p.process_id,p.name,p.created_at FROM polymarket.trading_processes p\n  WHERE (${pnl_scope:sqlstring}='All processes' OR p.process_id=(${process_id:sqlstring})::uuid)\n    AND p.process_type='btc_5m' AND p.process_scope='realtime_paper' AND p.status<>'completed'\n), filled_orders AS MATERIALIZED (\n  SELECT o.process_id,o.order_id,o.market_id,o.token_id,SUM(f.size)::numeric AS filled_size,\n         SUM(f.price*f.size)::numeric AS entry_cost,SUM(f.fee)::numeric AS entry_fees,MAX(f.timestamp_utc) AS filled_at,\n         BOOL_AND(f.source='live') AS is_live\n  FROM selected_process p JOIN polymarket.orders o USING(process_id)\n  JOIN polymarket.fills f ON f.order_id=o.order_id AND f.process_id=o.process_id AND f.source IN ('paper','live')\n  WHERE o.side='buy'\n  GROUP BY o.process_id,o.order_id,o.market_id,o.token_id\n), recognized_exits AS MATERIALIZED (\n  SELECT e.process_id,e.order_id,x.timestamp_utc AS realized_at,x.price AS exit_price,x.size AS exit_size,\n         (x.raw_payload#>>'{reconciliation,net_proceeds}')::numeric AS net_proceeds\n  FROM filled_orders e JOIN polymarket.account_trades x ON x.linked_order_id=e.order_id AND x.token_id=e.token_id\n  WHERE e.is_live AND x.side='sell' AND x.applied_exit_size=x.size AND x.applied_exit_size=e.filled_size\n    AND x.raw_payload#>>'{reconciliation,kind}'='manual_live_full_exit'\n    AND x.raw_payload#>>'{reconciliation,process_id}'=e.process_id::text\n    AND x.raw_payload#>>'{reconciliation,order_id}'=e.order_id\n    AND x.raw_payload#>>'{reconciliation,net_proceeds}'~'^[0-9]+([.][0-9]+)?$'\n), realized AS MATERIALIZED (\n  SELECT e.process_id,e.order_id,x.realized_at,(x.net_proceeds-e.entry_cost-e.entry_fees)::numeric AS net_pnl\n  FROM filled_orders e JOIN recognized_exits x USING(process_id,order_id)\n  UNION ALL\n  SELECT e.process_id,e.order_id,m.official_resolution_received_at,\n    (CASE WHEN e.token_id=m.official_winning_token_id THEN e.filled_size ELSE 0::numeric END-e.entry_cost-e.entry_fees)::numeric\n  FROM filled_orders e JOIN polymarket.btc_interval_markets m ON m.market_id=e.market_id\n  WHERE m.official_outcome IN ('up','down') AND m.official_winning_token_id IS NOT NULL\n    AND m.official_resolution_received_at IS NOT NULL AND m.official_resolution_received_at<=(SELECT to_ts FROM bounds)\n    AND NOT EXISTS (SELECT 1 FROM recognized_exits x WHERE x.process_id=e.process_id AND x.order_id=e.order_id)\n), opening_balance AS (\n  SELECT r.process_id,SUM(r.net_pnl)::numeric AS opening_pnl\n  FROM realized r CROSS JOIN bounds b\n  WHERE r.realized_at<=date_bin('5 minutes',b.from_ts,timestamptz '1970-01-01')\n  GROUP BY r.process_id\n), bucket_deltas AS (\n  SELECT r.process_id,LEAST(\n           date_bin('5 minutes',r.realized_at,timestamptz '1970-01-01')\n           + CASE WHEN r.realized_at=date_bin('5 minutes',r.realized_at,timestamptz '1970-01-01')\n                  THEN interval '0' ELSE interval '5 minutes' END,\n           b.to_ts) AS time,\n         SUM(r.net_pnl)::numeric AS net_pnl\n  FROM realized r CROSS JOIN bounds b\n  WHERE r.realized_at>date_bin('5 minutes',b.from_ts,timestamptz '1970-01-01')\n    AND r.realized_at<=b.to_ts\n  GROUP BY r.process_id,2\n), series AS (\n  SELECT p.process_id,p.name,b.time,\n         COALESCE(o.opening_pnl,0::numeric)\n         + SUM(COALESCE(d.net_pnl,0::numeric)) OVER (\n             PARTITION BY p.process_id ORDER BY b.time ROWS UNBOUNDED PRECEDING\n           ) AS value\n  FROM selected_process p JOIN buckets b ON b.time>=p.created_at\n  LEFT JOIN opening_balance o USING(process_id)\n  LEFT JOIN bucket_deltas d ON d.process_id=p.process_id AND d.time=b.time\n)\nSELECT time,name AS metric,value::double precision\nFROM series ORDER BY time,metric;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -2555,10 +2557,10 @@
         ]
       },
       "gridPos": {
-        "h": 20,
+        "h": 23,
         "w": 9,
         "x": 15,
-        "y": 28
+        "y": 24
       },
       "id": 19,
       "options": {
@@ -2701,9 +2703,9 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 5,
+        "w": 3,
         "x": 0,
-        "y": 33
+        "y": 29
       },
       "id": 3,
       "options": {
@@ -2787,9 +2789,9 @@
       },
       "gridPos": {
         "h": 6,
-        "w": 5,
+        "w": 3,
         "x": 0,
-        "y": 38
+        "y": 34
       },
       "id": 21,
       "options": {
@@ -2853,10 +2855,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 5,
+        "h": 7,
+        "w": 3,
         "x": 0,
-        "y": 44
+        "y": 40
       },
       "id": 30,
       "options": {
@@ -3140,9 +3142,9 @@
       },
       "gridPos": {
         "h": 9,
-        "w": 19,
-        "x": 5,
-        "y": 48
+        "w": 24,
+        "x": 0,
+        "y": 47
       },
       "id": 2,
       "options": {
@@ -3275,6 +3277,6 @@
   "timezone": "browser",
   "title": "Trading, PNL & Market Metrics",
   "uid": "polymarket-bot",
-  "version": 36,
+  "version": 38,
   "weekStart": ""
 }
