@@ -96,6 +96,7 @@ impl PolymarketOrderbooksDrain {
                 tokio::time::sleep(std::time::Duration::from_millis(15)).await;
             }
         }
+        drop(rows);
         if !buffer.is_empty() {
             sender
                 .send(orderbook_schema::to_batch(buffer)?)
