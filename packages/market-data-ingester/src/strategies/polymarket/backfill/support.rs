@@ -102,6 +102,21 @@ impl BackfillSupport {
             .user_agent("capitonic-ingester-worker/1")
             .build()
             .map_err(|error| integrity("polymarket_backfill_client", error.to_string()))?;
+        let cache_root = std::env::var("INGESTER_PMXT_CACHE_DIRECTORY")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/tmp/ingester-pmxt-cache"));
+        let worker_cache_key = std::env::var("INGESTER_WORKER_ID")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .unwrap_or_else(|_| "worker".to_owned())
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                    character
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
         Ok(Self {
             kind,
             descriptor,
@@ -109,9 +124,7 @@ impl BackfillSupport {
             gamma_url: env_url("POLYMARKET_GAMMA_BASE_URL", GAMMA_URL),
             clob_url: env_url("POLYMARKET_CLOB_BASE_URL", CLOB_URL),
             pmxt_url: env_url("POLYMARKET_PMXT_ARCHIVE_BASE_URL", DEFAULT_PMXT_ARCHIVE_URL),
-            cache_directory: std::env::var("INGESTER_PMXT_CACHE_DIRECTORY")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from("/tmp/ingester-pmxt-cache")),
+            cache_directory: cache_root.join(worker_cache_key),
         })
     }
 
@@ -451,7 +464,7 @@ async fn persist_reference_fact(
     .rows_affected();
     if inserted == 0 {
         let row = sqlx::query(
-            "SELECT value,source_effective_at,payload_sha256 FROM polymarket.btc_market_reference_facts WHERE market_id=$1 AND fact_type=$2 AND provider='polymarket_gamma'",
+            "SELECT value,source_effective_at,payload_sha256,evidence FROM polymarket.btc_market_reference_facts WHERE market_id=$1 AND fact_type=$2 AND provider='polymarket_gamma'",
         )
         .bind(fact.market_id)
         .bind(fact.fact_type)
@@ -462,8 +475,16 @@ async fn persist_reference_fact(
         let stored_at: DateTime<Utc> =
             row.try_get("source_effective_at").map_err(database_error)?;
         let _stored_hash: String = row.try_get("payload_sha256").map_err(database_error)?;
+        let stored_evidence: Value = row.try_get("evidence").map_err(database_error)?;
         // Gamma's surrounding response can change after this immutable fact is recorded.
-        if stored_value != value || stored_at != fact.source_effective_at {
+        if !reference_fact_matches(
+            fact.fact_type,
+            fact.value,
+            fact.source_effective_at,
+            stored_value,
+            stored_at,
+            &stored_evidence,
+        ) {
             return Err(integrity(
                 "market_reference_conflict",
                 format!(
@@ -475,6 +496,35 @@ async fn persist_reference_fact(
     }
     require_lease(&mut tx, context).await?;
     tx.commit().await.map_err(database_error)
+}
+
+pub(super) fn reference_fact_matches(
+    fact_type: &str,
+    source_value: Decimal,
+    source_effective_at: DateTime<Utc>,
+    stored_value: Decimal,
+    stored_effective_at: DateTime<Utc>,
+    stored_evidence: &Value,
+) -> bool {
+    if stored_effective_at != source_effective_at {
+        return false;
+    }
+    let evidence_key = match fact_type {
+        "final_price" => "finalPrice",
+        "opening_boundary" => "priceToBeat",
+        _ => return false,
+    };
+    if let Some(evidence_value) = stored_evidence
+        .get("eventMetadata")
+        .and_then(|metadata| decimal_json_field(metadata, &[evidence_key]))
+    {
+        return evidence_value == source_value;
+    }
+
+    // Facts written before source evidence was retained may use either historical
+    // ten-decimal contract. This fallback is deliberately limited to those rows.
+    stored_value == normalize_reference_value(source_value)
+        || stored_value == source_value.round_dp(10)
 }
 
 fn decimal_json_field(value: &Value, keys: &[&str]) -> Option<Decimal> {
@@ -1452,7 +1502,7 @@ impl BackfillSupport {
             &cancellation,
         )
         .await
-        .map_err(|error| invalid_source("pmxt_archive_download", error.to_string()))?
+        .map_err(|error| invalid_source("pmxt_archive_download", format!("{error:#}")))?
         .ok_or_else(|| invalid_source("pmxt_archive_missing", "PMXT archive object was absent"))?;
         let (mut receiver, parser) = spawn_parser(
             archive.path.clone(),
@@ -1540,7 +1590,7 @@ impl BackfillSupport {
                 &cancellation,
             )
             .await
-            .map_err(|error| invalid_source("pmxt_archive_download", error.to_string()))?
+            .map_err(|error| invalid_source("pmxt_archive_download", format!("{error:#}")))?
             .ok_or_else(|| {
                 invalid_source(
                     "pmxt_archive_missing",
@@ -1548,9 +1598,8 @@ impl BackfillSupport {
                 )
             })?;
             checksum.update(archive.sha256.as_bytes());
-            let archive_path = archive.path.clone();
             let (mut receiver, parser) = spawn_execution_parser(
-                archive.path,
+                archive.path.clone(),
                 scope.clone(),
                 DATABASE_BATCH_ROWS,
                 cancellation.clone(),
@@ -1571,16 +1620,6 @@ impl BackfillSupport {
                 .map_err(|error| integrity("pmxt_parser_join", error.to_string()))?
                 .map_err(|error| integrity("pmxt_execution_parse", error.to_string()))?;
             source_records = source_records.saturating_add(parsed.records);
-            match tokio::fs::remove_file(&archive_path).await {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(invalid_source(
-                        "pmxt_archive_cache_cleanup",
-                        format!("failed to remove parsed PMXT cache file: {error}"),
-                    ));
-                }
-            }
         }
         let mut snapshots = Vec::with_capacity(scope.len() * EXECUTION_SNAPSHOTS_PER_MARKET);
         reconstructor.finish_before(shard.range_end, &mut snapshots);
