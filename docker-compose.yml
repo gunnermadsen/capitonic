@@ -237,6 +237,8 @@ services:
       - *postgres-worker-env-file
     environment:
       <<: *ingester-environment
+      POSTGRES_HOST: "${INGESTER_WORKER_POSTGRES_HOST:-pgbouncer}"
+      POSTGRES_PORT: "${INGESTER_WORKER_POSTGRES_PORT:-6432}"
       POSTGRES_USER: "capitonic_ingester_worker"
       POSTGRES_DB: "${INGESTER_WORKER_POSTGRES_ALIAS:-polymarket_ingester_worker_tx}"
       INGESTER_MODE: "worker"
@@ -247,7 +249,7 @@ services:
       INGESTER_DEPLOYMENT_ID: "${INGESTER_DEPLOYMENT_ID:-default}"
       INGESTER_WORKER_MAX_BACKFILLS: "2"
       INGESTER_WORKER_CAPACITY_UNITS: "4"
-      INGESTER_WORKER_REALTIME_SLOT_LIMIT: "1"
+      INGESTER_WORKER_REALTIME_SLOT_LIMIT: "${INGESTER_WORKER_REALTIME_SLOT_LIMIT:-1}"
       INGESTER_IMAGE_DIGEST: "${INGESTER_IMAGE_DIGEST:-development}"
       INGESTER_GIT_REVISION: "${INGESTER_GIT_REVISION:-development}"
       BINANCE_ARCHIVE_BASE_URL: "https://data.binance.vision"
