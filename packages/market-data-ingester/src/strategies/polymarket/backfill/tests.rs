@@ -7,7 +7,7 @@ use crate::domain::{BackfillRequest, BackfillWorkerStrategy, StrategyCapability}
 
 use super::{
     support::{
-        normalize_reference_value, parse_gamma_btc_interval_event,
+        normalize_reference_value, parse_gamma_btc_interval_event, reference_fact_matches,
         EXECUTION_SNAPSHOTS_BACKFILL_KEY, MARKET_CONTRACTS_BACKFILL_KEY,
         ORDERBOOK_EVENTS_BACKFILL_KEY, RESOLUTIONS_BACKFILL_KEY,
     },
@@ -109,4 +109,107 @@ fn gamma_reference_values_match_the_durable_numeric_scale() {
         normalize_reference_value("66134.39593420082".parse::<Decimal>().unwrap()),
         "66134.3959342008".parse::<Decimal>().unwrap()
     );
+}
+
+#[test]
+fn gamma_reference_midpoints_match_existing_postgres_rounding() {
+    for (source, durable) in [
+        ("70636.27506812985", "70636.2750681299"),
+        ("68953.73318371625", "68953.7331837163"),
+    ] {
+        assert_eq!(
+            normalize_reference_value(source.parse::<Decimal>().unwrap()),
+            durable.parse::<Decimal>().unwrap()
+        );
+    }
+}
+
+#[test]
+fn gamma_reference_normalization_preserves_real_conflicts() {
+    assert_ne!(
+        normalize_reference_value("70636.27506812984".parse::<Decimal>().unwrap()),
+        "70636.2750681299".parse::<Decimal>().unwrap()
+    );
+}
+
+#[test]
+fn gamma_reference_legacy_midpoint_matches_exact_stored_evidence() {
+    let effective_at = "2026-08-17T02:30:00Z".parse().unwrap();
+    let source = "63116.58653999865".parse::<Decimal>().unwrap();
+    let evidence = json!({"eventMetadata": {"finalPrice": 63116.58653999865}});
+    assert!(reference_fact_matches(
+        "final_price",
+        source,
+        effective_at,
+        "63116.5865399986".parse().unwrap(),
+        effective_at,
+        &evidence,
+    ));
+}
+
+#[test]
+fn gamma_reference_exact_evidence_rejects_real_source_conflicts() {
+    let effective_at = "2026-08-17T02:30:00Z".parse().unwrap();
+    let evidence = json!({"eventMetadata": {"finalPrice": 63116.58653999865}});
+    assert!(!reference_fact_matches(
+        "final_price",
+        "63116.58653999866".parse().unwrap(),
+        effective_at,
+        "63116.5865399986".parse().unwrap(),
+        effective_at,
+        &evidence,
+    ));
+    assert!(!reference_fact_matches(
+        "final_price",
+        "63116.58653999865".parse().unwrap(),
+        effective_at + Duration::minutes(5),
+        "63116.5865399986".parse().unwrap(),
+        effective_at,
+        &evidence,
+    ));
+}
+
+#[test]
+fn gamma_opening_boundary_reads_price_to_beat_evidence() {
+    let effective_at = "2026-08-17T02:25:00Z".parse().unwrap();
+    let source = "63053.18232987998".parse::<Decimal>().unwrap();
+    let evidence = json!({"eventMetadata": {"priceToBeat": 63053.18232987998}});
+    assert!(reference_fact_matches(
+        "opening_boundary",
+        source,
+        effective_at,
+        "63053.1823298800".parse().unwrap(),
+        effective_at,
+        &evidence,
+    ));
+}
+
+#[test]
+fn gamma_reference_missing_evidence_accepts_only_historical_rounding_contracts() {
+    let effective_at = "2026-08-17T02:30:00Z".parse().unwrap();
+    let source = "63116.58653999865".parse::<Decimal>().unwrap();
+    assert!(reference_fact_matches(
+        "final_price",
+        source,
+        effective_at,
+        "63116.5865399986".parse().unwrap(),
+        effective_at,
+        &json!({}),
+    ));
+    assert!(reference_fact_matches(
+        "final_price",
+        source,
+        effective_at,
+        "63116.5865399987".parse().unwrap(),
+        effective_at,
+        &json!({}),
+    ));
+    assert!(!reference_fact_matches(
+        "final_price",
+        source,
+        effective_at,
+        "63116.5865399988".parse().unwrap(),
+        effective_at,
+        &json!({}),
+    ));
 }

@@ -30,7 +30,8 @@ FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --uid 10003 --create-home --shell /usr/sbin/nologin ingester
+    && useradd --system --uid 10003 --create-home --shell /usr/sbin/nologin ingester \
+    && install -d -o ingester -g ingester /var/lib/pmxt-cache
 
 ARG INGESTER_GIT_REVISION
 RUN case "$INGESTER_GIT_REVISION" in \

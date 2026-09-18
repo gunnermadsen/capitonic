@@ -25,6 +25,7 @@ use tokio::{
     task::JoinHandle,
     time::timeout,
 };
+use uuid::Uuid;
 
 use super::types::{
     ArchiveCancellation, ArchiveDownloadLimits, ArchiveParseSummary, BtcOrderbookArchiveEvent,
@@ -220,7 +221,8 @@ pub async fn download_archive(
         .with_context(|| format!("failed to create {}", cache_directory.display()))?;
     let final_path = cache_directory.join(&spec.file_name);
     if final_path.exists() {
-        let Some(identity) = fetch_object_identity(client, spec, cancellation).await? else {
+        let Some(identity) = fetch_object_identity(client, spec, limits, cancellation).await?
+        else {
             fs::remove_file(&final_path)
                 .await
                 .with_context(|| format!("failed to remove {}", final_path.display()))?;
@@ -232,7 +234,6 @@ pub async fn download_archive(
                 path: final_path,
                 sha256: digest.sha256,
                 compressed_bytes: digest.bytes,
-                reused_cache: true,
             }));
         }
         fs::remove_file(&final_path)
@@ -240,7 +241,8 @@ pub async fn download_archive(
             .with_context(|| format!("failed to remove invalid {}", final_path.display()))?;
     }
 
-    let partial_path = cache_directory.join(format!("{}.part", spec.file_name));
+    let partial_path = cache_directory.join(format!("{}.{}.part", spec.file_name, Uuid::new_v4()));
+    let _partial_cleanup = PartialArchiveCleanup(partial_path.clone());
     let mut last_error = None;
     for _ in 0..PMXT_DOWNLOAD_ATTEMPTS {
         match download_archive_once(client, spec, &partial_path, limits, cancellation).await {
@@ -253,7 +255,6 @@ pub async fn download_archive(
                     path: final_path,
                     sha256: digest.sha256,
                     compressed_bytes: digest.bytes,
-                    reused_cache: false,
                 }));
             }
             Err(error) => {
@@ -267,9 +268,28 @@ pub async fn download_archive(
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("PMXT archive download failed")))
 }
 
+struct PartialArchiveCleanup(PathBuf);
+
+impl Drop for PartialArchiveCleanup {
+    fn drop(&mut self) {
+        match std::fs::remove_file(&self.0) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => tracing::warn!(
+                event = "pmxt_archive_cleanup_failed",
+                error_code = "pmxt_archive_partial_cleanup",
+                path = %self.0.display(),
+                %error,
+                "failed to remove PMXT partial archive"
+            ),
+        }
+    }
+}
+
 async fn fetch_object_identity(
     client: &reqwest::Client,
     spec: &PmxtArchiveSpec,
+    limits: &ArchiveDownloadLimits,
     cancellation: &ArchiveCancellation,
 ) -> Result<Option<PmxtObjectIdentity>> {
     if cancellation.is_cancelled() {
@@ -277,6 +297,7 @@ async fn fetch_object_identity(
     }
     let response = client
         .head(&spec.source_uri)
+        .timeout(limits.request_timeout)
         .send()
         .await
         .with_context(|| format!("failed to inspect {}", spec.source_uri))?;
@@ -301,6 +322,7 @@ async fn download_archive_once(
     }
     let mut response = client
         .get(&spec.source_uri)
+        .timeout(limits.request_timeout)
         .send()
         .await
         .with_context(|| format!("failed to request {}", spec.source_uri))?;
@@ -724,8 +746,12 @@ async fn hash_file(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use chrono::TimeZone;
     use parquet::data_type::ByteArray;
+    use tempfile::TempDir;
+    use tokio::{net::TcpListener, time::sleep};
 
     use super::*;
 
@@ -778,5 +804,74 @@ mod tests {
             etag: Some(parse_etag("\"15c088024dc2b3017cad9ee6965f364a-2\"").unwrap()),
         };
         assert!(identity.validate(&digest).is_ok());
+    }
+
+    #[tokio::test]
+    async fn archive_request_timeout_overrides_the_short_api_client_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = vec![0u8; 1024];
+            let _ = stream.read(&mut request).await.unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            for byte in b"abc" {
+                sleep(Duration::from_millis(75)).await;
+                stream.write_all(&[*byte]).await.unwrap();
+            }
+        });
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(100))
+            .build()
+            .unwrap();
+        let hour = Utc.with_ymd_and_hms(2026, 4, 17, 12, 0, 0).unwrap();
+        let spec = PmxtArchiveSpec::new(&format!("http://{address}"), hour).unwrap();
+        let directory = TempDir::new().unwrap();
+        let archive = download_archive(
+            &client,
+            &spec,
+            directory.path(),
+            &ArchiveDownloadLimits {
+                maximum_compressed_bytes: 1024,
+                request_timeout: Duration::from_secs(2),
+                chunk_idle_timeout: Duration::from_millis(200),
+            },
+            &ArchiveCancellation::default(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        server.await.unwrap();
+        assert_eq!(archive.compressed_bytes, 3);
+        assert_eq!(tokio::fs::read(&archive.path).await.unwrap(), b"abc");
+    }
+
+    #[test]
+    fn partial_archive_guard_removes_abandoned_downloads() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("archive.parquet.lease.part");
+        std::fs::write(&path, b"partial").unwrap();
+        {
+            let _cleanup = PartialArchiveCleanup(path.clone());
+        }
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn downloaded_archive_removes_cache_file_on_drop() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("archive.parquet");
+        std::fs::write(&path, b"complete").unwrap();
+        {
+            let _archive = DownloadedArchive {
+                path: path.clone(),
+                sha256: "0".repeat(64),
+                compressed_bytes: 8,
+            };
+        }
+        assert!(!path.exists());
     }
 }

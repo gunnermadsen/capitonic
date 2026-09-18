@@ -1,12 +1,13 @@
 use std::{collections::BTreeMap, env, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context, Result};
+use chrono::{DateTime, Utc};
 use reqwest::{Client, StatusCode};
 use serde::Serialize;
 use serde_json::json;
 use sqlx::PgPool;
 use tokio::task::JoinSet;
-use tokio::time::MissedTickBehavior;
+use tokio::time::{timeout_at, Instant, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -284,22 +285,18 @@ impl BackfillWorkerRuntime {
         claim: &ClaimedBackfillJob,
         shutdown: CancellationToken,
     ) -> Result<()> {
-        let mut interval = tokio::time::interval(Duration::from_secs(15));
-        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        interval.tick().await;
-        loop {
-            tokio::select! {
-                _ = shutdown.cancelled() => return Ok(()),
-                _ = interval.tick() => {
-                    let response = self.client.post(format!("{}/internal/workers/{}/jobs/{}/heartbeat", self.master_url, self.worker.worker_id, claim.job.job_id))
-                        .bearer_auth(&self.admin_token)
-                        .json(&json!({"lease_token": claim.lease_token, "progress": {}, "checkpoint": {}}))
-                        .send().await?;
-                    if response.status() == StatusCode::CONFLICT { bail!("backfill lease was lost"); }
-                    response.error_for_status()?;
-                }
-            }
-        }
+        run_job_heartbeat_loop(
+            &self.client,
+            &self.master_url,
+            &self.admin_token,
+            &self.worker.worker_id,
+            claim.job.job_id,
+            claim.lease_token,
+            claim.job.lease_expires_at,
+            shutdown,
+            HeartbeatTiming::default(),
+        )
+        .await
     }
 
     async fn complete(&self, claim: &ClaimedBackfillJob, outcome: &BackfillOutcome) -> Result<()> {
@@ -341,10 +338,209 @@ impl BackfillWorkerRuntime {
     }
 }
 
+#[derive(Clone, Copy)]
+struct HeartbeatTiming {
+    normal_interval: Duration,
+    retry_interval: Duration,
+    confirmed_lease: Duration,
+    safety_margin: Duration,
+}
+
+impl Default for HeartbeatTiming {
+    fn default() -> Self {
+        Self {
+            normal_interval: Duration::from_secs(15),
+            retry_interval: Duration::from_secs(2),
+            confirmed_lease: Duration::from_secs(60),
+            safety_margin: Duration::from_secs(5),
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_job_heartbeat_loop(
+    client: &Client,
+    master_url: &str,
+    admin_token: &str,
+    worker_id: &str,
+    job_id: uuid::Uuid,
+    lease_token: uuid::Uuid,
+    lease_expires_at: Option<DateTime<Utc>>,
+    shutdown: CancellationToken,
+    timing: HeartbeatTiming,
+) -> Result<()> {
+    let initial_remaining = lease_expires_at
+        .and_then(|expires_at| (expires_at - Utc::now()).to_std().ok())
+        .unwrap_or_default();
+    let mut confirmation_deadline =
+        Instant::now() + initial_remaining.saturating_sub(timing.safety_margin);
+    let mut next_delay = timing.normal_interval;
+    let mut unavailable = false;
+    loop {
+        tokio::select! {
+            _ = shutdown.cancelled() => return Ok(()),
+            _ = tokio::time::sleep(next_delay) => {
+                if Instant::now() >= confirmation_deadline {
+                    bail!("backfill lease confirmation expired");
+                }
+                let request = client.post(format!("{master_url}/internal/workers/{worker_id}/jobs/{job_id}/heartbeat"))
+                    .bearer_auth(admin_token)
+                    .json(&json!({"lease_token": lease_token, "progress": {}, "checkpoint": {}}));
+                match timeout_at(confirmation_deadline, request.send()).await {
+                    Ok(Ok(response)) if response.status() == StatusCode::CONFLICT => {
+                        bail!("backfill lease was lost");
+                    }
+                    Ok(Ok(response)) if response.status().is_success() => {
+                        confirmation_deadline = Instant::now()
+                            + timing.confirmed_lease.saturating_sub(timing.safety_margin);
+                        if unavailable {
+                            info!(event="backfill_heartbeat_recovered", %job_id, %worker_id, "backfill heartbeat recovered before lease expiry");
+                        }
+                        unavailable = false;
+                        next_delay = timing.normal_interval;
+                    }
+                    Ok(Ok(response)) => {
+                        unavailable = true;
+                        warn!(event="backfill_heartbeat_unavailable", error_code="backfill_heartbeat_http", %job_id, %worker_id, status=%response.status(), "backfill heartbeat did not confirm lease ownership; retrying within confirmed lease window");
+                        next_delay = timing.retry_interval;
+                    }
+                    Ok(Err(error)) => {
+                        unavailable = true;
+                        warn!(event="backfill_heartbeat_unavailable", error_code="backfill_heartbeat_transport", %job_id, %worker_id, %error, "backfill heartbeat transport unavailable; retrying within confirmed lease window");
+                        next_delay = timing.retry_interval;
+                    }
+                    Err(_) => bail!("backfill lease confirmation expired"),
+                }
+            }
+        }
+    }
+}
+
 fn required(key: &str) -> Result<String> {
     let value = env::var(key).with_context(|| format!("{key} is required"))?;
     if value.trim().is_empty() {
         bail!("{key} must not be empty");
     }
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    use super::*;
+
+    async fn heartbeat_server(statuses: Vec<&'static str>) -> (String, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&requests);
+        tokio::spawn(async move {
+            for status in statuses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0u8; 2048];
+                let _ = stream.read(&mut request).await.unwrap();
+                observed.fetch_add(1, Ordering::SeqCst);
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        (format!("http://{address}"), requests)
+    }
+
+    fn test_timing() -> HeartbeatTiming {
+        HeartbeatTiming {
+            normal_interval: Duration::from_millis(10),
+            retry_interval: Duration::from_millis(10),
+            confirmed_lease: Duration::from_secs(1),
+            safety_margin: Duration::ZERO,
+        }
+    }
+
+    #[tokio::test]
+    async fn heartbeat_500_recovers_without_ending_execution() {
+        let (master_url, requests) =
+            heartbeat_server(vec!["500 Internal Server Error", "204 No Content"]).await;
+        let shutdown = CancellationToken::new();
+        let task_shutdown = shutdown.clone();
+        let client = Client::new();
+        let task = tokio::spawn(async move {
+            run_job_heartbeat_loop(
+                &client,
+                &master_url,
+                "token",
+                "worker",
+                uuid::Uuid::new_v4(),
+                uuid::Uuid::new_v4(),
+                Some(Utc::now() + chrono::Duration::seconds(1)),
+                task_shutdown,
+                test_timing(),
+            )
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while requests.load(Ordering::SeqCst) < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        shutdown.cancel();
+        assert!(task.await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn heartbeat_409_proves_lease_loss() {
+        let (master_url, _) = heartbeat_server(vec!["409 Conflict"]).await;
+        let error = run_job_heartbeat_loop(
+            &Client::new(),
+            &master_url,
+            "token",
+            "worker",
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            Some(Utc::now() + chrono::Duration::seconds(1)),
+            CancellationToken::new(),
+            test_timing(),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("lease was lost"));
+    }
+
+    #[tokio::test]
+    async fn repeated_heartbeat_500_stops_at_confirmed_lease_deadline() {
+        let (master_url, _) = heartbeat_server(vec!["500 Internal Server Error"; 20]).await;
+        let error = run_job_heartbeat_loop(
+            &Client::new(),
+            &master_url,
+            "token",
+            "worker",
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            Some(Utc::now() + chrono::Duration::milliseconds(60)),
+            CancellationToken::new(),
+            HeartbeatTiming {
+                normal_interval: Duration::from_millis(5),
+                retry_interval: Duration::from_millis(5),
+                confirmed_lease: Duration::from_millis(60),
+                safety_margin: Duration::ZERO,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("confirmation expired"));
+    }
 }

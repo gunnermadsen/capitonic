@@ -149,6 +149,7 @@ pub struct BtcExecutionSnapshot {
 #[derive(Debug, Clone)]
 pub struct ArchiveDownloadLimits {
     pub maximum_compressed_bytes: u64,
+    pub request_timeout: Duration,
     pub chunk_idle_timeout: Duration,
 }
 
@@ -167,12 +168,27 @@ impl ArchiveCancellation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct DownloadedArchive {
     pub path: PathBuf,
     pub sha256: String,
     pub compressed_bytes: u64,
-    pub reused_cache: bool,
+}
+
+impl Drop for DownloadedArchive {
+    fn drop(&mut self) {
+        match std::fs::remove_file(&self.path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => tracing::warn!(
+                event = "pmxt_archive_cleanup_failed",
+                error_code = "pmxt_archive_cache_cleanup",
+                path = %self.path.display(),
+                %error,
+                "failed to remove PMXT archive cache file"
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
