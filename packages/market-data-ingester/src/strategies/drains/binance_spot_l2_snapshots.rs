@@ -198,6 +198,7 @@ impl RetainedDrainAdapter for BinanceSpotL2SnapshotsDrain {
                 tokio::time::sleep(std::time::Duration::from_millis(15)).await;
             }
         }
+        drop(stream);
         if !rows.is_empty() {
             sender
                 .send(batch(rows)?)

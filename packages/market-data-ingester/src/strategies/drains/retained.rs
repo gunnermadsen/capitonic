@@ -1,4 +1,4 @@
-use std::{path::Path, sync::Arc};
+use std::{path::Path, sync::Arc, time::Duration as StdDuration};
 
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
@@ -21,6 +21,13 @@ pub struct RetainedDrainSpec {
     pub table: &'static str,
     pub retention_days: Option<i64>,
 }
+
+const CHUNK_REMOVAL_LOCK_TIMEOUT: &str = "500ms";
+const CHUNK_REMOVAL_STATEMENT_TIMEOUT: &str = "10s";
+const CHUNK_REMOVAL_RETRY_LIMIT: usize = 20;
+const CHUNK_REMOVAL_RETRY_INITIAL: StdDuration = StdDuration::from_millis(250);
+const CHUNK_REMOVAL_RETRY_MAX: StdDuration = StdDuration::from_secs(5);
+const CHUNK_REMOVAL_PACING: StdDuration = StdDuration::from_millis(100);
 
 #[async_trait]
 pub trait RetainedDrainAdapter: Send + Sync {
@@ -171,13 +178,11 @@ pub async fn execute(
         outcome.objects_published += 1;
         outcome.bytes_written += publication.byte_size;
         if request.mode.removes_source_data() && chunk.range_end <= request.cutoff {
-            outcome.rows_removed +=
-                sqlx::query_scalar::<_, i64>("SELECT ingester.remove_verified_drain_chunk($1,$2)")
-                    .bind(publication.object_id)
-                    .bind(&publication.sha256)
-                    .fetch_one(&context.pool)
-                    .await
-                    .map_err(db_error)?;
+            outcome.rows_removed += remove_verified_chunk(&context, &publication).await?;
+            tokio::select! {
+                _ = context.shutdown.cancelled() => return Err(cancelled()),
+                _ = tokio::time::sleep(CHUNK_REMOVAL_PACING) => {}
+            }
         }
     }
     outcome.summary = json!({
@@ -194,6 +199,81 @@ pub async fn execute(
         "verified_existing_objects": verified_existing_objects,
     });
     Ok(outcome)
+}
+
+async fn remove_verified_chunk(
+    context: &DrainContext,
+    publication: &Publication,
+) -> Result<i64, DrainExecutionError> {
+    let mut delay = CHUNK_REMOVAL_RETRY_INITIAL;
+    for attempt in 0..CHUNK_REMOVAL_RETRY_LIMIT {
+        let removal = remove_verified_chunk_once(context, publication);
+        let result = tokio::select! {
+            _ = context.shutdown.cancelled() => return Err(cancelled()),
+            result = removal => result,
+        };
+        match result {
+            Ok(rows) => return Ok(rows),
+            Err(error) if is_lock_contention(&error) && attempt + 1 < CHUNK_REMOVAL_RETRY_LIMIT => {
+                tokio::select! {
+                    _ = context.shutdown.cancelled() => return Err(cancelled()),
+                    _ = tokio::time::sleep(delay) => {}
+                }
+                delay = (delay * 2).min(CHUNK_REMOVAL_RETRY_MAX);
+            }
+            Err(error) if is_lock_contention(&error) => {
+                return Err(DrainExecutionError::new(
+                    "drain_chunk_lock_contended",
+                    "realtime database activity prevented safe chunk removal; retrying the drain later",
+                    true,
+                ));
+            }
+            Err(error) => return Err(db_error(error)),
+        }
+    }
+    unreachable!("chunk removal retry loop returns on its final attempt")
+}
+
+async fn remove_verified_chunk_once(
+    context: &DrainContext,
+    publication: &Publication,
+) -> Result<i64, sqlx::Error> {
+    let mut transaction = context.pool.begin().await?;
+    sqlx::query(
+        "SELECT set_config('lock_timeout',$1,true),set_config('statement_timeout',$2,true)",
+    )
+    .bind(CHUNK_REMOVAL_LOCK_TIMEOUT)
+    .bind(CHUNK_REMOVAL_STATEMENT_TIMEOUT)
+    .execute(&mut *transaction)
+    .await?;
+    let result =
+        sqlx::query_scalar::<_, i64>("SELECT ingester.remove_verified_drain_chunk($1,$2,$3)")
+            .bind(publication.object_id)
+            .bind(&publication.sha256)
+            .bind(context.job_id)
+            .fetch_one(&mut *transaction)
+            .await;
+    match result {
+        Ok(rows) => {
+            transaction.commit().await?;
+            Ok(rows)
+        }
+        Err(error) => {
+            transaction.rollback().await?;
+            Err(error)
+        }
+    }
+}
+
+fn is_lock_contention(error: &sqlx::Error) -> bool {
+    error
+        .as_database_error()
+        .and_then(|database| database.code())
+        .is_some_and(|code| code == "55P03" || code == "57014")
+}
+
+fn cancelled() -> DrainExecutionError {
+    DrainExecutionError::new("drain_cancelled", "drain was cancelled", true)
 }
 
 pub async fn execute_strategy(

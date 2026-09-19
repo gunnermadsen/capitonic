@@ -237,17 +237,19 @@ services:
       - *postgres-worker-env-file
     environment:
       <<: *ingester-environment
+      POSTGRES_HOST: "${INGESTER_WORKER_POSTGRES_HOST:-pgbouncer}"
+      POSTGRES_PORT: "${INGESTER_WORKER_POSTGRES_PORT:-6432}"
       POSTGRES_USER: "capitonic_ingester_worker"
       POSTGRES_DB: "${INGESTER_WORKER_POSTGRES_ALIAS:-polymarket_ingester_worker_tx}"
       INGESTER_MODE: "worker"
       INGESTER_GRPC_BIND: "0.0.0.0:50051"
       INGESTER_WORKER_METRICS_BIND: "0.0.0.0:8099"
-      MARKET_DATA_INGESTER_DB_POOL_CONNECTIONS: "1"
+      MARKET_DATA_INGESTER_DB_POOL_CONNECTIONS: "${INGESTER_WORKER_DB_POOL_CONNECTIONS:-1}"
       INGESTER_MASTER_URL: "http://ingester-master:8098"
       INGESTER_DEPLOYMENT_ID: "${INGESTER_DEPLOYMENT_ID:-default}"
       INGESTER_WORKER_MAX_BACKFILLS: "2"
       INGESTER_WORKER_CAPACITY_UNITS: "4"
-      INGESTER_WORKER_REALTIME_SLOT_LIMIT: "1"
+      INGESTER_WORKER_REALTIME_SLOT_LIMIT: "${INGESTER_WORKER_REALTIME_SLOT_LIMIT:-1}"
       INGESTER_IMAGE_DIGEST: "${INGESTER_IMAGE_DIGEST:-development}"
       INGESTER_GIT_REVISION: "${INGESTER_GIT_REVISION:-development}"
       BINANCE_ARCHIVE_BASE_URL: "https://data.binance.vision"
@@ -290,8 +292,8 @@ services:
       # - ${WEATHER_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/temperature-expectancy}:/var/lib/weather
       # - ${BINANCE_L2_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/binance-l2}:/var/lib/binance-l2
       # - ${BINANCE_AGG_TRADE_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/binance-aggregate-trades}:/var/lib/binance-aggregate-trades
-      # - ${POLYMARKET_ORDERBOOK_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/orderbook-drain}:/var/lib/polymarket-orderbooks
-      # - ${BINANCE_ONE_SECOND_OHLCV_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/binance-one-second-ohlcv}:/var/lib/binance-one-second-ohlcv
+      - ${POLYMARKET_ORDERBOOK_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/orderbook-drain}:/var/lib/polymarket-orderbooks
+      - ${BINANCE_ONE_SECOND_OHLCV_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/binance-one-second-ohlcv}:/var/lib/binance-one-second-ohlcv
       # - ${PMDATA_CHAINLINK_REFERENCE_PRICE_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/pmdata-chainlink-reference-prices}:/var/lib/pmdata-chainlink-reference-prices
       # - ${PMDATA_CHAINLINK_TWAP_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/pmdata-chainlink-twap}:/var/lib/pmdata-chainlink-twap
       # - ${POLYMARKET_CHAINLINK_TWAP_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/polymarket-chainlink-twap}:/var/lib/polymarket-chainlink-twap
@@ -299,7 +301,7 @@ services:
       # - ${CHAINLINK_ONE_MINUTE_CANDLES_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/chainlink-one-minute-candles}:/var/lib/chainlink-one-minute-candles
       # - ${BTC_CAPACITY_EXECUTION_SNAPSHOTS_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/btc-capacity-execution-snapshots}:/var/lib/btc-capacity-execution-snapshots
       # - ${BTC_FEATURE_SNAPSHOTS_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/btc-feature-snapshots}:/var/lib/btc-feature-snapshots
-      # - ${BINANCE_SPOT_L2_SNAPSHOTS_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/binance-spot-l2-snapshots}:/var/lib/binance-spot-l2-snapshots
+      - ${BINANCE_SPOT_L2_SNAPSHOTS_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/binance-spot-l2-snapshots}:/var/lib/binance-spot-l2-snapshots
       # - ${POLYGON_CHAINLINK_ORACLE_ROUNDS_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/polygon-chainlink-oracle-rounds}:/var/lib/polygon-chainlink-oracle-rounds
       # - ${KRAKEN_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/kraken-data}:/var/lib/kraken-data
       # - ${FINANCIAL_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/global-financial-data}:/var/lib/financial-data
