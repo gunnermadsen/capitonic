@@ -7,6 +7,7 @@ use crate::btc::{
 };
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+mod conservative_selective;
 pub mod data;
 mod feature_names;
 pub mod features;
@@ -67,6 +68,10 @@ pub(crate) fn compile(
         .pointer("/contract/adapter")
         .and_then(|v| v.as_str())
     {
+        Some("conservative_selective") => Ok(Box::new(conservative_selective::Adapter::compile(
+            serde_json::from_value(definition)?,
+            names,
+        )?)),
         Some("time_bucket_specialist") => Ok(Box::new(time_bucket_specialist::Adapter::compile(
             serde_json::from_value(definition)?,
             names,

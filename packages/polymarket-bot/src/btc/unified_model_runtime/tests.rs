@@ -28,6 +28,47 @@ fn model(key: &str) -> std::sync::Arc<crate::btc::RuntimeDirectionalModel> {
         })
         .unwrap()
 }
+#[test]
+fn conservative_paper_export_matches_training_vectors() {
+    let Ok(dir) = std::env::var("CONSERVATIVE_PAPER_MODEL_DIR") else {
+        return;
+    };
+    let dir = Path::new(&dir);
+    let key = dir.file_name().unwrap().to_str().unwrap();
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).unwrap()).unwrap();
+    let runtime = RuntimeModelRegistry::new(dir.parent().unwrap())
+        .load(&RuntimeModelSelection {
+            model_key: key.into(),
+            artifact_sha256: manifest["model_sha256"].as_str().unwrap().into(),
+            feature_schema_sha256: manifest["feature_schema_sha256"].as_str().unwrap().into(),
+        })
+        .unwrap();
+    let adapter = runtime.unified_adapter().unwrap();
+    let vectors: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("golden-vectors.json")).unwrap()).unwrap();
+    for row in vectors["vectors"].as_array().unwrap() {
+        let features = row["feature_values"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_f64().unwrap_or(f64::NAN))
+            .collect::<Vec<_>>();
+        let actual = adapter
+            .evaluate(&features, row["seconds_elapsed"].as_i64().unwrap())
+            .unwrap();
+        let expected = &row["expected"];
+        assert!(
+            (actual.score.probability_up - expected["probability_up"].as_f64().unwrap()).abs()
+                < 1e-10
+        );
+        assert!((actual.score.confidence - expected["confidence"].as_f64().unwrap()).abs() < 1e-10);
+        assert_eq!(
+            actual.score.accepted,
+            row["source"]["accepted"].as_bool().unwrap()
+        );
+    }
+}
 fn book(at: DateTime<Utc>) -> OrderbookCheckpoint {
     OrderbookCheckpoint {
         checkpoint_id: Uuid::new_v4(),

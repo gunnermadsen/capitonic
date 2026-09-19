@@ -2211,7 +2211,7 @@ pub(crate) fn build_payoff_feature_values_with_policy(
             .map(|(high, low)| (high - low) / close * BPS)
             .unwrap_or(f64::NAN)
     };
-    for seconds in [5, 30, 60] {
+    for seconds in [5, 15, 30, 60] {
         put(&format!("btc_range_{seconds}s_bps"), partial_range(seconds));
     }
     let return_5 = horizon(5);

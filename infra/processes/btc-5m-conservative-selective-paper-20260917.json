@@ -1,0 +1,46 @@
+{
+  "name": "BTC 5m conservative selective paper",
+  "process_type": "btc_5m",
+  "process_scope": "realtime_paper",
+  "process_key": "btc-5m-conservative-selective-paper-20260917",
+  "enabled": false,
+  "status": "created",
+  "config": {
+    "execution": { "mode": "paper", "execute_signals": true, "live_capital": false },
+    "raw": { "btc_realtime_paper": {
+      "schema_version": "btc_realtime_paper_process_v4",
+      "playbook_version": "v1.2",
+      "sources": ["polymarket_btc_five_minute_market_contracts", "polymarket_btc_five_minute_orderbooks", "polymarket_btc_five_minute_resolutions", "binance_spot_btcusdt_one_second_ohlcv"],
+      "strategy": {
+        "decision_strategy": {
+          "type": "unified_model_router", "version": 1,
+          "routing": { "mode": "first_qualified", "tie_break": "array_order" },
+          "models": [{ "member_id": "primary", "selection": {
+            "type": "btc_directional_model",
+            "model_key": "btc-5m-conservative-selective-paper-20260917",
+            "artifact_sha256": "4868c518fff440e7ca7405132dae171e32e99b6848f6479f7d62215f30f13793",
+            "feature_schema_sha256": "5dceedc374621f50e844ddf43cea5f58068c4dc70c36169c037dbb2691c7f39a"
+          }}]
+        },
+        "target_size": "5", "min_seconds_after_open": 30, "min_seconds_before_close": 90,
+        "max_reference_age_ms": 2000, "max_directional_feature_age_ms": 5000, "max_chainlink_open_delay_ms": 5000, "max_book_age_ms": 2000, "max_source_skew_ms": 1000, "max_fee_age_ms": 3600000,
+        "min_entry_price": "0.01", "max_entry_price": "0.55", "max_depth_participation": "0.25",
+        "volatility_floor_per_sqrt_second": "0.00005", "probability_floor": "0.01", "basis_lead_weight": "0.25", "momentum_1s_weight": "0.05", "momentum_5s_weight": "0.10", "momentum_30s_weight": "0.10", "max_lead_sigma_fraction": "0.25", "base_probability_uncertainty": "0.015", "basis_uncertainty_weight": "1", "feed_age_uncertainty_per_second": "0.002", "max_probability_uncertainty": "0.10", "spread_reserve_fraction": "0.10", "slippage_reserve_bps": "25", "latency_reserve_per_share": "0.005", "min_net_edge_per_share": "0.015", "min_net_edge_usd": "0.02", "max_fee_rate": "1"
+      },
+      "runtime": { "strategy_interval_ms": 1000, "official_resolution_audit_grace_secs": 120, "official_resolution_watch_retention_secs": 3600 },
+      "paper": { "arrival_latency_ms": 150, "visible_depth_haircut": "0.80", "starting_collateral_usd": "1000", "directional_model_entry_policy": "execute_directional_prediction", "stress_previews": [
+        { "scenario_key": "latency_300ms_depth_65pct", "arrival_latency_ms": 300, "visible_depth_haircut": "0.65" },
+        { "scenario_key": "latency_600ms_depth_50pct", "arrival_latency_ms": 600, "visible_depth_haircut": "0.50" }
+      ] }
+    } }
+  },
+  "metadata": {
+    "strategy_family": "btc_5m_directional_model", "model_key": "btc-5m-conservative-selective-paper-20260917",
+    "model_artifact_sha256": "4868c518fff440e7ca7405132dae171e32e99b6848f6479f7d62215f30f13793",
+    "model_feature_schema_version": "btc-5m-payoff-aware-conservative-price-v1",
+    "model_feature_schema_sha256": "5dceedc374621f50e844ddf43cea5f58068c4dc70c36169c037dbb2691c7f39a",
+    "source_training_model_sha256": "88744a1cc1fb0af824a902212906944ea7873433e672111d38a740afc3e01481",
+    "deployment_scope": "paper_only", "production_qualified": false,
+    "umr_contract": "capitonic-unified-model-runtime-v1", "directional_model_entry_policy": "execute_directional_prediction", "native_admission": true
+  }
+}
