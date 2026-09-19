@@ -1,4 +1,4 @@
-//! Frozen tournament regressors, Platt calibration and bucket admission.
+//! Frozen tournament regressors, Platt calibration and bucket admission policies.
 use super::super::contract::ModelContract;
 use super::{Evaluation, FeatureContext, FeatureSession, ModelAdapter};
 use crate::btc::directional_model::{
@@ -20,10 +20,11 @@ pub(crate) struct Definition {
 struct Calibration {
     slope: f64,
     intercept: f64,
+    reliability_penalty: Option<f64>,
 }
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Policy {
+struct BucketPolicy {
     start_second: i64,
     end_second: i64,
     side: String,
@@ -31,6 +32,23 @@ struct Policy {
     minimum_edge: f64,
     maximum_share_cost: f64,
     execution_reserve_per_share: f64,
+}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ConservativePolicy {
+    start_second: i64,
+    end_second: i64,
+    minimum_confidence: f64,
+    minimum_stressed_edge: f64,
+    maximum_share_cost: f64,
+    execution_reserve_per_share: f64,
+    stress_slippage_per_share: f64,
+}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+enum Policy {
+    Bucket(BucketPolicy),
+    Conservative(ConservativePolicy),
 }
 #[derive(Debug)]
 pub struct Adapter {
@@ -41,7 +59,7 @@ pub struct Adapter {
     width: usize,
     up_cost: usize,
     down_cost: usize,
-    fee: usize,
+    fee: Option<usize>,
 }
 impl Adapter {
     pub(crate) fn compile(definition: Definition, names: &[String]) -> Result<Self> {
@@ -53,26 +71,49 @@ impl Adapter {
         } = definition;
         contract.validate()?;
         ensure!(
-            contract.adapter == "time_bucket_specialist"
-                && contract.missing_policy == "native_missing_branch"
+            contract.missing_policy == "native_missing_branch"
                 && contract.qualified_trade_size == Some(5.0),
-            "invalid bucket specialist contract"
+            "invalid bucket model contract"
         );
         ensure!(
             calibration.slope.is_finite() && calibration.intercept.is_finite(),
             "invalid bucket calibration"
         );
-        ensure!(
-            (0..300).contains(&policy.start_second)
-                && (policy.start_second..300).contains(&policy.end_second)
-                && matches!(policy.side.as_str(), "up" | "down" | "both")
-                && (0.5..=1.0).contains(&policy.minimum_confidence)
-                && policy.minimum_edge.is_finite()
-                && (0.0..=1.0).contains(&policy.maximum_share_cost)
-                && policy.execution_reserve_per_share.is_finite()
-                && policy.execution_reserve_per_share >= 0.0,
-            "invalid frozen bucket policy"
-        );
+        match &policy {
+            Policy::Bucket(policy) => {
+                ensure!(
+                    contract.adapter == "time_bucket_specialist"
+                        && calibration.reliability_penalty.is_none()
+                        && (0..300).contains(&policy.start_second)
+                        && (policy.start_second..300).contains(&policy.end_second)
+                        && matches!(policy.side.as_str(), "up" | "down" | "both")
+                        && (0.5..=1.0).contains(&policy.minimum_confidence)
+                        && policy.minimum_edge.is_finite()
+                        && (0.0..=1.0).contains(&policy.maximum_share_cost)
+                        && policy.execution_reserve_per_share.is_finite()
+                        && policy.execution_reserve_per_share >= 0.0,
+                    "invalid frozen bucket policy"
+                );
+            }
+            Policy::Conservative(policy) => {
+                ensure!(
+                    contract.adapter == "conservative_selective"
+                        && calibration
+                            .reliability_penalty
+                            .is_some_and(|value| value.is_finite() && (0.0..=0.5).contains(&value))
+                        && (30..=210).contains(&policy.start_second)
+                        && (policy.start_second..=210).contains(&policy.end_second)
+                        && (0.5..=1.0).contains(&policy.minimum_confidence)
+                        && policy.minimum_stressed_edge.is_finite()
+                        && (0.0..=1.0).contains(&policy.maximum_share_cost)
+                        && policy.execution_reserve_per_share.is_finite()
+                        && policy.execution_reserve_per_share >= 0.0
+                        && policy.stress_slippage_per_share.is_finite()
+                        && policy.stress_slippage_per_share >= 0.0,
+                    "invalid conservative paper policy"
+                );
+            }
+        }
         super::time_bucket_features::validate_contract(&contract, names)?;
         let position = |name: &str| {
             names
@@ -83,7 +124,9 @@ impl Adapter {
         Ok(Self {
             up_cost: position("up_ask_vwap_5")?,
             down_cost: position("down_ask_vwap_5")?,
-            fee: position("fee_rate")?,
+            fee: matches!(&policy, Policy::Bucket(_))
+                .then(|| position("fee_rate"))
+                .transpose()?,
             width: names.len(),
             contract,
             outcome: compile_submodel(outcome, names.len())?,
@@ -127,26 +170,61 @@ impl ModelAdapter for Adapter {
         Box::new(Session)
     }
     fn evaluate(&self, values: &[f64], seconds: i64) -> Result<Evaluation> {
+        let (start_second, end_second) = match &self.policy {
+            Policy::Bucket(policy) => (policy.start_second, policy.end_second),
+            Policy::Conservative(policy) => (policy.start_second, policy.end_second),
+        };
         ensure!(
-            (self.policy.start_second..=self.policy.end_second).contains(&seconds),
+            (start_second..=end_second).contains(&seconds),
             "outside frozen bucket"
         );
         let p = self.probability(values)?;
         let up = p >= 0.5;
         let confidence = p.max(1.0 - p);
         let cost = values[if up { self.up_cost } else { self.down_cost }];
-        let fee = values[self.fee];
-        ensure!(fee.is_finite() && fee >= 0.0, "invalid bucket fee");
-        let side_allowed =
-            self.policy.side == "both" || self.policy.side == if up { "up" } else { "down" };
-        let edge =
-            confidence - cost - fee * cost * (1.0 - cost) - self.policy.execution_reserve_per_share;
-        let accepted = side_allowed
-            && cost.is_finite()
-            && cost > 0.0
-            && cost <= self.policy.maximum_share_cost
-            && confidence >= self.policy.minimum_confidence
-            && edge >= self.policy.minimum_edge;
+        let (accepted, reason, stressed_edge) = match &self.policy {
+            Policy::Bucket(policy) => {
+                let fee = values[self.fee.expect("validated bucket fee feature")];
+                ensure!(fee.is_finite() && fee >= 0.0, "invalid bucket fee");
+                let side_allowed =
+                    policy.side == "both" || policy.side == if up { "up" } else { "down" };
+                let edge = confidence
+                    - cost
+                    - fee * cost * (1.0 - cost)
+                    - policy.execution_reserve_per_share;
+                (
+                    side_allowed
+                        && cost.is_finite()
+                        && cost > 0.0
+                        && cost <= policy.maximum_share_cost
+                        && confidence >= policy.minimum_confidence
+                        && edge >= policy.minimum_edge,
+                    "frozen_bucket_policy",
+                    None,
+                )
+            }
+            Policy::Conservative(policy) => {
+                let conservative_confidence = (confidence
+                    - self
+                        .calibration
+                        .reliability_penalty
+                        .expect("validated reliability penalty"))
+                .max(0.5);
+                let stressed_edge = conservative_confidence
+                    - cost
+                    - policy.execution_reserve_per_share
+                    - policy.stress_slippage_per_share;
+                (
+                    cost.is_finite()
+                        && cost > 0.0
+                        && cost <= policy.maximum_share_cost
+                        && conservative_confidence >= policy.minimum_confidence
+                        && stressed_edge >= policy.minimum_stressed_edge,
+                    "conservative_paper_policy",
+                    Some(stressed_edge),
+                )
+            }
+        };
         Ok(Evaluation {
             score: RuntimeModelScore {
                 raw_logit: (p / (1.0 - p)).ln(),
@@ -161,13 +239,9 @@ impl ModelAdapter for Adapter {
                 },
                 accepted,
             },
-            reason: if accepted {
-                "qualified"
-            } else {
-                "frozen_bucket_policy"
-            },
+            reason: if accepted { "qualified" } else { reason },
             admission_probability: None,
-            predicted_stress_edge: None,
+            predicted_stress_edge: stressed_edge,
             predicted_loss: None,
             temporal_std: None,
             temporal_agreement: None,

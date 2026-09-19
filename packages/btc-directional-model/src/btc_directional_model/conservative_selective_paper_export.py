@@ -12,6 +12,7 @@ import polars as pl
 
 from .core_extract import file_sha256
 from .payoff_runtime_export import _base_model, _histogram
+from .router_bucket_export import contract as bucket_contract
 from .runtime_export import canonical_json_bytes, write_immutable_directory
 
 SOURCE_SHA256 = "88744a1cc1fb0af824a902212906944ea7873433e672111d38a740afc3e01481"
@@ -36,19 +37,8 @@ def export(source: Path, panel: Path, output: Path) -> Path:
         raise ValueError("expected the diagnostic artifact without a qualified final policy")
     names = list(bundle["features"])
     runtime_names = names + ["up_ask_vwap_5", "down_ask_vwap_5"]
-    contract = {
-        "version": "capitonic-unified-model-runtime-v1",
-        "adapter": "conservative_selective",
-        "adapter_version": 1,
-        "probability_semantics": "probability_up",
-        "feature_clock": "closed_binance_second_as_of",
-        "missing_policy": "native_missing_branch",
-        "qualified_trade_size": 5.0,
-        "inputs": [
-            {"slot": "btc_seconds", "product": "binance_spot_btcusdt_one_second_ohlcv", "semantics": "binance_closed_seconds_prewindow_open_v1", "required": True, "lookback_seconds": 301, "maximum_age_ms": 5000},
-            {"slot": "execution_book", "product": "polymarket_btc_five_minute_orderbooks", "semantics": "causal_vwap_five_shares_v1", "required": True, "lookback_seconds": 2, "maximum_age_ms": 2000},
-        ],
-    }
+    contract = bucket_contract(names)
+    contract["adapter"] = "conservative_selective"
     calibrator = bundle["calibrator"]
     penalty = max(float(bundle["calibration_ece"]), 0.02)
     definition = {
