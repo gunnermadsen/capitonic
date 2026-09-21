@@ -4250,6 +4250,7 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                             // All optional frame accounting belongs after dequeue.
                             // Moving it above the channel can starve socket reads and
                             // cause provider slow-consumer disconnects.
+                            let received_at = canonical_timestamp(received_at);
                             let interframe = last_data_frame_at
                                 .replace(queued_at)
                                 .map(|previous| queued_at.saturating_duration_since(previous));
@@ -4592,6 +4593,77 @@ async fn run_clob_socket<S>(
         tokio::select! {
             biased;
             _ = worker_shutdown.cancelled() => return,
+            frame = stream.next() => {
+                let event = match frame {
+                    Some(Ok(Message::Text(text))) => {
+                        let value = text.as_str();
+                        if acknowledge_text_pong(value, &mut pong_deadline) {
+                            read_deadline = Instant::now() + read_timeout;
+                            continue;
+                        }
+                        if value.eq_ignore_ascii_case("PING") {
+                            if let Err(error) = enqueue_clob_control(&control_sender, Message::Text("PONG".into())) {
+                                let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
+                                return;
+                            }
+                            read_deadline = Instant::now() + read_timeout;
+                            pong_deadline = None;
+                            continue;
+                        }
+                        if value.is_empty() {
+                            read_deadline = Instant::now() + read_timeout;
+                            pong_deadline = None;
+                            continue;
+                        }
+                        ClobIoEvent::Frame {
+                            message: Message::Text(text),
+                            received_at: Utc::now(),
+                            queued_at: Instant::now(),
+                        }
+                    }
+                    Some(Ok(Message::Binary(bytes))) => ClobIoEvent::Frame {
+                        message: Message::Binary(bytes),
+                        received_at: Utc::now(),
+                        queued_at: Instant::now(),
+                    },
+                    Some(Ok(Message::Ping(payload))) => {
+                        if let Err(error) = enqueue_clob_control(&control_sender, Message::Pong(payload)) {
+                            let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
+                            return;
+                        }
+                        read_deadline = Instant::now() + read_timeout;
+                        pong_deadline = None;
+                        continue;
+                    }
+                    Some(Ok(Message::Pong(_))) => {
+                        read_deadline = Instant::now() + read_timeout;
+                        pong_deadline = None;
+                        continue;
+                    }
+                    Some(Ok(Message::Close(frame))) => ClobIoEvent::Failed(source_error(
+                        "polymarket_clob_closed",
+                        format!("Polymarket CLOB websocket closed: {frame:?}"),
+                    )),
+                    Some(Ok(_)) => continue,
+                    Some(Err(error)) => ClobIoEvent::Failed(source_error(
+                        "polymarket_clob_read_failed",
+                        format!("failed to read Polymarket CLOB websocket: {error}"),
+                    )),
+                    None => ClobIoEvent::Failed(source_error(
+                        "polymarket_clob_eof",
+                        "Polymarket CLOB websocket ended",
+                    )),
+                };
+                // Keep the read-to-enqueue boundary intentionally bare. Data
+                // frames are moved directly into the bounded handoff before
+                // timestamp canonicalization, metrics, parsing, or other
+                // optional work.
+                if !enqueue_clob_io_event(&io_sender, event).await {
+                    return;
+                }
+                read_deadline = Instant::now() + read_timeout;
+                pong_deadline = None;
+            }
             result = &mut writer => {
                 if let Err(error) = result {
                     let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
@@ -4624,67 +4696,6 @@ async fn run_clob_socket<S>(
                 let Some(command) = command else { return; };
                 if let Err(error) = enqueue_clob_control(&control_sender, command) {
                     let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
-                    return;
-                }
-            }
-            frame = stream.next() => {
-                read_deadline = Instant::now() + read_timeout;
-                let received_at = canonical_timestamp(Utc::now());
-                if frame.as_ref().is_some_and(Result::is_ok) {
-                    // Explicit PONG is preferred, but any inbound frame
-                    // after our text PING proves the socket is live.
-                    pong_deadline = None;
-                }
-                let event = match frame {
-                    Some(Ok(Message::Text(text))) => {
-                        let value = text.as_str().trim();
-                        if acknowledge_text_pong(value, &mut pong_deadline) {
-                            continue;
-                        }
-                        if value.eq_ignore_ascii_case("PING") {
-                            if let Err(error) = enqueue_clob_control(&control_sender, Message::Text("PONG".into())) {
-                                let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
-                                return;
-                            }
-                            continue;
-                        }
-                        if value.is_empty() { continue; }
-                        ClobIoEvent::Frame { message: Message::Text(text), received_at, queued_at: Instant::now() }
-                    }
-                    Some(Ok(Message::Binary(bytes))) => ClobIoEvent::Frame {
-                        message: Message::Binary(bytes),
-                        received_at,
-                        queued_at: Instant::now(),
-                    },
-                    Some(Ok(Message::Ping(payload))) => {
-                        if let Err(error) = enqueue_clob_control(&control_sender, Message::Pong(payload)) {
-                            let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
-                            return;
-                        }
-                        continue;
-                    }
-                    Some(Ok(Message::Pong(_))) => continue,
-                    Some(Ok(Message::Close(frame))) => ClobIoEvent::Failed(source_error(
-                        "polymarket_clob_closed",
-                        format!("Polymarket CLOB websocket closed: {frame:?}"),
-                    )),
-                    Some(Ok(_)) => continue,
-                    Some(Err(error)) => ClobIoEvent::Failed(source_error(
-                        "polymarket_clob_read_failed",
-                        format!("failed to read Polymarket CLOB websocket: {error}"),
-                    )),
-                    None => ClobIoEvent::Failed(source_error(
-                        "polymarket_clob_eof",
-                        "Polymarket CLOB websocket ended",
-                    )),
-                };
-                // Keep the read-to-enqueue boundary intentionally bare.
-                // Do not add probes, metrics, logging, parsing, or shared
-                // locks anywhere on this socket runtime: optional blocking
-                // work in another select branch competes with `stream.next()`
-                // and can make Polymarket classify us as a slow consumer.
-                // See `docs/websocket-consumer-latency.md`.
-                if !enqueue_clob_io_event(&io_sender, event).await {
                     return;
                 }
             }
@@ -4881,6 +4892,44 @@ mod tests {
         })
         .await
         .expect("data keeps draining during a stalled write")
+    }
+
+    #[tokio::test]
+    async fn ready_clob_frame_is_handed_off_before_ready_control_work() {
+        let (client, mut server, _) = clob_socket_pair(false).await;
+        let (commands, command_receiver) = mpsc::channel(64);
+        commands
+            .try_send(Message::Text("subscribe-next".into()))
+            .expect("control command is ready before the socket loop starts");
+        server
+            .send(Message::Text("book-frame".into()))
+            .await
+            .expect("data frame is ready before the socket loop starts");
+        let (events, mut receiver) = mpsc::channel(64);
+        let shutdown = CancellationToken::new();
+        let task = tokio::spawn(run_clob_socket(
+            client,
+            "initial-subscription".into(),
+            command_receiver,
+            events,
+            shutdown.clone(),
+            test_socket_timing(),
+        ));
+
+        match tokio::time::timeout(Duration::from_secs(1), receiver.recv())
+            .await
+            .expect("socket loop produces an event")
+            .expect("socket event channel remains open")
+        {
+            ClobIoEvent::Frame {
+                message: Message::Text(text),
+                ..
+            } => assert_eq!(text, "book-frame"),
+            _ => panic!("ready data frame must win over ready control work"),
+        }
+
+        shutdown.cancel();
+        task.await.unwrap();
     }
 
     #[tokio::test]
@@ -5320,7 +5369,9 @@ mod tests {
             ClobIoEvent::Frame {
                 message: Message::Binary(payload),
                 ..
-            } => assert_eq!(payload.as_ptr(), payload_address),
+            } => {
+                assert_eq!(payload.as_ptr(), payload_address)
+            }
             _ => panic!("expected binary data frame"),
         }
     }
