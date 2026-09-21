@@ -98,8 +98,9 @@ impl BtcProcessManager {
 
     pub(super) async fn grafana_market_path_observation(
         &self,
+        observed_at: chrono::DateTime<Utc>,
     ) -> Option<(
-        polymarket_bot::btc::BtcIntervalMarket,
+        MarketPathWindow,
         Vec<polymarket_bot::btc::ChainlinkTwap60Point>,
     )> {
         let state = self
@@ -111,15 +112,14 @@ impl BtcProcessManager {
         let Some(state) = state else {
             return None;
         };
-        let (market, twap_history) = {
+        let twap_history = {
             let state = state.read().await;
-            let Some(market) = state.display_market.clone() else {
-                return None;
-            };
-            let twap_history = state.chainlink_twap_60.iter().cloned().collect::<Vec<_>>();
-            (market, twap_history)
+            state.chainlink_twap_60.iter().cloned().collect::<Vec<_>>()
         };
-        Some((market, twap_history))
+        // This visual is intentionally independent of Polymarket contract discovery,
+        // process state, and Grafana's global time range. It needs only the live TWAP
+        // feed and the deterministic wall-clock five-minute boundary.
+        Some((MarketPathWindow::current(observed_at), twap_history))
     }
 
     pub(super) async fn reconcile_failed_runtime(&self) {

@@ -1539,7 +1539,7 @@ mod tests {
         let snapshot = path.observe(
             now,
             Some((
-                display,
+                display.into(),
                 vec![ChainlinkTwap60Point {
                     price: Decimal::new(81_000, 0),
                     source_timestamp: window_start,

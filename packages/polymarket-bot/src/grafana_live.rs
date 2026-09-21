@@ -344,6 +344,36 @@ pub struct MarketPathSnapshot {
     pub points: Vec<MarketPathPoint>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketPathWindow {
+    pub market_id: String,
+    pub window_start: DateTime<Utc>,
+    pub window_end: DateTime<Utc>,
+}
+
+impl MarketPathWindow {
+    pub fn current(observed_at: DateTime<Utc>) -> Self {
+        let window_start = crate::btc::market::aligned_window_start(observed_at);
+        Self {
+            // The visual is a wall-clock-aligned realtime BTC path. Its identity and
+            // availability must not depend on contract discovery or trading state.
+            market_id: format!("btc-realtime-{}", window_start.timestamp()),
+            window_start,
+            window_end: window_start + chrono::Duration::seconds(300),
+        }
+    }
+}
+
+impl From<BtcIntervalMarket> for MarketPathWindow {
+    fn from(market: BtcIntervalMarket) -> Self {
+        Self {
+            market_id: market.market_id,
+            window_start: market.window_start,
+            window_end: market.window_end,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct RetainedMarketPath {
     market_id: String,
@@ -362,7 +392,7 @@ impl MarketPathPublicationState {
     pub fn observe(
         &mut self,
         observed_at: DateTime<Utc>,
-        observation: Option<(BtcIntervalMarket, Vec<ChainlinkTwap60Point>)>,
+        observation: Option<(MarketPathWindow, Vec<ChainlinkTwap60Point>)>,
     ) -> Option<MarketPathSnapshot> {
         if let Some((market, points)) = observation {
             let rollover = self
@@ -925,12 +955,12 @@ mod tests {
         let mut state = MarketPathPublicationState::default();
         state.observe(
             market.window_start + ChronoDuration::seconds(60),
-            Some((market.clone(), first_batch)),
+            Some((market.clone().into(), first_batch)),
         );
         let snapshot = state
             .observe(
                 market.window_start + ChronoDuration::seconds(120),
-                Some((market.clone(), second_batch)),
+                Some((market.clone().into(), second_batch)),
             )
             .unwrap();
 
@@ -947,7 +977,7 @@ mod tests {
         state.observe(
             market.window_start + ChronoDuration::seconds(1),
             Some((
-                market.clone(),
+                market.clone().into(),
                 vec![twap_point(market.window_start, dec!(100.5))],
             )),
         );
@@ -959,7 +989,7 @@ mod tests {
         let updated = state
             .observe(
                 market.window_start + ChronoDuration::seconds(2),
-                Some((market.clone(), vec![changed_opening])),
+                Some((market.clone().into(), vec![changed_opening])),
             )
             .unwrap();
         let at_close = state.observe(market.window_end, None).unwrap();
@@ -980,7 +1010,7 @@ mod tests {
         state.observe(
             first.window_start,
             Some((
-                first.clone(),
+                first.clone().into(),
                 vec![twap_point(first.window_start, dec!(100.5))],
             )),
         );
@@ -988,7 +1018,7 @@ mod tests {
             .observe(
                 second.window_start,
                 Some((
-                    second.clone(),
+                    second.clone().into(),
                     vec![twap_point(second.window_start, dec!(102))],
                 )),
             )
