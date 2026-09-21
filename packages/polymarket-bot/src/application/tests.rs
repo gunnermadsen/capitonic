@@ -27,6 +27,23 @@ mod lifecycle_tests {
         conflicting.maximum_age_ms = Some(1000);
         assert!(super::merge_source_selectors([required, conflicting]).is_err());
     }
+
+    #[test]
+    fn grafana_live_owns_an_optional_twap_subscription() {
+        let selectors = super::merge_runtime_source_selectors(Vec::new(), true).unwrap();
+
+        assert_eq!(selectors.len(), 1);
+        assert_eq!(
+            selectors[0].key,
+            polymarket_bot::market_data_stream::PRODUCT_TWAP
+        );
+        assert!(!selectors[0].required);
+        assert_eq!(selectors[0].maximum_age_ms, Some(120_000));
+        assert!(!selectors[0].require_sequence_integrity);
+        assert!(super::merge_runtime_source_selectors(Vec::new(), false)
+            .unwrap()
+            .is_empty());
+    }
     use super::*;
     use polymarket_bot::btc::BTC_DIRECTIONAL_MODEL_FEATURE_SCHEMA_VERSION;
 
@@ -42,6 +59,7 @@ mod lifecycle_tests {
             BtcProcessManagerConfig {
                 live_venue: None,
                 live_reconcile_interval: Duration::from_secs(1),
+                grafana_live_enabled: false,
             },
         );
 

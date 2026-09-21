@@ -1239,12 +1239,13 @@ impl BtcProcessManager {
             .await
             .remove(&process_id)
             .expect("active BTC playbook exists while lifecycle transition is held");
-        let remaining_sources = merge_source_selectors(
+        let remaining_sources = merge_runtime_source_selectors(
             self.active_playbooks
                 .lock()
                 .await
                 .values()
                 .flat_map(|playbook| playbook.sources.clone()),
+            self.config.grafana_live_enabled,
         )?;
         if let Some(shared) = self.shared_runtime.lock().await.as_ref() {
             if let Some(runtime) = shared.runtime.as_ref() {

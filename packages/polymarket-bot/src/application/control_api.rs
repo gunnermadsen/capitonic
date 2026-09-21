@@ -620,10 +620,11 @@ impl ControlApi for RuntimeControl {
                     .get_mut(&process_id)
                     .expect("active selector update retains its runtime")
                     .sources = sources;
-                let union = merge_source_selectors(
+                let union = merge_runtime_source_selectors(
                     active
                         .values()
                         .flat_map(|playbook| playbook.sources.clone()),
+                    manager.config.grafana_live_enabled,
                 )?;
                 if let Some(runtime) = manager
                     .shared_runtime

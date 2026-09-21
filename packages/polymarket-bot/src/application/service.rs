@@ -60,6 +60,7 @@ pub(crate) async fn run() -> Result<()> {
             BtcProcessManagerConfig {
                 live_venue: live_venue.clone(),
                 live_reconcile_interval: config.live.reconcile_interval,
+                grafana_live_enabled: config.grafana_live.enabled,
             },
         ))
     };

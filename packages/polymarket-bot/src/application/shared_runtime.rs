@@ -18,11 +18,12 @@ impl BtcProcessManager {
         let _startup_guard = self.shared_runtime_startup.lock().await;
         let active_guard = self.active_playbooks.lock().await;
         let active_playbooks = active_guard.len();
-        let source_union = merge_source_selectors(
+        let source_union = merge_runtime_source_selectors(
             active_guard
                 .values()
                 .flat_map(|playbook| playbook.sources.clone())
                 .chain(sources.iter().cloned()),
+            self.config.grafana_live_enabled,
         )?;
         drop(active_guard);
         let retired_runtime = {
@@ -97,12 +98,13 @@ impl BtcProcessManager {
     }
 
     pub(super) async fn refresh_shared_sources(&self) -> Result<(), HttpError> {
-        let source_union = merge_source_selectors(
+        let source_union = merge_runtime_source_selectors(
             self.active_playbooks
                 .lock()
                 .await
                 .values()
                 .flat_map(|playbook| playbook.sources.clone()),
+            self.config.grafana_live_enabled,
         )?;
         if source_union.is_empty() {
             return Ok(());

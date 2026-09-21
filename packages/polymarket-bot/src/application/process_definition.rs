@@ -116,6 +116,7 @@ pub(super) fn validate_btc_process_terminal_request(status: &str, reason: &str) 
 pub(super) struct BtcProcessManagerConfig {
     pub(super) live_venue: Option<Arc<LiveVenue>>,
     pub(super) live_reconcile_interval: Duration,
+    pub(super) grafana_live_enabled: bool,
 }
 
 pub(super) fn shared_market_data_config_compatible(
@@ -601,6 +602,23 @@ pub(super) fn merge_source_selectors(
         by_key.insert(selector.key.clone(), selector);
     }
     Ok(by_key.into_values().collect())
+}
+
+pub(super) fn merge_runtime_source_selectors(
+    selectors: impl IntoIterator<Item = SourceSelector>,
+    grafana_live_enabled: bool,
+) -> Result<Vec<SourceSelector>, HttpError> {
+    merge_source_selectors(selectors.into_iter().chain(grafana_live_enabled.then(|| {
+        // Observability owns this optional subscription. It must stay independent
+        // of playbook inputs and must never become a trading-readiness gate.
+        SourceSelector {
+            key: polymarket_bot::market_data_stream::PRODUCT_TWAP.to_string(),
+            contract_version: polymarket_bot::market_data_stream::CONTRACT_VERSION,
+            required: false,
+            maximum_age_ms: Some(120_000),
+            require_sequence_integrity: false,
+        }
+    })))
 }
 
 pub(super) const BTC_LIVE_EXECUTION_FRESHNESS_LIMIT_MS: i64 = 2_000;
