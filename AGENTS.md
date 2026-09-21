@@ -31,53 +31,59 @@ Think of Capitonic as a vision to generate income through systems with automatio
 - Keep public module interfaces minimal and expose implementation details only when required by another module.
 - Follow the existing crate and module structure unless the requested change requires a focused reorganization.
 
-# Source Control and Worktrees
+# Source Control and Releases
 
-## Integration Cycle and Trading Release Roles
+## Branch Roles
 
-- `development` is the settlement branch for accepted trading-capable releases. Do not implement features, fixes, experiments, or integration corrections directly on `development`.
-- A `development` tip containing project-code changes is golden only when an annotated `golden/<image_name>/sha256-<docker-sha256-hash>` tag identifies the exact accepted image. Branch position or an `image/...` build tag alone is not golden evidence. A configuration-only promotion permitted below does not mint or move a golden image tag.
-- Feature verification proves readiness for integration; it does not make a feature branch or its image golden.
-- Use exactly one active integration branch for each golden-image build cycle. Name it `integration-<YYYY-MM-DD>`.
-- Create the integration branch once from the current accepted `development` tip at the beginning of the cycle. An annotated `integration-cycle/<YYYY-MM-DD>` tag may record the cycle boundary for ancestry inspection, but its absence does not block explicitly authorized branch creation or integration.
-- The active integration branch is always checked out in the main repository worktree. Never create or keep it in a disposable worktree under `worktrees`.
-- The integration branch is the single collection point for the cycle. Do not create feature-specific, defect-specific, candidate-specific, or secondary integration branches.
-- Creating the integration branch is the only point where the cycle branches from `development`. After it exists, every new feature or defect intended for that cycle starts from the latest integration tip and merges back into that same integration branch.
-- A narrowly scoped integration-policy or coordination correction may be committed directly on the integration branch when the user explicitly requests it. Feature and defect implementation still use branches rooted in the active integration lineage.
-- Merge a selected feature or defect branch into the integration branch only after the user explicitly authorizes merging that exact branch. Verification findings must be reported but do not create an additional authorization gate. Never merge a feature or defect branch directly into `development`.
-- Abandon a rejected candidate branch rather than repairing its integration history with merge reverts. Preserve the rejected branch until its result and any reusable commits are accounted for.
+- `development` contains accepted releases. Do not implement features or fixes directly on it.
+- Use one active integration branch named `integration-<YYYY-MM-DD>`, created from the accepted `development` tip. An optional annotated `integration-cycle/<YYYY-MM-DD>` tag may record its starting boundary.
+- New feature and defect branches use `feature/<name>` or `defect/<name>`, start from the latest integration tip, and merge only into integration. Keep unrelated feature domains separate; follow-up work starts from its existing feature, training, or integration lineage.
+- Use `docs/<name>` for standalone documentation or repository-policy changes, including `AGENTS.md` and files under `docs/`. Create and work on documentation branches only in the main worktree from the latest integration tip; do not create a separate worktree. Documentation required by a feature or defect remains on its owning branch.
+- Keep integration and documentation branches in the main worktree. A narrowly scoped integration-policy or coordination correction may be committed directly on integration only when explicitly requested.
+- Tag a committed standalone documentation change with annotated `docs/<name>/git-<full-git-commit-id>` metadata recording its source branch, changed paths, purpose, and integration base. Documentation tags record provenance only and do not confer acceptance, image, or golden status.
 
-## Abandoned Lineages
+## Branch Integration
 
-- Before deleting or otherwise retiring an intentionally discarded branch, divergent commit, rejected candidate, or superseded release snapshot, create an annotated tag on its final retained commit using `abandoned/<domain>/git-<full-git-commit-id>`.
-- The abandoned tag annotation records the original branch or ref when known, the reason for abandonment, the replacement or superseding commit when one exists, any image identity built from it, and whether it was ever deployed.
-- An `abandoned/...` tag excludes that lineage and its images from implicit integration, candidate admission, golden promotion, and rollback selection. The user may explicitly restore or use an exact abandoned branch, commit, or image without creating a new lineage.
-- Preserve abandoned tags when removing worktrees or branches. An image build tag may remain for provenance, but it does not override abandoned status.
-- Release and integration tasks must inspect `abandoned/...` tags before selecting branches, commits, or images and must fail closed rather than merge or deploy an abandoned lineage implicitly.
+- Commit changes in coherent feature-domain groups. Feature, defect, and documentation branches merge only into integration.
+- Outside the golden image workflow, each merge requires explicit authorization naming the branch or commit.
+- A branch qualifies for the golden image workflow when it belongs to the active integration cycle, is clean and committed, is not abandoned, and passes its required checks. Report and exclude branches that do not qualify.
+- Before merging, report its lineage, abandoned status, worktree and test state, commits, and diff against integration. Explicit authorization remains sufficient despite disclosed findings; stop only for an ambiguous target, potential loss of uncommitted work, or unauthorized destructive history rewriting.
+- Use `--ff-only` when integration has not diverged from the branch merge base; otherwise use `--no-ff`. Do not rewrite or discard lineage to obtain a fast-forward.
+- Advance `development` only through the golden image workflow or an explicitly authorized configuration-only promotion.
 
-## Golden Image Admission and Promotion
+## Golden Image Workflow
 
-- Configuration-only changes outside image-producing project codebases may be fast-forwarded from the integration branch to `development` without building or minting golden images when the user explicitly authorizes that exact promotion. Qualifying changes include CI/CD workflows, provisioned instrumentation, and platform configuration that do not change application source, image contents, database migrations, or trading behavior.
-- Before a configuration-only promotion, inspect and report the complete commit range and diff, confirm that every changed path qualifies for the exception, and disclose the checks performed. If any changed path affects project code, image contents, database migrations, or trading behavior, use the normal golden-image admission and promotion rules for the entire promotion.
-- The user may explicitly authorize minting a golden image from an exact integration commit and immutable image at any time. That instruction is sufficient promotion authorization and must not be delayed or refused because of an undefined waiting period, elapsed-time requirement, or missing operational evidence.
-- always deploy the golden images to containers after minting.
-- Operational validation may be performed and recorded when requested, but it is not a mandatory time-based gate unless the user explicitly defines one.
-- Before minting, verify the selected Git commit, immutable Docker image ID or registry digest, embedded source revision, and clean committed state. Record which tests and operational checks were performed and disclose known limitations.
-- Track the exact candidate tuple that was evaluated: Git commit, immutable Docker image ID or registry digest, embedded source revision, migration state, material runtime configuration, and model identity when applicable.
-- When operational validation is requested, evaluate whether the exact candidate image:
-  - was built from a clean committed worktree with `POLYMARKET_GIT_REVISION` matching the candidate commit;
-  - passed the required compilation, linting, focused tests, and migration checks;
-  - preserved automatic container, database, reconciliation, and transport recovery where affected;
-  - preserved enabled paper and live process eligibility without bypassing capital, identity, accounting, order, or market-safety controls;
-  - produced healthy order, fill, reconciliation, settlement, and accounting evidence appropriate to the affected paths;
-  - avoided sustained crash loops, resource exhaustion, systemic readiness poisoning, and cross-process failure propagation; and
-  - remained rollback-compatible with the immediately preceding golden image and its database state.
-- Missing operational evidence must be disclosed, but it does not override an explicit user instruction to mint the golden image unless the user explicitly made that evidence a requirement.
-- A Codex task performing integration or release stewardship must inspect the active candidate and golden tags before acting. If the user explicitly requests minting a golden image, proceed using the exact selected candidate without another confirmation prompt. Without an explicit request, promotion is authorized only when exactly one candidate has complete admission evidence.
-- Promote by fast-forwarding `development` with `--ff-only` to the exact selected candidate commit. Do not create a promotion merge commit, rewrite `development`, or force-push. Do not rebuild a user-selected immutable image unless the user explicitly authorizes building an image for the exact committed integration revision.
-- Create an annotated `golden/<image_name>/sha256-<docker-sha256-hash>` tag recording the Git revision, immutable image identity, migration/config/model identity, checks performed, and accepted limitations.
-- Promote or alias the selected already-built image manifest when one exists. If the user explicitly directs minting and no image exists for the exact committed integration revision, build it with provenance, verify its immutable identity, and mint that image golden. Do not substitute a rebuilt image for a user-selected immutable digest without explicit authorization. Verify the resulting branch, tag, image identity, and embedded provenance.
-- Roll back by deploying a previously annotated immutable golden image. Do not rebuild the old commit and do not reset `development` merely to change the deployed image.
+`Perform the golden image workflow` authorizes eligible branch merges, candidate builds and local deployment, promotion, golden tagging, pushing to origin, cleanup, and integration-cycle rollover.
+
+1. Inspect and merge every qualifying active-cycle branch into integration under Branch Integration.
+2. Compare each image-producing component with its latest golden revision. Run required checks and build immutable candidates with the required embedded Git revisions only for components whose code or shared inputs changed.
+3. Record the candidate and rollback tuples, create `image/<image_name>/sha256-<docker-sha256-hash>` provenance tags, and deploy the exact candidates under Safe Image Deployment.
+4. On an attributable failure, restore the rollback tuple, create `rejected/release/git-<full-git-commit-id>`, and leave `development` and golden tags unchanged.
+5. On success, fast-forward `development` with `--ff-only` to the verified integration commit. For each affected image, create an annotated `golden/<image_name>/sha256-<docker-sha256-hash>` tag recording its candidate tuple and accepted limitations. Golden images may be minted only from the current `development` commit.
+6. Push `development`, provenance tags, golden tags, and exact verified image manifests. Verify the expected GitHub Actions results; an independently rebuilt CI image does not inherit golden status.
+7. Remove merged worktrees under Worktree Lifecycle. Retain the current-date integration branch when it matches `development`; otherwise create it from `development`.
+
+Explicit migration-application authorization remains separate. The workflow may build and validate `db-migrate`, but must not apply an unauthorized migration.
+
+## Image and Golden Identity
+
+- An `image/...` tag records build provenance. A `golden/...` tag accepts an exact immutable image whose source is the current `development` commit; branch position, tests, deployment, and image tags alone do not confer golden status.
+- The candidate tuple records the Git revision, immutable image identities, embedded revisions, migration state, material runtime configuration, applicable model identity, checks, and limitations. The rollback tuple records the predeployment images and revisions, service set, worker capacity, active realtime and backfill allocations, migration state, and material runtime configuration.
+- Golden status and change detection are component-specific. Shared code or build-input changes affect every image that consumes them.
+- Reuse a selected immutable image when it exists. Do not replace a selected digest with a rebuild without explicit authorization.
+- Golden tags are provenance records. Do not delete or move them to hide a later failure; use a rejected or abandoned tag to exclude a failed artifact or lineage from future admission.
+
+## Configuration-Only Promotion
+
+- The user may explicitly authorize a configuration-only fast-forward from integration to `development` without building or minting images.
+- Before promotion, inspect and report the complete commit range and confirm that no changed path affects application source, image contents, database migrations, or trading behavior. Otherwise use the golden image workflow.
+
+## Rejected Candidates and Abandoned Lineages
+
+- Tag a failed release snapshot with annotated `rejected/release/git-<full-git-commit-id>` metadata recording its reason, image identities, deployment result, rollback tuple, and replacement when known. This rejects that snapshot without abandoning repaired descendants.
+- Before retiring a discarded branch or lineage, create an annotated `abandoned/<domain>/git-<full-git-commit-id>` tag recording its original ref, reason, replacement when known, image identities, and deployment status.
+- Rejected snapshots and abandoned lineages are excluded from implicit admission, promotion, and rollback selection. The user may explicitly restore an exact rejected or abandoned commit or image.
+- Preserve provenance tags when removing branches or worktrees.
 
 ## Safe Image Deployment
 
@@ -85,11 +91,11 @@ Think of Capitonic as a vision to generate income through systems with automatio
 - Add any required worker capacity before replacing existing workers. Verify new workers are registered and healthy before proceeding with the remaining deployment.
 - Deploy the exact prebuilt image without rebuilding it or changing unrelated services. Preserve configured process intent and worker scale unless the verified allocation demand requires additional capacity.
 - Run Post-Deployment Verification before declaring the deployment healthy. A failed check requires investigation, but triggers rollback only when the failure is attributable to the deployed image.
-- Record the exact image ID, embedded Git revision, worker-capacity calculation, migration state, functional checks, and unresolved alerts in the deployment result.
+- Record the candidate tuple, worker-capacity calculation, verification results, and unresolved alerts in the deployment result.
 
 ### Post-Deployment Verification
 
-- Before replacing containers, record the immutable image IDs and embedded revisions currently running, together with the service set, worker replica count, active realtime profiles, active backfill allocations, migration state, and material runtime configuration. Keep this rollback tuple until deployment verification is complete.
+- Before replacing containers, record the rollback tuple defined by the golden image workflow and keep it until deployment verification is complete.
 - After deployment, verify in this order:
   1. Every expected container is running without a restart loop and uses the intended immutable image ID and embedded Git revision.
   2. Database, migration runner, ingester master, every ingester worker, bot, Prometheus, Grafana, Loki, and Alloy report their expected health or successful completion state; migrations complete with none pending.
@@ -124,39 +130,14 @@ Think of Capitonic as a vision to generate income through systems with automatio
   - `Permanent hardening`: only the smallest code, configuration, alerting, or deployment change needed to prevent recurrence; do not implement it unless authorized.
 - Make repair instructions executable and unambiguous. Avoid vague directions such as “check the service,” “monitor it,” or “restart if needed”; name the service, condition, exact safe action, and success signal.
 
-## Branching
+## Model Artifact Provenance
 
-- Commit changes in coherent groups organized by feature domain.
-- After building an immutable container image, tag the exact source commit used for that build with `image/<image_name>/sha256-<docker-sha256-hash>`.
 - A `model/<model-name-with-metadata>` tag records provenance for a new immutable model artifact produced by an executed model-build or training workflow. Create it only when that exact artifact exists, its identity can be verified, and the tag can point to the commit that first records or unambiguously references it.
 - Deploying, activating, configuring, copying, exporting for runtime use, or packaging an existing model does not constitute a new model build and must not create a new `model/...` tag. Building a container that uses an existing model receives an `image/...` tag only; record the existing model tag, model key, or artifact SHA-256 in the image tag annotation.
 - Starting a paper or live trading process with an existing model must not place a `model/...` tag on the process configuration commit, deployment commit, current branch tip, or latest repository commit. Reuse the existing model identity without moving or recreating its tag.
 - Model tags must be annotated and record the model artifact SHA-256, artifact path or immutable URI, producing commit, executed model-build or training-run identity, source or input identity, qualification status, and deployment status at tagging time.
 - Never infer model-tag eligibility from a model filename, manifest, process deployment, container build, branch name, or the fact that a commit is recent. If the task did not produce a new immutable model artifact, do not create a `model/...` tag.
 - These rules govern Git tag creation and provenance only. They do not gate, delay, prohibit, prescribe, or otherwise interfere with model training, retraining, evaluation, export, or experimentation.
-- Use these standard branch names for new cycle work: `integration-<YYYY-MM-DD>`, `feature/<feature-name>`, and `defect/<defect-name>`. Use another branch name only when the user explicitly requests it.
-- By default, every new independent feature domain uses a dedicated `feature/<feature-name>` branch and every defect uses a dedicated `defect/<defect-name>` branch. An explicitly requested branch name may override this naming default.
-- Create feature and defect branches from the latest tip of the active integration branch, never from `development` while an integration cycle is active.
-- Follow-up work that must inherit an existing feature or training lineage starts from that lineage’s designated base or integration branch, not from `development`.
-- Keep unrelated feature domains on separate branches.
-- Do not merge a feature or defect branch directly into `development`.
-- Creating a `feature/...` or `defect/...` branch from the active integration branch authorizes isolated work on that branch only; it does not authorize merging it back. Keep the branch unmerged until the user explicitly grants permission to merge that exact branch into integration. Completing implementation, committing, testing, reviewing, or declaring the branch ready does not imply merge permission. If permission is absent or ambiguous, stop before the merge and ask for authorization.
-- Before carrying out an explicitly authorized merge, inspect and report:
-  - the exact selected branch or commit;
-  - its merge base and whether it descends from the active cycle marker when one exists;
-  - whether it is marked by an `abandoned/...` tag;
-  - its clean, committed, and test state;
-  - whether it incorporates the latest integration tip; and
-  - its commit log and diff against the active integration branch.
-- These findings are disclosure requirements, not independent vetoes. Explicit user authorization naming the exact branch or commit is sufficient to proceed. Stop only when the target is ambiguous, uncommitted work would be lost, or the action requires destructive history rewriting that the user did not explicitly authorize.
-- Merge an explicitly authorized feature or defect branch into the integration branch using `--ff-only` when the integration branch has not diverged from the feature branch's merge base.
-- When the branches have diverged, merge the explicitly authorized feature or defect branch using `--no-ff`.
-- Never rebase, rewrite, or discard either lineage merely to make a fast-forward merge possible.
-- Never infer merge permission from recency, branch-name similarity, worktree existence, dirty state, or whether Git reports the branch as unmerged.
-- Do not merge an old, pre-cycle, cross-cycle, abandoned, or otherwise unrelated branch implicitly. Explicit user authorization naming the exact branch or commit is sufficient authorization for that merge; disclose its lineage and status before proceeding.
-- After integration collects new work, create subsequent feature and defect branches from the new integration tip so they begin with the complete collected code.
-- Advance `development` only through the golden admission and fast-forward promotion rules above or through the explicitly authorized configuration-only exception.
-- Never discard, rewrite, or bypass an existing feature lineage merely to satisfy the “latest development” rule.
 
 ## When to Create a Worktree
 
