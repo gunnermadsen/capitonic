@@ -380,6 +380,7 @@ struct RetainedMarketPath {
     window_start: DateTime<Utc>,
     window_end: DateTime<Utc>,
     price_to_beat: Option<Decimal>,
+    price_to_beat_exact: bool,
     points: BTreeMap<DateTime<Utc>, Decimal>,
 }
 
@@ -405,6 +406,7 @@ impl MarketPathPublicationState {
                     window_start: market.window_start,
                     window_end: market.window_end,
                     price_to_beat: None,
+                    price_to_beat_exact: false,
                     points: BTreeMap::new(),
                 });
             }
@@ -419,15 +421,24 @@ impl MarketPathPublicationState {
                     }
                     retained.points.insert(point.source_timestamp, point.price);
                 }
-                if retained.price_to_beat.is_none() {
-                    retained.price_to_beat = retained
+                if !retained.price_to_beat_exact {
+                    if let Some((_, price)) = retained
                         .points
                         .range(
                             retained.window_start
                                 ..=retained.window_start + chrono::Duration::seconds(5),
                         )
                         .next()
-                        .map(|(_, price)| *price);
+                    {
+                        retained.price_to_beat = Some(*price);
+                        retained.price_to_beat_exact = true;
+                    } else if retained.price_to_beat.is_none() {
+                        // A mid-window restart must not blank the entire realtime visual.
+                        // Use the earliest available current-window TWAP until an exact
+                        // opening-boundary sample is available.
+                        retained.price_to_beat =
+                            retained.points.first_key_value().map(|(_, price)| *price);
+                    }
                 }
             }
         }
@@ -930,6 +941,27 @@ mod tests {
 
         assert_eq!(snapshot.price_to_beat, None);
         assert_eq!(snapshot.influx_body(), None);
+    }
+
+    #[test]
+    fn publication_state_uses_earliest_current_twap_after_mid_window_restart() {
+        let now = Utc.timestamp_opt(1_800_000_100, 0).unwrap();
+        let market = market("one", now);
+        let first_available = market.window_start + ChronoDuration::seconds(42);
+        let mut state = MarketPathPublicationState::default();
+
+        let snapshot = state
+            .observe(
+                first_available,
+                Some((
+                    market.into(),
+                    vec![twap_point(first_available, dec!(100.75))],
+                )),
+            )
+            .unwrap();
+
+        assert_eq!(snapshot.price_to_beat, Some(dec!(100.75)));
+        assert!(snapshot.influx_body().is_some());
     }
 
     #[test]
