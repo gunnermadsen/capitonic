@@ -332,6 +332,7 @@ impl CountdownSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarketPathPoint {
     pub observed_at: DateTime<Utc>,
+    pub market_elapsed_seconds: i64,
     pub price: Decimal,
 }
 
@@ -418,6 +419,10 @@ impl MarketPathPublicationState {
                 .iter()
                 .map(|(observed_at, price)| MarketPathPoint {
                     observed_at: *observed_at,
+                    market_elapsed_seconds: observed_at
+                        .signed_duration_since(retained.window_start)
+                        .num_seconds()
+                        .clamp(0, 300),
                     price: *price,
                 })
                 .collect(),
@@ -441,6 +446,11 @@ impl MarketPathSnapshot {
             })
             .map(|point| MarketPathPoint {
                 observed_at: point.source_timestamp,
+                market_elapsed_seconds: point
+                    .source_timestamp
+                    .signed_duration_since(market.window_start)
+                    .num_seconds()
+                    .clamp(0, 300),
                 price: point.price,
             })
             .collect::<Vec<_>>();
@@ -465,15 +475,19 @@ impl MarketPathSnapshot {
         let price_to_beat = self.price_to_beat?;
         let market_schema_field = format!("market_{:x}", Sha256::digest(self.market_id.as_bytes()));
 
-        let mut body = String::with_capacity(self.points.len().saturating_mul(128));
+        let mut body = String::with_capacity(self.points.len().saturating_mul(160));
         for point in &self.points {
             let point_epoch_nanos = point
                 .observed_at
                 .timestamp_nanos_opt()
                 .expect("a current UTC timestamp is representable in nanoseconds");
+            // Grafana receives a wall-clock timestamp because Live Measurements requires one,
+            // but the realtime market panel must plot this numeric market-relative coordinate.
+            // Never bind that panel's x-axis to Grafana's dashboard/global time range.
             writeln!(
                 body,
-                "{MARKET_PATH_MEASUREMENT} twap_price={},price_to_beat={price_to_beat},{market_schema_field}=1i {point_epoch_nanos}",
+                "{MARKET_PATH_MEASUREMENT} market_elapsed_seconds={}i,twap_price={},price_to_beat={price_to_beat},{market_schema_field}=1i {point_epoch_nanos}",
+                point.market_elapsed_seconds,
                 point.price,
             )
             .expect("writing an Influx line into a String cannot fail");
@@ -753,8 +767,10 @@ mod tests {
 
         assert_eq!(snapshot.points.len(), 2);
         assert_eq!(snapshot.points[0].observed_at, market.window_start);
+        assert_eq!(snapshot.points[0].market_elapsed_seconds, 0);
         assert_eq!(snapshot.points[0].price, dec!(100.5));
         assert_eq!(snapshot.points[1].observed_at, current.source_timestamp);
+        assert_eq!(snapshot.points[1].market_elapsed_seconds, 1);
         assert_eq!(snapshot.points[1].price, dec!(100));
     }
 
@@ -772,7 +788,9 @@ mod tests {
         );
         let body = snapshot.influx_body().expect("market path has points");
 
-        assert!(body.starts_with("btc_market_path twap_price=100.5,price_to_beat=100.5"));
+        assert!(body.starts_with(
+            "btc_market_path market_elapsed_seconds=0i,twap_price=100.5,price_to_beat=100.5"
+        ));
         let expected_market_field = format!("market_{:x}=1i", Sha256::digest(b"one"));
         assert!(body
             .lines()
@@ -784,13 +802,36 @@ mod tests {
                         .split_once(' ')
                         .is_some_and(|(fields, _)| {
                             fields.split(',').all(|field| {
-                                field.starts_with("twap_price=")
+                                field.starts_with("market_elapsed_seconds=")
+                                    || field.starts_with("twap_price=")
                                     || field.starts_with("price_to_beat=")
                                     || field == expected_market_field
                             })
                         })
                 })
         }));
+        assert!(body
+            .lines()
+            .nth(1)
+            .is_some_and(|line| line.contains("market_elapsed_seconds=1i")));
+    }
+
+    #[test]
+    fn market_path_elapsed_coordinate_is_bounded_to_the_five_minute_market() {
+        let now = Utc.timestamp_opt(1_800_000_100, 0).unwrap();
+        let mut market = market("one", now);
+        market.window_end = market.window_start + ChronoDuration::seconds(300);
+        let snapshot = MarketPathSnapshot::resolve(
+            market.window_end,
+            &market,
+            [
+                twap_point(market.window_start, dec!(100.5)),
+                twap_point(market.window_end, dec!(101)),
+            ],
+        );
+
+        assert_eq!(snapshot.points[0].market_elapsed_seconds, 0);
+        assert_eq!(snapshot.points[1].market_elapsed_seconds, 300);
     }
 
     #[test]
