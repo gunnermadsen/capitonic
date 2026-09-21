@@ -63,7 +63,7 @@ Think of Capitonic as a vision to generate income through systems with automatio
 6. Push `development`, provenance tags, golden tags, and exact verified image manifests. Verify the expected GitHub Actions results; an independently rebuilt CI image does not inherit golden status.
 7. Remove merged worktrees under Worktree Lifecycle. Retain the current-date integration branch when it matches `development`; otherwise create it from `development`.
 
-Explicit migration-application authorization remains separate. The workflow may build and validate `db-migrate`, but must not apply an unauthorized migration.
+Migration creation and application follow Database Changes and Migrations. The golden image workflow authorizes neither unless its approved plan explicitly includes them.
 
 ## Image and Golden Identity
 
@@ -245,26 +245,28 @@ done
 - Direct Chainlink Data Streams reference prices use only `market_data.chainlink_btcusd_reference_prices`; PMData reference prices use only `market_data.pmdata_chainlink_btcusd_reference_prices`. Strategies must call the corresponding shared persistence function and must not issue table-specific insert SQL.
 - A one-off historical drain is copy-only: it may read source tables and write canonical Parquet, but it must not mutate its database sources. Source removal happens only through a separately guarded database migration after complete manifest validation.
 
-# Database and migrations
-- The `db-migrate` TypeScript service is the exclusive database-migration authority. Every schema change, constraint, index, extension, database-owned function, trigger, role or grant change, data correction, reference-data mutation, and other non-runtime database alteration must be implemented as a TypeORM migration in `packages/db-migrate/src/migrations` and applied by the `db-migrate` container.
-- Never alter the database with a one-off SQL, shell, Python, Rust, JavaScript, or TypeScript script; an interactive `psql` command; ORM schema synchronization; application startup code; another service container; or a host-side migration command. Do not create temporary migration scripts outside `packages/db-migrate/src/migrations`.
-- Normal application persistence through established runtime contracts is not a migration. Do not use this distinction to bypass TypeORM migrations for schema changes, backfills, cleanup, corrections, or administrative data mutations.
-- Do not create, edit, or apply a migration without explicit user permission. Before requesting permission, provide a narrow, unambiguous summary of the exact database effect, affected tables or objects, data-mutation scope, rollback behavior, and expected locking or operational risk.
-- Permission to create a migration does not imply permission to apply it. Permission to apply one migration does not authorize later migrations or a nonstandard execution path.
-- A non-`db-migrate` database alteration is prohibited unless the user explicitly authorizes that exact exceptional operation and execution method after the risks are disclosed. General debugging, implementation, deployment, or repair permission is not an exception. Without exact authorization, fail closed.
-- Before applying migrations, confirm the intended TypeORM migration files are committed, inspect the pending migration list, and verify each migration has not already been applied. After application, verify the migration ledger and expected schema state.
-- Apply migrations only by recreating the `db-migrate` container from the project Compose configuration. Do not run TypeORM migration commands directly on the host or from another container:
+# Database Changes and Migrations
+
+- `db-migrate` is the exclusive authority for schema changes and administrative data mutations. This includes schemas, tables, columns, constraints, indexes, extensions, database functions, triggers, roles, grants, reference data, corrections, cleanup, and administrative backfills.
+- Every such change must be a committed TypeScript TypeORM migration under `packages/db-migrate/src/migrations`. Required SQL must be contained in that migration and executed through its TypeORM `QueryRunner`.
+- Never alter database state through a standalone SQL file, one-off shell, Python, Rust, JavaScript, or TypeScript script, interactive `psql`, ORM synchronization, application startup, another service, host-side migration command, or temporary migration file. There is no exceptional one-off mutation path.
+- Established runtime persistence and shared backfill contracts may perform their normal application writes. Bounded read-only diagnostics are also permitted. Neither exception may be used for schema changes, administrative backfills, cleanup, corrections, or reference-data mutation.
+
+## Migration Authorization and Execution
+
+- Before creating, editing, or applying a migration, present a plan identifying the migration, exact database effects, affected objects, data scope, rollback behavior, and expected locking or operational risk.
+- User approval of that plan, including an instruction such as `execute the plan`, authorizes only the creation, editing, and application actions explicitly stated in it. Creating a migration does not authorize applying it unless the same approved plan explicitly includes application.
+- Before application, confirm that the migration files are committed and that the complete pending migration list exactly matches the approved set. Stop if an approved migration was already applied or any additional migration is pending.
+- Apply approved migrations only by recreating the `db-migrate` container from the project Compose configuration:
 
 ```bash
 docker compose up -d --force-recreate --no-deps db-migrate
 ```
 
-- Never create trading processes through migrations. Create or modify trading processes only through the established API endpoint.
-- All diagnostic database reads must be optimized for conservative resource usage. Do not scan large tables without considering performance ramifications.
-
-# Diagnostics
-- Conservative query resource usage when performing diagnostics in the database.
-- do not run large table scans or inefficient queries that starve resources and cause crashes.
+- Do not run TypeORM commands directly on the host or through another container. After application, verify the migration ledger and intended schema or data state.
+- Any database correction, reversal, or rollback requires its own approved TypeORM migration. Never repair or reverse database state with an ad hoc command or script.
+- Never create or modify trading processes through migrations; use the established API.
+- Keep diagnostic reads bounded and index-conscious. Do not run scans or queries likely to starve database resources.
 
 # Implementation
 - Execute the narrow implementation plan, only focusing on the instructed plan parameters.
