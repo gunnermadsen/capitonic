@@ -83,26 +83,6 @@ pub struct BtcStrategyConfig {
     pub min_entry_price: Decimal,
     pub max_entry_price: Decimal,
     pub max_depth_participation: Decimal,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub volatility_floor_per_sqrt_second: Option<Decimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub probability_floor: Option<Decimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub basis_lead_weight: Option<Decimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub momentum_1s_weight: Option<Decimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub momentum_5s_weight: Option<Decimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub momentum_30s_weight: Option<Decimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_lead_sigma_fraction: Option<Decimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base_probability_uncertainty: Option<Decimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub basis_uncertainty_weight: Option<Decimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub feed_age_uncertainty_per_second: Option<Decimal>,
     pub max_probability_uncertainty: Decimal,
     pub spread_reserve_fraction: Decimal,
     pub slippage_reserve_bps: Decimal,
@@ -132,16 +112,6 @@ impl Default for BtcStrategyConfig {
             min_entry_price: dec!(0.05),
             max_entry_price: dec!(0.95),
             max_depth_participation: dec!(0.25),
-            volatility_floor_per_sqrt_second: None,
-            probability_floor: None,
-            basis_lead_weight: None,
-            momentum_1s_weight: None,
-            momentum_5s_weight: None,
-            momentum_30s_weight: None,
-            max_lead_sigma_fraction: None,
-            base_probability_uncertainty: None,
-            basis_uncertainty_weight: None,
-            feed_age_uncertainty_per_second: None,
             max_probability_uncertainty: dec!(0.10),
             spread_reserve_fraction: dec!(0.10),
             slippage_reserve_bps: dec!(25),
@@ -1471,39 +1441,6 @@ fn validate_config(config: &BtcStrategyConfig) -> Result<(), BtcRejectReason> {
         && config.min_entry_price < config.max_entry_price
         && config.max_depth_participation > Decimal::ZERO
         && config.max_depth_participation <= Decimal::ONE
-        && config
-            .volatility_floor_per_sqrt_second
-            .is_none_or(|value| value > Decimal::ZERO)
-        && config
-            .probability_floor
-            .is_none_or(|value| value > Decimal::ZERO && value < dec!(0.5))
-        && config
-            .basis_lead_weight
-            .is_none_or(|value| value >= Decimal::ZERO)
-        && config
-            .momentum_1s_weight
-            .is_none_or(|value| value >= Decimal::ZERO)
-        && config
-            .momentum_5s_weight
-            .is_none_or(|value| value >= Decimal::ZERO)
-        && config
-            .momentum_30s_weight
-            .is_none_or(|value| value >= Decimal::ZERO)
-        && config
-            .max_lead_sigma_fraction
-            .is_none_or(|value| value >= Decimal::ZERO)
-        && config
-            .base_probability_uncertainty
-            .is_none_or(|value| value >= Decimal::ZERO)
-        && config
-            .basis_uncertainty_weight
-            .is_none_or(|value| value >= Decimal::ZERO)
-        && config
-            .feed_age_uncertainty_per_second
-            .is_none_or(|value| value >= Decimal::ZERO)
-        && config
-            .base_probability_uncertainty
-            .is_none_or(|base| config.max_probability_uncertainty >= base)
         && config.max_probability_uncertainty < dec!(0.5)
         && config.spread_reserve_fraction >= Decimal::ZERO
         && config.slippage_reserve_bps >= Decimal::ZERO

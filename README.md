@@ -277,9 +277,7 @@ run key; lifecycle and record ownership still belong to `process_id`.
           }
         },
         "runtime": {
-          "strategy_interval_ms": 1000,
-          "official_resolution_audit_grace_secs": 120,
-          "official_resolution_watch_retention_secs": 3600
+          "strategy_interval_ms": 1000
         },
         "paper": {
           "arrival_latency_ms": 150,
