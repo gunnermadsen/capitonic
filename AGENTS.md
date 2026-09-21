@@ -37,14 +37,14 @@ Think of Capitonic as a vision to generate income through systems with automatio
 
 - `development` contains accepted releases. Do not implement features or fixes directly on it.
 - Use one active integration branch named `integration-<YYYY-MM-DD>`, created from the accepted `development` tip. An optional annotated `integration-cycle/<YYYY-MM-DD>` tag may record its starting boundary.
-- New feature and defect branches use `feature/<name>` or `defect/<name>`, start from the latest integration tip, and merge only into integration. Keep unrelated feature domains separate; follow-up work starts from its existing feature, training, or integration lineage.
+- New feature, defect, and model-training branches use `feature/<name>`, `defect/<name>`, or `training/<name>`, start from the latest integration tip, and merge only into integration. Keep unrelated domains separate; follow-up work starts from its existing feature, training, or integration lineage.
 - Use `docs/<name>` for standalone documentation or repository-policy changes, including `AGENTS.md` and files under `docs/`. Create and work on documentation branches only in the main worktree from the latest integration tip; do not create a separate worktree. Documentation required by a feature or defect remains on its owning branch.
 - Keep integration and documentation branches in the main worktree. A narrowly scoped integration-policy or coordination correction may be committed directly on integration only when explicitly requested.
 - Tag a committed standalone documentation change with annotated `docs/<name>/git-<full-git-commit-id>` metadata recording its source branch, changed paths, purpose, and integration base. Documentation tags record provenance only and do not confer acceptance, image, or golden status.
 
 ## Branch Integration
 
-- Commit changes in coherent feature-domain groups. Feature, defect, and documentation branches merge only into integration.
+- Commit changes in coherent domain groups. Feature, defect, training, and documentation branches merge only into integration.
 - Outside the golden image workflow, each merge requires explicit authorization naming the branch or commit.
 - A branch qualifies for the golden image workflow when it belongs to the active integration cycle, is clean and committed, is not abandoned, and passes its required checks. Report and exclude branches that do not qualify.
 - Before merging, report its lineage, abandoned status, worktree and test state, commits, and diff against integration. Explicit authorization remains sufficient despite disclosed findings; stop only for an ambiguous target, potential loss of uncommitted work, or unauthorized destructive history rewriting.
@@ -139,34 +139,15 @@ Explicit migration-application authorization remains separate. The workflow may 
 - Never infer model-tag eligibility from a model filename, manifest, process deployment, container build, branch name, or the fact that a commit is recent. If the task did not produce a new immutable model artifact, do not create a `model/...` tag.
 - These rules govern Git tag creation and provenance only. They do not gate, delay, prohibit, prescribe, or otherwise interfere with model training, retraining, evaluation, export, or experimentation.
 
-## When to Create a Worktree
+## Worktree Creation and Ownership
 
-- Create a new worktree only for a new, independent, overarching feature domain that requires isolation from the current checkout.
-- Use one worktree for the entire feature domain, including its implementation, tests, fixes, review corrections, model variations, and follow-up iterations.
-- Do not create additional worktrees for:
-  - small fixes within the active feature;
-  - test failures or review corrections;
-  - configuration adjustments;
-  - documentation changes;
-  - model candidates or training variations belonging to the same training objective;
-  - additional commits or temporary branches within the same feature;
-  - read-only investigation or diagnostics.
-- Reuse the existing feature worktree whenever the requested change belongs to that worktree’s overarching feature domain.
-- A tiny unrelated change may be committed on its own branch without creating a worktree when isolation is unnecessary.
-- Do not create multiple worktrees for the same feature domain.
-- Do not create a new worktree while another agent-created feature worktree is active unless:
-  - the existing worktree belongs to a materially different feature domain; and
-  - parallel worktrees were explicitly requested or are strictly necessary.
-
-## Worktree Location and Ownership
-
-- Store all persistent project worktrees under `worktrees/<feature-domain>` in the project root.
-- Never place worktrees under `target/`; Cargo owns that directory and `cargo clean` may delete its contents.
-- Do not create persistent worktrees under `/tmp`, `/private/tmp`, or arbitrary external directories.
-- Each disposable worktree owns one overarching feature domain and one designated `feature/...` or `defect/...` branch. The active integration branch belongs only to the main worktree.
-- Related temporary change branches may be created and checked out inside that same worktree; they do not receive separate worktrees.
-- Keep all implementation, tests, generated evidence, and related fixes for the feature inside its assigned worktree.
-- Before creating a worktree, run `git worktree list` and confirm that no existing worktree already covers the feature domain.
+- Before creating a worktree, run `git worktree list` and reuse any worktree that already owns the requested domain.
+- Create one worktree only for a new, independent feature, defect, or model-training domain that requires isolation. Store it at `worktrees/<domain>` with one designated `feature/...`, `defect/...`, or `training/...` branch.
+- Use that worktree for the domain’s implementation, tests, fixes, review corrections, follow-up work, and model variations belonging to the same training objective. Related temporary branches use the same worktree.
+- Do not create a worktree for documentation, standalone configuration adjustments, read-only investigation, small unrelated changes, or corrections within an existing domain. A small isolated change may use its own branch in the main worktree.
+- Keep source changes, tests, and lightweight evidence in the assigned worktree. Store generated data under Worktree Data Artifact Storage.
+- Never store a worktree under `target/`, `/tmp`, `/private/tmp`, or another external location.
+- Do not create parallel worktrees unless they cover materially different domains and parallel isolation was explicitly requested or is strictly necessary.
 
 ## Worktree Environment Initialization
 
