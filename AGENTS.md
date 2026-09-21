@@ -84,9 +84,7 @@ Think of Capitonic as a vision to generate income through systems with automatio
 - Before deploying any newly built image, inspect active realtime strategies, active backfill jobs, worker allocation units, replica count, and current service health. Preserve enough worker capacity for every enabled realtime strategy plus active backfill allocations; do not assume the existing replica count is sufficient.
 - Add any required worker capacity before replacing existing workers. Verify new workers are registered and healthy before proceeding with the remaining deployment.
 - Deploy the exact prebuilt image without rebuilding it or changing unrelated services. Preserve configured process intent and worker scale unless the verified allocation demand requires additional capacity.
-- Container startup and Docker health checks are necessary but insufficient. A deployment is healthy only after functional checks confirm that every desired realtime profile has a current owner and is `running` and `healthy`, every required market-data product resolves to a current worker route, and required RTDS, orderbook, resolution, contract, and reference-price timestamps advance after deployment.
-- Verify that enabled trading processes automatically resume their market-data subscriptions and runtime eligibility, migrations complete with none pending, observability services remain available, and no new sustained critical alerts, crash loops, route-resolution failures, or ingestion gaps appear during startup.
-- Do not declare deployment complete while any required product reports `no_current_owner`, `owner_unavailable`, stale data, missing publications, or a degraded profile. Continue safe recovery or report the deployment as unhealthy.
+- Complete every applicable Post-Deployment Verification check before declaring the deployment healthy. Container startup and Docker health checks alone do not establish success. If a required check fails, follow Automatic Rollback and Recovery.
 - Record the exact image ID, embedded Git revision, worker-capacity calculation, migration state, functional checks, and unresolved alerts in the deployment result.
 
 ### Post-Deployment Verification
@@ -94,10 +92,10 @@ Think of Capitonic as a vision to generate income through systems with automatio
 - Before replacing containers, record the last known-good golden image IDs, embedded revisions, running service set, worker replica count, active realtime profiles, active backfill allocations, migration state, and material runtime configuration. Keep this rollback tuple available until the new deployment passes every functional check.
 - After deployment, verify in this order:
   1. Every expected container is running without a restart loop and uses the intended immutable image ID and embedded Git revision.
-  2. Database, migration runner, ingester master, every ingester worker, bot, Prometheus, Grafana, Loki, and Alloy report their expected health or successful completion state.
+  2. Database, migration runner, ingester master, every ingester worker, bot, Prometheus, Grafana, Loki, and Alloy report their expected health or successful completion state; migrations complete with none pending.
   3. Worker capacity still covers all desired realtime profiles and active backfills, and every desired realtime profile has a current lease owner with `observed_state='running'` and `health_status='healthy'`.
-  4. The master resolves every required product to a live worker, and the bot establishes the expected routes without sustained `no_current_owner`, `owner_unavailable`, route-resolution, or stale-product errors.
-  5. Fresh RTDS, orderbook, resolution, contract, Binance, Polygon, and required reference-price timestamps advance after the deployment rather than merely containing old rows.
+  4. The master resolves every required product to a live worker, and the bot establishes the expected routes without sustained `no_current_owner`, `owner_unavailable`, route-resolution, stale-product, or missing-publication errors.
+  5. Fresh RTDS, orderbook, resolution, contract, Binance, Polygon, and required reference-price timestamps advance after the deployment rather than merely containing old rows; no required product has an ingestion gap.
   6. Every enabled trading process preserves durable intent, resumes required subscriptions, and becomes eligible automatically when its evidence is healthy without bypassing capital, identity, accounting, order, or market-safety controls.
   7. Order, fill, reconciliation, settlement, and accounting paths affected by the deployment remain healthy, and Grafana shows no new sustained critical alerts attributable to the deployment.
 - Use bounded, resource-conscious queries and recent log windows for verification. Do not run large diagnostic scans against production tables.
