@@ -50,6 +50,21 @@ Direct Chainlink Data Streams reports and PMData reference-price archive rows ar
 
 Historical drain tools are copy-only. They normalize source rows to the exact canonical table-shaped Parquet contract, keep provider products separate, and record complete row accounting and file hashes. They never delete, update, rename, or truncate source relations. A legacy table may be removed only by a guarded migration after the final archive watermark and manifest validation are established.
 
+## Drain API
+
+Send `Authorization: Bearer <admin-token>` with every drain request. Submit work with `POST /drains`; the remaining endpoints list jobs, inspect one job or its events, cancel an active job, or retry a failed or cancelled job that has attempts remaining:
+
+- `POST /drains`
+- `GET /drains`
+- `GET /drains/{job_id}`
+- `GET /drains/{job_id}/events`
+- `POST /drains/{job_id}/cancel`
+- `POST /drains/{job_id}/retry`
+
+A submission must contain `strategy_key`, `cutoff`, `mode`, and `dry_run`; `execution` is optional. Set `mode` to `reconcile`; API-scheduled drains are copy-only. Set `dry_run` explicitly: `true` reports eligible work without publishing Parquet, while `false` publishes verified Parquet without removing source data. Do not omit `mode` or `dry_run`, and do not submit `mode: "drain"`.
+
+`execution` may specify either `required_worker_id` or `required_deployment`, never both. Source removal is not a drain API operation; it requires a separately approved, guarded database migration after manifest validation.
+
 ## API
 
 All control endpoints except health and metrics require the administrative bearer token.
