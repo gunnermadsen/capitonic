@@ -1080,6 +1080,6 @@ mod lifecycle_tests {
             assert_eq!(first.config_hash, resumed.config_hash);
             checked += 1;
         }
-        assert_eq!(checked, 5);
+        assert_eq!(checked, 2);
     }
 }

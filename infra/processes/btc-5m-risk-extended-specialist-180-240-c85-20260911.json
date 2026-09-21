@@ -79,16 +79,6 @@
           "min_entry_price": "0.01",
           "max_entry_price": "0.99",
           "max_depth_participation": "0.25",
-          "volatility_floor_per_sqrt_second": "0.00005",
-          "probability_floor": "0.01",
-          "basis_lead_weight": "0.25",
-          "momentum_1s_weight": "0.05",
-          "momentum_5s_weight": "0.10",
-          "momentum_30s_weight": "0.10",
-          "max_lead_sigma_fraction": "0.25",
-          "base_probability_uncertainty": "0.015",
-          "basis_uncertainty_weight": "1",
-          "feed_age_uncertainty_per_second": "0.002",
           "max_probability_uncertainty": "0.10",
           "spread_reserve_fraction": "0.10",
           "slippage_reserve_bps": "25",
@@ -105,9 +95,7 @@
           }
         ],
         "runtime": {
-          "strategy_interval_ms": 1000,
-          "official_resolution_audit_grace_secs": 120,
-          "official_resolution_watch_retention_secs": 3600
+          "strategy_interval_ms": 1000
         },
         "paper": {
           "arrival_latency_ms": 150,
