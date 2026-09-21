@@ -515,6 +515,7 @@ impl MarketPathSnapshot {
         }
         let price_to_beat = self.price_to_beat?;
         let market_schema_field = format!("market_{:x}", Sha256::digest(self.market_id.as_bytes()));
+        let snapshot_schema_field = format!("snapshot_{}", self.observed_at.timestamp_millis());
 
         let mut body = String::with_capacity(self.points.len().saturating_mul(160));
         for point in &self.points {
@@ -527,7 +528,7 @@ impl MarketPathSnapshot {
             // Never bind that panel's x-axis to Grafana's dashboard/global time range.
             writeln!(
                 body,
-                "{MARKET_PATH_MEASUREMENT} market_elapsed_seconds={}i,twap_price={},price_to_beat={price_to_beat},{market_schema_field}=1i {point_epoch_nanos}",
+                "{MARKET_PATH_MEASUREMENT} market_elapsed_seconds={}i,twap_price={},price_to_beat={price_to_beat},{market_schema_field}=1i,{snapshot_schema_field}=1i {point_epoch_nanos}",
                 point.market_elapsed_seconds,
                 point.price,
             )
@@ -833,6 +834,7 @@ mod tests {
             "btc_market_path market_elapsed_seconds=0i,twap_price=100.5,price_to_beat=100.5"
         ));
         let expected_market_field = format!("market_{:x}=1i", Sha256::digest(b"one"));
+        let expected_snapshot_field = format!("snapshot_{}=1i", now.timestamp_millis());
         assert!(body
             .lines()
             .all(|line| line.contains(&expected_market_field)));
@@ -847,6 +849,7 @@ mod tests {
                                     || field.starts_with("twap_price=")
                                     || field.starts_with("price_to_beat=")
                                     || field == expected_market_field
+                                    || field == expected_snapshot_field
                             })
                         })
                 })
@@ -876,7 +879,7 @@ mod tests {
     }
 
     #[test]
-    fn market_path_schema_changes_only_when_the_market_changes() {
+    fn market_path_schema_changes_for_each_complete_snapshot() {
         let now = Utc.timestamp_opt(1_800_000_100, 0).unwrap();
         let first_market = market("one", now);
         let second_market = market("two", now);
@@ -913,7 +916,10 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
-        assert_eq!(schema(&first), schema(&repeated));
+        // Grafana Live appends packets with an unchanged schema. Each publication
+        // contains the complete current-window path, so a snapshot marker forces a
+        // full-frame replacement instead of appending overlapping x coordinates.
+        assert_ne!(schema(&first), schema(&repeated));
         assert_ne!(schema(&first), schema(&successor));
     }
 
