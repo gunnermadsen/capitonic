@@ -84,12 +84,12 @@ Think of Capitonic as a vision to generate income through systems with automatio
 - Before deploying any newly built image, inspect active realtime strategies, active backfill jobs, worker allocation units, replica count, and current service health. Preserve enough worker capacity for every enabled realtime strategy plus active backfill allocations; do not assume the existing replica count is sufficient.
 - Add any required worker capacity before replacing existing workers. Verify new workers are registered and healthy before proceeding with the remaining deployment.
 - Deploy the exact prebuilt image without rebuilding it or changing unrelated services. Preserve configured process intent and worker scale unless the verified allocation demand requires additional capacity.
-- Complete every applicable Post-Deployment Verification check before declaring the deployment healthy. Container startup and Docker health checks alone do not establish success. If a required check fails, follow Automatic Rollback and Recovery.
+- Run Post-Deployment Verification before declaring the deployment healthy. A failed check requires investigation, but triggers rollback only when the failure is attributable to the deployed image.
 - Record the exact image ID, embedded Git revision, worker-capacity calculation, migration state, functional checks, and unresolved alerts in the deployment result.
 
 ### Post-Deployment Verification
 
-- Before replacing containers, record the last known-good golden image IDs, embedded revisions, running service set, worker replica count, active realtime profiles, active backfill allocations, migration state, and material runtime configuration. Keep this rollback tuple available until the new deployment passes every functional check.
+- Before replacing containers, record the immutable image IDs and embedded revisions currently running, together with the service set, worker replica count, active realtime profiles, active backfill allocations, migration state, and material runtime configuration. Keep this rollback tuple until deployment verification is complete.
 - After deployment, verify in this order:
   1. Every expected container is running without a restart loop and uses the intended immutable image ID and embedded Git revision.
   2. Database, migration runner, ingester master, every ingester worker, bot, Prometheus, Grafana, Loki, and Alloy report their expected health or successful completion state; migrations complete with none pending.
@@ -99,16 +99,16 @@ Think of Capitonic as a vision to generate income through systems with automatio
   6. Every enabled trading process preserves durable intent, resumes required subscriptions, and becomes eligible automatically when its evidence is healthy without bypassing capital, identity, accounting, order, or market-safety controls.
   7. Order, fill, reconciliation, settlement, and accounting paths affected by the deployment remain healthy, and Grafana shows no new sustained critical alerts attributable to the deployment.
 - Use bounded, resource-conscious queries and recent log windows for verification. Do not run large diagnostic scans against production tables.
-- Report the deployment as successful only after all applicable checks pass. State exactly which checks were not applicable or could not be completed.
+- Report the status of the intended fix and affected paths. Disclose unrelated failures and checks that could not be completed without treating them as rollback triggers.
 
 ### Automatic Rollback and Recovery
 
-- Treat the deployment as failed when a required container crash-loops, an expected service cannot start, migrations fail, any desired realtime profile remains unowned or degraded, required timestamps stop advancing, the bot cannot establish required routes, enabled trading processes fail to recover eligibility, or new sustained critical alerts are attributable to the deployment.
+- Roll back only when the intended fix remains defective or evidence reasonably attributes a regression in an affected path to the deployed image. A coincident, pre-existing, or unrelated failure must be reported and handled separately; it must not trigger rollback of the image.
 - On deployment failure, stop further rollout actions and preserve logs and the failed candidate tuple. Do not mint, move, or alter golden tags to disguise the failure.
-- Automatically roll back affected services to the recorded last known-good immutable golden image IDs and restore the recorded worker replica count and material runtime configuration. Do not rebuild an old commit, use mutable tags as rollback identity, reset Git branches, or change unrelated services.
-- Before rolling back across a database change, verify that the previous golden image is compatible with the current database state. Never reverse or mutate database state outside a separately authorized migration. If compatibility is not proven, leave the database intact, restore only compatible services, and report the rollback as blocked or partial.
-- Recreate only the affected containers, then repeat the complete post-deployment verification sequence against the rollback tuple. A rollback is complete only when functional data flow and process recovery are healthy; running containers alone are not sufficient.
-- If adding capacity or restarting a narrowly affected disposable worker safely restores ownership without changing code, images, durable intent, or data, perform that minimal recovery before a full rollback. Still classify the original deployment as failed and document the capacity defect.
+- If adding capacity or restarting a narrowly affected disposable worker safely restores an attributable failure without changing code, images, durable intent, or data, perform that recovery before rollback and repeat the affected verification checks.
+- If the attributable failure remains, restore each affected service to the exact immutable image that was running immediately before deployment, together with its recorded material runtime configuration and required worker capacity. Do not rebuild an old commit, use mutable tags as rollback identity, reset Git branches, or change unrelated services.
+- Before rolling back across a database change, verify that the previous image is compatible with the current database state. Never reverse or mutate database state outside a separately authorized migration. If compatibility is not proven, leave the database intact, restore only compatible services, and report the rollback as blocked or partial.
+- Recreate only the affected containers, then repeat Post-Deployment Verification against the rollback tuple. A rollback is complete when the affected paths and required functional data flow recover; disclose unrelated checks that remain unhealthy.
 
 ### Failure RCA and Repair Instructions
 
