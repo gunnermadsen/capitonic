@@ -39,6 +39,7 @@ pub const SUPPORTED: &[&str] = &[
     "btc_path_terminal_volatility_z",
     "btc_range_30s_bps",
     "btc_range_5s_bps",
+    "btc_range_15s_bps",
     "btc_range_60s_bps",
     "btc_range_position_30s",
     "btc_range_position_60s",
