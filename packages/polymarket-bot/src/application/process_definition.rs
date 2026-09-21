@@ -296,6 +296,7 @@ pub(super) fn resolve_legacy_btc_strategy(
         serde_json::Value::Null,
     );
     object.insert("required_model_feeds".into(), serde_json::json!([]));
+    insert_optional_strategy_slots(object);
     for (key, override_value) in overrides {
         let slot = object
             .get_mut(key)
@@ -407,6 +408,7 @@ pub(super) fn resolve_btc_members(
         serde_json::Value::Null,
     );
     object.insert("required_model_feeds".into(), serde_json::json!([]));
+    insert_optional_strategy_slots(object);
     for (key, v) in overrides {
         if key == "decision_strategy" {
             continue;
@@ -422,6 +424,23 @@ pub(super) fn resolve_btc_members(
     router
         .compile_members(&base, &sources)
         .map_err(|e| HttpError::bad_request(e.to_string()))
+}
+
+fn insert_optional_strategy_slots(object: &mut serde_json::Map<String, serde_json::Value>) {
+    for key in [
+        "volatility_floor_per_sqrt_second",
+        "probability_floor",
+        "basis_lead_weight",
+        "momentum_1s_weight",
+        "momentum_5s_weight",
+        "momentum_30s_weight",
+        "max_lead_sigma_fraction",
+        "base_probability_uncertainty",
+        "basis_uncertainty_weight",
+        "feed_age_uncertainty_per_second",
+    ] {
+        object.insert(key.into(), serde_json::Value::Null);
+    }
 }
 #[cfg(test)]
 pub(super) fn resolve_btc_strategy(

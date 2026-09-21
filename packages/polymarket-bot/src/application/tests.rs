@@ -240,7 +240,7 @@ mod lifecycle_tests {
 
     #[test]
     fn router_v4_resolves_native_directional_model_as_the_only_strategy() {
-        let control = BtcRealtimePaperControlConfig {
+        let mut control = BtcRealtimePaperControlConfig {
             schema_version: SELECTABLE_BTC_PROCESS_SCHEMA_VERSION.to_string(),
             strategy: serde_json::json!({
                 "decision_strategy": {
@@ -273,6 +273,10 @@ mod lifecycle_tests {
             Some(BtcDecisionStrategyConfig::BtcDirectionalModel { .. })
         ));
         assert_eq!(strategy.max_directional_feature_age_ms, Some(5_000));
+
+        control.strategy["base_probability_uncertainty"] = serde_json::json!("0.015");
+        let legacy = resolve_btc_strategy(&router_fixture(control)).unwrap();
+        assert_eq!(legacy.base_probability_uncertainty, Some(dec!(0.015)));
     }
 
     #[test]
@@ -332,6 +336,23 @@ mod lifecycle_tests {
 
         let resolved = resolve_legacy_btc_strategy(&control).unwrap();
         assert_eq!(resolved.unified_model.as_ref(), Some(&binding));
+
+        for (key, value) in [
+            ("volatility_floor_per_sqrt_second", "0.00005"),
+            ("probability_floor", "0.01"),
+            ("basis_lead_weight", "0.25"),
+            ("momentum_1s_weight", "0.05"),
+            ("momentum_5s_weight", "0.10"),
+            ("momentum_30s_weight", "0.10"),
+            ("max_lead_sigma_fraction", "0.25"),
+            ("base_probability_uncertainty", "0.015"),
+            ("basis_uncertainty_weight", "1"),
+            ("feed_age_uncertainty_per_second", "0.002"),
+        ] {
+            control.strategy[key] = serde_json::Value::String(value.into());
+        }
+        let legacy = resolve_legacy_btc_strategy(&control).unwrap();
+        assert_eq!(legacy.base_probability_uncertainty, Some(dec!(0.015)));
     }
 
     #[test]
