@@ -492,16 +492,16 @@ pub(super) fn validate_btc_entry_timing(strategy: &BtcStrategyConfig) -> Result<
 #[serde(default, deny_unknown_fields)]
 pub(super) struct BtcProcessRuntimeControl {
     pub(super) strategy_interval_ms: u64,
-    pub(super) official_resolution_audit_grace_secs: u64,
-    pub(super) official_resolution_watch_retention_secs: u64,
+    pub(super) official_resolution_audit_grace_secs: Option<u64>,
+    pub(super) official_resolution_watch_retention_secs: Option<u64>,
 }
 
 impl Default for BtcProcessRuntimeControl {
     fn default() -> Self {
         Self {
             strategy_interval_ms: 1_000,
-            official_resolution_audit_grace_secs: 120,
-            official_resolution_watch_retention_secs: 3_600,
+            official_resolution_audit_grace_secs: None,
+            official_resolution_watch_retention_secs: None,
         }
     }
 }

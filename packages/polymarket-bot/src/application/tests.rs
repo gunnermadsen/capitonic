@@ -1080,6 +1080,53 @@ mod lifecycle_tests {
             assert_eq!(first.config_hash, resumed.config_hash);
             checked += 1;
         }
-        assert_eq!(checked, 5);
+        assert_eq!(checked, 2);
+    }
+
+    #[test]
+    fn managed_btc_playbooks_omit_retired_optional_properties() {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("infra/processes");
+        let retired_strategy_fields = [
+            "volatility_floor_per_sqrt_second",
+            "probability_floor",
+            "basis_lead_weight",
+            "momentum_1s_weight",
+            "momentum_5s_weight",
+            "momentum_30s_weight",
+            "max_lead_sigma_fraction",
+            "base_probability_uncertainty",
+            "basis_uncertainty_weight",
+            "feed_age_uncertainty_per_second",
+        ];
+        let retired_runtime_fields = [
+            "official_resolution_audit_grace_secs",
+            "official_resolution_watch_retention_secs",
+        ];
+        let mut checked = 0;
+
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                continue;
+            }
+            let process: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            let raw = &process["config"]["raw"]["btc_realtime_paper"];
+            parse_btc_process_control(raw.clone(), BtcDefinitionUse::InactiveDefinition).unwrap();
+            for field in retired_strategy_fields {
+                assert!(raw["strategy"].get(field).is_none());
+            }
+            for field in retired_runtime_fields {
+                assert!(raw["runtime"].get(field).is_none());
+            }
+            checked += 1;
+        }
+
+        assert_eq!(checked, 6);
     }
 }
