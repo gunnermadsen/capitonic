@@ -86,7 +86,7 @@ groups:
         annotations: {summary: "Orders remain unresolved after reconciliation", description: "One or more process-owned orders remain ambiguous or nonterminal across the persistence window."}
         labels: {service: polymarket-bot, family: reconciliation, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
         isPaused: false
-      - uid: reconciliation_execution_opportunity_loss
+      - uid: reconciliation_opportunity_loss
         title: Sustained execution opportunity loss
         condition: C
         data:
