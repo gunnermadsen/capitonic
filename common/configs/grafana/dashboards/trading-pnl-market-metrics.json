@@ -3304,6 +3304,6 @@
   "timezone": "browser",
   "title": "Trading, PNL & Market Metrics",
   "uid": "polymarket-bot",
-  "version": 41,
+  "version": 43,
   "weekStart": ""
 }
