@@ -14,7 +14,7 @@ use crate::{
 
 use super::{
     paper::{PaperPreviewConfig, PaperPreviewResult, PaperVenue},
-    repository::BtcRepository,
+    repository::{BtcRepository, BtcSettlementHealth},
 };
 
 const PAPER_RECONCILE_INTERVAL: Duration = Duration::from_secs(5);
@@ -103,11 +103,7 @@ impl BtcExecutionLifecycle for PaperExecutionLifecycle {
         run_id: Uuid,
     ) -> Result<()> {
         repository
-            .recover_process_official_resolution_watches(
-                process_id,
-                run_id,
-                BtcExecutionMode::Paper,
-            )
+            .recover_process_official_resolution_watches(process_id, BtcExecutionMode::Paper)
             .await?;
         let state = repository
             .paper_venue_resume_state(process_id, run_id)
@@ -130,16 +126,31 @@ impl BtcExecutionLifecycle for PaperExecutionLifecycle {
         run_id: Uuid,
         config_hash: &str,
     ) -> Result<()> {
+        recover_settlement_state(repository, process_id, run_id, BtcExecutionMode::Paper).await?;
         let pending = repository
             .discover_pending_paper_settlements(process_id, run_id)
             .await?;
         for settlement in pending {
-            let credit = self
-                .venue
-                .apply_settlement_credit(settlement.settlement_id, settlement.payout)
-                .await?;
+            let disposition = paper_settlement_disposition(settlement.run_id, run_id);
+            let credit = if disposition.apply_venue_credit {
+                Some(
+                    self.venue
+                        .apply_settlement_credit(settlement.settlement_id, settlement.payout)
+                        .await?,
+                )
+            } else {
+                None
+            };
+            let settlement_config_hash = if disposition.apply_venue_credit {
+                config_hash.to_string()
+            } else {
+                repository
+                    .run_config_hash(process_id, settlement.run_id)
+                    .await?
+            };
             let evidence = serde_json::json!({
-                "evidence_version": "btc_paper_capital_credit_v1",
+                "evidence_version": disposition.evidence_version,
+                "credit_kind": disposition.credit_kind,
                 "settlement_id": settlement.settlement_id,
                 "process_id": settlement.process_id,
                 "run_id": settlement.run_id,
@@ -159,12 +170,12 @@ impl BtcExecutionLifecycle for PaperExecutionLifecycle {
                 "payout": settlement.payout,
                 "net_pnl": settlement.net_pnl,
                 "venue_credit": credit,
-                "credited_by_config_hash": config_hash,
+                "credited_by_config_hash": settlement_config_hash,
             });
             let marked = repository
                 .mark_paper_settlement_credited(
                     process_id,
-                    run_id,
+                    settlement.run_id,
                     settlement.settlement_id,
                     &evidence,
                 )
@@ -183,6 +194,15 @@ impl BtcExecutionLifecycle for PaperExecutionLifecycle {
                     settlement.net_pnl.to_f64().unwrap_or(0.0),
                     settlement.entry_fees.to_f64().unwrap_or(0.0),
                 );
+                info!(
+                    process_id = %process_id,
+                    run_id = %settlement.run_id,
+                    settlement_id = %settlement.settlement_id,
+                    order_id = %settlement.order_id,
+                    current_run = disposition.apply_venue_credit,
+                    credit_kind = disposition.credit_kind,
+                    "BTC paper settlement credited from official resolution"
+                );
             }
             if !marked {
                 warn!(
@@ -192,6 +212,12 @@ impl BtcExecutionLifecycle for PaperExecutionLifecycle {
                 );
             }
         }
+        observe_settlement_health(
+            process_id,
+            &repository
+                .settlement_health(process_id, run_id, BtcExecutionMode::Paper)
+                .await?,
+        );
         Ok(())
     }
 
@@ -239,10 +265,10 @@ impl BtcExecutionLifecycle for LiveExecutionLifecycle {
         &self,
         repository: &BtcRepository,
         process_id: Uuid,
-        run_id: Uuid,
+        _run_id: Uuid,
     ) -> Result<()> {
         repository
-            .recover_process_official_resolution_watches(process_id, run_id, BtcExecutionMode::Live)
+            .recover_process_official_resolution_watches(process_id, BtcExecutionMode::Live)
             .await?;
         // The runner performs one mandatory reconciliation after resume hydration and admission
         // initialization. Live execution has no in-memory capital state to hydrate here.
@@ -257,6 +283,8 @@ impl BtcExecutionLifecycle for LiveExecutionLifecycle {
         config_hash: &str,
     ) -> Result<()> {
         let attempt = async {
+            recover_settlement_state(repository, process_id, run_id, BtcExecutionMode::Live)
+                .await?;
             let pending = repository
                 .discover_pending_settlements(process_id, run_id, BtcExecutionMode::Live)
                 .await?;
@@ -308,6 +336,12 @@ impl BtcExecutionLifecycle for LiveExecutionLifecycle {
             // Zero-payout settlement evidence is durable before wallet reconciliation so the
             // same cycle observes the credited ledger instead of waiting for the next poll.
             let reconciliation = self.venue.reconcile().await?;
+            observe_settlement_health(
+                process_id,
+                &repository
+                    .settlement_health(process_id, run_id, BtcExecutionMode::Live)
+                    .await?,
+            );
             Ok::<_, anyhow::Error>((reconciliation, pending_redemption_count))
         }
         .await;
@@ -372,6 +406,151 @@ impl BtcExecutionLifecycle for LiveExecutionLifecycle {
     }
 }
 
+async fn recover_settlement_state(
+    repository: &BtcRepository,
+    process_id: Uuid,
+    run_id: Uuid,
+    execution_mode: BtcExecutionMode,
+) -> Result<()> {
+    let recovered_resolutions = repository
+        .recover_process_official_resolutions(process_id, execution_mode)
+        .await
+        .map_err(|error| {
+            warn!(
+                process_id = %process_id,
+                run_id = %run_id,
+                execution_mode = execution_mode.as_str(),
+                stage = "resolution_projection",
+                error_code = "btc_settlement_autoheal_failed",
+                error = %error,
+                "BTC settlement auto-heal failed"
+            );
+            error
+        })?;
+    let recovered_watches = repository
+        .recover_process_official_resolution_watches(process_id, execution_mode)
+        .await
+        .map_err(|error| {
+            warn!(
+                process_id = %process_id,
+                run_id = %run_id,
+                execution_mode = execution_mode.as_str(),
+                stage = "resolution_watch",
+                error_code = "btc_settlement_autoheal_failed",
+                error = %error,
+                "BTC settlement auto-heal failed"
+            );
+            error
+        })?;
+
+    if recovered_resolutions > 0 {
+        super::unified_model_runtime::telemetry::event(
+            process_id,
+            "settlement_autoheal",
+            "resolution_projection",
+        );
+    }
+    if recovered_watches > 0 {
+        super::unified_model_runtime::telemetry::event(
+            process_id,
+            "settlement_autoheal",
+            "resolution_watch",
+        );
+    }
+    if recovered_resolutions > 0 || recovered_watches > 0 {
+        info!(
+            process_id = %process_id,
+            run_id = %run_id,
+            execution_mode = execution_mode.as_str(),
+            recovered_resolution_count = recovered_resolutions,
+            recovered_watch_count = recovered_watches,
+            "BTC settlement state auto-healed from durable resolution evidence"
+        );
+    }
+    Ok(())
+}
+
+fn observe_settlement_health(process_id: Uuid, health: &BtcSettlementHealth) {
+    use super::unified_model_runtime::telemetry::gauge;
+
+    gauge(
+        process_id,
+        "settlement_unresolved_fills",
+        health.unresolved_fills as f64,
+    );
+    gauge(
+        process_id,
+        "settlement_oldest_unresolved_age_seconds",
+        health.oldest_unresolved_age_seconds,
+    );
+    gauge(
+        process_id,
+        "settlement_actionable_stale_fills",
+        health.actionable_stale_fills as f64,
+    );
+    gauge(
+        process_id,
+        "settlement_oldest_actionable_stale_age_seconds",
+        health.oldest_actionable_stale_age_seconds,
+    );
+    gauge(
+        process_id,
+        "settlement_resolution_missing",
+        health.resolution_missing as f64,
+    );
+    gauge(
+        process_id,
+        "settlement_projection_missing",
+        health.projection_missing as f64,
+    );
+    gauge(
+        process_id,
+        "settlement_watch_missing",
+        health.watch_missing as f64,
+    );
+    gauge(
+        process_id,
+        "settlement_ledger_missing",
+        health.ledger_missing as f64,
+    );
+    gauge(
+        process_id,
+        "settlement_ledger_pending",
+        health.ledger_pending as f64,
+    );
+    gauge(
+        process_id,
+        "settlement_prior_run_unresolved",
+        health.prior_run_unresolved as f64,
+    );
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PaperSettlementDisposition {
+    apply_venue_credit: bool,
+    evidence_version: &'static str,
+    credit_kind: &'static str,
+}
+
+fn paper_settlement_disposition(
+    settlement_run_id: Uuid,
+    current_run_id: Uuid,
+) -> PaperSettlementDisposition {
+    if settlement_run_id == current_run_id {
+        PaperSettlementDisposition {
+            apply_venue_credit: true,
+            evidence_version: "btc_paper_capital_credit_v1",
+            credit_kind: "current_run_capital_credit",
+        }
+    } else {
+        PaperSettlementDisposition {
+            apply_venue_credit: false,
+            evidence_version: "btc_paper_historical_settlement_v1",
+            credit_kind: "prior_run_accounting_only",
+        }
+    }
+}
+
 const fn reconciliation_failure_blocks_entries(transient: bool) -> bool {
     !transient
 }
@@ -394,7 +573,8 @@ mod tests {
     use crate::execution::ReconciliationReport;
 
     use super::{
-        live_reconciliation_gate_reason, reconciliation_failure_blocks_entries, BtcExecutionMode,
+        live_reconciliation_gate_reason, paper_settlement_disposition,
+        reconciliation_failure_blocks_entries, BtcExecutionMode,
         LIVE_UNCLEAN_RECONCILIATION_GATE_REASON,
     };
 
@@ -458,5 +638,21 @@ mod tests {
     fn only_non_transient_reconciliation_failures_block_entries() {
         assert!(!reconciliation_failure_blocks_entries(true));
         assert!(reconciliation_failure_blocks_entries(false));
+    }
+
+    #[test]
+    fn prior_run_paper_settlement_repairs_accounting_without_current_capital_credit() {
+        let current_run = uuid::Uuid::from_u128(1);
+        let prior_run = uuid::Uuid::from_u128(2);
+
+        let current = paper_settlement_disposition(current_run, current_run);
+        assert!(current.apply_venue_credit);
+        assert_eq!(current.evidence_version, "btc_paper_capital_credit_v1");
+        assert_eq!(current.credit_kind, "current_run_capital_credit");
+
+        let prior = paper_settlement_disposition(prior_run, current_run);
+        assert!(!prior.apply_venue_credit);
+        assert_eq!(prior.evidence_version, "btc_paper_historical_settlement_v1");
+        assert_eq!(prior.credit_kind, "prior_run_accounting_only");
     }
 }

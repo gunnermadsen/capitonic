@@ -1,0 +1,104 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: settlement-resolution-liveness-30s
+    folder: Polymarket Trading Path
+    interval: 30s
+    rules:
+      - uid: settlement_actionable_stale_over_five_minutes
+        title: Settlement resolution is stale beyond one market window
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 600, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "max by (process_id) (polymarket_umr_settlement_oldest_actionable_stale_age_seconds) and on (process_id) (max by (process_id) (polymarket_umr_settlement_actionable_stale_fills) > 0)", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [300], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 1m
+        annotations: {summary: "A process-owned fill has remained unresolved for more than five minutes", description: "The oldest actionable settlement is {{ printf \"%.0f\" $values.B.Value }} seconds past market close. Live winners awaiting proven redemption are excluded; this indicates missing resolution, projection, watch, ledger, or a pending paper credit."}
+        labels: {service: polymarket-bot, family: settlement_resolution, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        dashboardUid: reconciliation-health
+        panelId: 16
+        isPaused: false
+      - uid: settlement_resolution_pipeline_incomplete
+        title: Settlement resolution pipeline is incomplete
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 600, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "max by (process_id) (polymarket_umr_settlement_resolution_missing + polymarket_umr_settlement_projection_missing + polymarket_umr_settlement_watch_missing + polymarket_umr_settlement_ledger_missing)", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations: {summary: "Durable settlement state is incomplete", description: "{{ printf \"%.0f\" $values.B.Value }} process-owned fill(s) lack a required resolution, projection, watch, or ledger record after five minutes of automatic repair attempts."}
+        labels: {service: polymarket-bot, family: settlement_resolution, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        dashboardUid: reconciliation-health
+        panelId: 17
+        isPaused: false
+      - uid: settlement_prior_run_unresolved
+        title: Prior-run settlement remains unresolved
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 600, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "max by (process_id) (polymarket_umr_settlement_prior_run_unresolved)", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations: {summary: "Accounting from an earlier process run is unresolved", description: "{{ printf \"%.0f\" $values.B.Value }} prior-run fill(s) remain unresolved. Automatic recovery must preserve accounting across process restarts without applying historical paper proceeds to current-run capital."}
+        labels: {service: polymarket-bot, family: settlement_resolution, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        dashboardUid: reconciliation-health
+        panelId: 18
+        isPaused: false
+      - uid: settlement_autoheal_repeated_failures
+        title: Settlement auto-healing is repeatedly failing
+        condition: C
+        data:
+          - refId: A
+            queryType: instant
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: loki
+            model:
+              datasource: {type: loki, uid: loki}
+              editorMode: code
+              expr: 'sum by (process_id, execution_mode, stage) (count_over_time({service_name="polymarket-bot",error_code="btc_settlement_autoheal_failed"}[5m]))'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [2], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations: {summary: "Settlement auto-healing failed repeatedly", description: "The {{ $labels.stage }} repair stage for {{ $labels.execution_mode }} process {{ $labels.process_id }} failed {{ printf \"%.0f\" $values.B.Value }} times in five minutes."}
+        labels: {service: polymarket-bot, family: settlement_resolution, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        dashboardUid: reconciliation-health
+        panelId: 18
+        isPaused: false

@@ -163,22 +163,22 @@ FROM polymarket.orders o
 JOIN polymarket.fills f
   ON f.process_id = $1
  AND f.order_id = o.order_id
- AND f.source = $3
+ AND f.source = $2
 JOIN polymarket.btc_interval_markets m ON m.market_id = o.market_id
 WHERE o.process_id = $1
   AND m.official_outcome IS NOT NULL
   AND m.official_winning_token_id IS NOT NULL
   AND m.official_resolution_received_at IS NOT NULL
   AND m.official_resolution_source IS NOT NULL
-  AND (
-    ($3 = 'live' AND COALESCE(
-      NULLIF(o.raw_payload #>> '{request,metadata,run_id}', ''),
-      NULLIF(o.raw_payload #>> '{request,metadata,experiment_id}', '')
-    ) IS NOT NULL)
-    OR ($3 <> 'live' AND (
-      o.raw_payload #>> '{request,metadata,run_id}' = $2::text
-      OR o.raw_payload #>> '{request,metadata,experiment_id}' = $2::text
-    ))
+  AND COALESCE(
+    NULLIF(o.raw_payload #>> '{request,metadata,run_id}', ''),
+    NULLIF(o.raw_payload #>> '{request,metadata,experiment_id}', '')
+  ) IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM polymarket.btc_official_resolution_watches existing_watch
+    WHERE existing_watch.market_id = m.market_id
+      AND existing_watch.status IN ('resolved','resolved_late')
   )
 ON CONFLICT (market_id) DO UPDATE
 SET status = CASE
@@ -213,6 +213,47 @@ SET status = CASE
     last_error = NULL,
     updated_at = now()
 WHERE btc_official_resolution_watches.status IN ('pending','expired')
+"#;
+
+const LOAD_PROCESS_RESOLUTION_RECOVERY_SQL: &str = r#"
+SELECT DISTINCT ON (o.market_id)
+  r.market_id,
+  r.winning_token_id,
+  r.winning_outcome,
+  COALESCE(r.source_timestamp, r.received_at) AS source_timestamp,
+  r.source AS resolution_source,
+  r.received_at,
+  r.source_payload
+FROM polymarket.orders o
+JOIN polymarket.fills f
+  ON f.process_id = o.process_id
+ AND f.order_id = o.order_id
+ AND f.source = $2
+JOIN polymarket.btc_interval_markets market ON market.market_id = o.market_id
+JOIN market_data.polymarket_btc_five_minute_resolutions r
+  ON r.market_id = o.market_id
+WHERE o.process_id = $1
+  AND market.official_outcome IS NULL
+  AND COALESCE(
+    NULLIF(o.raw_payload #>> '{request,metadata,run_id}', ''),
+    NULLIF(o.raw_payload #>> '{request,metadata,experiment_id}', '')
+  ) IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM polymarket.account_trades account_exit
+    WHERE account_exit.linked_order_id = o.order_id
+      AND account_exit.side = 'sell'
+      AND account_exit.applied_exit_size > 0
+  )
+ORDER BY o.market_id,
+  CASE r.source
+    WHEN 'clob_websocket' THEN 0
+    WHEN 'clob_rest_reconciliation' THEN 1
+    ELSE 2
+  END,
+  r.received_at,
+  r.payload_sha256
+LIMIT 256
 "#;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromRow)]
@@ -273,6 +314,31 @@ pub struct BtcSettlementRecord {
     pub credit_evidence: serde_json::Value,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct ProcessResolutionRecoveryRow {
+    market_id: String,
+    winning_token_id: String,
+    winning_outcome: String,
+    source_timestamp: DateTime<Utc>,
+    resolution_source: String,
+    received_at: DateTime<Utc>,
+    source_payload: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, FromRow)]
+pub struct BtcSettlementHealth {
+    pub unresolved_fills: i64,
+    pub oldest_unresolved_age_seconds: f64,
+    pub actionable_stale_fills: i64,
+    pub oldest_actionable_stale_age_seconds: f64,
+    pub resolution_missing: i64,
+    pub projection_missing: i64,
+    pub watch_missing: i64,
+    pub ledger_missing: i64,
+    pub ledger_pending: i64,
+    pub prior_run_unresolved: i64,
 }
 
 /// Compatibility alias for callers that only operate the paper venue.
@@ -713,16 +779,19 @@ WITH order_identity AS MATERIALIZED (
         AND account_exit.side = 'sell'
         AND account_exit.applied_exit_size > 0
     )
-    AND (
-      ($3 = 'live' AND COALESCE(
-        NULLIF(o.raw_payload #>> '{request,metadata,run_id}', ''),
-        NULLIF(o.raw_payload #>> '{request,metadata,experiment_id}', '')
-      ) IS NOT NULL)
-      OR ($3 <> 'live' AND (
-        o.raw_payload #>> '{request,metadata,run_id}' = $2::text
-        OR o.raw_payload #>> '{request,metadata,experiment_id}' = $2::text
-      ))
+    AND COALESCE(
+      NULLIF(o.raw_payload #>> '{request,metadata,run_id}', ''),
+      NULLIF(o.raw_payload #>> '{request,metadata,experiment_id}', '')
+    ) IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1
+      FROM polymarket.btc_paper_settlement_ledger existing_ledger
+      WHERE existing_ledger.process_id = o.process_id
+        AND existing_ledger.order_id = o.order_id
+        AND existing_ledger.execution_mode = $2
     )
+  ORDER BY o.order_id
+  LIMIT 256
 ), identity_state AS (
   SELECT COALESCE(
     BOOL_OR(
@@ -736,7 +805,7 @@ WITH order_identity AS MATERIALIZED (
 ), entered AS (
   SELECT
     o.process_id,
-    CASE WHEN $3 = 'live' THEN o.order_run_id ELSE $2::uuid END AS run_id,
+    o.order_run_id AS run_id,
     o.order_id,
     o.market_id,
     o.token_id,
@@ -748,7 +817,7 @@ WITH order_identity AS MATERIALIZED (
   JOIN polymarket.fills f
     ON f.process_id = $1
    AND f.order_id = o.order_id
-   AND f.source = $3
+   AND f.source = $2
   WHERE NOT COALESCE(
     o.metadata_run_id <> o.legacy_experiment_id,
     false
@@ -788,7 +857,7 @@ WITH order_identity AS MATERIALIZED (
     filled_size, entry_notional, entry_fees, payout, net_pnl
   )
   SELECT
-    process_id, run_id, $3, order_id, market_id, token_id, fill_ids,
+    process_id, run_id, $2, order_id, market_id, token_id, fill_ids,
     official_outcome, official_winning_token_id,
     official_resolution_received_at, official_resolution_source,
     filled_size, entry_notional, entry_fees, payout,
@@ -819,10 +888,96 @@ LEFT JOIN polymarket.orders order_record
   ON order_record.process_id = ledger.process_id
  AND order_record.order_id = ledger.order_id
 WHERE ledger.process_id = $1
-  AND ledger.execution_mode = $3
-  AND ($3 = 'live' OR ledger.run_id = $2)
+  AND ledger.execution_mode = $2
   AND ledger.credit_status = 'pending'
 ORDER BY ledger.official_resolution_received_at, ledger.order_id, ledger.settlement_id
+LIMIT 256
+"#;
+
+const LOAD_SETTLEMENT_HEALTH_SQL: &str = r#"
+WITH filled AS MATERIALIZED (
+  SELECT DISTINCT
+    o.order_id,
+    o.market_id,
+    COALESCE(
+      NULLIF(o.raw_payload #>> '{request,metadata,run_id}', ''),
+      NULLIF(o.raw_payload #>> '{request,metadata,experiment_id}', '')
+    )::uuid AS run_id,
+    market.window_end,
+    market.official_outcome,
+    EXISTS (
+      SELECT 1
+      FROM market_data.polymarket_btc_five_minute_resolutions resolution
+      WHERE resolution.market_id = o.market_id
+    ) AS canonical_resolution_exists
+  FROM polymarket.orders o
+  JOIN polymarket.fills fill
+    ON fill.process_id = o.process_id
+   AND fill.order_id = o.order_id
+   AND fill.source = $3
+  JOIN polymarket.btc_interval_markets market ON market.market_id = o.market_id
+  WHERE o.process_id = $1
+    AND market.window_end <= now()
+    AND COALESCE(
+      NULLIF(o.raw_payload #>> '{request,metadata,run_id}', ''),
+      NULLIF(o.raw_payload #>> '{request,metadata,experiment_id}', '')
+    ) IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1
+      FROM polymarket.account_trades account_exit
+      WHERE account_exit.linked_order_id = o.order_id
+        AND account_exit.side = 'sell'
+        AND account_exit.applied_exit_size > 0
+    )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM polymarket.btc_paper_settlement_ledger credited_ledger
+      WHERE credited_ledger.process_id = o.process_id
+        AND credited_ledger.order_id = o.order_id
+        AND credited_ledger.execution_mode = $3
+        AND credited_ledger.credit_status = 'credited'
+    )
+), classified AS MATERIALIZED (
+  SELECT filled.*,
+    CASE
+      WHEN filled.official_outcome IS NULL AND NOT filled.canonical_resolution_exists
+        THEN 'resolution_missing'
+      WHEN filled.official_outcome IS NULL AND filled.canonical_resolution_exists
+        THEN 'projection_missing'
+      WHEN watch.market_id IS NULL THEN 'watch_missing'
+      WHEN ledger.settlement_id IS NULL THEN 'ledger_missing'
+      WHEN ledger.credit_status = 'pending' THEN 'ledger_pending'
+      ELSE 'settled'
+    END AS stage
+  FROM filled
+  LEFT JOIN polymarket.btc_official_resolution_watches watch
+    ON watch.market_id = filled.market_id
+   AND watch.status IN ('resolved','resolved_late')
+  LEFT JOIN polymarket.btc_paper_settlement_ledger ledger
+    ON ledger.process_id = $1
+   AND ledger.run_id = filled.run_id
+   AND ledger.order_id = filled.order_id
+   AND ledger.execution_mode = $3
+)
+SELECT
+  COUNT(*) FILTER (WHERE stage <> 'settled')::bigint AS unresolved_fills,
+  COALESCE(MAX(EXTRACT(EPOCH FROM (now() - window_end))) FILTER (WHERE stage <> 'settled'), 0)::double precision
+    AS oldest_unresolved_age_seconds,
+  COUNT(*) FILTER (
+    WHERE stage IN ('resolution_missing','projection_missing','watch_missing','ledger_missing')
+       OR ($3 = 'paper' AND stage = 'ledger_pending')
+  )::bigint AS actionable_stale_fills,
+  COALESCE(MAX(EXTRACT(EPOCH FROM (now() - window_end))) FILTER (
+    WHERE stage IN ('resolution_missing','projection_missing','watch_missing','ledger_missing')
+       OR ($3 = 'paper' AND stage = 'ledger_pending')
+  ), 0)::double precision AS oldest_actionable_stale_age_seconds,
+  COUNT(*) FILTER (WHERE stage = 'resolution_missing')::bigint AS resolution_missing,
+  COUNT(*) FILTER (WHERE stage = 'projection_missing')::bigint AS projection_missing,
+  COUNT(*) FILTER (WHERE stage = 'watch_missing')::bigint AS watch_missing,
+  COUNT(*) FILTER (WHERE stage = 'ledger_missing')::bigint AS ledger_missing,
+  COUNT(*) FILTER (WHERE stage = 'ledger_pending')::bigint AS ledger_pending,
+  COUNT(*) FILTER (WHERE stage <> 'settled' AND run_id <> $2)::bigint AS prior_run_unresolved
+FROM classified
 "#;
 
 const MARK_SETTLEMENT_RECOGNIZED_SQL: &str = r#"
@@ -2797,18 +2952,61 @@ impl BtcRepository {
         Ok(())
     }
 
-    /// Restores a missing durable watch only from exact process-owned fill obligations and an
-    /// already persisted canonical official resolution. This is bounded by process and run on
-    /// restart and leaves the settlement query's provenance joins unchanged.
+    /// Replays canonical durable resolution evidence for exact process-owned filled orders that
+    /// missed realtime delivery. This is bounded by process and never calls a provider.
+    pub async fn recover_process_official_resolutions(
+        &self,
+        process_id: Uuid,
+        execution_mode: BtcExecutionMode,
+    ) -> Result<u64> {
+        let rows =
+            sqlx::query_as::<_, ProcessResolutionRecoveryRow>(LOAD_PROCESS_RESOLUTION_RECOVERY_SQL)
+                .bind(process_id)
+                .bind(execution_mode.as_str())
+                .fetch_all(&self.pool)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to load canonical BTC {} resolution recovery evidence",
+                        execution_mode.as_str()
+                    )
+                })?;
+        let mut recovered = 0_u64;
+        for row in rows {
+            let persisted = self
+                .persist_official_market_resolution(
+                    &row.market_id,
+                    &row.winning_token_id,
+                    &row.winning_outcome,
+                    row.source_timestamp,
+                    &row.resolution_source,
+                    row.received_at,
+                    &row.source_payload,
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to replay canonical BTC resolution for market {}",
+                        row.market_id
+                    )
+                })?;
+            if persisted.newly_recorded {
+                recovered = recovered.saturating_add(1);
+            }
+        }
+        Ok(recovered)
+    }
+
+    /// Restores missing durable watches from exact process-owned fill obligations and persisted
+    /// official resolutions. Prior-run obligations remain eligible so run rollover cannot orphan
+    /// accounting.
     pub async fn recover_process_official_resolution_watches(
         &self,
         process_id: Uuid,
-        run_id: Uuid,
         execution_mode: BtcExecutionMode,
-    ) -> Result<()> {
-        sqlx::query(RECOVER_PROCESS_OFFICIAL_RESOLUTION_WATCHES_SQL)
+    ) -> Result<u64> {
+        let result = sqlx::query(RECOVER_PROCESS_OFFICIAL_RESOLUTION_WATCHES_SQL)
             .bind(process_id)
-            .bind(run_id)
             .bind(execution_mode.as_str())
             .execute(&self.pool)
             .await
@@ -2818,7 +3016,7 @@ impl BtcRepository {
                     execution_mode.as_str()
                 )
             })?;
-        Ok(())
+        Ok(result.rows_affected())
     }
 
     /// Materializes every newly eligible official settlement into a durable, idempotent ledger
@@ -2834,7 +3032,6 @@ impl BtcRepository {
         let (has_identity_conflict, _inserted_count) =
             sqlx::query_as::<_, (bool, i64)>(DISCOVER_PENDING_SETTLEMENTS_SQL)
                 .bind(process_id)
-                .bind(run_id)
                 .bind(execution_mode.as_str())
                 .fetch_one(&self.pool)
                 .await
@@ -2848,7 +3045,6 @@ impl BtcRepository {
 
         let records = sqlx::query_as::<_, BtcSettlementRecord>(LOAD_PENDING_SETTLEMENTS_SQL)
             .bind(process_id)
-            .bind(run_id)
             .bind(execution_mode.as_str())
             .fetch_all(&self.pool)
             .await
@@ -2872,6 +3068,26 @@ impl BtcRepository {
     ) -> Result<Vec<BtcPaperSettlementRecord>> {
         self.discover_pending_settlements(process_id, run_id, BtcExecutionMode::Paper)
             .await
+    }
+
+    pub async fn settlement_health(
+        &self,
+        process_id: Uuid,
+        run_id: Uuid,
+        execution_mode: BtcExecutionMode,
+    ) -> Result<BtcSettlementHealth> {
+        sqlx::query_as::<_, BtcSettlementHealth>(LOAD_SETTLEMENT_HEALTH_SQL)
+            .bind(process_id)
+            .bind(run_id)
+            .bind(execution_mode.as_str())
+            .fetch_one(&self.pool)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to load BTC {} settlement health",
+                    execution_mode.as_str()
+                )
+            })
     }
 
     pub async fn recognize_live_zero_payout_settlement(
@@ -4069,13 +4285,15 @@ mod tests {
         assert!(discovery.contains("bool_or("));
         assert!(discovery.contains("as has_identity_conflict"));
         assert!(discovery.contains("on f.process_id = $1"));
-        assert!(discovery.contains("and f.source = $3"));
-        assert!(discovery
-            .contains("case when $3 = 'live' then o.order_run_id else $2::uuid end as run_id"));
-        assert!(discovery.contains("$3 = 'live' and coalesce("));
+        assert!(discovery.contains("and f.source = $2"));
+        assert!(discovery.contains("o.order_run_id as run_id"));
+        assert!(!discovery.contains("$3 = 'live'"));
         assert!(discovery.contains("process_id, run_id, execution_mode"));
-        assert!(discovery.contains("process_id, run_id, $3"));
+        assert!(discovery.contains("process_id, run_id, $2"));
         assert!(discovery.contains("on conflict (run_id, order_id) do nothing"));
+        assert!(discovery.contains("existing_ledger.execution_mode = $2"));
+        assert!(discovery.contains("order by o.order_id"));
+        assert!(discovery.contains("limit 256"));
         assert!(discovery.contains("where not (select has_identity_conflict from identity_state)"));
         assert!(discovery.contains(
             "(select has_identity_conflict from identity_state) as has_identity_conflict"
@@ -4087,23 +4305,42 @@ mod tests {
         let watch_recovery = RECOVER_PROCESS_OFFICIAL_RESOLUTION_WATCHES_SQL.to_ascii_lowercase();
         assert!(watch_recovery.contains("where o.process_id = $1"));
         assert!(watch_recovery.contains("on f.process_id = $1"));
-        assert!(watch_recovery.contains("and f.source = $3"));
+        assert!(watch_recovery.contains("and f.source = $2"));
         assert!(watch_recovery.contains("m.official_outcome is not null"));
         assert!(watch_recovery.contains("m.official_winning_token_id is not null"));
         assert!(watch_recovery.contains("m.official_resolution_received_at is not null"));
         assert!(watch_recovery.contains("m.official_resolution_source is not null"));
         assert!(watch_recovery.contains("on conflict (market_id) do update"));
+        assert!(watch_recovery.contains("existing_watch.status in ('resolved','resolved_late')"));
         assert!(watch_recovery
             .contains("where btc_official_resolution_watches.status in ('pending','expired')"));
-        assert!(watch_recovery.matches("metadata,run_id").count() >= 2);
-        assert!(watch_recovery.matches("experiment_id").count() >= 2);
+        assert!(watch_recovery.contains("metadata,run_id"));
+        assert!(watch_recovery.contains("experiment_id"));
         assert!(!watch_recovery.contains("btc_paper_experiments"));
+        assert!(!watch_recovery.contains("= $2::uuid"));
 
         let pending = LOAD_PENDING_SETTLEMENTS_SQL.to_ascii_lowercase();
         assert!(pending.contains("process_id = $1"));
-        assert!(pending.contains("execution_mode = $3"));
-        assert!(pending.contains("$3 = 'live' or ledger.run_id = $2"));
+        assert!(pending.contains("execution_mode = $2"));
+        assert!(!pending.contains("ledger.run_id = $2"));
+        assert!(pending.contains("limit 256"));
         assert!(!pending.contains("experiment_id"));
+
+        let recovery = LOAD_PROCESS_RESOLUTION_RECOVERY_SQL.to_ascii_lowercase();
+        assert!(recovery.contains("market_data.polymarket_btc_five_minute_resolutions"));
+        assert!(recovery.contains("f.source = $2"));
+        assert!(recovery.contains("market.official_outcome is null"));
+        assert!(recovery.contains("limit 256"));
+
+        let health = LOAD_SETTLEMENT_HEALTH_SQL.to_ascii_lowercase();
+        assert!(health.contains("market.window_end <= now()"));
+        assert!(health.contains("'resolution_missing'"));
+        assert!(health.contains("'projection_missing'"));
+        assert!(health.contains("'watch_missing'"));
+        assert!(health.contains("'ledger_missing'"));
+        assert!(health.contains("$3 = 'paper' and stage = 'ledger_pending'"));
+        assert!(health.contains("run_id <> $2"));
+        assert!(health.contains("credited_ledger.credit_status = 'credited'"));
 
         let recognized = MARK_SETTLEMENT_RECOGNIZED_SQL.to_ascii_lowercase();
         assert!(recognized.contains("process_id = $1"));

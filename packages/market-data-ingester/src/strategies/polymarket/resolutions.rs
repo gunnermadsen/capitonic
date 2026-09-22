@@ -636,25 +636,6 @@ impl RealtimeWorkerStrategy for PolymarketBtcFiveMinuteResolutionsStrategy {
                     };
                     let result = match notice {
                         ProducerNotice::Fact(fact) => {
-                            crate::streaming::publish(
-                                STRATEGY_KEY.as_str(),
-                                fact.identity.market_id.clone(),
-                                fact.source_timestamp.unwrap_or(fact.received_at),
-                                fact.provider_available_at.unwrap_or(fact.received_at),
-                                fact.received_at,
-                                fact.payload_sha256.clone(),
-                                true,
-                                &serde_json::json!({
-                                    "market_id": fact.identity.market_id,
-                                    "condition_id": fact.identity.condition_id,
-                                    "winning_token_id": fact.winning_token_id,
-                                    "winning_outcome": fact.winning_outcome.as_str(),
-                                    "resolution_source": fact.source.as_str(),
-                                    "source_timestamp": fact.source_timestamp,
-                                    "received_at": fact.received_at,
-                                    "payload_sha256": fact.payload_sha256,
-                                }),
-                            ).await;
                             self.persist_websocket_fact(&mut state, *fact).await
                         }
                         ProducerNotice::Error(error) => Err(error),
@@ -1301,6 +1282,9 @@ impl PolymarketBtcFiveMinuteResolutionsStrategy {
         transaction.commit().await.map_err(|error| {
             database_error("polymarket_resolution_transaction_commit_failed", error)
         })?;
+        for fact in facts {
+            publish_resolution_fact(fact).await;
+        }
         if let Some(artifact) = artifact_after_commit {
             state.artifact = Some(artifact);
         }
@@ -1483,6 +1467,9 @@ impl PolymarketBtcFiveMinuteResolutionsStrategy {
                 error,
             )
         })?;
+        for fact in &facts {
+            publish_resolution_fact(fact).await;
+        }
         state.artifact = None;
         state.last_scanned_window_start = next_scan_frontier;
         let recheck_at = Instant::now() + Duration::from_secs(self.config.retry_max_seconds);
@@ -2003,6 +1990,29 @@ impl PolymarketBtcFiveMinuteResolutionsStrategy {
         );
         Ok(())
     }
+}
+
+async fn publish_resolution_fact(fact: &ResolutionFact) {
+    crate::streaming::publish(
+        STRATEGY_KEY.as_str(),
+        fact.identity.market_id.clone(),
+        fact.source_timestamp.unwrap_or(fact.received_at),
+        fact.provider_available_at.unwrap_or(fact.received_at),
+        fact.received_at,
+        fact.payload_sha256.clone(),
+        true,
+        &serde_json::json!({
+            "market_id": fact.identity.market_id,
+            "condition_id": fact.identity.condition_id,
+            "winning_token_id": fact.winning_token_id,
+            "winning_outcome": fact.winning_outcome.as_str(),
+            "resolution_source": fact.source.as_str(),
+            "source_timestamp": fact.source_timestamp,
+            "received_at": fact.received_at,
+            "payload_sha256": fact.payload_sha256,
+        }),
+    )
+    .await;
 }
 
 fn resolution_window_plan(
@@ -4007,5 +4017,46 @@ mod tests {
         assert_eq!(value["type"], "market");
         assert_eq!(value["custom_feature_enabled"], true);
         assert_eq!(value["initial_dump"], true);
+    }
+
+    #[test]
+    fn every_resolution_source_publishes_only_after_durable_commit() {
+        let source = include_str!("resolutions.rs");
+        let normal_start = source.find("async fn persist_normal_cycle").unwrap();
+        let repair_start = source.find("async fn persist_recovered_gaps").unwrap();
+        let normal = &source[normal_start..repair_start];
+        let normal_commit = normal.find("transaction.commit()").unwrap();
+        let normal_publish = normal.find("publish_resolution_fact(fact).await").unwrap();
+        assert!(normal_commit < normal_publish);
+        assert_eq!(
+            normal
+                .matches("publish_resolution_fact(fact).await")
+                .count(),
+            1
+        );
+
+        let repair_end = source[repair_start..]
+            .find("async fn finish_owned_drain")
+            .map(|offset| repair_start + offset)
+            .unwrap();
+        let repair = &source[repair_start..repair_end];
+        let repair_commit = repair.find("transaction.commit()").unwrap();
+        let repair_publish = repair.find("publish_resolution_fact(fact).await").unwrap();
+        assert!(repair_commit < repair_publish);
+        assert_eq!(
+            repair
+                .matches("publish_resolution_fact(fact).await")
+                .count(),
+            1
+        );
+
+        let websocket_notice = source
+            .split("ProducerNotice::Fact(fact) =>")
+            .nth(1)
+            .unwrap()
+            .split("ProducerNotice::Error(error)")
+            .next()
+            .unwrap();
+        assert!(!websocket_notice.contains("streaming::publish"));
     }
 }
