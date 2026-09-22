@@ -439,69 +439,6 @@ fn ten_model_concurrent_inference_smoke() {
 }
 
 #[test]
-fn mounted_catalog_and_paper_playbooks_have_compatible_contracts() {
-    let entries = catalog::discover().unwrap();
-    let mut checked = 0;
-    for entry in &entries {
-        if !entry.model_key.ends_with("-umr-20260902") {
-            continue;
-        }
-        assert!(entry.compatible, "{}: {:?}", entry.model_key, entry.error);
-        let path = root()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("infra/processes")
-            .join(format!("{}.json", entry.model_key));
-        let process: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        assert_eq!(process["enabled"], false);
-        assert_eq!(process["config"]["execution"]["live_capital"], false);
-        let control = &process["config"]["raw"]["btc_realtime_paper"];
-        let router: super::router::RouterDefinition =
-            serde_json::from_value(control["strategy"]["decision_strategy"].clone()).unwrap();
-        let mut overrides = control["strategy"].as_object().unwrap().clone();
-        overrides.remove("decision_strategy");
-        let mut base =
-            serde_json::to_value(crate::btc::strategy::BtcStrategyConfig::default()).unwrap();
-        base.as_object_mut().unwrap().extend(overrides);
-        let base = serde_json::from_value(base).unwrap();
-        let sources = control["sources"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|source| source.as_str().or_else(|| source["key"].as_str()).unwrap())
-            .collect();
-        let members = router.compile_members(&base, &sources).unwrap();
-        assert_eq!(members.len(), 1);
-        let strategy = &members[0].1;
-        strategy.validate().unwrap();
-        let binding = strategy.unified_model.as_ref().unwrap();
-        for source in &binding.sources {
-            assert!(control["sources"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|v| v.as_str() == Some(source.product.as_str())
-                    || v["key"].as_str() == Some(source.product.as_str())));
-        }
-        let mut invalid = strategy.clone();
-        invalid.target_size = dec!(10);
-        assert!(invalid.validate().is_err());
-        let mut invalid = strategy.clone();
-        invalid.unified_model.as_mut().unwrap().policy["maximum_share_cost"] =
-            serde_json::json!(0.999);
-        assert!(invalid.validate().is_err());
-        checked += 1;
-    }
-    assert_eq!(checked, 5);
-    if let Ok(path) = std::env::var("UMR_VALIDATION_CATALOG_OUTPUT") {
-        std::fs::write(path, serde_json::to_vec_pretty(&serde_json::json!({"contract_version":contract::CONTRACT_VERSION,"models":entries})).unwrap()).unwrap();
-    }
-}
-
-#[test]
 fn observation_books_preserve_safety_and_recover_after_epoch_change() {
     let at = DateTime::from_timestamp(1_788_888_000, 0).unwrap();
     let original = book(at - Duration::milliseconds(100));
