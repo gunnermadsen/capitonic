@@ -1711,6 +1711,14 @@
               {
                 "id": "decimals",
                 "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 300
               }
             ]
           },
@@ -3296,6 +3304,6 @@
   "timezone": "browser",
   "title": "Trading, PNL & Market Metrics",
   "uid": "polymarket-bot",
-  "version": 39,
+  "version": 40,
   "weekStart": ""
 }
