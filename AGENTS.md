@@ -1,6 +1,10 @@
 # Implementation
-- Make the smallest surgical change that satisfies the requested implementation. Do not expand the scope, redesign adjacent systems, or add unrelated functionality.
-- Extend the existing architecture and execution paths. Do not create parallel subsystems, duplicate features, competing abstractions, replacement pipelines, or alternate implementations unless explicitly requested.
+- The user’s requested outcome and any agreed implementation plan are the authoritative scope. If no separate plan exists, the request itself defines the implementation boundary.
+- Execute every in-scope requirement completely and verify the requested outcome. Do not add optional improvements, cleanup, redesigns, or unrelated fixes.
+- Before implementing functionality, identify the existing module, contract, registry, persistence path, instrumentation, or execution path that owns the capability. Reuse its supported extension point instead of creating another implementation.
+- Do not delete, disable, replace, rewrite, or modify existing systems, behavior, interfaces, or data outside the defined scope, even when doing so would simplify the implementation.
+- If completing the work requires a change outside the defined scope, stop before making that change, explain why it is required, and obtain explicit user authorization to amend the scope.
+- If an existing system cannot satisfy the request, stop and explain the specific incompatibility. Do not create a parallel or replacement system without explicit user authorization.
 - Use `trading_processes.process_id` as the canonical identity for trading-process ownership and scoping.
 
 # North Star
