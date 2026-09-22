@@ -372,6 +372,10 @@ impl ExecutionVenue for BtcLiveExecutionAdapter {
         true
     }
 
+    fn reconciliation_error_is_transient(&self, error: &anyhow::Error) -> bool {
+        self.delegate.reconciliation_error_is_transient(error)
+    }
+
     async fn find_existing_order(&self, request: &OrderRequest) -> Result<Option<OrderRecord>> {
         self.delegate.find_existing_order(request).await
     }

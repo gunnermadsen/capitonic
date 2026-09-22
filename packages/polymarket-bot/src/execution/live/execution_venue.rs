@@ -6,6 +6,10 @@ impl ExecutionVenue for LiveVenue {
         true
     }
 
+    fn reconciliation_error_is_transient(&self, error: &anyhow::Error) -> bool {
+        is_transient_failure(error)
+    }
+
     async fn find_existing_order(&self, request: &OrderRequest) -> Result<Option<OrderRecord>> {
         self.validate_request_process(request)?;
         let Some(store) = self.store.as_ref() else {
@@ -389,35 +393,70 @@ impl ExecutionVenue for LiveVenue {
         let reconciliation_safety_generation = {
             let global = self.global_entry_gate.lock().await;
             if global.safety_generation == u64::MAX {
-                bail!("live safety generation is exhausted; reconciliation remains fail-closed");
+                let error = anyhow::anyhow!(
+                    "live safety generation is exhausted; reconciliation remains fail-closed"
+                );
+                if let Some(metrics) = &self.reconciliation_metrics {
+                    metrics.record_failure(ReconciliationStage::SafetyGeneration, &error);
+                }
+                return Err(error);
             }
             global.safety_generation
         };
-        let store = self.store()?;
+        let store = match at_stage(ReconciliationStage::Persistence, self.store()) {
+            Ok(store) => store,
+            Err(failure) => {
+                if let Some(metrics) = &self.reconciliation_metrics {
+                    metrics.record_failure(failure.stage, &failure.error);
+                }
+                return Err(failure.error);
+            }
+        };
         let reconcile_result = async {
-            let mut fills_backfilled = self
-                .backfill_fills_from_live_events()
-                .await
-                .context("failed to backfill live user websocket fills")?;
-            let open_orders = self.get_open_orders().await?;
+            let mut fills_backfilled = at_stage(
+                ReconciliationStage::UserEventBackfill,
+                self.backfill_fills_from_live_events()
+                    .await
+                    .context("failed to backfill live user websocket fills"),
+            )?;
+            let open_orders = at_stage(
+                ReconciliationStage::OpenOrders,
+                self.get_open_orders().await,
+            )?;
             let mut local_nonterminal = match self.bound_process_id {
-                Some(process_id) => self.bounded_nonterminal_orders(process_id).await?,
+                Some(process_id) => at_stage(
+                    ReconciliationStage::LocalOrders,
+                    self.bounded_nonterminal_orders(process_id).await,
+                )?,
                 None => Vec::new(),
             };
             let trades = if self.bound_process_id.is_some() {
-                let trade_window_start =
-                    reconciliation_trade_window_start(&local_nonterminal, checked_at)?;
+                let trade_window_start = at_stage(
+                    ReconciliationStage::LocalOrders,
+                    reconciliation_trade_window_start(&local_nonterminal, checked_at),
+                )?;
                 let trades_request = TradesRequest::builder()
                     .after(trade_window_start.timestamp())
                     .before(checked_at.timestamp())
                     .build();
-                self.all_trade_responses(&trades_request).await?
+                at_stage(
+                    ReconciliationStage::Trades,
+                    self.all_trade_responses(&trades_request).await,
+                )?
             } else {
                 Vec::new()
             };
-            let balances = self.get_balances().await?;
+            let balances = at_stage(
+                ReconciliationStage::Balances,
+                self.get_balances().await,
+            )?;
             if balances.is_empty() {
-                bail!("Polymarket CLOB balance reconciliation returned no assets");
+                return at_stage(
+                    ReconciliationStage::Balances,
+                    Err(anyhow::anyhow!(
+                        "Polymarket CLOB balance reconciliation returned no assets"
+                    )),
+                );
             }
             let owned_orders = if self.bound_process_id.is_some() {
                 let mut venue_order_ids = open_orders
@@ -425,19 +464,28 @@ impl ExecutionVenue for LiveVenue {
                     .map(|order| order.order_id.clone())
                     .collect::<Vec<_>>();
                 for trade in &trades {
-                    let candidate_count = trade
-                        .maker_orders
-                        .len()
-                        .checked_add(1)
-                        .context("Polymarket CLOB trade order identity count overflow")?;
-                    let total_candidate_count = venue_order_ids
-                        .len()
-                        .checked_add(candidate_count)
-                        .context("Polymarket CLOB reconciliation order identity overflow")?;
+                    let candidate_count = at_stage(
+                        ReconciliationStage::OrderOwnership,
+                        trade
+                            .maker_orders
+                            .len()
+                            .checked_add(1)
+                            .context("Polymarket CLOB trade order identity count overflow"),
+                    )?;
+                    let total_candidate_count = at_stage(
+                        ReconciliationStage::OrderOwnership,
+                        venue_order_ids
+                            .len()
+                            .checked_add(candidate_count)
+                            .context("Polymarket CLOB reconciliation order identity overflow"),
+                    )?;
                     if total_candidate_count > MAX_CLOB_RECONCILIATION_ORDER_IDS {
-                        bail!(
-                            "Polymarket CLOB reconciliation exceeds the bounded {}-order identity window",
-                            MAX_CLOB_RECONCILIATION_ORDER_IDS
+                        return at_stage(
+                            ReconciliationStage::OrderOwnership,
+                            Err(anyhow::anyhow!(
+                                "Polymarket CLOB reconciliation exceeds the bounded {}-order identity window",
+                                MAX_CLOB_RECONCILIATION_ORDER_IDS
+                            )),
                         );
                     }
                     venue_order_ids.push(trade.taker_order_id.clone());
@@ -448,38 +496,54 @@ impl ExecutionVenue for LiveVenue {
                             .map(|maker_order| maker_order.order_id.clone()),
                     );
                 }
-                self.bound_account_venue_order_ids(
-                    &store,
-                    self.bound_account_ref()
-                        .context("live reconciliation requires account_ref")?,
-                    venue_order_ids.iter().map(String::as_str),
-                )
-                .await?
+                at_stage(
+                    ReconciliationStage::OrderOwnership,
+                    self.bound_account_venue_order_ids(
+                        &store,
+                        at_stage(
+                            ReconciliationStage::OrderOwnership,
+                            self.bound_account_ref()
+                                .context("live reconciliation requires account_ref"),
+                        )?,
+                        venue_order_ids.iter().map(String::as_str),
+                    )
+                    .await,
+                )?
             } else {
                 HashMap::new()
             };
             if let Some(process_id) = self.bound_process_id {
-                let rest_fills = persist_rest_fill_backfill(
-                    &store,
-                    process_id,
-                    &local_nonterminal,
-                    &owned_orders,
-                    &trades,
-                    checked_at,
-                )
-                .await
-                .context("failed to backfill authenticated CLOB REST fills")?;
-                fills_backfilled = fills_backfilled
-                    .checked_add(rest_fills.len())
-                    .context("live reconciliation fill backfill count overflow")?;
+                let rest_fills = at_stage(
+                    ReconciliationStage::RestFillBackfill,
+                    persist_rest_fill_backfill(
+                        &store,
+                        process_id,
+                        &local_nonterminal,
+                        &owned_orders,
+                        &trades,
+                        checked_at,
+                    )
+                    .await
+                    .context("failed to backfill authenticated CLOB REST fills"),
+                )?;
+                fills_backfilled = at_stage(
+                    ReconciliationStage::RestFillBackfill,
+                    fills_backfilled
+                        .checked_add(rest_fills.len())
+                        .context("live reconciliation fill backfill count overflow"),
+                )?;
                 // Reconciliation readiness must be derived from the state after REST evidence is
                 // durable and cumulative fill progress has terminalized fully filled orders.
-                local_nonterminal = self.bounded_nonterminal_orders(process_id).await?;
+                local_nonterminal = at_stage(
+                    ReconciliationStage::LocalOrders,
+                    self.bounded_nonterminal_orders(process_id).await,
+                )?;
             }
             // Position ownership is reconstructed from persisted live fills, so reconcile the
             // wallet only after authenticated REST evidence has been backfilled durably.
-            let account_reconcile = self
-                .run_account_reconcile(AccountReconcileRequest {
+            let account_reconcile = at_stage(
+                ReconciliationStage::AccountReconciliation,
+                self.run_account_reconcile(AccountReconcileRequest {
                     account_address: None,
                     lookback_hours: Some(1),
                     process_id: self.bound_process_id,
@@ -490,7 +554,8 @@ impl ExecutionVenue for LiveVenue {
                     source: Some("poll".to_string()),
                 })
                 .await
-                .context("live account reconciliation polling backup failed")?;
+                .context("live account reconciliation polling backup failed"),
+            )?;
             let owned_venue_order_ids = owned_orders
                 .keys()
                 .map(String::as_str)
@@ -535,9 +600,14 @@ impl ExecutionVenue for LiveVenue {
             if self.global_entry_gate.lock().await.safety_generation
                 != reconciliation_safety_generation
             {
-                bail!("live safety generation changed during reconciliation");
+                return at_stage(
+                    ReconciliationStage::SafetyGeneration,
+                    Err(anyhow::anyhow!(
+                        "live safety generation changed during reconciliation"
+                    )),
+                );
             }
-            Ok::<_, anyhow::Error>((
+            Ok::<_, StagedReconciliationError>((
                 fills_backfilled,
                 account_reconcile,
                 open_orders,
@@ -559,7 +629,7 @@ impl ExecutionVenue for LiveVenue {
             foreign_wallet_trades,
         ) = match reconcile_result {
             Ok(result) => result,
-            Err(error) => {
+            Err(failure) => {
                 if let Err(record_error) = store
                     .insert_live_reconciliation_run(
                         self.bound_process_id,
@@ -573,7 +643,7 @@ impl ExecutionVenue for LiveVenue {
                         1,
                         json!({
                             "process_id": self.bound_process_id,
-                            "error": error.to_string(),
+                            "error": failure.error.to_string(),
                             "checked_at": checked_at,
                         }),
                     )
@@ -581,11 +651,14 @@ impl ExecutionVenue for LiveVenue {
                 {
                     warn!(
                         error = %record_error,
-                        reconciliation_error = %error,
+                        reconciliation_error = %failure.error,
                         "failed to persist failed live reconciliation run"
                     );
                 }
-                return Err(error);
+                if let Some(metrics) = &self.reconciliation_metrics {
+                    metrics.record_failure(failure.stage, &failure.error);
+                }
+                return Err(failure.error);
             }
         };
 
@@ -622,6 +695,9 @@ impl ExecutionVenue for LiveVenue {
             )
             .await
         {
+            if let Some(metrics) = &self.reconciliation_metrics {
+                metrics.record_failure(ReconciliationStage::Persistence, &error);
+            }
             return Err(error);
         }
         {
@@ -649,8 +725,16 @@ impl ExecutionVenue for LiveVenue {
                 && global.safety_generation != reconciliation_safety_generation
             {
                 state.idempotency_clean = false;
-                bail!("live safety generation changed before reconciliation commit");
+                let error =
+                    anyhow::anyhow!("live safety generation changed before reconciliation commit");
+                if let Some(metrics) = &self.reconciliation_metrics {
+                    metrics.record_failure(ReconciliationStage::SafetyGeneration, &error);
+                }
+                return Err(error);
             }
+        }
+        if let Some(metrics) = &self.reconciliation_metrics {
+            metrics.record_report(&report);
         }
         Ok(report)
     }
@@ -714,6 +798,14 @@ impl ExecutionVenue for LiveVenue {
         });
         if state.reconciliation_error.is_some() {
             state.reconciled_safety_generation = None;
+        }
+        if let Some(metrics) = &self.reconciliation_metrics {
+            metrics.set_entry_safe(
+                state.reconciliation_error.is_none()
+                    && state.idempotency_clean
+                    && state.unresolved_live_order_count == 0
+                    && state.process_accounting_entry_safe,
+            );
         }
         Ok(())
     }

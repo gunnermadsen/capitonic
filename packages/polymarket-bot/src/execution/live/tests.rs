@@ -431,9 +431,10 @@ mod tests {
 
     #[tokio::test]
     async fn reconciliation_failure_gate_recovers_without_mutating_manual_authorization() {
+        let process_id = Uuid::new_v4();
         let venue = LiveVenue::new_for_test(live_config())
             .unwrap()
-            .bind_process(Uuid::new_v4(), &live_execution())
+            .bind_process(process_id, &live_execution())
             .unwrap();
         {
             let mut state = venue.readiness_state.lock().await;
@@ -481,6 +482,51 @@ mod tests {
             venue.readiness_state.lock().await.pending_settlement_count,
             1
         );
+        assert!(prometheus_metrics().contains(&format!(
+            "polymarket_live_reconciliation_entry_safe{{process_id=\"{process_id}\"}} 1"
+        )));
+    }
+
+    #[tokio::test]
+    async fn transient_reconciliation_failure_preserves_current_entry_gate() {
+        let venue = LiveVenue::new_for_test(live_config())
+            .unwrap()
+            .bind_process(Uuid::new_v4(), &live_execution())
+            .unwrap();
+        {
+            let mut state = venue.readiness_state.lock().await;
+            state.last_rest_reconcile_at = Some(Utc::now());
+            state.idempotency_clean = true;
+            state.unresolved_live_order_count = 0;
+            state.manual_entries_enabled = true;
+            state.manual_entries_reason = None;
+            state.process_accounting_proven = true;
+            state.process_accounting_entry_safe = true;
+            state.process_accounting_status = "proven".to_string();
+        }
+        {
+            let mut global = venue.global_entry_gate.lock().await;
+            global.halted = false;
+            global.reason = "configured_resume_authorization".to_string();
+        }
+        venue
+            .update_live_reconciliation_health(0, None)
+            .await
+            .unwrap();
+
+        let failure = at_stage(
+            ReconciliationStage::OpenOrders,
+            Err::<(), _>(anyhow::Error::new(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "temporary venue timeout",
+            ))),
+        )
+        .unwrap_err();
+        assert!(venue.reconciliation_error_is_transient(&failure.error));
+
+        let status = venue.live_status().await.unwrap();
+        assert!(status.entries_enabled);
+        assert_eq!(status.reason, None);
     }
 
     #[tokio::test]

@@ -25,6 +25,7 @@ impl LiveVenue {
             global_entry_gate: Arc::new(Mutex::new(GlobalLiveEntryGate::fail_closed())),
             submit_guard: Arc::new(Mutex::new(())),
             reconcile_guard: Arc::new(Mutex::new(())),
+            reconciliation_metrics: None,
         };
         venue.spawn_user_ws_task_if_enabled();
         Ok(venue)
@@ -50,6 +51,7 @@ impl LiveVenue {
             global_entry_gate: Arc::new(Mutex::new(GlobalLiveEntryGate::fail_closed())),
             submit_guard: Arc::new(Mutex::new(())),
             reconcile_guard: Arc::new(Mutex::new(())),
+            reconciliation_metrics: None,
         })
     }
 
@@ -90,6 +92,7 @@ impl LiveVenue {
             global_entry_gate: self.global_entry_gate.clone(),
             submit_guard: self.submit_guard.clone(),
             reconcile_guard: self.reconcile_guard.clone(),
+            reconciliation_metrics: Some(LiveReconciliationMetrics::new(process_id)),
         })
     }
 
