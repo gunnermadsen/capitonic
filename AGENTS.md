@@ -72,7 +72,7 @@ Think of Capitonic as a vision to generate income through systems with automatio
 6. Push `development`, provenance tags, golden tags, and exact verified image manifests. Verify the expected GitHub Actions results; an independently rebuilt CI image does not inherit golden status.
 7. Remove merged worktrees under Worktree Lifecycle. Retain the current-date integration branch when it matches `development`; otherwise create it from `development`.
 
-Migration creation and application follow Database Changes and Migrations. The golden image workflow authorizes neither unless its approved plan explicitly includes them.
+Migration creation and initial feature or defect validation follow Database Changes and Migrations. The golden image workflow authorizes rebuilding and deploying `db-migrate` when its pending migrations exactly match the committed, approved, and previously validated set. Stop for any new, altered, unvalidated, or unexpected migration.
 
 ## Image and Golden Identity
 
@@ -269,8 +269,8 @@ done
 
 ## Migration Authorization and Execution
 
-- Before creating, editing, or applying a migration, present a plan identifying the migration, exact database effects, affected objects, data scope, rollback behavior, and expected locking or operational risk.
-- User approval of that plan, including an instruction such as `execute the plan`, authorizes only the creation, editing, and application actions explicitly stated in it. Creating a migration does not authorize applying it unless the same approved plan explicitly includes application.
+- Before creating or first applying a migration on its feature or defect branch, present a plan identifying its exact database effects, affected objects, data scope, rollback behavior, and expected locking or operational risk.
+- Approval of that plan, including `execute the plan`, authorizes creating the migration, deploying it for branch validation, and repeating that validation as needed without renewed approval, provided the migration and stated effects have not changed.
 - Before application, confirm that the migration files are committed and that the complete pending migration list exactly matches the approved set. Stop if an approved migration was already applied or any additional migration is pending.
 - Apply approved migrations only by recreating the `db-migrate` container from the project Compose configuration:
 
