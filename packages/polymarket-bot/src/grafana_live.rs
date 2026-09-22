@@ -332,7 +332,6 @@ impl CountdownSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarketPathPoint {
     pub observed_at: DateTime<Utc>,
-    pub market_seconds_remaining: i64,
     pub price: Decimal,
 }
 
@@ -344,43 +343,12 @@ pub struct MarketPathSnapshot {
     pub points: Vec<MarketPathPoint>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MarketPathWindow {
-    pub market_id: String,
-    pub window_start: DateTime<Utc>,
-    pub window_end: DateTime<Utc>,
-}
-
-impl MarketPathWindow {
-    pub fn current(observed_at: DateTime<Utc>) -> Self {
-        let window_start = crate::btc::market::aligned_window_start(observed_at);
-        Self {
-            // The visual is a wall-clock-aligned realtime BTC path. Its identity and
-            // availability must not depend on contract discovery or trading state.
-            market_id: format!("btc-realtime-{}", window_start.timestamp()),
-            window_start,
-            window_end: window_start + chrono::Duration::seconds(300),
-        }
-    }
-}
-
-impl From<BtcIntervalMarket> for MarketPathWindow {
-    fn from(market: BtcIntervalMarket) -> Self {
-        Self {
-            market_id: market.market_id,
-            window_start: market.window_start,
-            window_end: market.window_end,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 struct RetainedMarketPath {
     market_id: String,
     window_start: DateTime<Utc>,
     window_end: DateTime<Utc>,
     price_to_beat: Option<Decimal>,
-    price_to_beat_exact: bool,
     points: BTreeMap<DateTime<Utc>, Decimal>,
 }
 
@@ -393,7 +361,7 @@ impl MarketPathPublicationState {
     pub fn observe(
         &mut self,
         observed_at: DateTime<Utc>,
-        observation: Option<(MarketPathWindow, Vec<ChainlinkTwap60Point>)>,
+        observation: Option<(BtcIntervalMarket, Vec<ChainlinkTwap60Point>)>,
     ) -> Option<MarketPathSnapshot> {
         if let Some((market, points)) = observation {
             let rollover = self
@@ -406,7 +374,6 @@ impl MarketPathPublicationState {
                     window_start: market.window_start,
                     window_end: market.window_end,
                     price_to_beat: None,
-                    price_to_beat_exact: false,
                     points: BTreeMap::new(),
                 });
             }
@@ -421,24 +388,15 @@ impl MarketPathPublicationState {
                     }
                     retained.points.insert(point.source_timestamp, point.price);
                 }
-                if !retained.price_to_beat_exact {
-                    if let Some((_, price)) = retained
+                if retained.price_to_beat.is_none() {
+                    retained.price_to_beat = retained
                         .points
                         .range(
                             retained.window_start
                                 ..=retained.window_start + chrono::Duration::seconds(5),
                         )
                         .next()
-                    {
-                        retained.price_to_beat = Some(*price);
-                        retained.price_to_beat_exact = true;
-                    } else if retained.price_to_beat.is_none() {
-                        // A mid-window restart must not blank the entire realtime visual.
-                        // Use the earliest available current-window TWAP until an exact
-                        // opening-boundary sample is available.
-                        retained.price_to_beat =
-                            retained.points.first_key_value().map(|(_, price)| *price);
-                    }
+                        .map(|(_, price)| *price);
                 }
             }
         }
@@ -460,11 +418,6 @@ impl MarketPathPublicationState {
                 .iter()
                 .map(|(observed_at, price)| MarketPathPoint {
                     observed_at: *observed_at,
-                    market_seconds_remaining: retained
-                        .window_end
-                        .signed_duration_since(*observed_at)
-                        .num_seconds()
-                        .clamp(0, 300),
                     price: *price,
                 })
                 .collect(),
@@ -488,11 +441,6 @@ impl MarketPathSnapshot {
             })
             .map(|point| MarketPathPoint {
                 observed_at: point.source_timestamp,
-                market_seconds_remaining: market
-                    .window_end
-                    .signed_duration_since(point.source_timestamp)
-                    .num_seconds()
-                    .clamp(0, 300),
                 price: point.price,
             })
             .collect::<Vec<_>>();
@@ -516,28 +464,16 @@ impl MarketPathSnapshot {
         }
         let price_to_beat = self.price_to_beat?;
         let market_schema_field = format!("market_{:x}", Sha256::digest(self.market_id.as_bytes()));
-        let snapshot_schema_field = format!("snapshot_{}", self.observed_at.timestamp_millis());
 
-        let mut body = String::with_capacity(self.points.len().saturating_mul(160));
-        // Remaining time decreases as wall-clock time advances. Emit the retained
-        // path newest-to-oldest so Grafana Trend receives an ascending numeric x-axis
-        // and paints the active market from the right edge toward the left.
-        for point in self.points.iter().rev() {
-            // Grafana Live orders measurement rows by their transport timestamp before
-            // the Trend panel validates its numeric x field. Mirror the remaining-time
-            // coordinate into a bounded synthetic timestamp so the resulting frame stays
-            // ascending without exposing this transport clock as the visual x-axis.
-            let transport_epoch_nanos = (self.observed_at
-                - chrono::Duration::seconds(300 - point.market_seconds_remaining))
-            .timestamp_nanos_opt()
-            .expect("a bounded current UTC timestamp is representable in nanoseconds");
-            // Grafana receives a wall-clock timestamp because Live Measurements requires one,
-            // but the realtime market panel must plot this numeric market-relative coordinate.
-            // Never bind that panel's x-axis to Grafana's dashboard/global time range.
+        let mut body = String::with_capacity(self.points.len().saturating_mul(128));
+        for point in &self.points {
+            let point_epoch_nanos = point
+                .observed_at
+                .timestamp_nanos_opt()
+                .expect("a current UTC timestamp is representable in nanoseconds");
             writeln!(
                 body,
-                "{MARKET_PATH_MEASUREMENT} market_seconds_remaining={}i,twap_price={},price_to_beat={price_to_beat},{market_schema_field}=1i,{snapshot_schema_field}=1i {transport_epoch_nanos}",
-                point.market_seconds_remaining,
+                "{MARKET_PATH_MEASUREMENT} twap_price={},price_to_beat={price_to_beat},{market_schema_field}=1i {point_epoch_nanos}",
                 point.price,
             )
             .expect("writing an Influx line into a String cannot fail");
@@ -817,10 +753,8 @@ mod tests {
 
         assert_eq!(snapshot.points.len(), 2);
         assert_eq!(snapshot.points[0].observed_at, market.window_start);
-        assert_eq!(snapshot.points[0].market_seconds_remaining, 246);
         assert_eq!(snapshot.points[0].price, dec!(100.5));
         assert_eq!(snapshot.points[1].observed_at, current.source_timestamp);
-        assert_eq!(snapshot.points[1].market_seconds_remaining, 245);
         assert_eq!(snapshot.points[1].price, dec!(100));
     }
 
@@ -838,11 +772,8 @@ mod tests {
         );
         let body = snapshot.influx_body().expect("market path has points");
 
-        assert!(body.starts_with(
-            "btc_market_path market_seconds_remaining=245i,twap_price=100,price_to_beat=100.5"
-        ));
+        assert!(body.starts_with("btc_market_path twap_price=100.5,price_to_beat=100.5"));
         let expected_market_field = format!("market_{:x}=1i", Sha256::digest(b"one"));
-        let expected_snapshot_field = format!("snapshot_{}=1i", now.timestamp_millis());
         assert!(body
             .lines()
             .all(|line| line.contains(&expected_market_field)));
@@ -853,48 +784,17 @@ mod tests {
                         .split_once(' ')
                         .is_some_and(|(fields, _)| {
                             fields.split(',').all(|field| {
-                                field.starts_with("market_seconds_remaining=")
-                                    || field.starts_with("twap_price=")
+                                field.starts_with("twap_price=")
                                     || field.starts_with("price_to_beat=")
                                     || field == expected_market_field
-                                    || field == expected_snapshot_field
                             })
                         })
                 })
         }));
-        assert!(body
-            .lines()
-            .nth(1)
-            .is_some_and(|line| line.contains("market_seconds_remaining=246i")));
-        let transport_timestamps = body
-            .lines()
-            .map(|line| line.rsplit_once(' ').unwrap().1.parse::<i64>().unwrap())
-            .collect::<Vec<_>>();
-        assert!(transport_timestamps
-            .windows(2)
-            .all(|pair| pair[0] < pair[1]));
     }
 
     #[test]
-    fn market_path_remaining_coordinate_is_bounded_to_the_five_minute_market() {
-        let now = Utc.timestamp_opt(1_800_000_100, 0).unwrap();
-        let mut market = market("one", now);
-        market.window_end = market.window_start + ChronoDuration::seconds(300);
-        let snapshot = MarketPathSnapshot::resolve(
-            market.window_end,
-            &market,
-            [
-                twap_point(market.window_start, dec!(100.5)),
-                twap_point(market.window_end, dec!(101)),
-            ],
-        );
-
-        assert_eq!(snapshot.points[0].market_seconds_remaining, 300);
-        assert_eq!(snapshot.points[1].market_seconds_remaining, 0);
-    }
-
-    #[test]
-    fn market_path_schema_changes_for_each_complete_snapshot() {
+    fn market_path_schema_changes_only_when_the_market_changes() {
         let now = Utc.timestamp_opt(1_800_000_100, 0).unwrap();
         let first_market = market("one", now);
         let second_market = market("two", now);
@@ -931,10 +831,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
-        // Grafana Live appends packets with an unchanged schema. Each publication
-        // contains the complete current-window path, so a snapshot marker forces a
-        // full-frame replacement instead of appending overlapping x coordinates.
-        assert_ne!(schema(&first), schema(&repeated));
+        assert_eq!(schema(&first), schema(&repeated));
         assert_ne!(schema(&first), schema(&successor));
     }
 
@@ -965,27 +862,6 @@ mod tests {
     }
 
     #[test]
-    fn publication_state_uses_earliest_current_twap_after_mid_window_restart() {
-        let now = Utc.timestamp_opt(1_800_000_100, 0).unwrap();
-        let market = market("one", now);
-        let first_available = market.window_start + ChronoDuration::seconds(42);
-        let mut state = MarketPathPublicationState::default();
-
-        let snapshot = state
-            .observe(
-                first_available,
-                Some((
-                    market.into(),
-                    vec![twap_point(first_available, dec!(100.75))],
-                )),
-            )
-            .unwrap();
-
-        assert_eq!(snapshot.price_to_beat, Some(dec!(100.75)));
-        assert!(snapshot.influx_body().is_some());
-    }
-
-    #[test]
     fn publication_state_retains_opening_target_after_more_than_six_hundred_updates() {
         let now = Utc.timestamp_opt(1_800_000_100, 0).unwrap();
         let market = market("one", now);
@@ -1008,12 +884,12 @@ mod tests {
         let mut state = MarketPathPublicationState::default();
         state.observe(
             market.window_start + ChronoDuration::seconds(60),
-            Some((market.clone().into(), first_batch)),
+            Some((market.clone(), first_batch)),
         );
         let snapshot = state
             .observe(
                 market.window_start + ChronoDuration::seconds(120),
-                Some((market.clone().into(), second_batch)),
+                Some((market.clone(), second_batch)),
             )
             .unwrap();
 
@@ -1030,7 +906,7 @@ mod tests {
         state.observe(
             market.window_start + ChronoDuration::seconds(1),
             Some((
-                market.clone().into(),
+                market.clone(),
                 vec![twap_point(market.window_start, dec!(100.5))],
             )),
         );
@@ -1042,7 +918,7 @@ mod tests {
         let updated = state
             .observe(
                 market.window_start + ChronoDuration::seconds(2),
-                Some((market.clone().into(), vec![changed_opening])),
+                Some((market.clone(), vec![changed_opening])),
             )
             .unwrap();
         let at_close = state.observe(market.window_end, None).unwrap();
@@ -1063,7 +939,7 @@ mod tests {
         state.observe(
             first.window_start,
             Some((
-                first.clone().into(),
+                first.clone(),
                 vec![twap_point(first.window_start, dec!(100.5))],
             )),
         );
@@ -1071,7 +947,7 @@ mod tests {
             .observe(
                 second.window_start,
                 Some((
-                    second.clone().into(),
+                    second.clone(),
                     vec![twap_point(second.window_start, dec!(102))],
                 )),
             )

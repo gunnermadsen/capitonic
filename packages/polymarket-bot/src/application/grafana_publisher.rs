@@ -45,9 +45,7 @@ pub(super) async fn run_grafana_live(
                 }
 
                 let observed_at = Utc::now();
-                let market_path_observation = manager
-                    .grafana_market_path_observation(observed_at)
-                    .await;
+                let market_path_observation = manager.grafana_market_path_observation().await;
                 let market_path_result = match market_path_state
                     .observe(observed_at, market_path_observation)
                 {

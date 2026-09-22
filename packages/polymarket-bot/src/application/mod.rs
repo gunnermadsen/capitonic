@@ -35,8 +35,8 @@ use polymarket_bot::{
         LiveVenueStatus, LiveWalletAddressDiagnostics,
     },
     grafana_live::{
-        CountdownSnapshot, EntryPermission, GrafanaLivePublisher, MarketPathWindow,
-        ProcessEntryPermission, TradingEntryStatusSnapshot,
+        CountdownSnapshot, EntryPermission, GrafanaLivePublisher, ProcessEntryPermission,
+        TradingEntryStatusSnapshot,
     },
     http as control_http,
     http::{
