@@ -1639,7 +1639,7 @@
         "type": "grafana",
         "uid": "grafana"
       },
-      "description": "Global Chainlink BTC/USD 60-second TWAP path for only the active five-minute Polymarket window, with the first boundary TWAP shown as Price to Beat. The x-axis is the numeric 0-300 seconds-remaining coordinate within the active market, never a Grafana timestamp; the live path paints from the right edge toward the left. This is a hard boundary: do not convert this panel back to a time-series visualization or bind it to dashboard/global time filters. The bounded current-market path is resent every second so a refreshed browser reconstructs the elapsed window and the completed market is replaced at rollover. This panel is independent of trading-process, PnL, and dashboard time filters.",
+      "description": "Global Chainlink BTC/USD 60-second TWAP path for only the active five-minute Polymarket window, with the first boundary TWAP shown as Price to Beat. The bounded current-market path is resent every second so a refreshed browser reconstructs the elapsed window and the completed market is replaced at rollover. This panel is independent of trading-process and PnL filters.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1694,34 +1694,6 @@
           "unit": "prefix:$"
         },
         "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "market_seconds_remaining"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Market remaining"
-              },
-              {
-                "id": "unit",
-                "value": "s"
-              },
-              {
-                "id": "decimals",
-                "value": 0
-              },
-              {
-                "id": "min",
-                "value": 0
-              },
-              {
-                "id": "max",
-                "value": 300
-              }
-            ]
-          },
           {
             "matcher": {
               "id": "byName",
@@ -1782,6 +1754,7 @@
         "x": 3,
         "y": 1
       },
+      "hideTimeOverride": true,
       "id": 27,
       "options": {
         "legend": {
@@ -1796,8 +1769,7 @@
           "hideZeros": false,
           "mode": "multi",
           "sort": "none"
-        },
-        "xField": "market_seconds_remaining"
+        }
       },
       "pluginVersion": "12.4.2",
       "targets": [
@@ -1811,7 +1783,6 @@
           "filter": {
             "fields": [
               "time",
-              "market_seconds_remaining",
               "twap_price",
               "price_to_beat"
             ]
@@ -1820,8 +1791,9 @@
           "refId": "A"
         }
       ],
+      "timeFrom": "5m",
       "title": "BTC 5-Minute Realtime Market",
-      "type": "trend"
+      "type": "timeseries"
     },
     {
       "datasource": {
@@ -3304,6 +3276,6 @@
   "timezone": "browser",
   "title": "Trading, PNL & Market Metrics",
   "uid": "polymarket-bot",
-  "version": 45,
+  "version": 46,
   "weekStart": ""
 }

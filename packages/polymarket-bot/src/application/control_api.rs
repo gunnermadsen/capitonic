@@ -122,6 +122,7 @@ impl ControlApi for RuntimeControl {
         }
         output.push_str(&polymarket_bot::market_data_stream::prometheus_metrics());
         output.push_str(&polymarket_bot::btc::execution_freshness::prometheus_metrics(&runtime));
+        output.push_str(&polymarket_bot::execution::live::prometheus_metrics());
         output
             .push_str(&polymarket_bot::btc::unified_model_runtime::telemetry::prometheus_metrics());
         Ok(output)

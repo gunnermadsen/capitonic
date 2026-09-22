@@ -67,6 +67,7 @@ mod execution_venue;
 mod fill_reconciliation;
 mod normalization;
 mod reconciliation;
+mod reconciliation_telemetry;
 mod user_stream;
 mod venue;
 
@@ -77,7 +78,10 @@ use diagnostics::*;
 use fill_reconciliation::*;
 use normalization::*;
 use reconciliation::*;
+use reconciliation_telemetry::*;
 use user_stream::*;
+
+pub use reconciliation_telemetry::prometheus_metrics;
 
 type AuthenticatedClient = SdkClient<Authenticated<Normal>>;
 
@@ -122,6 +126,7 @@ pub struct LiveVenue {
     global_entry_gate: Arc<Mutex<GlobalLiveEntryGate>>,
     submit_guard: Arc<Mutex<()>>,
     reconcile_guard: Arc<Mutex<()>>,
+    reconciliation_metrics: Option<Arc<LiveReconciliationMetrics>>,
 }
 
 #[derive(Debug, Clone)]

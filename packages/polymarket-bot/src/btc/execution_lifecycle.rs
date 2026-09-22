@@ -336,28 +336,36 @@ impl BtcExecutionLifecycle for LiveExecutionLifecycle {
             }
             Err(error) => {
                 let error_chain = format!("{error:#}");
-                if let Err(readiness_error) = self
-                    .venue
-                    .update_live_reconciliation_health(0, Some(error_chain.clone()))
-                    .await
-                {
-                    warn!(
-                        process_id = %process_id,
-                        run_id = %run_id,
-                        error = %readiness_error,
-                        "failed to mark process-scoped reconciliation degraded"
-                    );
+                let transient = self.venue.reconciliation_error_is_transient(&error);
+                if reconciliation_failure_blocks_entries(transient) {
+                    if let Err(readiness_error) = self
+                        .venue
+                        .update_live_reconciliation_health(0, Some(error_chain.clone()))
+                        .await
+                    {
+                        warn!(
+                            process_id = %process_id,
+                            run_id = %run_id,
+                            error = %readiness_error,
+                            "failed to mark process-scoped reconciliation unsafe"
+                        );
+                    }
                 }
                 warn!(
                     process_id = %process_id,
                     run_id = %run_id,
+                    transient,
                     error = %error_chain,
-                    "BTC live reconciliation failed; preserving process authorization and retrying"
+                    "BTC live reconciliation failed; retrying without changing durable process authorization"
                 );
             }
         }
         Ok(())
     }
+}
+
+const fn reconciliation_failure_blocks_entries(transient: bool) -> bool {
+    !transient
 }
 
 fn live_reconciliation_gate_reason(
@@ -378,7 +386,8 @@ mod tests {
     use crate::execution::ReconciliationReport;
 
     use super::{
-        live_reconciliation_gate_reason, BtcExecutionMode, LIVE_UNCLEAN_RECONCILIATION_GATE_REASON,
+        live_reconciliation_gate_reason, reconciliation_failure_blocks_entries, BtcExecutionMode,
+        LIVE_UNCLEAN_RECONCILIATION_GATE_REASON,
     };
 
     #[test]
@@ -435,5 +444,11 @@ mod tests {
             checked_at: Utc::now(),
         };
         assert_eq!(live_reconciliation_gate_reason(&clean, 1), None);
+    }
+
+    #[test]
+    fn only_non_transient_reconciliation_failures_block_entries() {
+        assert!(!reconciliation_failure_blocks_entries(true));
+        assert!(reconciliation_failure_blocks_entries(false));
     }
 }

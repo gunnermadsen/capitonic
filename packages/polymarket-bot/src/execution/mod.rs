@@ -381,6 +381,10 @@ pub trait ExecutionVenue: Send + Sync {
         false
     }
 
+    fn reconciliation_error_is_transient(&self, _error: &anyhow::Error) -> bool {
+        false
+    }
+
     async fn find_existing_order(&self, _request: &OrderRequest) -> Result<Option<OrderRecord>> {
         Ok(None)
     }
