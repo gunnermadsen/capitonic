@@ -250,6 +250,12 @@ done
 - Direct Chainlink Data Streams reference prices use only `market_data.chainlink_btcusd_reference_prices`; PMData reference prices use only `market_data.pmdata_chainlink_btcusd_reference_prices`. Strategies must call the corresponding shared persistence function and must not issue table-specific insert SQL.
 - A one-off historical drain is copy-only: it may read source tables and write canonical Parquet, but it must not mutate its database sources. Source removal happens only through a separately guarded database migration after complete manifest validation.
 
+## Temporary code and scripts
+- Do not commit one-off scripts, diagnostic probes, data insertion helpers, scratch files, or other temporary artifacts. Keep them outside the repository, such as under `/tmp`, and delete them when finished. The `scripts/` directory is only for maintained, reusable project tooling.
+- Do not add temporary shim logic inline with permanent implementation code.
+- A temporary shim may be committed only with explicit user authorization. Isolate it in a dedicated, domain-named module, import it at the narrowest integration point, and clearly record why it exists and the exact condition for removing it.
+- Before committing, remove temporary artifacts and obsolete shims from the diff.
+
 # Database Changes and Migrations
 
 - `db-migrate` is the exclusive authority for schema changes and administrative data mutations. This includes schemas, tables, columns, constraints, indexes, extensions, database functions, triggers, roles, grants, reference data, corrections, cleanup, and administrative backfills.
