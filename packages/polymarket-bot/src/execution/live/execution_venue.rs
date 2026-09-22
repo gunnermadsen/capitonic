@@ -2,6 +2,29 @@ use super::*;
 
 #[async_trait]
 impl ExecutionVenue for LiveVenue {
+    fn request_post_order_reconciliation(&self) {
+        self.post_order_reconciliation_generation
+            .fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn reconciliation_requested(&self) -> bool {
+        self.http_fallback_requested.load(Ordering::Acquire)
+            || self
+                .post_order_reconciliation_generation
+                .load(Ordering::Acquire)
+                > self
+                    .post_order_reconciled_generation
+                    .load(Ordering::Acquire)
+    }
+
+    fn synchronous_post_order_fill_lookup(&self) -> bool {
+        false
+    }
+
+    fn synchronous_post_order_reconciliation(&self) -> bool {
+        false
+    }
+
     fn preserve_liveness_on_post_order_reconcile_error(&self) -> bool {
         true
     }
@@ -197,6 +220,7 @@ impl ExecutionVenue for LiveVenue {
             return persist_pre_submit_gate_rejection(&store, pending_order, reason).await;
         }
         pre_post_guard.observe_post_attempt(&request);
+        let post_started = std::time::Instant::now();
         let submit_result = client
             .post_order(signed)
             .await
@@ -204,12 +228,22 @@ impl ExecutionVenue for LiveVenue {
 
         match submit_result {
             Ok(response) if response.success => {
+                pre_post_guard.observe_post_result(
+                    &request,
+                    post_started.elapsed(),
+                    "acknowledged",
+                );
                 let raw_ack = post_order_response_payload(&response);
                 store
                     .mark_order_submitted(request.client_order_id, &response.order_id, raw_ack)
                     .await
             }
             Ok(response) => {
+                pre_post_guard.observe_post_result(
+                    &request,
+                    post_started.elapsed(),
+                    "venue_rejected",
+                );
                 let reject_reason = definitive_live_venue_reject_reason(
                     request.order_type,
                     response.error_msg.as_deref(),
@@ -233,6 +267,11 @@ impl ExecutionVenue for LiveVenue {
                 Ok(failed_order)
             }
             Err(error) => {
+                pre_post_guard.observe_post_result(
+                    &request,
+                    post_started.elapsed(),
+                    "transport_failure",
+                );
                 let error_chain = format!("{error:#}");
                 if is_definitive_live_submit_error(&error) {
                     let reject_reason =
@@ -390,6 +429,33 @@ impl ExecutionVenue for LiveVenue {
     async fn reconcile(&self) -> Result<ReconciliationReport> {
         let _reconcile_guard = self.reconcile_guard.lock().await;
         let checked_at = Utc::now();
+        let post_order_generation = self
+            .post_order_reconciliation_generation
+            .load(Ordering::Acquire);
+        let (source, fallback_reason, continuity_generation) = {
+            let readiness = self.readiness_state.lock().await;
+            let transport = self.transport_state.lock().await;
+            if readiness.last_rest_reconcile_at.is_none() {
+                ("startup", None, transport.continuity_generation)
+            } else if transport.continuity_uncertain {
+                (
+                    "http_fallback",
+                    transport.fallback_reason,
+                    transport.continuity_generation,
+                )
+            } else if post_order_generation
+                > self
+                    .post_order_reconciled_generation
+                    .load(Ordering::Acquire)
+            {
+                ("post_order", None, transport.continuity_generation)
+            } else {
+                ("http_periodic", None, transport.continuity_generation)
+            }
+        };
+        if let Some(metrics) = &self.reconciliation_metrics {
+            metrics.record_started(source, fallback_reason);
+        }
         let reconciliation_safety_generation = {
             let global = self.global_entry_gate.lock().await;
             if global.safety_generation == u64::MAX {
@@ -419,6 +485,7 @@ impl ExecutionVenue for LiveVenue {
                     .await
                     .context("failed to backfill live user websocket fills"),
             )?;
+            let mut http_fills_recovered = 0usize;
             let open_orders = at_stage(
                 ReconciliationStage::OpenOrders,
                 self.get_open_orders().await,
@@ -526,10 +593,11 @@ impl ExecutionVenue for LiveVenue {
                     .await
                     .context("failed to backfill authenticated CLOB REST fills"),
                 )?;
+                http_fills_recovered = rest_fills.recovered_count;
                 fills_backfilled = at_stage(
                     ReconciliationStage::RestFillBackfill,
                     fills_backfilled
-                        .checked_add(rest_fills.len())
+                        .checked_add(rest_fills.fills.len())
                         .context("live reconciliation fill backfill count overflow"),
                 )?;
                 // Reconciliation readiness must be derived from the state after REST evidence is
@@ -615,6 +683,7 @@ impl ExecutionVenue for LiveVenue {
                 mismatches,
                 foreign_venue_orders,
                 foreign_wallet_trades,
+                http_fills_recovered,
             ))
         }
         .await;
@@ -627,6 +696,7 @@ impl ExecutionVenue for LiveVenue {
             mismatches,
             foreign_venue_orders,
             foreign_wallet_trades,
+            http_fills_recovered,
         ) = match reconcile_result {
             Ok(result) => result,
             Err(failure) => {
@@ -733,9 +803,19 @@ impl ExecutionVenue for LiveVenue {
                 return Err(error);
             }
         }
-        if let Some(metrics) = &self.reconciliation_metrics {
-            metrics.record_report(&report);
+        {
+            let mut transport = self.transport_state.lock().await;
+            if transport.continuity_generation == continuity_generation {
+                transport.continuity_uncertain = false;
+                transport.fallback_reason = None;
+                self.http_fallback_requested.store(false, Ordering::Release);
+            }
         }
+        if let Some(metrics) = &self.reconciliation_metrics {
+            metrics.record_report(&report, http_fills_recovered);
+        }
+        self.post_order_reconciled_generation
+            .store(post_order_generation, Ordering::Release);
         Ok(report)
     }
 
@@ -770,7 +850,7 @@ impl ExecutionVenue for LiveVenue {
         let trades = self.all_trade_responses(&trades_request).await?;
         let owned_orders =
             HashMap::from([(order_id.to_string(), persisted_order.order_id.clone())]);
-        persist_rest_fill_backfill(
+        Ok(persist_rest_fill_backfill(
             &store,
             order_process_id,
             std::slice::from_ref(&persisted_order),
@@ -778,7 +858,8 @@ impl ExecutionVenue for LiveVenue {
             &trades,
             Utc::now(),
         )
-        .await
+        .await?
+        .fills)
     }
 
     async fn update_live_reconciliation_health(

@@ -1,0 +1,168 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: reconciliation-health-30s
+    folder: Polymarket Trading Path
+    interval: 30s
+    rules:
+      - uid: reconciliation_ws_stale_without_fallback
+        title: User websocket stale without successful HTTP fallback
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 600, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "(time() - polymarket_live_user_ws_last_pong_timestamp_seconds > 120) and on() (time() - max(polymarket_live_reconciliation_last_success_timestamp_seconds) > 120)", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 3m
+        annotations: {summary: "Authenticated user stream and HTTP reconciliation are both stale", description: "No recent user-stream heartbeat or clean HTTP reconciliation is available. Entry safety remains governed by existing fail-closed reconciliation evidence."}
+        labels: {service: polymarket-bot, family: reconciliation, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
+      - uid: reconciliation_repeated_failures
+        title: Reconciliation is repeatedly failing
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 900, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "sum by (process_id) (increase(polymarket_live_reconciliation_attempts_total{outcome=~\"transient_failure|hard_failure\"}[10m]))", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [2], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 2m
+        annotations: {summary: "Process reconciliation has repeated failures", description: "More than two bounded reconciliation failures occurred in ten minutes. Inspect the source, stage, and failure_class metrics before intervening."}
+        labels: {service: polymarket-bot, family: reconciliation, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
+      - uid: reconciliation_latency_budget
+        title: Reconciliation exceeds latency budget
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 900, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "histogram_quantile(0.95, sum by (process_id, le) (rate(polymarket_live_reconciliation_duration_seconds_bucket[10m])))", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [5], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations: {summary: "Reconciliation p95 latency exceeds five seconds", description: "Reconciliation is sustained above its operational latency budget. Inference remains independently scheduled."}
+        labels: {service: polymarket-bot, family: reconciliation, severity: warning, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
+      - uid: reconciliation_unresolved_orders
+        title: Reconciliation has persistent unresolved orders
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 900, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "max by (process_id) (polymarket_live_reconciliation_unresolved_orders)", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations: {summary: "Orders remain unresolved after reconciliation", description: "One or more process-owned orders remain ambiguous or nonterminal across the persistence window."}
+        labels: {service: polymarket-bot, family: reconciliation, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
+      - uid: reconciliation_execution_opportunity_loss
+        title: Sustained execution opportunity loss
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 900, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "sum by (process_id) (increase({__name__=~\"polymarket_umr_(scheduled_buckets_skipped|marketability_lost)_total\"}[10m]))", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [3], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 3m
+        annotations: {summary: "Scheduled opportunities are repeatedly skipped or lose marketability", description: "This measures execution opportunity loss, not confirmed missed fills."}
+        labels: {service: polymarket-bot, family: reconciliation, severity: warning, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
+      - uid: reconciliation_decision_post_latency
+        title: Decision-to-POST latency is excessive
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 900, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "histogram_quantile(0.95, sum by (process_id, le) (rate(polymarket_umr_stage_duration_seconds_bucket{stage=\"decision_to_venue_post\"}[10m])))", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [1], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations: {summary: "Qualified decisions are taking too long to reach the venue POST", description: "The process-scoped p95 decision-to-POST latency exceeded one second for five minutes."}
+        labels: {service: polymarket-bot, family: reconciliation, severity: warning, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
+      - uid: reconciliation_http_recovered_fill
+        title: HTTP fallback recovered websocket-missed fills
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 900, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "sum by (process_id) (increase(polymarket_live_reconciliation_fills_recovered_http_total[10m]))", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 2m
+        annotations: {summary: "HTTP reconciliation recovered fills absent from websocket processing", description: "Authenticated REST evidence recovered one or more fills while websocket continuity was uncertain."}
+        labels: {service: polymarket-bot, family: reconciliation, severity: warning, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
+      - uid: reconciliation_entry_not_recovered
+        title: Entry eligibility did not recover with clean reconciliation
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 600, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "(polymarket_live_reconciliation_entry_safe == 0) and on(process_id) (time() - polymarket_live_reconciliation_last_success_timestamp_seconds < 120)", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 3m
+        annotations: {summary: "Entry safety remains closed after recent clean reconciliation", description: "Clean reconciliation evidence exists but process entry safety has not recovered. Durable operator intent is unchanged."}
+        labels: {service: polymarket-bot, family: reconciliation, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false

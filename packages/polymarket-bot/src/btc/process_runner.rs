@@ -5,7 +5,10 @@ use super::unified_model_runtime::telemetry as umr_telemetry;
 use std::{
     collections::HashSet,
     str::FromStr,
-    sync::{Arc, Mutex as StdMutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex as StdMutex,
+    },
 };
 
 use anyhow::{ensure, Context, Result};
@@ -463,6 +466,7 @@ pub struct BtcProcessRunner {
     loss_regime_admission: Mutex<Option<LossRegimeAdmissionRuntime>>,
     high_water_mark_entry_submission: Mutex<()>,
     execution_reconcile_started_at: Mutex<Option<Instant>>,
+    execution_reconcile_requested: AtomicBool,
     router_members: Vec<RouterMemberRuntime>,
     router_observation: Mutex<()>,
     risk_model: Option<Arc<RuntimeRiskModel>>,
@@ -630,6 +634,7 @@ impl BtcProcessRunner {
             config,
             initialized: OnceCell::new(),
             execution_reconcile_started_at: Mutex::new(None),
+            execution_reconcile_requested: AtomicBool::new(false),
             router_members,
             router_observation: Mutex::new(()),
             risk_model,
@@ -721,14 +726,10 @@ impl BtcProcessRunner {
                         .await?;
                 }
                 self.initialize_entry_admission(resume).await?;
-                if let Err(error) = self.force_refresh_settlement_and_reconcile().await {
-                    warn!(
-                        process_id = %self.config.process_id,
-                        run_id = %self.config.run_id,
-                        error = %error,
-                        "initial reconciliation deferred; runtime remains active for automatic recovery"
-                    );
-                }
+                // The independent reconciliation maintenance task performs the mandatory first
+                // authoritative pass. Entry readiness remains fail-closed until it succeeds.
+                self.execution_reconcile_requested
+                    .store(true, Ordering::Release);
                 Ok::<(), anyhow::Error>(())
             })
             .await?;
@@ -953,24 +954,38 @@ impl BtcProcessRunner {
             return Ok(());
         };
         let now = Instant::now();
-        if !execution_reconcile_due(
-            *last_started_at,
-            now,
-            self.execution_lifecycle.reconcile_interval(),
-        ) {
+        let requested = self.execution_reconcile_requested.load(Ordering::Acquire)
+            || self.execution_lifecycle.reconciliation_requested();
+        if !requested
+            && !execution_reconcile_due(
+                *last_started_at,
+                now,
+                self.execution_lifecycle.reconcile_interval(),
+            )
+        {
             return Ok(());
         }
         let previous = *last_started_at;
         *last_started_at = Some(now);
+        self.execution_reconcile_requested
+            .store(false, Ordering::Release);
         let result = self.refresh_settlement_and_reconcile().await;
         if result.is_err() {
             *last_started_at = previous;
+            self.execution_reconcile_requested
+                .store(true, Ordering::Release);
         }
         result
     }
 
     async fn observe(&self, observation: StrategyObservation) -> Result<()> {
+        let observation_started = Instant::now();
         let Ok(_router_guard) = self.router_observation.try_lock() else {
+            umr_telemetry::event(
+                self.config.process_id,
+                "scheduled_buckets_skipped",
+                "evaluation_in_progress",
+            );
             return Ok(());
         };
         if !self.primary_persistence_available().await {
@@ -990,15 +1005,6 @@ impl BtcProcessRunner {
         } else {
             None
         };
-        if let Err(error) = self.refresh_settlement_and_reconcile_if_due().await {
-            warn!(
-                process_id = %self.config.process_id,
-                run_id = %self.config.run_id,
-                error = %error,
-                "periodic reconciliation deferred; strategy runtime remains active"
-            );
-        }
-
         let Some(market) = observation.state.current_market.as_ref() else {
             return Ok(());
         };
@@ -1036,6 +1042,25 @@ impl BtcProcessRunner {
             return Ok(());
         }
         let (selected, proposal) = proposals.remove(0);
+        let scheduled_candidate_at = proposal
+            .snapshot
+            .directional_model
+            .as_ref()
+            .map(|features| features.feature_as_of)
+            .unwrap_or(proposal.snapshot.observed_at);
+        umr_telemetry::duration(
+            self.config.process_id,
+            "scheduled_candidate_evaluation_lag",
+            (observation.readiness.checked_at - scheduled_candidate_at)
+                .num_milliseconds()
+                .max(0) as f64
+                / 1_000.0,
+        );
+        umr_telemetry::duration(
+            self.config.process_id,
+            "observation_to_decision",
+            observation_started.elapsed().as_secs_f64(),
+        );
         if !proposals.is_empty() {
             umr_telemetry::event(
                 self.config.process_id,
@@ -1687,6 +1712,11 @@ impl BtcProcessRunner {
             .as_ref()
             .is_some_and(|evaluation| evaluation.disposition == AdmissionDisposition::Defer)
         {
+            umr_telemetry::event(
+                self.config.process_id,
+                "qualified_without_post",
+                "entry_admission",
+            );
             self.insert_process_strategy_decision(
                 &member.strategy.strategy_version,
                 &snapshot.market_id,
@@ -1703,6 +1733,11 @@ impl BtcProcessRunner {
             .as_ref()
             .is_some_and(|evaluation| evaluation.disposition == RiskDisposition::Defer)
         {
+            umr_telemetry::event(
+                self.config.process_id,
+                "qualified_without_post",
+                "risk_gate",
+            );
             self.insert_process_strategy_decision(
                 &member.strategy.strategy_version,
                 &snapshot.market_id,
@@ -1730,6 +1765,15 @@ impl BtcProcessRunner {
             self.config.run_id,
             fee_rate,
         )?;
+        let decision_book = if intent.outcome == BtcOutcome::Up {
+            &snapshot.up_book
+        } else {
+            &snapshot.down_book
+        };
+        order_metadata["execution_observation"] = serde_json::json!({
+            "executable_ask_vwap": decision_book.executable_ask_vwap,
+            "available_ask_depth": decision_book.ask_depth,
+        });
         let member_identity = directional_model_selection(&member.strategy)
             .context("selected member is missing immutable model identity")?;
         let feature_as_of = snapshot
@@ -1778,6 +1822,11 @@ impl BtcProcessRunner {
         )?;
         reference_execution_guard.insert_into_metadata(&mut request.metadata)?;
         if !self.primary_persistence_available().await {
+            umr_telemetry::event(
+                self.config.process_id,
+                "qualified_without_post",
+                "persistence_unavailable",
+            );
             return Ok(());
         }
         self.insert_process_strategy_decision(
@@ -1798,6 +1847,11 @@ impl BtcProcessRunner {
             .map(|preview| self.execution_lifecycle.preview_order(&request, preview));
         let primary_request = request.clone();
         if !self.primary_persistence_available().await {
+            umr_telemetry::event(
+                self.config.process_id,
+                "qualified_without_post",
+                "persistence_unavailable",
+            );
             return Ok(());
         }
         // Once this durable reservation succeeds, execution must proceed. A
@@ -1812,6 +1866,7 @@ impl BtcProcessRunner {
             )
             .await?;
         complete_directional_model_candidate(&mut directional_candidate, true)?;
+        let execution_started = Instant::now();
         let (report, preview_results) = tokio::join!(
             execute_order_plan(
                 self.execution_venue.as_ref(),
@@ -1826,6 +1881,11 @@ impl BtcProcessRunner {
         let report = report.with_context(|| {
             format!("BTC {} OrderPlan execution failed", execution_mode.as_str())
         })?;
+        umr_telemetry::duration(
+            self.config.process_id,
+            "decision_to_execution_result",
+            execution_started.elapsed().as_secs_f64(),
+        );
         let mut stress_previews = Vec::with_capacity(preview_results.len());
         for (config, result) in self
             .config
@@ -1897,6 +1957,22 @@ impl BtcProcessRunner {
         let filled = primary_state == OrderState::Filled;
         let execution_status = decision_execution_status(primary_state);
         umr_telemetry::event(self.config.process_id, "execution", execution_status);
+        let gate_reason = primary_order
+            .request
+            .metadata
+            .pointer("/live_execution_gate/gate_reason")
+            .and_then(serde_json::Value::as_str);
+        if let Some(reason) = gate_reason {
+            umr_telemetry::event(self.config.process_id, "pre_submit_gate_rejections", reason);
+            umr_telemetry::event(
+                self.config.process_id,
+                "qualified_without_post",
+                "local_gate_rejected",
+            );
+            if reason == "orderbook_marketability" {
+                umr_telemetry::event(self.config.process_id, "marketability_lost", "pre_submit");
+            }
+        }
         umr_telemetry::member_order(self.config.process_id, &member.member_id, execution_status);
         if filled {
             umr_telemetry::gauge(
@@ -1935,6 +2011,22 @@ impl BtcProcessRunner {
                 )
                 .await?;
         }
+        let outcome = match primary_state {
+            OrderState::Filled => "filled",
+            OrderState::PartiallyFilled => "partial",
+            OrderState::Rejected if gate_reason.is_some() => "local_gate_rejected",
+            OrderState::Rejected
+                if execution_reject_reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains("fok_unfilled")) =>
+            {
+                "fok_unfilled"
+            }
+            OrderState::Rejected => "venue_rejected",
+            OrderState::Unknown => "ambiguous",
+            _ => "acknowledged_pending",
+        };
+        umr_telemetry::event(self.config.process_id, "execution_outcomes", outcome);
         let execution_metadata = execution_result_metadata(
             execution_mode,
             &report,
@@ -1952,16 +2044,8 @@ impl BtcProcessRunner {
                 execution_metadata,
             )
             .await?;
-        if filled {
-            if let Err(error) = self.force_refresh_settlement_and_reconcile().await {
-                warn!(
-                    process_id = %self.config.process_id,
-                    run_id = %self.config.run_id,
-                    error = %error,
-                    "post-fill reconciliation deferred; strategy runtime remains active"
-                );
-            }
-        }
+        self.execution_reconcile_requested
+            .store(true, Ordering::Release);
         Ok(())
     }
 }
@@ -2512,6 +2596,21 @@ fn build_directional_model_feature_snapshot(
 
 #[async_trait]
 impl BtcStrategyRunner for BtcProcessRunner {
+    fn observe_schedule(&self, lag: std::time::Duration, interval: std::time::Duration) {
+        umr_telemetry::duration(
+            self.config.process_id,
+            "strategy_schedule_lag",
+            lag.as_secs_f64(),
+        );
+        if lag >= interval {
+            umr_telemetry::event(
+                self.config.process_id,
+                "scheduled_buckets_skipped",
+                "runtime_lag",
+            );
+        }
+    }
+
     async fn reconcile_if_due(&self) -> Result<()> {
         if self.initialized.get().is_none() {
             return Ok(());

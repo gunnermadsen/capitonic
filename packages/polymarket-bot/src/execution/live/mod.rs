@@ -1,7 +1,10 @@
 use std::{
     collections::{HashMap, HashSet},
     str::FromStr,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -35,7 +38,7 @@ use rust_decimal::Decimal;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::Sha256;
-use tokio::sync::{Mutex, OnceCell};
+use tokio::sync::{mpsc, Mutex, OnceCell};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, warn};
 use uuid::Uuid;
@@ -102,6 +105,8 @@ const CLOB_ORDER_ID_QUERY_CHUNK: usize = 500;
 const USER_WS_MAX_TRANSPORT_OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
 const USER_WS_RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
 const USER_WS_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(30);
+const USER_WS_EVENT_QUEUE_CAPACITY: usize = 256;
+const USER_WS_CONTROL_QUEUE_CAPACITY: usize = 16;
 
 #[derive(Debug, Deserialize)]
 struct RpcResponse {
@@ -127,12 +132,19 @@ pub struct LiveVenue {
     submit_guard: Arc<Mutex<()>>,
     reconcile_guard: Arc<Mutex<()>>,
     reconciliation_metrics: Option<Arc<LiveReconciliationMetrics>>,
+    http_fallback_requested: Arc<AtomicBool>,
+    post_order_reconciliation_generation: Arc<AtomicU64>,
+    post_order_reconciled_generation: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Clone)]
 struct LiveTransportState {
     user_ws_connected: bool,
     last_user_ws_pong_at: Option<DateTime<Utc>>,
+    last_user_ws_event_at: Option<DateTime<Utc>>,
+    continuity_uncertain: bool,
+    continuity_generation: u64,
+    fallback_reason: Option<&'static str>,
 }
 
 #[derive(Debug, Clone)]
@@ -171,6 +183,10 @@ impl LiveTransportState {
         Self {
             user_ws_connected: false,
             last_user_ws_pong_at: None,
+            last_user_ws_event_at: None,
+            continuity_uncertain: true,
+            continuity_generation: 0,
+            fallback_reason: Some("startup"),
         }
     }
 }

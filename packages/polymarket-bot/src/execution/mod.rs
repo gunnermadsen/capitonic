@@ -98,6 +98,14 @@ pub trait LivePrePostGuard: live_pre_post_guard_sealed::Sealed + Send + Sync {
     /// Observe the actual POST boundary after awaited preparation and authorization.
     /// Telemetry only; this never changes durable trading authorization.
     fn observe_post_attempt(&self, _request: &OrderRequest) {}
+
+    fn observe_post_result(
+        &self,
+        _request: &OrderRequest,
+        _latency: std::time::Duration,
+        _outcome: &'static str,
+    ) {
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -334,7 +342,9 @@ pub async fn execute_order_plan<V: ExecutionVenue + ?Sized>(
 
     for request in plan.orders {
         let order = venue.submit_order(request).await?;
-        if !matches!(order.state, OrderState::Rejected | OrderState::Cancelled) {
+        if venue.synchronous_post_order_fill_lookup()
+            && !matches!(order.state, OrderState::Rejected | OrderState::Cancelled)
+        {
             match venue.fills_for_order(&order.order_id).await {
                 Ok(order_fills) => fills.extend(order_fills),
                 Err(error) => {
@@ -349,23 +359,45 @@ pub async fn execute_order_plan<V: ExecutionVenue + ?Sized>(
         orders.push(order);
     }
 
-    let reconciliation = match venue.reconcile().await {
-        Ok(reconciliation) => reconciliation,
-        Err(error) if venue.preserve_liveness_on_post_order_reconcile_error() => {
-            warn!(
-                error = %error,
-                order_count = orders.len(),
-                "post-order reconciliation deferred; preserving live trading process liveness"
-            );
-            ReconciliationReport {
-                open_orders: 0,
-                balances_checked: false,
-                mismatches_found: 0,
-                unresolved_count: 1,
-                checked_at: Utc::now(),
-            }
+    let reconciliation = if !venue.synchronous_post_order_reconciliation() {
+        venue.request_post_order_reconciliation();
+        ReconciliationReport {
+            open_orders: 0,
+            balances_checked: false,
+            mismatches_found: 0,
+            unresolved_count: orders
+                .iter()
+                .filter(|order| {
+                    !matches!(
+                        order.state,
+                        OrderState::Filled
+                            | OrderState::Rejected
+                            | OrderState::Cancelled
+                            | OrderState::Expired
+                    )
+                })
+                .count(),
+            checked_at: Utc::now(),
         }
-        Err(error) => return Err(error),
+    } else {
+        match venue.reconcile().await {
+            Ok(reconciliation) => reconciliation,
+            Err(error) if venue.preserve_liveness_on_post_order_reconcile_error() => {
+                warn!(
+                    error = %error,
+                    order_count = orders.len(),
+                    "post-order reconciliation deferred; preserving live trading process liveness"
+                );
+                ReconciliationReport {
+                    open_orders: 0,
+                    balances_checked: false,
+                    mismatches_found: 0,
+                    unresolved_count: 1,
+                    checked_at: Utc::now(),
+                }
+            }
+            Err(error) => return Err(error),
+        }
     };
     Ok(OrderPlanReport {
         plan_id: plan.plan_id,
@@ -377,6 +409,19 @@ pub async fn execute_order_plan<V: ExecutionVenue + ?Sized>(
 
 #[async_trait]
 pub trait ExecutionVenue: Send + Sync {
+    fn request_post_order_reconciliation(&self) {}
+
+    fn reconciliation_requested(&self) -> bool {
+        false
+    }
+
+    fn synchronous_post_order_fill_lookup(&self) -> bool {
+        true
+    }
+
+    fn synchronous_post_order_reconciliation(&self) -> bool {
+        true
+    }
     fn preserve_liveness_on_post_order_reconcile_error(&self) -> bool {
         false
     }

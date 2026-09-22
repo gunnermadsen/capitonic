@@ -48,6 +48,10 @@ pub trait BtcExecutionLifecycle: Send + Sync {
 
     fn reconcile_interval(&self) -> Duration;
 
+    fn reconciliation_requested(&self) -> bool {
+        false
+    }
+
     async fn resume_run(
         &self,
         repository: &BtcRepository,
@@ -225,6 +229,10 @@ impl BtcExecutionLifecycle for LiveExecutionLifecycle {
 
     fn reconcile_interval(&self) -> Duration {
         self.reconcile_interval
+    }
+
+    fn reconciliation_requested(&self) -> bool {
+        self.venue.reconciliation_requested()
     }
 
     async fn resume_run(

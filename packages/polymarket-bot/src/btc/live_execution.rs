@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use anyhow::{bail, Result};
 use async_trait::async_trait;
-use chrono::{Duration, Utc};
-use rust_decimal::Decimal;
+use chrono::{DateTime, Duration, Utc};
+use rust_decimal::{prelude::ToPrimitive, Decimal};
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
@@ -53,6 +53,21 @@ impl LivePrePostGuard for BtcLiveExecutionAdapter {
         &self,
         request: &OrderRequest,
     ) -> Result<Option<LiveExecutionGateReason>> {
+        if let Some(evaluated_at) = request
+            .metadata
+            .get("decision_at")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        {
+            super::unified_model_runtime::telemetry::duration(
+                self.expected_process_id,
+                "decision_to_pre_submit_validation",
+                (Utc::now() - evaluated_at.with_timezone(&Utc))
+                    .num_milliseconds()
+                    .max(0) as f64
+                    / 1_000.0,
+            );
+        }
         if let Some(reason) = self.validate_reference_execution(request)? {
             return Ok(Some(reason));
         }
@@ -67,6 +82,39 @@ impl LivePrePostGuard for BtcLiveExecutionAdapter {
             .map(|(_, book)| book);
         self.freshness_metrics
             .execution(book, Utc::now(), request.client_order_id);
+        if let Some(evaluated_at) = request
+            .metadata
+            .get("decision_at")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        {
+            super::unified_model_runtime::telemetry::duration(
+                self.expected_process_id,
+                "decision_to_venue_post",
+                (Utc::now() - evaluated_at.with_timezone(&Utc))
+                    .num_milliseconds()
+                    .max(0) as f64
+                    / 1_000.0,
+            );
+        }
+    }
+
+    fn observe_post_result(
+        &self,
+        _request: &OrderRequest,
+        latency: std::time::Duration,
+        outcome: &'static str,
+    ) {
+        super::unified_model_runtime::telemetry::duration(
+            self.expected_process_id,
+            "venue_post_to_acknowledgement",
+            latency.as_secs_f64(),
+        );
+        super::unified_model_runtime::telemetry::event(
+            self.expected_process_id,
+            "venue_post_outcomes",
+            outcome,
+        );
     }
 }
 
@@ -201,6 +249,43 @@ impl BtcLiveExecutionAdapter {
                     self.freshness_metrics.reject_book();
                 }
                 return Ok(Some(reason));
+            }
+        }
+        if capture_final {
+            if let (Some(decision_price), Some(current_price)) = (
+                request
+                    .metadata
+                    .pointer("/execution_observation/executable_ask_vwap")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|value| value.parse::<Decimal>().ok()),
+                checkpoint.best_ask,
+            ) {
+                super::unified_model_runtime::telemetry::gauge(
+                    self.expected_process_id,
+                    "decision_to_submission_price_drift",
+                    (current_price - decision_price)
+                        .to_f64()
+                        .unwrap_or_default(),
+                );
+            }
+            let current_depth = checkpoint
+                .asks
+                .iter()
+                .filter(|level| level.price <= request.price)
+                .fold(Decimal::ZERO, |total, level| total + level.size);
+            if let Some(decision_depth) = request
+                .metadata
+                .pointer("/execution_observation/available_ask_depth")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| value.parse::<Decimal>().ok())
+            {
+                super::unified_model_runtime::telemetry::gauge(
+                    self.expected_process_id,
+                    "decision_to_submission_depth_drift",
+                    (current_depth - decision_depth)
+                        .to_f64()
+                        .unwrap_or_default(),
+                );
             }
         }
         let result = validate_marketable_depth(&checkpoint, request, self.max_depth_participation)?;

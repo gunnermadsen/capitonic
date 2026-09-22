@@ -136,6 +136,8 @@ pub struct StrategyObservation {
 
 #[async_trait]
 pub trait BtcStrategyRunner: Send + Sync {
+    fn observe_schedule(&self, _lag: StdDuration, _interval: StdDuration) {}
+
     async fn reconcile_if_due(&self) -> Result<()> {
         Ok(())
     }
@@ -1047,10 +1049,14 @@ async fn run_strategy_loop(
     loop {
         tokio::select! {
             _ = shutdown.changed() => break,
-            _ = ticker.tick() => {
-                if let Err(error) = strategy.reconcile_if_due().await {
-                    tracing::warn!(error = %error, "BTC reconciliation maintenance failed; runtime remains active");
-                }
+            scheduled_at = ticker.tick() => {
+                strategy.observe_schedule(scheduled_at.elapsed(), config.strategy_interval);
+                let reconciliation = strategy.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = reconciliation.reconcile_if_due().await {
+                        tracing::warn!(error = %error, "BTC reconciliation maintenance failed; runtime remains active");
+                    }
+                });
                 let snapshot = realtime_snapshot(&state, &books).await;
                 let observation = (
                     snapshot.last_updated_at,
@@ -1145,6 +1151,72 @@ mod tests {
     use super::*;
     use rust_decimal::Decimal;
     use rust_decimal_macros::dec;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+    use tokio::sync::Notify;
+
+    struct SlowReconciliationStrategy {
+        reconciliation_started: Notify,
+        release_reconciliation: Notify,
+        observations: AtomicUsize,
+        observation_recorded: Notify,
+    }
+
+    #[async_trait]
+    impl BtcStrategyRunner for SlowReconciliationStrategy {
+        async fn reconcile_if_due(&self) -> Result<()> {
+            self.reconciliation_started.notify_waiters();
+            self.release_reconciliation.notified().await;
+            Ok(())
+        }
+
+        async fn on_observation(&self, _observation: StrategyObservation) -> Result<()> {
+            self.observations.fetch_add(1, AtomicOrdering::Relaxed);
+            self.observation_recorded.notify_waiters();
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn slow_reconciliation_does_not_delay_strategy_observation() {
+        let strategy = Arc::new(SlowReconciliationStrategy {
+            reconciliation_started: Notify::new(),
+            release_reconciliation: Notify::new(),
+            observations: AtomicUsize::new(0),
+            observation_recorded: Notify::new(),
+        });
+        let realtime = RealtimeState {
+            last_updated_at: Some(Utc::now()),
+            ..RealtimeState::default()
+        };
+        let state = Arc::new(RwLock::new(realtime));
+        let books = Arc::new(RwLock::new(BookRegistry::new(Uuid::new_v4())));
+        let metrics = Arc::new(RwLock::new(BtcRuntimeMetrics::default()));
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let task = tokio::spawn(run_strategy_loop(
+            BtcRuntimeConfig {
+                enabled: true,
+                strategy_interval: StdDuration::from_millis(10),
+                ..BtcRuntimeConfig::default()
+            },
+            strategy.clone(),
+            state,
+            books,
+            metrics,
+            shutdown_rx,
+        ));
+
+        tokio::time::timeout(
+            StdDuration::from_millis(250),
+            strategy.observation_recorded.notified(),
+        )
+        .await
+        .expect("strategy observation must not wait for reconciliation");
+        assert_eq!(strategy.observations.load(AtomicOrdering::Relaxed), 1);
+
+        strategy.release_reconciliation.notify_one();
+        shutdown_tx.send(true).unwrap();
+        task.await.unwrap();
+    }
 
     #[test]
     fn shared_rtds_subscription_is_unique_and_preserves_explicit_consumers() {

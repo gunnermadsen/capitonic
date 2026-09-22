@@ -5,7 +5,6 @@ pub(super) async fn run_user_ws_once(
     store: &Store,
     data_api: Option<&DataApiClient>,
     state: &Arc<Mutex<LiveTransportState>>,
-    submit_guard: &Arc<Mutex<()>>,
 ) -> Result<()> {
     let subscription = user_ws_subscription_payload(config)?;
     {
@@ -28,126 +27,149 @@ pub(super) async fn run_user_ws_once(
     .context("Polymarket user websocket subscription send timed out")?
     .context("failed to subscribe Polymarket user websocket")?;
 
-    let mut heartbeat = tokio::time::interval(Duration::from_secs(10));
-    let mut awaiting_pong_since: Option<tokio::time::Instant> = None;
-    loop {
-        tokio::select! {
-            _ = heartbeat.tick() => {
-                if user_ws_heartbeat_ack_timed_out(
-                    awaiting_pong_since.map(|sent_at| sent_at.elapsed()),
-                    config.user_ws_stale,
-                ) {
-                    bail!("Polymarket user websocket heartbeat acknowledgement timed out");
+    let (mut writer, mut reader) = ws.split();
+    let (event_tx, mut event_rx) = mpsc::channel::<Message>(USER_WS_EVENT_QUEUE_CAPACITY);
+    let (control_tx, mut control_rx) = mpsc::channel::<Message>(USER_WS_CONTROL_QUEUE_CAPACITY);
+
+    let socket_writer = async {
+        while let Some(message) = control_rx.recv().await {
+            tokio::time::timeout(operation_timeout, writer.send(message))
+                .await
+                .context("Polymarket user websocket control send timed out")?
+                .context("failed to write Polymarket user websocket control frame")?;
+        }
+        Ok::<(), anyhow::Error>(())
+    };
+    let socket_reader = async {
+        let mut heartbeat = tokio::time::interval(Duration::from_secs(10));
+        let mut awaiting_pong_since: Option<tokio::time::Instant> = None;
+        loop {
+            tokio::select! {
+                _ = heartbeat.tick() => {
+                    if user_ws_heartbeat_ack_timed_out(
+                        awaiting_pong_since.map(|sent_at| sent_at.elapsed()),
+                        config.user_ws_stale,
+                    ) {
+                        bail!("Polymarket user websocket heartbeat acknowledgement timed out");
+                    }
+                    control_tx.try_send(Message::Text("PING".into()))
+                        .context("Polymarket user websocket control queue overflow")?;
+                    awaiting_pong_since.get_or_insert_with(tokio::time::Instant::now);
                 }
-                tokio::time::timeout(
-                    operation_timeout,
-                    ws.send(Message::Text("PING".into())),
-                )
-                    .await
-                    .context("Polymarket user websocket heartbeat send timed out")?
-                    .context("failed to ping Polymarket user websocket")?;
-                awaiting_pong_since.get_or_insert_with(tokio::time::Instant::now);
-            }
-            message = ws.next() => {
-                let Some(message) = message else {
-                    bail!("Polymarket user websocket ended without a close frame");
-                };
-                match message.context("failed to read Polymarket user websocket")? {
-                    Message::Text(text) => {
-                        let text = text.to_string();
-                        let payload = match classify_user_ws_text(&text, &[])? {
-                            UserWsText::HeartbeatPong => {
-                                awaiting_pong_since = None;
-                                let mut state = state.lock().await;
-                                state.user_ws_connected = true;
-                                state.last_user_ws_pong_at = Some(Utc::now());
-                                continue;
-                            }
-                            UserWsText::HeartbeatPing => {
-                                tokio::time::timeout(
-                                    operation_timeout,
-                                    ws.send(Message::Text("PONG".into())),
-                                )
-                                    .await
-                                    .context("Polymarket user websocket text PONG send timed out")?
-                                    .context("failed to pong Polymarket user websocket")?;
-                                continue;
-                            }
-                            UserWsText::UserEvent(payload) => payload,
-                        };
-                        // Apply the websocket event atomically with respect to live submission.
-                        // Connectivity and event delivery never mutate process authorization.
-                        let _event_guard = submit_guard.lock().await;
-                        let event = LiveVenue::parse_user_event(payload);
-                        let inserted = store.insert_live_venue_event(&event).await?;
-                        let bot_fill_persisted = match LiveVenue::persist_fill_from_live_event(&store, &event).await {
-                            Ok(persisted) => persisted > 0,
-                            Err(error) => {
-                                warn!(error = %error, "failed to persist Polymarket live user websocket fill event");
-                                false
-                            }
-                        };
-                        if !bot_fill_persisted {
-                            if let Some(account_address) = configured_account_address(config)? {
-                                if let Some(account_trade) = account_trade_from_live_event(&account_address, &event) {
-                                    if let Err(error) = store.upsert_account_trade(&account_trade).await {
-                                        warn!(error = %error, "failed to persist Polymarket account trade from user websocket event");
-                                    }
-                                    if let Some(data_api) = data_api.cloned() {
-                                        let store = store.clone();
-                                        let token_id = account_trade.token_id.clone();
-                                        tokio::spawn(async move {
-                                            tokio::time::sleep(Duration::from_secs(2)).await;
-                                            let request = AccountReconcileRequest {
-                                                account_address: Some(account_address),
-                                                lookback_hours: Some(1),
-                                                process_id: None,
-                                                account_ref: None,
-                                                credential_account_fingerprint_sha256: None,
-                                                dry_run: false,
-                                                token_id: Some(token_id),
-                                                source: Some("user_ws".to_string()),
-                                            };
-                                            if let Err(error) = reconcile_account_positions(&store, &data_api, request).await {
-                                                warn!(error = %error, "websocket-triggered account reconciliation failed");
-                                            }
-                                        });
-                                    }
+                message = reader.next() => {
+                    let Some(message) = message else {
+                        bail!("Polymarket user websocket ended without a close frame");
+                    };
+                    match message.context("failed to read Polymarket user websocket")? {
+                        Message::Text(text) => {
+                            match text.trim() {
+                                "PONG" => {
+                                    awaiting_pong_since = None;
+                                    let mut state = state.lock().await;
+                                    state.user_ws_connected = true;
+                                    state.last_user_ws_pong_at = Some(Utc::now());
+                                    record_user_ws_pong();
+                                    continue;
                                 }
+                                "PING" => {
+                                    control_tx.try_send(Message::Text("PONG".into()))
+                                        .context("Polymarket user websocket control queue overflow")?;
+                                    continue;
+                                }
+                                _ => event_tx.try_send(Message::Text(text)).map_err(|_| {
+                                    record_user_ws_queue_overflow();
+                                    anyhow::anyhow!("Polymarket user websocket event queue overflow")
+                                })?,
                             }
                         }
-                        if let Err(error) = LiveVenue::persist_order_update_from_live_event(&store, &event).await {
-                            warn!(error = %error, "failed to persist Polymarket live user websocket order event");
+                        Message::Ping(payload) => {
+                            control_tx.try_send(Message::Pong(payload))
+                                .context("Polymarket user websocket control queue overflow")?;
                         }
-                        if inserted {
-                            debug!(
-                                event_type = %event.event_type,
-                                venue_order_id = ?event.venue_order_id,
-                                venue_trade_id = ?event.venue_trade_id,
-                                "persisted Polymarket live user websocket event"
-                            );
+                        Message::Pong(_) => {
+                            awaiting_pong_since = None;
+                            let mut state = state.lock().await;
+                            state.user_ws_connected = true;
+                            state.last_user_ws_pong_at = Some(Utc::now());
+                            record_user_ws_pong();
                         }
-                        let mut state = state.lock().await;
-                        state.user_ws_connected = true;
+                        Message::Close(_) => bail!("Polymarket user websocket closed"),
+                        Message::Binary(_) => bail!("Polymarket user websocket sent an unsupported binary frame"),
+                        _ => {}
                     }
-                    Message::Ping(payload) => {
-                        tokio::time::timeout(operation_timeout, ws.send(Message::Pong(payload)))
-                            .await
-                            .context("Polymarket user websocket control PONG send timed out")?
-                            .context("failed to answer websocket control ping")?;
-                    }
-                    Message::Pong(_) => {
-                        awaiting_pong_since = None;
-                        let mut state = state.lock().await;
-                        state.user_ws_connected = true;
-                        state.last_user_ws_pong_at = Some(Utc::now());
-                    }
-                    Message::Close(_) => bail!("Polymarket user websocket closed"),
-                    Message::Binary(_) => bail!("Polymarket user websocket sent an unsupported binary frame"),
-                    _ => {}
                 }
             }
         }
+    };
+    let event_processor = async {
+        while let Some(Message::Text(text)) = event_rx.recv().await {
+            let UserWsText::UserEvent(payload) = classify_user_ws_text(&text, &[])? else {
+                continue;
+            };
+            let event = LiveVenue::parse_user_event(payload);
+            let inserted = store.insert_live_venue_event(&event).await?;
+            let bot_fill_persisted = match LiveVenue::persist_fill_from_live_event(store, &event)
+                .await
+            {
+                Ok(persisted) => persisted > 0,
+                Err(error) => {
+                    warn!(error = %error, "failed to persist Polymarket live user websocket fill event");
+                    false
+                }
+            };
+            if !bot_fill_persisted {
+                if let Some(account_address) = configured_account_address(config)? {
+                    if let Some(account_trade) =
+                        account_trade_from_live_event(&account_address, &event)
+                    {
+                        if let Err(error) = store.upsert_account_trade(&account_trade).await {
+                            warn!(error = %error, "failed to persist Polymarket account trade from user websocket event");
+                        }
+                        if let Some(data_api) = data_api.cloned() {
+                            let store = store.clone();
+                            let token_id = account_trade.token_id.clone();
+                            tokio::spawn(async move {
+                                tokio::time::sleep(Duration::from_secs(2)).await;
+                                let request = AccountReconcileRequest {
+                                    account_address: Some(account_address),
+                                    lookback_hours: Some(1),
+                                    process_id: None,
+                                    account_ref: None,
+                                    credential_account_fingerprint_sha256: None,
+                                    dry_run: false,
+                                    token_id: Some(token_id),
+                                    source: Some("user_ws".to_string()),
+                                };
+                                if let Err(error) =
+                                    reconcile_account_positions(&store, &data_api, request).await
+                                {
+                                    warn!(error = %error, "websocket-triggered account reconciliation failed");
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+            if let Err(error) = LiveVenue::persist_order_update_from_live_event(store, &event).await
+            {
+                warn!(error = %error, "failed to persist Polymarket live user websocket order event");
+            }
+            record_user_ws_event(bot_fill_persisted);
+            {
+                let mut transport = state.lock().await;
+                transport.user_ws_connected = true;
+                transport.last_user_ws_event_at = Some(Utc::now());
+            }
+            if inserted {
+                debug!(event_type = %event.event_type, "persisted Polymarket live user websocket event");
+            }
+        }
+        Ok::<(), anyhow::Error>(())
+    };
+    tokio::select! {
+        result = socket_reader => result,
+        result = socket_writer => result.context("Polymarket user websocket writer stopped"),
+        result = event_processor => result.context("Polymarket user websocket event processor stopped"),
     }
 }
 

@@ -102,6 +102,11 @@ pub(super) fn reconciliation_trade_window_start(
         .context("live reconciliation trade window underflow")
 }
 
+pub(super) struct RestFillBackfill {
+    pub(super) fills: Vec<FillRecord>,
+    pub(super) recovered_count: usize,
+}
+
 pub(super) async fn persist_rest_fill_backfill(
     store: &Store,
     process_id: Uuid,
@@ -109,7 +114,7 @@ pub(super) async fn persist_rest_fill_backfill(
     owned_orders: &HashMap<String, String>,
     trades: &[TradeResponse],
     checked_at: DateTime<Utc>,
-) -> Result<Vec<FillRecord>> {
+) -> Result<RestFillBackfill> {
     let fills = rest_fill_backfill_plan(
         process_id,
         local_nonterminal,
@@ -118,8 +123,13 @@ pub(super) async fn persist_rest_fill_backfill(
         checked_at,
     )?;
     let mut fill_ids_by_order: HashMap<String, Vec<Uuid>> = HashMap::new();
+    let mut recovered_count = 0usize;
     for fill in &fills {
+        let already_durable = store.find_fill_order_id(fill.fill_id).await?.is_some();
         store.insert_fill(fill).await?;
+        if !already_durable {
+            recovered_count = recovered_count.saturating_add(1);
+        }
         fill_ids_by_order
             .entry(fill.order_id.clone())
             .or_default()
@@ -167,7 +177,10 @@ pub(super) async fn persist_rest_fill_backfill(
             );
         }
     }
-    Ok(fills)
+    Ok(RestFillBackfill {
+        fills,
+        recovered_count,
+    })
 }
 
 pub(super) async fn live_fill_records_from_event(

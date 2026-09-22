@@ -1,7 +1,11 @@
 use std::{
     collections::BTreeMap,
     fmt::Write as _,
-    sync::{Arc, Mutex, OnceLock, Weak},
+    sync::{
+        atomic::{AtomicI64, AtomicU64, Ordering::Relaxed},
+        Arc, Mutex, OnceLock, Weak,
+    },
+    time::Instant,
 };
 
 use anyhow::Result;
@@ -11,6 +15,105 @@ use uuid::Uuid;
 use crate::execution::ReconciliationReport;
 
 static REGISTRY: OnceLock<Mutex<Vec<Weak<LiveReconciliationMetrics>>>> = OnceLock::new();
+static USER_WS_EVENTS: AtomicU64 = AtomicU64::new(0);
+static USER_WS_FILL_EVENTS: AtomicU64 = AtomicU64::new(0);
+static USER_WS_RECONNECTS: AtomicU64 = AtomicU64::new(0);
+static USER_WS_QUEUE_OVERFLOWS: AtomicU64 = AtomicU64::new(0);
+static USER_WS_LAST_EVENT: AtomicI64 = AtomicI64::new(0);
+static USER_WS_LAST_PONG: AtomicI64 = AtomicI64::new(0);
+
+pub(super) fn record_user_ws_event(fill: bool) {
+    USER_WS_EVENTS.fetch_add(1, Relaxed);
+    if fill {
+        USER_WS_FILL_EVENTS.fetch_add(1, Relaxed);
+    }
+    USER_WS_LAST_EVENT.store(chrono::Utc::now().timestamp(), Relaxed);
+}
+
+pub(super) fn record_user_ws_reconnect() {
+    USER_WS_RECONNECTS.fetch_add(1, Relaxed);
+}
+
+pub(super) fn record_user_ws_pong() {
+    USER_WS_LAST_PONG.store(chrono::Utc::now().timestamp(), Relaxed);
+}
+
+pub(super) fn record_user_ws_queue_overflow() {
+    USER_WS_QUEUE_OVERFLOWS.fetch_add(1, Relaxed);
+}
+
+pub(super) fn record_process_fill_latency(
+    process_id: Uuid,
+    first_fill: bool,
+    final_fill: bool,
+    seconds: f64,
+) {
+    let mut registry = REGISTRY
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    registry.retain(|entry| entry.strong_count() > 0);
+    for metrics in registry.iter().filter_map(Weak::upgrade) {
+        if metrics.process_id == process_id {
+            let mut state = metrics
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if first_fill {
+                state
+                    .execution_latencies
+                    .entry("acknowledgement_to_first_fill")
+                    .or_default()
+                    .observe(seconds);
+            }
+            if final_fill {
+                state
+                    .execution_latencies
+                    .entry("acknowledgement_to_final_fill")
+                    .or_default()
+                    .observe(seconds);
+            }
+        }
+    }
+}
+
+pub(super) fn record_process_execution_outcome(process_id: Uuid, outcome: &'static str) {
+    let mut registry = REGISTRY
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    registry.retain(|entry| entry.strong_count() > 0);
+    for metrics in registry.iter().filter_map(Weak::upgrade) {
+        if metrics.process_id == process_id {
+            let mut state = metrics
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            *state.execution_outcomes.entry(outcome).or_default() += 1;
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct DurationHistogram {
+    buckets: [u64; 8],
+    count: u64,
+    sum: f64,
+}
+
+const DURATION_BUCKETS: [f64; 8] = [0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0];
+
+impl DurationHistogram {
+    fn observe(&mut self, value: f64) {
+        self.count = self.count.saturating_add(1);
+        self.sum += value;
+        for (index, bound) in DURATION_BUCKETS.iter().enumerate() {
+            if value <= *bound {
+                self.buckets[index] = self.buckets[index].saturating_add(1);
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum ReconciliationOutcome {
@@ -225,6 +328,18 @@ struct MetricsState {
     reconciliation_entry_safe: bool,
     mismatches: usize,
     unresolved_orders: usize,
+    runs: BTreeMap<(&'static str, ReconciliationOutcome), u64>,
+    durations: BTreeMap<&'static str, DurationHistogram>,
+    current_source: &'static str,
+    started_at: Option<Instant>,
+    in_progress: bool,
+    fallback_activations: BTreeMap<&'static str, u64>,
+    fills_recovered_http: u64,
+    recovery_started_at: Option<Instant>,
+    last_recovery_duration_seconds: f64,
+    execution_latencies: BTreeMap<&'static str, DurationHistogram>,
+    execution_outcomes: BTreeMap<&'static str, u64>,
+    entry_eligibility_changes: BTreeMap<&'static str, u64>,
 }
 
 pub(super) struct LiveReconciliationMetrics {
@@ -247,7 +362,21 @@ impl LiveReconciliationMetrics {
         metrics
     }
 
-    pub(super) fn record_report(&self, report: &ReconciliationReport) {
+    pub(super) fn record_started(
+        &self,
+        source: &'static str,
+        fallback_reason: Option<&'static str>,
+    ) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.current_source = source;
+        state.started_at = Some(Instant::now());
+        state.in_progress = true;
+        if let Some(reason) = fallback_reason {
+            *state.fallback_activations.entry(reason).or_default() += 1;
+        }
+    }
+
+    pub(super) fn record_report(&self, report: &ReconciliationReport, fills_recovered: usize) {
         let outcome = if report.balances_checked
             && report.mismatches_found == 0
             && report.unresolved_count == 0
@@ -257,13 +386,43 @@ impl LiveReconciliationMetrics {
             ReconciliationOutcome::Unsafe
         };
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let source = state.current_source;
+        let elapsed = state
+            .started_at
+            .take()
+            .map(|started| started.elapsed().as_secs_f64())
+            .unwrap_or_default();
+        state.in_progress = false;
+        state.durations.entry(source).or_default().observe(elapsed);
+        *state.runs.entry((source, outcome)).or_default() += 1;
+        if source == "http_fallback" {
+            state.fills_recovered_http = state
+                .fills_recovered_http
+                .saturating_add(fills_recovered as u64);
+        }
         state.attempts[outcome.index()] = state.attempts[outcome.index()].saturating_add(1);
         state.last_attempt_timestamp = report.checked_at.timestamp();
         state.mismatches = report.mismatches_found;
         state.unresolved_orders = report.unresolved_count;
-        state.reconciliation_entry_safe = outcome == ReconciliationOutcome::Clean;
+        let next_entry_safe = outcome == ReconciliationOutcome::Clean;
+        if state.reconciliation_entry_safe != next_entry_safe {
+            *state
+                .entry_eligibility_changes
+                .entry(if next_entry_safe {
+                    "enabled"
+                } else {
+                    "disabled"
+                })
+                .or_default() += 1;
+        }
+        state.reconciliation_entry_safe = next_entry_safe;
         if outcome == ReconciliationOutcome::Clean {
             state.last_success_timestamp = report.checked_at.timestamp();
+            if let Some(started) = state.recovery_started_at.take() {
+                state.last_recovery_duration_seconds = started.elapsed().as_secs_f64();
+            }
+        } else {
+            state.recovery_started_at.get_or_insert_with(Instant::now);
         }
     }
 
@@ -277,19 +436,39 @@ impl LiveReconciliationMetrics {
         };
         let now = chrono::Utc::now().timestamp();
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let source = state.current_source;
+        let elapsed = state
+            .started_at
+            .take()
+            .map(|started| started.elapsed().as_secs_f64())
+            .unwrap_or_default();
+        state.in_progress = false;
+        state.durations.entry(source).or_default().observe(elapsed);
+        *state.runs.entry((source, outcome)).or_default() += 1;
+        state.recovery_started_at.get_or_insert_with(Instant::now);
         state.attempts[outcome.index()] = state.attempts[outcome.index()].saturating_add(1);
         *state.failures.entry((failure_stage, class)).or_default() += 1;
         state.last_attempt_timestamp = now;
         if !transient {
+            if state.reconciliation_entry_safe {
+                *state
+                    .entry_eligibility_changes
+                    .entry("disabled")
+                    .or_default() += 1;
+            }
             state.reconciliation_entry_safe = false;
         }
     }
 
     pub(super) fn set_entry_safe(&self, entry_safe: bool) {
-        self.state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .reconciliation_entry_safe = entry_safe;
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.reconciliation_entry_safe != entry_safe {
+            *state
+                .entry_eligibility_changes
+                .entry(if entry_safe { "enabled" } else { "disabled" })
+                .or_default() += 1;
+        }
+        state.reconciliation_entry_safe = entry_safe;
     }
 
     fn write(&self, output: &mut String) {
@@ -311,6 +490,42 @@ impl LiveReconciliationMetrics {
                 class.as_str()
             );
         }
+        for ((source, outcome), count) in &state.runs {
+            let _ = writeln!(output, "polymarket_live_reconciliation_runs_total{{{labels},source=\"{source}\",outcome=\"{}\"}} {count}", outcome.as_str());
+        }
+        for (source, histogram) in &state.durations {
+            for (index, bound) in DURATION_BUCKETS.iter().enumerate() {
+                let _ = writeln!(output, "polymarket_live_reconciliation_duration_seconds_bucket{{{labels},source=\"{source}\",le=\"{bound}\"}} {}", histogram.buckets[index]);
+            }
+            let _ = writeln!(output, "polymarket_live_reconciliation_duration_seconds_bucket{{{labels},source=\"{source}\",le=\"+Inf\"}} {}", histogram.count);
+            let _ = writeln!(output, "polymarket_live_reconciliation_duration_seconds_sum{{{labels},source=\"{source}\"}} {}", histogram.sum);
+            let _ = writeln!(output, "polymarket_live_reconciliation_duration_seconds_count{{{labels},source=\"{source}\"}} {}", histogram.count);
+        }
+        for (stage, histogram) in &state.execution_latencies {
+            for (index, bound) in DURATION_BUCKETS.iter().enumerate() {
+                let _ = writeln!(output, "polymarket_live_execution_latency_seconds_bucket{{{labels},stage=\"{stage}\",le=\"{bound}\"}} {}", histogram.buckets[index]);
+            }
+            let _ = writeln!(output, "polymarket_live_execution_latency_seconds_bucket{{{labels},stage=\"{stage}\",le=\"+Inf\"}} {}", histogram.count);
+            let _ = writeln!(
+                output,
+                "polymarket_live_execution_latency_seconds_sum{{{labels},stage=\"{stage}\"}} {}",
+                histogram.sum
+            );
+            let _ = writeln!(
+                output,
+                "polymarket_live_execution_latency_seconds_count{{{labels},stage=\"{stage}\"}} {}",
+                histogram.count
+            );
+        }
+        for (outcome, count) in &state.execution_outcomes {
+            let _ = writeln!(output, "polymarket_live_execution_outcomes_total{{{labels},outcome=\"{outcome}\"}} {count}");
+        }
+        for (eligibility, count) in &state.entry_eligibility_changes {
+            let _ = writeln!(output, "polymarket_live_reconciliation_entry_eligibility_changes_total{{{labels},eligibility=\"{eligibility}\"}} {count}");
+        }
+        for (reason, count) in &state.fallback_activations {
+            let _ = writeln!(output, "polymarket_live_reconciliation_fallback_activations_total{{{labels},reason=\"{reason}\"}} {count}");
+        }
         for (metric, value) in [
             (
                 "last_attempt_timestamp_seconds",
@@ -323,12 +538,22 @@ impl LiveReconciliationMetrics {
             ("entry_safe", i64::from(state.reconciliation_entry_safe)),
             ("mismatches", state.mismatches as i64),
             ("unresolved_orders", state.unresolved_orders as i64),
+            ("in_progress", i64::from(state.in_progress)),
+            (
+                "fills_recovered_http_total",
+                state.fills_recovered_http as i64,
+            ),
         ] {
             let _ = writeln!(
                 output,
                 "polymarket_live_reconciliation_{metric}{{{labels}}} {value}"
             );
         }
+        let _ = writeln!(
+            output,
+            "polymarket_live_reconciliation_last_recovery_duration_seconds{{{labels}}} {}",
+            state.last_recovery_duration_seconds
+        );
     }
 }
 
@@ -342,6 +567,13 @@ pub fn prometheus_metrics() -> String {
         ("entry_safe", "Whether the latest reconciliation evidence is safe for entry; transient failures preserve the prior value.", "gauge"),
         ("mismatches", "Mismatches in the latest completed live reconciliation report.", "gauge"),
         ("unresolved_orders", "Unresolved orders in the latest completed live reconciliation report.", "gauge"),
+        ("in_progress", "Whether process-scoped reconciliation is currently in progress.", "gauge"),
+        ("runs_total", "Reconciliation runs by bounded source and outcome.", "counter"),
+        ("duration_seconds", "Reconciliation latency by bounded source.", "histogram"),
+        ("fallback_activations_total", "HTTP fallback activations by bounded reason.", "counter"),
+        ("fills_recovered_http_total", "Fills recovered by HTTP reconciliation after websocket delivery was uncertain.", "counter"),
+        ("last_recovery_duration_seconds", "Duration of the latest reconciliation recovery from degraded to clean.", "gauge"),
+        ("entry_eligibility_changes_total", "Entry eligibility changes caused by reconciliation evidence.", "counter"),
     ] {
         let _ = writeln!(
             output,
@@ -366,6 +598,49 @@ pub fn prometheus_metrics() -> String {
     for metrics in current.values() {
         metrics.write(&mut output);
     }
+    output.push_str("# HELP polymarket_live_user_ws_events_total Authenticated user websocket events processed after bounded dequeue.\n# TYPE polymarket_live_user_ws_events_total counter\n");
+    output.push_str("# HELP polymarket_live_execution_latency_seconds Live acknowledgement-to-fill latency by bounded stage.\n# TYPE polymarket_live_execution_latency_seconds histogram\n");
+    output.push_str("# HELP polymarket_live_execution_outcomes_total Terminal live execution outcomes established by venue evidence.\n# TYPE polymarket_live_execution_outcomes_total counter\n");
+    let _ = writeln!(
+        output,
+        "polymarket_live_user_ws_events_total {}",
+        USER_WS_EVENTS.load(Relaxed)
+    );
+    let _ = writeln!(
+        output,
+        "polymarket_live_reconciliation_runs_total{{process_id=\"shared_account\",source=\"user_ws_event\",outcome=\"applied\"}} {}",
+        USER_WS_EVENTS.load(Relaxed)
+    );
+    output.push_str("# HELP polymarket_live_user_ws_fill_events_total Authenticated user websocket events that durably advanced a bot fill.\n# TYPE polymarket_live_user_ws_fill_events_total counter\n");
+    let _ = writeln!(
+        output,
+        "polymarket_live_user_ws_fill_events_total {}",
+        USER_WS_FILL_EVENTS.load(Relaxed)
+    );
+    output.push_str("# HELP polymarket_live_user_ws_reconnects_total Authenticated user websocket reconnect cycles.\n# TYPE polymarket_live_user_ws_reconnects_total counter\n");
+    let _ = writeln!(
+        output,
+        "polymarket_live_user_ws_reconnects_total {}",
+        USER_WS_RECONNECTS.load(Relaxed)
+    );
+    output.push_str("# HELP polymarket_live_user_ws_queue_overflows_total Authenticated user websocket bounded event queue overflows.\n# TYPE polymarket_live_user_ws_queue_overflows_total counter\n");
+    let _ = writeln!(
+        output,
+        "polymarket_live_user_ws_queue_overflows_total {}",
+        USER_WS_QUEUE_OVERFLOWS.load(Relaxed)
+    );
+    output.push_str("# HELP polymarket_live_user_ws_last_event_timestamp_seconds Unix timestamp of the latest processed authenticated user websocket event.\n# TYPE polymarket_live_user_ws_last_event_timestamp_seconds gauge\n");
+    let _ = writeln!(
+        output,
+        "polymarket_live_user_ws_last_event_timestamp_seconds {}",
+        USER_WS_LAST_EVENT.load(Relaxed)
+    );
+    output.push_str("# HELP polymarket_live_user_ws_last_pong_timestamp_seconds Unix timestamp of the latest authenticated user websocket heartbeat acknowledgement.\n# TYPE polymarket_live_user_ws_last_pong_timestamp_seconds gauge\n");
+    let _ = writeln!(
+        output,
+        "polymarket_live_user_ws_last_pong_timestamp_seconds {}",
+        USER_WS_LAST_PONG.load(Relaxed)
+    );
     output
 }
 
@@ -379,13 +654,17 @@ mod tests {
     fn transient_failure_preserves_entry_safety_and_uses_bounded_labels() {
         let process_id = Uuid::new_v4();
         let metrics = LiveReconciliationMetrics::new(process_id);
-        metrics.record_report(&ReconciliationReport {
-            open_orders: 0,
-            balances_checked: true,
-            mismatches_found: 0,
-            unresolved_count: 0,
-            checked_at: Utc::now(),
-        });
+        metrics.record_started("http_periodic", None);
+        metrics.record_report(
+            &ReconciliationReport {
+                open_orders: 0,
+                balances_checked: true,
+                mismatches_found: 0,
+                unresolved_count: 0,
+                checked_at: Utc::now(),
+            },
+            0,
+        );
         let failure = at_stage(
             ReconciliationStage::OpenOrders,
             Err::<(), _>(anyhow::Error::new(std::io::Error::new(
@@ -458,13 +737,17 @@ mod tests {
     fn unsafe_report_and_hard_failure_clear_entry_safety() {
         let process_id = Uuid::new_v4();
         let metrics = LiveReconciliationMetrics::new(process_id);
-        metrics.record_report(&ReconciliationReport {
-            open_orders: 1,
-            balances_checked: true,
-            mismatches_found: 1,
-            unresolved_count: 1,
-            checked_at: Utc::now(),
-        });
+        metrics.record_started("http_periodic", None);
+        metrics.record_report(
+            &ReconciliationReport {
+                open_orders: 1,
+                balances_checked: true,
+                mismatches_found: 1,
+                unresolved_count: 1,
+                checked_at: Utc::now(),
+            },
+            0,
+        );
         let rendered = prometheus_metrics();
         assert!(rendered.contains(&format!(
             "polymarket_live_reconciliation_entry_safe{{process_id=\"{process_id}\"}} 0"

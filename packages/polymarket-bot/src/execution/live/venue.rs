@@ -26,6 +26,9 @@ impl LiveVenue {
             submit_guard: Arc::new(Mutex::new(())),
             reconcile_guard: Arc::new(Mutex::new(())),
             reconciliation_metrics: None,
+            http_fallback_requested: Arc::new(AtomicBool::new(true)),
+            post_order_reconciliation_generation: Arc::new(AtomicU64::new(0)),
+            post_order_reconciled_generation: Arc::new(AtomicU64::new(0)),
         };
         venue.spawn_user_ws_task_if_enabled();
         Ok(venue)
@@ -52,6 +55,9 @@ impl LiveVenue {
             submit_guard: Arc::new(Mutex::new(())),
             reconcile_guard: Arc::new(Mutex::new(())),
             reconciliation_metrics: None,
+            http_fallback_requested: Arc::new(AtomicBool::new(true)),
+            post_order_reconciliation_generation: Arc::new(AtomicU64::new(0)),
+            post_order_reconciled_generation: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -93,6 +99,9 @@ impl LiveVenue {
             submit_guard: self.submit_guard.clone(),
             reconcile_guard: self.reconcile_guard.clone(),
             reconciliation_metrics: Some(LiveReconciliationMetrics::new(process_id)),
+            http_fallback_requested: self.http_fallback_requested.clone(),
+            post_order_reconciliation_generation: Arc::new(AtomicU64::new(0)),
+            post_order_reconciled_generation: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -177,6 +186,7 @@ impl LiveVenue {
     ) -> Result<usize> {
         let fills = live_fill_records_from_event(store, event).await?;
         for (order, fill) in &fills {
+            let (prior_filled_size, _) = store.order_filled_economics(&order.order_id).await?;
             store.insert_fill(fill).await?;
             let (cumulative_filled_size, cumulative_filled_notional) =
                 store.order_filled_economics(&order.order_id).await?;
@@ -199,6 +209,25 @@ impl LiveVenue {
                     }),
                 )
                 .await?;
+            if cumulative_filled_size > prior_filled_size {
+                if let Some(process_id) = order.request.process_id {
+                    let latency = (fill.filled_at - order.updated_at)
+                        .num_milliseconds()
+                        .max(0) as f64
+                        / 1_000.0;
+                    record_process_fill_latency(
+                        process_id,
+                        prior_filled_size == Decimal::ZERO,
+                        cumulative_filled_size >= order.request.size,
+                        latency,
+                    );
+                    if cumulative_filled_size >= order.request.size {
+                        record_process_execution_outcome(process_id, "filled");
+                    } else {
+                        record_process_execution_outcome(process_id, "partial");
+                    }
+                }
+            }
         }
         Ok(fills.len())
     }
@@ -219,7 +248,7 @@ impl LiveVenue {
         else {
             return Ok(false);
         };
-        store
+        let cancelled = store
             .mark_order_cancelled(
                 order_id,
                 json!({
@@ -230,6 +259,14 @@ impl LiveVenue {
                 }),
             )
             .await?;
+        if let Some(order) = cancelled {
+            if let Some(process_id) = order.request.process_id {
+                let (filled_size, _) = store.order_filled_economics(&order.order_id).await?;
+                if filled_size == Decimal::ZERO {
+                    record_process_execution_outcome(process_id, "acknowledged_unfilled");
+                }
+            }
+        }
         Ok(true)
     }
 
@@ -263,25 +300,36 @@ impl LiveVenue {
         };
         let data_api = self.data_api.clone();
         let transport_state = self.transport_state.clone();
-        let submit_guard = self.submit_guard.clone();
+        let http_fallback_requested = self.http_fallback_requested.clone();
         tokio::spawn(async move {
             let mut reconnect_delay = USER_WS_RECONNECT_INITIAL_DELAY;
             loop {
-                let result = run_user_ws_once(
-                    &config,
-                    &store,
-                    data_api.as_ref(),
-                    &transport_state,
-                    &submit_guard,
-                )
-                .await;
+                let result =
+                    run_user_ws_once(&config, &store, data_api.as_ref(), &transport_state).await;
+                let fallback_reason = result.as_ref().err().map(|error| {
+                    let detail = format!("{error:#}").to_ascii_lowercase();
+                    if detail.contains("queue overflow") {
+                        "queue_overflow"
+                    } else if detail.contains("timed out") || detail.contains("stale") {
+                        "websocket_stale"
+                    } else {
+                        "reconnect"
+                    }
+                });
                 let was_healthy = {
                     let mut state = transport_state.lock().await;
                     let was_healthy = state.last_user_ws_pong_at.is_some();
                     state.user_ws_connected = false;
                     state.last_user_ws_pong_at = None;
+                    state.continuity_uncertain = true;
+                    state.continuity_generation = state.continuity_generation.saturating_add(1);
+                    if let Some(reason) = fallback_reason {
+                        state.fallback_reason = Some(reason);
+                    }
                     was_healthy
                 };
+                record_user_ws_reconnect();
+                http_fallback_requested.store(true, Ordering::Release);
                 let retry_delay = if was_healthy {
                     reconnect_delay = USER_WS_RECONNECT_INITIAL_DELAY;
                     USER_WS_RECONNECT_INITIAL_DELAY
