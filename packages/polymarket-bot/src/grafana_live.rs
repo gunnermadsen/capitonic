@@ -332,7 +332,7 @@ impl CountdownSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarketPathPoint {
     pub observed_at: DateTime<Utc>,
-    pub market_elapsed_seconds: i64,
+    pub market_seconds_remaining: i64,
     pub price: Decimal,
 }
 
@@ -460,8 +460,9 @@ impl MarketPathPublicationState {
                 .iter()
                 .map(|(observed_at, price)| MarketPathPoint {
                     observed_at: *observed_at,
-                    market_elapsed_seconds: observed_at
-                        .signed_duration_since(retained.window_start)
+                    market_seconds_remaining: retained
+                        .window_end
+                        .signed_duration_since(*observed_at)
                         .num_seconds()
                         .clamp(0, 300),
                     price: *price,
@@ -487,9 +488,9 @@ impl MarketPathSnapshot {
             })
             .map(|point| MarketPathPoint {
                 observed_at: point.source_timestamp,
-                market_elapsed_seconds: point
-                    .source_timestamp
-                    .signed_duration_since(market.window_start)
+                market_seconds_remaining: market
+                    .window_end
+                    .signed_duration_since(point.source_timestamp)
                     .num_seconds()
                     .clamp(0, 300),
                 price: point.price,
@@ -518,7 +519,10 @@ impl MarketPathSnapshot {
         let snapshot_schema_field = format!("snapshot_{}", self.observed_at.timestamp_millis());
 
         let mut body = String::with_capacity(self.points.len().saturating_mul(160));
-        for point in &self.points {
+        // Remaining time decreases as wall-clock time advances. Emit the retained
+        // path newest-to-oldest so Grafana Trend receives an ascending numeric x-axis
+        // and paints the active market from the right edge toward the left.
+        for point in self.points.iter().rev() {
             let point_epoch_nanos = point
                 .observed_at
                 .timestamp_nanos_opt()
@@ -528,8 +532,8 @@ impl MarketPathSnapshot {
             // Never bind that panel's x-axis to Grafana's dashboard/global time range.
             writeln!(
                 body,
-                "{MARKET_PATH_MEASUREMENT} market_elapsed_seconds={}i,twap_price={},price_to_beat={price_to_beat},{market_schema_field}=1i,{snapshot_schema_field}=1i {point_epoch_nanos}",
-                point.market_elapsed_seconds,
+                "{MARKET_PATH_MEASUREMENT} market_seconds_remaining={}i,twap_price={},price_to_beat={price_to_beat},{market_schema_field}=1i,{snapshot_schema_field}=1i {point_epoch_nanos}",
+                point.market_seconds_remaining,
                 point.price,
             )
             .expect("writing an Influx line into a String cannot fail");
@@ -809,10 +813,10 @@ mod tests {
 
         assert_eq!(snapshot.points.len(), 2);
         assert_eq!(snapshot.points[0].observed_at, market.window_start);
-        assert_eq!(snapshot.points[0].market_elapsed_seconds, 0);
+        assert_eq!(snapshot.points[0].market_seconds_remaining, 246);
         assert_eq!(snapshot.points[0].price, dec!(100.5));
         assert_eq!(snapshot.points[1].observed_at, current.source_timestamp);
-        assert_eq!(snapshot.points[1].market_elapsed_seconds, 1);
+        assert_eq!(snapshot.points[1].market_seconds_remaining, 245);
         assert_eq!(snapshot.points[1].price, dec!(100));
     }
 
@@ -831,7 +835,7 @@ mod tests {
         let body = snapshot.influx_body().expect("market path has points");
 
         assert!(body.starts_with(
-            "btc_market_path market_elapsed_seconds=0i,twap_price=100.5,price_to_beat=100.5"
+            "btc_market_path market_seconds_remaining=245i,twap_price=100,price_to_beat=100.5"
         ));
         let expected_market_field = format!("market_{:x}=1i", Sha256::digest(b"one"));
         let expected_snapshot_field = format!("snapshot_{}=1i", now.timestamp_millis());
@@ -845,7 +849,7 @@ mod tests {
                         .split_once(' ')
                         .is_some_and(|(fields, _)| {
                             fields.split(',').all(|field| {
-                                field.starts_with("market_elapsed_seconds=")
+                                field.starts_with("market_seconds_remaining=")
                                     || field.starts_with("twap_price=")
                                     || field.starts_with("price_to_beat=")
                                     || field == expected_market_field
@@ -857,11 +861,11 @@ mod tests {
         assert!(body
             .lines()
             .nth(1)
-            .is_some_and(|line| line.contains("market_elapsed_seconds=1i")));
+            .is_some_and(|line| line.contains("market_seconds_remaining=246i")));
     }
 
     #[test]
-    fn market_path_elapsed_coordinate_is_bounded_to_the_five_minute_market() {
+    fn market_path_remaining_coordinate_is_bounded_to_the_five_minute_market() {
         let now = Utc.timestamp_opt(1_800_000_100, 0).unwrap();
         let mut market = market("one", now);
         market.window_end = market.window_start + ChronoDuration::seconds(300);
@@ -874,8 +878,8 @@ mod tests {
             ],
         );
 
-        assert_eq!(snapshot.points[0].market_elapsed_seconds, 0);
-        assert_eq!(snapshot.points[1].market_elapsed_seconds, 300);
+        assert_eq!(snapshot.points[0].market_seconds_remaining, 300);
+        assert_eq!(snapshot.points[1].market_seconds_remaining, 0);
     }
 
     #[test]

@@ -1639,7 +1639,7 @@
         "type": "grafana",
         "uid": "grafana"
       },
-      "description": "Global Chainlink BTC/USD 60-second TWAP path for only the active five-minute Polymarket window, with the first boundary TWAP shown as Price to Beat. The x-axis is the numeric 0-300 second coordinate within the active market, never a Grafana timestamp. This is a hard boundary: do not convert this panel back to a time-series visualization or bind it to dashboard/global time filters. The bounded current-market path is resent every second so a refreshed browser reconstructs the elapsed window and the completed market is replaced at rollover. This panel is independent of trading-process, PnL, and dashboard time filters.",
+      "description": "Global Chainlink BTC/USD 60-second TWAP path for only the active five-minute Polymarket window, with the first boundary TWAP shown as Price to Beat. The x-axis is the numeric 0-300 seconds-remaining coordinate within the active market, never a Grafana timestamp; the live path paints from the right edge toward the left. This is a hard boundary: do not convert this panel back to a time-series visualization or bind it to dashboard/global time filters. The bounded current-market path is resent every second so a refreshed browser reconstructs the elapsed window and the completed market is replaced at rollover. This panel is independent of trading-process, PnL, and dashboard time filters.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1697,12 +1697,12 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "market_elapsed_seconds"
+              "options": "market_seconds_remaining"
             },
             "properties": [
               {
                 "id": "displayName",
-                "value": "Market elapsed"
+                "value": "Market remaining"
               },
               {
                 "id": "unit",
@@ -1797,7 +1797,7 @@
           "mode": "multi",
           "sort": "none"
         },
-        "xField": "market_elapsed_seconds"
+        "xField": "market_seconds_remaining"
       },
       "pluginVersion": "12.4.2",
       "targets": [
@@ -1811,7 +1811,7 @@
           "filter": {
             "fields": [
               "time",
-              "market_elapsed_seconds",
+              "market_seconds_remaining",
               "twap_price",
               "price_to_beat"
             ]
@@ -3304,6 +3304,6 @@
   "timezone": "browser",
   "title": "Trading, PNL & Market Metrics",
   "uid": "polymarket-bot",
-  "version": 40,
+  "version": 41,
   "weekStart": ""
 }
