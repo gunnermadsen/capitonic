@@ -6,7 +6,7 @@ groups:
     folder: Polymarket Trading Path
     interval: 30s
     rules:
-      - uid: settlement_actionable_stale_over_five_minutes
+      - uid: settlement_stale_over_five_minutes
         title: Settlement resolution is stale beyond one market window
         condition: C
         data:
@@ -28,7 +28,7 @@ groups:
         dashboardUid: reconciliation-health
         panelId: 16
         isPaused: false
-      - uid: settlement_resolution_pipeline_incomplete
+      - uid: settlement_pipeline_incomplete
         title: Settlement resolution pipeline is incomplete
         condition: C
         data:
@@ -72,7 +72,7 @@ groups:
         dashboardUid: reconciliation-health
         panelId: 18
         isPaused: false
-      - uid: settlement_autoheal_repeated_failures
+      - uid: settlement_autoheal_failures
         title: Settlement auto-healing is repeatedly failing
         condition: C
         data:
