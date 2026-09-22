@@ -246,7 +246,7 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 12,
+        "h": 8,
         "w": 16,
         "x": 8,
         "y": 1
@@ -259,7 +259,7 @@
             "max"
           ],
           "displayMode": "table",
-          "placement": "right",
+          "placement": "bottom",
           "showLegend": true
         },
         "tooltip": {
@@ -594,6 +594,114 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
+      "description": "Five-minute p99 timings that separate host scheduling, provider cadence, and local queue delay. The render series reports the preceding Prometheus response build.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 8,
+        "y": 9
+      },
+      "id": 34,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_interframe_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))",
+          "legendFormat": "provider inter-frame",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_queue_delay_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))",
+          "legendFormat": "raw queue",
+          "refId": "B"
+        },
+        {
+          "expr": "max(market_data_ingester_prometheus_render_duration_seconds)",
+          "legendFormat": "metrics render",
+          "refId": "E"
+        }
+      ],
+      "title": "Socket Pipeline p99",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "description": "Provider websocket data-frame rate over the last minute.",
       "fieldConfig": {
         "defaults": {
@@ -721,114 +829,6 @@
       ],
       "title": "Queue Overflows (20m)",
       "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Five-minute p99 timings that separate host scheduling, provider cadence, and local queue delay. The render series reports the preceding Prometheus response build.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "showValues": false,
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "min": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          },
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 12,
-        "w": 16,
-        "x": 8,
-        "y": 13
-      },
-      "id": 34,
-      "options": {
-        "legend": {
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ],
-          "displayMode": "table",
-          "placement": "right",
-          "showLegend": true
-        },
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "pluginVersion": "12.4.2",
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_interframe_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))",
-          "legendFormat": "provider inter-frame",
-          "refId": "A"
-        },
-        {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_queue_delay_seconds_bucket{product=\"polymarket_btc_five_minute_orderbooks\"}[5m])))",
-          "legendFormat": "raw queue",
-          "refId": "B"
-        },
-        {
-          "expr": "max(market_data_ingester_prometheus_render_duration_seconds)",
-          "legendFormat": "metrics render",
-          "refId": "E"
-        }
-      ],
-      "title": "Socket Pipeline p99",
-      "type": "timeseries"
     },
     {
       "datasource": {
@@ -979,6 +979,118 @@
       ],
       "title": "Current Book",
       "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Explicit loss and recovery signals. Publication overflow does not reset the authoritative source; websocket overflow does.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "bars",
+            "fillOpacity": 35,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 8,
+        "y": 17
+      },
+      "id": 36,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "sum"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "sum(increase(market_data_ingester_websocket_queue_overflow_total{product=\"polymarket_btc_five_minute_orderbooks\"}[5m]))",
+          "legendFormat": "raw queue overflow",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(increase(market_data_ingester_publication_queue_overflow_total{product=\"polymarket_btc_five_minute_orderbooks\"}[5m]))",
+          "legendFormat": "publication overflow",
+          "refId": "B"
+        },
+        {
+          "expr": "sum by (reason) (increase(ingester_source_reconnects_total{product=\"polymarket_btc_five_minute_orderbooks\"}[5m]))",
+          "legendFormat": "reconnect {{reason}}",
+          "refId": "C"
+        },
+        {
+          "expr": "sum(increase(market_data_ingester_cached_contract_reconnect_total{product=\"polymarket_btc_five_minute_orderbooks\"}[5m]))",
+          "legendFormat": "cached-contract reconnect",
+          "refId": "D"
+        }
+      ],
+      "title": "Backpressure and Reconnect Events",
+      "type": "timeseries"
     },
     {
       "datasource": {
@@ -1234,7 +1346,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Explicit loss and recovery signals. Publication overflow does not reset the authoritative source; websocket overflow does.",
+      "description": "Authoritative-book readiness and Gamma contract refresh outcomes across window rotation and reconnects.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1248,8 +1360,8 @@
             "axisPlacement": "auto",
             "barAlignment": 0,
             "barWidthFactor": 0.6,
-            "drawStyle": "bars",
-            "fillOpacity": 35,
+            "drawStyle": "line",
+            "fillOpacity": 12,
             "gradientMode": "none",
             "hideFrom": {
               "legend": false,
@@ -1258,7 +1370,7 @@
             },
             "insertNulls": false,
             "lineInterpolation": "linear",
-            "lineWidth": 1,
+            "lineWidth": 2,
             "pointSize": 5,
             "scaleDistribution": {
               "type": "linear"
@@ -1293,17 +1405,17 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 11,
+        "h": 8,
         "w": 16,
         "x": 8,
         "y": 25
       },
-      "id": 36,
+      "id": 37,
       "options": {
         "legend": {
           "calcs": [
             "lastNotNull",
-            "sum"
+            "max"
           ],
           "displayMode": "table",
           "placement": "bottom",
@@ -1318,27 +1430,27 @@
       "pluginVersion": "12.4.2",
       "targets": [
         {
-          "expr": "sum(increase(market_data_ingester_websocket_queue_overflow_total{product=\"polymarket_btc_five_minute_orderbooks\"}[5m]))",
-          "legendFormat": "raw queue overflow",
+          "expr": "max by (scope) (market_data_ingester_clob_bootstrap_ready{product=\"polymarket_btc_five_minute_orderbooks\"})",
+          "legendFormat": "ready {{scope}}",
           "refId": "A"
         },
         {
-          "expr": "sum(increase(market_data_ingester_publication_queue_overflow_total{product=\"polymarket_btc_five_minute_orderbooks\"}[5m]))",
-          "legendFormat": "publication overflow",
+          "expr": "sum by (result) (increase(market_data_ingester_gamma_refresh_total{product=\"polymarket_btc_five_minute_orderbooks\"}[15m]))",
+          "legendFormat": "Gamma {{result}}",
           "refId": "B"
         },
         {
-          "expr": "sum by (reason) (increase(ingester_source_reconnects_total{product=\"polymarket_btc_five_minute_orderbooks\"}[5m]))",
-          "legendFormat": "reconnect {{reason}}",
+          "expr": "sum(rate(market_data_ingester_clob_messages_total{product=\"polymarket_btc_five_minute_orderbooks\"}[1m]))",
+          "legendFormat": "messages/s",
           "refId": "C"
         },
         {
-          "expr": "sum(increase(market_data_ingester_cached_contract_reconnect_total{product=\"polymarket_btc_five_minute_orderbooks\"}[5m]))",
-          "legendFormat": "cached-contract reconnect",
+          "expr": "sum(rate(market_data_ingester_clob_changes_total{product=\"polymarket_btc_five_minute_orderbooks\"}[1m]))",
+          "legendFormat": "changes/s",
           "refId": "D"
         }
       ],
-      "title": "Backpressure and Reconnect Events",
+      "title": "Bootstrap, Discovery, and Message Activity",
       "type": "timeseries"
     },
     {
@@ -1406,7 +1518,7 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
+        "h": 9,
         "w": 8,
         "x": 0,
         "y": 33
@@ -1461,118 +1573,6 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Authoritative-book readiness and Gamma contract refresh outcomes across window rotation and reconnects.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 12,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "showValues": false,
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "min": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 16,
-        "x": 8,
-        "y": 36
-      },
-      "id": 37,
-      "options": {
-        "legend": {
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "pluginVersion": "12.4.2",
-      "targets": [
-        {
-          "expr": "max by (scope) (market_data_ingester_clob_bootstrap_ready{product=\"polymarket_btc_five_minute_orderbooks\"})",
-          "legendFormat": "ready {{scope}}",
-          "refId": "A"
-        },
-        {
-          "expr": "sum by (result) (increase(market_data_ingester_gamma_refresh_total{product=\"polymarket_btc_five_minute_orderbooks\"}[15m]))",
-          "legendFormat": "Gamma {{result}}",
-          "refId": "B"
-        },
-        {
-          "expr": "sum(rate(market_data_ingester_clob_messages_total{product=\"polymarket_btc_five_minute_orderbooks\"}[1m]))",
-          "legendFormat": "messages/s",
-          "refId": "C"
-        },
-        {
-          "expr": "sum(rate(market_data_ingester_clob_changes_total{product=\"polymarket_btc_five_minute_orderbooks\"}[1m]))",
-          "legendFormat": "changes/s",
-          "refId": "D"
-        }
-      ],
-      "title": "Bootstrap, Discovery, and Message Activity",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
         "type": "loki",
         "uid": "loki"
       },
@@ -1618,6 +1618,7 @@
             }
           },
           "decimals": 0,
+          "mappings": [],
           "min": 0,
           "thresholds": {
             "mode": "absolute",
@@ -1637,10 +1638,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 41
+        "h": 9,
+        "w": 16,
+        "x": 8,
+        "y": 33
       },
       "id": 50,
       "options": {
@@ -1681,7 +1682,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 49
+        "y": 42
       },
       "id": 51,
       "panels": [],
@@ -1720,7 +1721,7 @@
         "h": 5,
         "w": 6,
         "x": 0,
-        "y": 50
+        "y": 43
       },
       "id": 1,
       "options": {
@@ -1798,7 +1799,7 @@
         "h": 5,
         "w": 4,
         "x": 6,
-        "y": 50
+        "y": 43
       },
       "id": 12,
       "options": {
@@ -1862,7 +1863,7 @@
         "h": 5,
         "w": 4,
         "x": 10,
-        "y": 50
+        "y": 43
       },
       "id": 3,
       "options": {
@@ -1978,7 +1979,7 @@
         "h": 8,
         "w": 10,
         "x": 14,
-        "y": 50
+        "y": 43
       },
       "id": 5,
       "options": {
@@ -2067,7 +2068,7 @@
         "h": 5,
         "w": 3,
         "x": 0,
-        "y": 55
+        "y": 48
       },
       "id": 13,
       "options": {
@@ -2145,7 +2146,7 @@
         "h": 5,
         "w": 3,
         "x": 3,
-        "y": 55
+        "y": 48
       },
       "id": 11,
       "options": {
@@ -2250,7 +2251,7 @@
         "h": 5,
         "w": 4,
         "x": 6,
-        "y": 55
+        "y": 48
       },
       "id": 27,
       "options": {
@@ -2329,7 +2330,7 @@
         "h": 10,
         "w": 4,
         "x": 10,
-        "y": 55
+        "y": 48
       },
       "id": 2,
       "options": {
@@ -2447,7 +2448,7 @@
         "h": 8,
         "w": 10,
         "x": 14,
-        "y": 58
+        "y": 51
       },
       "id": 7,
       "options": {
@@ -2530,7 +2531,7 @@
         "h": 5,
         "w": 3,
         "x": 0,
-        "y": 60
+        "y": 53
       },
       "id": 20,
       "options": {
@@ -2608,7 +2609,7 @@
         "h": 5,
         "w": 3,
         "x": 3,
-        "y": 60
+        "y": 53
       },
       "id": 21,
       "options": {
@@ -2726,7 +2727,7 @@
         "h": 5,
         "w": 4,
         "x": 6,
-        "y": 60
+        "y": 53
       },
       "id": 9,
       "options": {
@@ -2836,7 +2837,7 @@
         "h": 24,
         "w": 7,
         "x": 0,
-        "y": 65
+        "y": 58
       },
       "id": 22,
       "options": {
@@ -2929,7 +2930,7 @@
         "h": 8,
         "w": 7,
         "x": 7,
-        "y": 65
+        "y": 58
       },
       "id": 23,
       "options": {
@@ -3029,7 +3030,7 @@
         "h": 8,
         "w": 10,
         "x": 14,
-        "y": 66
+        "y": 59
       },
       "id": 4,
       "options": {
@@ -3126,7 +3127,7 @@
         "h": 8,
         "w": 7,
         "x": 7,
-        "y": 73
+        "y": 66
       },
       "id": 6,
       "options": {
@@ -3227,7 +3228,7 @@
         "h": 7,
         "w": 10,
         "x": 14,
-        "y": 74
+        "y": 67
       },
       "id": 24,
       "options": {
@@ -3318,7 +3319,7 @@
         "h": 8,
         "w": 7,
         "x": 7,
-        "y": 81
+        "y": 74
       },
       "id": 8,
       "options": {
@@ -3415,7 +3416,7 @@
         "h": 17,
         "w": 10,
         "x": 14,
-        "y": 81
+        "y": 74
       },
       "id": 18,
       "options": {
@@ -3511,7 +3512,7 @@
         "h": 9,
         "w": 14,
         "x": 0,
-        "y": 89
+        "y": 82
       },
       "id": 15,
       "options": {
@@ -3546,7 +3547,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 98
+        "y": 91
       },
       "id": 10,
       "panels": [],
@@ -3620,7 +3621,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 99
+        "y": 92
       },
       "id": 17,
       "options": {
@@ -3720,7 +3721,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 99
+        "y": 92
       },
       "id": 14,
       "options": {
@@ -3820,7 +3821,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 107
+        "y": 100
       },
       "id": 25,
       "options": {
@@ -3923,7 +3924,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 107
+        "y": 100
       },
       "id": 16,
       "options": {
@@ -3958,7 +3959,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 115
+        "y": 108
       },
       "id": 28,
       "panels": [],
@@ -4000,7 +4001,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 116
+        "y": 109
       },
       "id": 29,
       "options": {
@@ -4044,7 +4045,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 116
+        "y": 109
       },
       "id": 30,
       "options": {
@@ -4084,16 +4085,67 @@
       "description": "Book count after market-contract reconciliation. Includes the catalog ten-minute retention grace and future contracts; updated on contract refresh, not on book frames.",
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
-          "min": 0
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
         },
         "overrides": []
       },
       "gridPos": {
-        "x": 0,
-        "y": 125,
+        "h": 7,
         "w": 12,
-        "h": 7
+        "x": 0,
+        "y": 118
       },
       "id": 52,
       "options": {
@@ -4174,6 +4226,7 @@
             }
           },
           "decimals": 0,
+          "mappings": [],
           "min": 0,
           "thresholds": {
             "mode": "absolute",
@@ -4193,10 +4246,10 @@
         "overrides": []
       },
       "gridPos": {
-        "x": 12,
-        "y": 125,
+        "h": 7,
         "w": 12,
-        "h": 7
+        "x": 12,
+        "y": 118
       },
       "id": 53,
       "options": {
@@ -4239,16 +4292,67 @@
       "description": "Sink send/flush duration for subscription, ping and pong writes; excludes queue wait. Recorded after dequeue, never on successful data-frame intake. Best effort if the raw-frame queue is full.",
       "fieldConfig": {
         "defaults": {
-          "unit": "s",
-          "min": 0
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "s"
         },
         "overrides": []
       },
       "gridPos": {
-        "x": 0,
-        "y": 132,
+        "h": 7,
         "w": 12,
-        "h": 7
+        "x": 0,
+        "y": 125
       },
       "id": 54,
       "options": {
@@ -4282,125 +4386,493 @@
       "type": "timeseries"
     },
     {
-      "collapsed": true,
+      "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 139
+        "y": 132
       },
       "id": 60,
-      "panels": [
-        {
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "description": "Cutover is ready only when every desired realtime profile is currently healthy.",
-          "fieldConfig": {
-            "defaults": {
-              "color": {"mode": "thresholds"},
-              "mappings": [
-                {"options": {"0": {"color": "green", "text": "READY"}}, "type": "value"}
-              ],
-              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": 0}, {"color": "red", "value": 1}]},
-              "unit": "short"
-            },
-            "overrides": []
-          },
-          "gridPos": {"h": 5, "w": 6, "x": 0, "y": 140},
-          "id": 61,
-          "options": {
-            "colorMode": "background",
-            "graphMode": "none",
-            "justifyMode": "center",
-            "orientation": "horizontal",
-            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
-            "showPercentChange": false,
-            "textMode": "value_and_name",
-            "wideLayout": true
-          },
-          "pluginVersion": "12.4.2",
-          "targets": [
-            {"editorMode": "code", "expr": "clamp_min(max(market_data_ingester_realtime_profiles_desired) - max(market_data_ingester_realtime_profiles_healthy), 0)", "instant": true, "legendFormat": "Unhealthy profiles", "refId": "A"}
-          ],
-          "title": "Functional Cutover Readiness",
-          "type": "stat"
-        },
-        {
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "description": "Required products selected by active processes compared with products resolved to current workers and products reporting ready.",
-          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "decimals": 0, "min": 0, "unit": "short"}, "overrides": []},
-          "gridPos": {"h": 5, "w": 6, "x": 6, "y": 140},
-          "id": 62,
-          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showPercentChange": false, "textMode": "value_and_name", "wideLayout": true},
-          "pluginVersion": "12.4.2",
-          "targets": [
-            {"editorMode": "code", "expr": "max(polymarket_market_data_required_products)", "instant": true, "legendFormat": "Required", "refId": "A"},
-            {"editorMode": "code", "expr": "max(polymarket_market_data_resolved_products)", "instant": true, "legendFormat": "Resolved", "refId": "B"},
-            {"editorMode": "code", "expr": "max(polymarket_market_data_ready_products)", "instant": true, "legendFormat": "Ready", "refId": "C"}
-          ],
-          "title": "Required Product Coverage",
-          "type": "stat"
-        },
-        {
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "description": "Usable realtime slots account for both the per-worker slot limit and enough free allocation units for a standard realtime profile.",
-          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "decimals": 0, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": 0}, {"color": "green", "value": 1}]}, "unit": "short"}, "overrides": []},
-          "gridPos": {"h": 5, "w": 6, "x": 12, "y": 140},
-          "id": 63,
-          "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showPercentChange": false, "textMode": "value_and_name", "wideLayout": true},
-          "pluginVersion": "12.4.2",
-          "targets": [
-            {"editorMode": "code", "expr": "max(market_data_ingester_worker_realtime_slots_available)", "instant": true, "legendFormat": "Usable spare slots", "refId": "A"}
-          ],
-          "title": "Realtime Cutover Headroom",
-          "type": "stat"
-        },
-        {
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "description": "Current aggregate allocation capacity and the portion reserved by active backfills.",
-          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "decimals": 0, "min": 0, "unit": "short"}, "overrides": []},
-          "gridPos": {"h": 5, "w": 6, "x": 18, "y": 140},
-          "id": 64,
-          "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showPercentChange": false, "textMode": "value_and_name", "wideLayout": true},
-          "pluginVersion": "12.4.2",
-          "targets": [
-            {"editorMode": "code", "expr": "max(market_data_ingester_worker_capacity_units_total)", "instant": true, "legendFormat": "Total", "refId": "A"},
-            {"editorMode": "code", "expr": "max(market_data_ingester_worker_capacity_units_available)", "instant": true, "legendFormat": "Available", "refId": "B"},
-            {"editorMode": "code", "expr": "max(market_data_ingester_backfill_capacity_units_active)", "instant": true, "legendFormat": "Backfills", "refId": "C"}
-          ],
-          "title": "Worker Capacity Units",
-          "type": "stat"
-        },
-        {
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "description": "Age of the latest canonical event applied by the bot for each required product. Lower is fresher.",
-          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 12, "lineWidth": 2, "showPoints": "never", "spanNulls": false}, "min": 0, "unit": "s"}, "overrides": []},
-          "gridPos": {"h": 7, "w": 16, "x": 0, "y": 145},
-          "id": 65,
-          "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}},
-          "pluginVersion": "12.4.2",
-          "targets": [
-            {"editorMode": "code", "expr": "clamp_min(time() - polymarket_market_data_product_last_event_timestamp_seconds, 0)", "legendFormat": "{{product}}", "range": true, "refId": "A"}
-          ],
-          "title": "Required Product Event Age",
-          "type": "timeseries"
-        },
-        {
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "description": "Current unresolved required products grouped by bounded operational reason.",
-          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "decimals": 0, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": 0}, {"color": "red", "value": 1}]}, "unit": "short"}, "overrides": []},
-          "gridPos": {"h": 7, "w": 8, "x": 16, "y": 145},
-          "id": 66,
-          "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "vertical", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showPercentChange": false, "textMode": "value_and_name", "wideLayout": true},
-          "pluginVersion": "12.4.2",
-          "targets": [
-            {"editorMode": "code", "expr": "polymarket_market_data_unresolved_products", "instant": true, "legendFormat": "{{reason}}", "refId": "A"}
-          ],
-          "title": "Unresolved Required Products",
-          "type": "stat"
-        }
-      ],
+      "panels": [],
       "title": "Deployment and Market-Data Readiness",
       "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Cutover is ready only when every desired realtime profile is currently healthy.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "green",
+                  "text": "READY"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 133
+      },
+      "id": 61,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "clamp_min(max(market_data_ingester_realtime_profiles_desired) - max(market_data_ingester_realtime_profiles_healthy), 0)",
+          "instant": true,
+          "legendFormat": "Unhealthy profiles",
+          "refId": "A"
+        }
+      ],
+      "title": "Functional Cutover Readiness",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Required products selected by active processes compared with products resolved to current workers and products reporting ready.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 133
+      },
+      "id": 62,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "max(polymarket_market_data_required_products)",
+          "instant": true,
+          "legendFormat": "Required",
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "max(polymarket_market_data_resolved_products)",
+          "instant": true,
+          "legendFormat": "Resolved",
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "max(polymarket_market_data_ready_products)",
+          "instant": true,
+          "legendFormat": "Ready",
+          "refId": "C"
+        }
+      ],
+      "title": "Required Product Coverage",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Usable realtime slots account for both the per-worker slot limit and enough free allocation units for a standard realtime profile.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 133
+      },
+      "id": 63,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "max(market_data_ingester_worker_realtime_slots_available)",
+          "instant": true,
+          "legendFormat": "Usable spare slots",
+          "refId": "A"
+        }
+      ],
+      "title": "Realtime Cutover Headroom",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Current aggregate allocation capacity and the portion reserved by active backfills.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 133
+      },
+      "id": 64,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "max(market_data_ingester_worker_capacity_units_total)",
+          "instant": true,
+          "legendFormat": "Total",
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "max(market_data_ingester_worker_capacity_units_available)",
+          "instant": true,
+          "legendFormat": "Available",
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "max(market_data_ingester_backfill_capacity_units_active)",
+          "instant": true,
+          "legendFormat": "Backfills",
+          "refId": "C"
+        }
+      ],
+      "title": "Worker Capacity Units",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Age of the latest canonical event applied by the bot for each required product. Lower is fresher.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 16,
+        "x": 0,
+        "y": 138
+      },
+      "id": 65,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "clamp_min(time() - polymarket_market_data_product_last_event_timestamp_seconds, 0)",
+          "legendFormat": "{{product}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Required Product Event Age",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Current unresolved required products grouped by bounded operational reason.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 138
+      },
+      "id": 66,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "polymarket_market_data_unresolved_products",
+          "instant": true,
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Unresolved Required Products",
+      "type": "stat"
     }
   ],
   "preload": false,
@@ -4447,6 +4919,6 @@
   "timezone": "browser",
   "title": "Market Data Pipeline",
   "uid": "market-data-pipeline",
-  "version": 29,
+  "version": 14,
   "weekStart": ""
 }
