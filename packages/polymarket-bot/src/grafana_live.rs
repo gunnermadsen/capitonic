@@ -523,16 +523,20 @@ impl MarketPathSnapshot {
         // path newest-to-oldest so Grafana Trend receives an ascending numeric x-axis
         // and paints the active market from the right edge toward the left.
         for point in self.points.iter().rev() {
-            let point_epoch_nanos = point
-                .observed_at
-                .timestamp_nanos_opt()
-                .expect("a current UTC timestamp is representable in nanoseconds");
+            // Grafana Live orders measurement rows by their transport timestamp before
+            // the Trend panel validates its numeric x field. Mirror the remaining-time
+            // coordinate into a bounded synthetic timestamp so the resulting frame stays
+            // ascending without exposing this transport clock as the visual x-axis.
+            let transport_epoch_nanos = (self.observed_at
+                - chrono::Duration::seconds(300 - point.market_seconds_remaining))
+            .timestamp_nanos_opt()
+            .expect("a bounded current UTC timestamp is representable in nanoseconds");
             // Grafana receives a wall-clock timestamp because Live Measurements requires one,
             // but the realtime market panel must plot this numeric market-relative coordinate.
             // Never bind that panel's x-axis to Grafana's dashboard/global time range.
             writeln!(
                 body,
-                "{MARKET_PATH_MEASUREMENT} market_seconds_remaining={}i,twap_price={},price_to_beat={price_to_beat},{market_schema_field}=1i,{snapshot_schema_field}=1i {point_epoch_nanos}",
+                "{MARKET_PATH_MEASUREMENT} market_seconds_remaining={}i,twap_price={},price_to_beat={price_to_beat},{market_schema_field}=1i,{snapshot_schema_field}=1i {transport_epoch_nanos}",
                 point.market_seconds_remaining,
                 point.price,
             )
@@ -862,6 +866,13 @@ mod tests {
             .lines()
             .nth(1)
             .is_some_and(|line| line.contains("market_seconds_remaining=246i")));
+        let transport_timestamps = body
+            .lines()
+            .map(|line| line.rsplit_once(' ').unwrap().1.parse::<i64>().unwrap())
+            .collect::<Vec<_>>();
+        assert!(transport_timestamps
+            .windows(2)
+            .all(|pair| pair[0] < pair[1]));
     }
 
     #[test]
