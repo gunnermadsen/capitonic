@@ -4,6 +4,7 @@ use super::unified_model_runtime::risk::{
 use super::unified_model_runtime::telemetry as umr_telemetry;
 use std::{
     collections::HashSet,
+    future::Future,
     str::FromStr,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -18,7 +19,7 @@ use rust_decimal::{prelude::ToPrimitive, Decimal};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::{
-    sync::{Mutex, OnceCell, RwLock},
+    sync::{Mutex, OnceCell, OwnedSemaphorePermit, RwLock, Semaphore},
     time::{Duration as TokioDuration, Instant},
 };
 use tracing::warn;
@@ -471,6 +472,8 @@ pub struct BtcProcessRunner {
     router_observation: Mutex<()>,
     risk_model: Option<Arc<RuntimeRiskModel>>,
     primary_persistence_state: Option<Arc<RwLock<RealtimeState>>>,
+    stress_preview_slot: Arc<Semaphore>,
+    stress_preview_tasks: StdMutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 pub type BtcPaperProcessRunner = BtcProcessRunner;
@@ -639,6 +642,8 @@ impl BtcProcessRunner {
             router_observation: Mutex::new(()),
             risk_model,
             primary_persistence_state: None,
+            stress_preview_slot: Arc::new(Semaphore::new(1)),
+            stress_preview_tasks: StdMutex::new(Vec::new()),
         })
     }
 
@@ -1840,11 +1845,6 @@ impl BtcProcessRunner {
             "execution_pending",
         )
         .await?;
-        let preview_futures = self
-            .config
-            .paper_stress_previews
-            .iter()
-            .map(|preview| self.execution_lifecycle.preview_order(&request, preview));
         let primary_request = request.clone();
         if !self.primary_persistence_available().await {
             umr_telemetry::event(
@@ -1867,57 +1867,31 @@ impl BtcProcessRunner {
             .await?;
         complete_directional_model_candidate(&mut directional_candidate, true)?;
         let execution_started = Instant::now();
-        let (report, preview_results) = tokio::join!(
-            execute_order_plan(
-                self.execution_venue.as_ref(),
-                OrderPlan {
-                    plan_id,
-                    orders: vec![primary_request],
-                },
-            ),
-            futures_util::future::join_all(preview_futures),
-        );
+        let report = execute_order_plan(
+            self.execution_venue.as_ref(),
+            OrderPlan {
+                plan_id,
+                orders: vec![primary_request],
+            },
+        )
+        .await;
         let execution_mode = self.execution_lifecycle.mode();
         let report = report.with_context(|| {
             format!("BTC {} OrderPlan execution failed", execution_mode.as_str())
         })?;
         umr_telemetry::duration(
             self.config.process_id,
-            "decision_to_execution_result",
+            "primary_execution",
             execution_started.elapsed().as_secs_f64(),
         );
-        let mut stress_previews = Vec::with_capacity(preview_results.len());
-        for (config, result) in self
-            .config
-            .paper_stress_previews
-            .iter()
-            .zip(preview_results)
-        {
-            match result {
-                Ok(Some(result)) => stress_previews.push(serde_json::json!({
-                    "status": "observed",
-                    "result": result,
-                })),
-                Ok(None) => stress_previews.push(serde_json::json!({
-                    "status": "unavailable",
-                    "scenario_key": config.scenario_key,
-                    "execution_mode": execution_mode.as_str(),
-                })),
-                Err(error) => {
-                    warn!(
-                        error = %error,
-                        scenario_key = %config.scenario_key,
-                        decision_id = %decision.decision_id,
-                        "non-mutating BTC paper stress preview failed"
-                    );
-                    stress_previews.push(serde_json::json!({
-                        "status": "error",
-                        "scenario_key": config.scenario_key,
-                        "error": error.to_string(),
-                    }));
-                }
-            }
-        }
+        umr_telemetry::duration(
+            self.config.process_id,
+            "decision_to_primary_execution_result",
+            (Utc::now() - decision.evaluated_at)
+                .num_milliseconds()
+                .max(0) as f64
+                / 1_000.0,
+        );
         self.store.persist_order_plan_report(&report).await?;
         for fill in &report.fills {
             if let (Some(price), Some(size), Some(fee)) =
@@ -2027,11 +2001,34 @@ impl BtcProcessRunner {
             _ => "acknowledged_pending",
         };
         umr_telemetry::event(self.config.process_id, "execution_outcomes", outcome);
+        let preview_permit = if self.config.paper_stress_previews.is_empty() {
+            None
+        } else {
+            match self.stress_preview_slot.clone().try_acquire_owned() {
+                Ok(permit) => Some(permit),
+                Err(_) => {
+                    umr_telemetry::event(
+                        self.config.process_id,
+                        "stress_preview_outcomes",
+                        "capacity_unavailable",
+                    );
+                    None
+                }
+            }
+        };
+        let preview_status = if self.config.paper_stress_previews.is_empty() {
+            "not_configured"
+        } else if preview_permit.is_some() {
+            "scheduled"
+        } else {
+            "capacity_unavailable"
+        };
         let execution_metadata = execution_result_metadata(
             execution_mode,
             &report,
             &self.config.config_hash,
-            stress_previews,
+            preview_status,
+            scheduled_stress_preview_evidence(&self.config.paper_stress_previews, preview_status),
         );
         self.repository
             .update_strategy_decision_execution(
@@ -2044,9 +2041,44 @@ impl BtcProcessRunner {
                 execution_metadata,
             )
             .await?;
+        if let Some(permit) = preview_permit {
+            let task = spawn_stress_preview_batch(
+                permit,
+                self.execution_lifecycle.clone(),
+                self.repository.clone(),
+                request,
+                self.config.paper_stress_previews.clone(),
+                StressPreviewDecisionIdentity {
+                    process_id: self.config.process_id,
+                    run_id: self.config.run_id,
+                    decision_id: decision.decision_id,
+                    decision_at: decision.evaluated_at,
+                    execution_mode,
+                    config_hash: self.config.config_hash.clone(),
+                },
+            );
+            let mut tasks = self
+                .stress_preview_tasks
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            tasks.retain(|task| !task.is_finished());
+            tasks.push(task);
+        }
         self.execution_reconcile_requested
             .store(true, Ordering::Release);
         Ok(())
+    }
+}
+
+impl Drop for BtcProcessRunner {
+    fn drop(&mut self) {
+        let tasks = self
+            .stress_preview_tasks
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner());
+        for task in tasks.drain(..) {
+            task.abort();
+        }
     }
 }
 
@@ -2063,10 +2095,185 @@ fn decision_execution_status(state: OrderState) -> &'static str {
     }
 }
 
+struct StressPreviewDecisionIdentity {
+    process_id: Uuid,
+    run_id: Uuid,
+    decision_id: Uuid,
+    decision_at: DateTime<Utc>,
+    execution_mode: BtcExecutionMode,
+    config_hash: String,
+}
+
+struct StressPreviewTaskGuard {
+    process_id: Uuid,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl Drop for StressPreviewTaskGuard {
+    fn drop(&mut self) {
+        umr_telemetry::gauge(self.process_id, "stress_preview_in_flight", 0.0);
+    }
+}
+
+fn scheduled_stress_preview_evidence(
+    configs: &[PaperPreviewConfig],
+    status: &'static str,
+) -> Vec<serde_json::Value> {
+    configs
+        .iter()
+        .map(|config| {
+            serde_json::json!({
+                "status": status,
+                "scenario_key": config.scenario_key,
+            })
+        })
+        .collect()
+}
+
+fn stress_preview_metadata(
+    mode: BtcExecutionMode,
+    config_hash: &str,
+    status: &'static str,
+    scenarios: Vec<serde_json::Value>,
+) -> serde_json::Value {
+    let previews = serde_json::json!({
+        "telemetry_only": true,
+        "influenced_primary_execution": false,
+        "primary_config_hash": config_hash,
+        "status": status,
+        "scenarios": scenarios,
+    });
+    match mode {
+        BtcExecutionMode::Paper => serde_json::json!({"paper_stress_previews": previews}),
+        BtcExecutionMode::Live => serde_json::json!({"stress_previews": previews}),
+    }
+}
+
+fn spawn_stress_preview_batch(
+    permit: OwnedSemaphorePermit,
+    execution_lifecycle: Arc<dyn BtcExecutionLifecycle>,
+    repository: BtcRepository,
+    request: OrderRequest,
+    configs: Vec<PaperPreviewConfig>,
+    identity: StressPreviewDecisionIdentity,
+) -> tokio::task::JoinHandle<()> {
+    let process_id = identity.process_id;
+    spawn_process_background_task(process_id, permit, async move {
+        let started = Instant::now();
+        let preview_results = futures_util::future::join_all(
+            configs
+                .iter()
+                .map(|preview| execution_lifecycle.preview_order(&request, preview)),
+        )
+        .await;
+        umr_telemetry::duration(
+            identity.process_id,
+            "stress_preview_batch",
+            started.elapsed().as_secs_f64(),
+        );
+
+        let mut any_error = false;
+        let mut scenarios = Vec::with_capacity(preview_results.len());
+        for (config, result) in configs.iter().zip(preview_results) {
+            match result {
+                Ok(Some(result)) => {
+                    umr_telemetry::event(
+                        identity.process_id,
+                        "stress_preview_outcomes",
+                        "completed",
+                    );
+                    scenarios.push(serde_json::json!({
+                        "status": "observed",
+                        "result": result,
+                    }));
+                }
+                Ok(None) => {
+                    umr_telemetry::event(
+                        identity.process_id,
+                        "stress_preview_outcomes",
+                        "unavailable",
+                    );
+                    scenarios.push(serde_json::json!({
+                        "status": "unavailable",
+                        "scenario_key": config.scenario_key,
+                        "execution_mode": identity.execution_mode.as_str(),
+                    }));
+                }
+                Err(error) => {
+                    any_error = true;
+                    umr_telemetry::event(identity.process_id, "stress_preview_outcomes", "error");
+                    warn!(
+                        error = %error,
+                        scenario_key = %config.scenario_key,
+                        decision_id = %identity.decision_id,
+                        "non-mutating BTC paper stress preview failed"
+                    );
+                    scenarios.push(serde_json::json!({
+                        "status": "error",
+                        "scenario_key": config.scenario_key,
+                        "error": error.to_string(),
+                    }));
+                }
+            }
+        }
+        let status = if any_error {
+            "completed_with_errors"
+        } else {
+            "completed"
+        };
+        let metadata = stress_preview_metadata(
+            identity.execution_mode,
+            &identity.config_hash,
+            status,
+            scenarios,
+        );
+        if let Err(error) = repository
+            .merge_strategy_decision_metadata(
+                identity.process_id,
+                identity.run_id,
+                identity.decision_id,
+                identity.decision_at,
+                metadata,
+            )
+            .await
+        {
+            umr_telemetry::event(
+                identity.process_id,
+                "stress_preview_outcomes",
+                "persistence_error",
+            );
+            warn!(
+                error = %error,
+                decision_id = %identity.decision_id,
+                "failed to persist non-mutating BTC paper stress-preview evidence"
+            );
+        }
+    })
+}
+
+fn spawn_process_background_task<F>(
+    process_id: Uuid,
+    permit: OwnedSemaphorePermit,
+    task: F,
+) -> tokio::task::JoinHandle<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    umr_telemetry::gauge(process_id, "stress_preview_in_flight", 1.0);
+    tokio::spawn(async move {
+        let _task_guard = StressPreviewTaskGuard {
+            process_id,
+            _permit: permit,
+        };
+        task.await;
+    })
+}
+
 fn execution_result_metadata(
     mode: BtcExecutionMode,
     report: &OrderPlanReport,
     config_hash: &str,
+    preview_status: &'static str,
     stress_previews: Vec<serde_json::Value>,
 ) -> serde_json::Value {
     let order_plan = serde_json::json!({
@@ -2075,22 +2282,18 @@ fn execution_result_metadata(
         "fills": &report.fills,
         "reconciliation": &report.reconciliation,
     });
-    let previews = serde_json::json!({
-        "telemetry_only": true,
-        "influenced_primary_execution": false,
-        "primary_config_hash": config_hash,
-        "scenarios": stress_previews,
-    });
+    let preview_metadata =
+        stress_preview_metadata(mode, config_hash, preview_status, stress_previews);
     match mode {
         // Preserve the durable paper evidence shape for existing processes and resumable runs.
         BtcExecutionMode::Paper => serde_json::json!({
             "paper_order_plan": order_plan,
-            "paper_stress_previews": previews,
+            "paper_stress_previews": preview_metadata["paper_stress_previews"],
         }),
         BtcExecutionMode::Live => serde_json::json!({
             "execution_mode": mode.as_str(),
             "order_plan": order_plan,
-            "stress_previews": previews,
+            "stress_previews": preview_metadata["stress_previews"],
         }),
     }
 }
@@ -3449,19 +3652,94 @@ mod tests {
                 checked_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
             },
         };
-        let paper =
-            execution_result_metadata(BtcExecutionMode::Paper, &report, "paper-config", Vec::new());
+        let paper = execution_result_metadata(
+            BtcExecutionMode::Paper,
+            &report,
+            "paper-config",
+            "scheduled",
+            Vec::new(),
+        );
         assert!(paper.get("paper_order_plan").is_some());
         assert!(paper.get("paper_stress_previews").is_some());
+        assert_eq!(paper["paper_stress_previews"]["status"], "scheduled");
+        assert_eq!(
+            paper["paper_stress_previews"]["influenced_primary_execution"],
+            false
+        );
         assert!(paper.get("execution_mode").is_none());
         assert!(paper.get("order_plan").is_none());
 
-        let live =
-            execution_result_metadata(BtcExecutionMode::Live, &report, "live-config", Vec::new());
+        let live = execution_result_metadata(
+            BtcExecutionMode::Live,
+            &report,
+            "live-config",
+            "scheduled",
+            Vec::new(),
+        );
         assert_eq!(live["execution_mode"], "live");
         assert!(live.get("order_plan").is_some());
         assert!(live.get("stress_previews").is_some());
+        assert_eq!(live["stress_previews"]["status"], "scheduled");
+        assert_eq!(
+            live["stress_previews"]["influenced_primary_execution"],
+            false
+        );
         assert!(live.get("paper_order_plan").is_none());
+    }
+
+    #[test]
+    fn stress_preview_capacity_is_process_scoped_and_non_blocking() {
+        let slot = Arc::new(Semaphore::new(1));
+        let first = slot
+            .clone()
+            .try_acquire_owned()
+            .expect("first preview batch must acquire the process slot");
+        assert!(slot.clone().try_acquire_owned().is_err());
+        drop(first);
+        assert!(slot.try_acquire_owned().is_ok());
+    }
+
+    #[tokio::test]
+    async fn blocked_stress_preview_task_does_not_block_primary_caller() {
+        let slot = Arc::new(Semaphore::new(1));
+        let permit = slot
+            .clone()
+            .try_acquire_owned()
+            .expect("preview slot must be available");
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let task_started = started.clone();
+        let task_release = release.clone();
+
+        let handle = spawn_process_background_task(Uuid::from_u128(701), permit, async move {
+            task_started.notify_one();
+            task_release.notified().await;
+        });
+
+        tokio::time::timeout(TokioDuration::from_millis(100), started.notified())
+            .await
+            .expect("background preview task must start independently");
+        assert!(!handle.is_finished());
+        assert!(slot.clone().try_acquire_owned().is_err());
+
+        release.notify_one();
+        tokio::time::timeout(TokioDuration::from_millis(100), handle)
+            .await
+            .expect("background preview task must finish after release")
+            .expect("background preview task must not panic");
+        assert!(slot.try_acquire_owned().is_ok());
+    }
+
+    #[test]
+    fn unavailable_stress_preview_evidence_is_explicit() {
+        let configs = vec![PaperPreviewConfig {
+            scenario_key: "slow-arrival".to_string(),
+            arrival_latency: std::time::Duration::from_millis(500),
+            visible_depth_haircut: dec!(0.75),
+        }];
+        let evidence = scheduled_stress_preview_evidence(&configs, "capacity_unavailable");
+        assert_eq!(evidence[0]["status"], "capacity_unavailable");
+        assert_eq!(evidence[0]["scenario_key"], "slow-arrival");
     }
 
     #[test]

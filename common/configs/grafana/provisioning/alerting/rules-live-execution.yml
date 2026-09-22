@@ -1,0 +1,128 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: live-execution-health-30s
+    folder: Polymarket Trading Path
+    interval: 30s
+    rules:
+      - uid: live_execution_decision_post_latency
+        title: Decision-to-POST latency is excessive
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 900, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "histogram_quantile(0.95, sum by (process_id, le) (rate(polymarket_umr_stage_duration_seconds_bucket{stage=\"decision_to_venue_post\"}[10m])))", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [1], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations: {summary: "Qualified decisions are taking too long to reach the venue POST", description: "The process-scoped p95 decision-to-POST latency exceeded one second for five minutes."}
+        labels: {service: polymarket-bot, family: live_execution, severity: warning, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
+      - uid: live_execution_decision_ack_latency
+        title: Decision-to-acknowledgement latency is excessive
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 900, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "histogram_quantile(0.95, sum by (process_id, le) (rate(polymarket_umr_stage_duration_seconds_bucket{stage=\"decision_to_venue_acknowledgement\"}[10m])))", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [2], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations: {summary: "Live orders are slow to reach venue acknowledgement", description: "The process-scoped p95 decision-to-acknowledgement latency exceeded two seconds for five minutes."}
+        labels: {service: polymarket-bot, family: live_execution, severity: warning, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
+      - uid: live_execution_transport_failure
+        title: Live submissions are failing in transport
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 600, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "sum by (process_id) (increase(polymarket_umr_venue_post_outcomes_total{reason=\"transport_failure\"}[5m]))", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 1m
+        annotations: {summary: "A live order encountered a venue transport failure", description: "The submission is durably marked ambiguous and must be resolved by WebSocket or HTTP reconciliation before intervention."}
+        labels: {service: polymarket-bot, family: live_execution, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
+      - uid: live_execution_qualified_without_post
+        title: Qualified decisions repeatedly fail to reach a venue POST
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 900, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "sum by (process_id, reason) (increase(polymarket_umr_qualified_without_post_total[10m]))", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [3], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 3m
+        annotations: {summary: "Qualified decisions are repeatedly failing before venue submission", description: "This is execution opportunity loss, not proof of a missed fill. Inspect the bounded reason label and entry-safety evidence."}
+        labels: {service: polymarket-bot, family: live_execution, severity: warning, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
+      - uid: live_execution_candidate_lag
+        title: Scheduled candidate evaluation lag is excessive
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 900, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "histogram_quantile(0.95, sum by (process_id, le) (rate(polymarket_umr_stage_duration_seconds_bucket{stage=\"scheduled_candidate_evaluation_lag\"}[10m])))", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [1], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations: {summary: "Scheduled candidates are evaluated more than one second late", description: "Sustained evaluation lag can consume market-data freshness and execution opportunity budgets."}
+        labels: {service: polymarket-bot, family: live_execution, severity: warning, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
+      - uid: live_execution_preview_capacity
+        title: Stress preview capacity is unavailable
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 900, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "sum by (process_id) (increase(polymarket_umr_stress_preview_outcomes_total{reason=~\"capacity_unavailable|persistence_error\"}[10m]))", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 2m
+        annotations: {summary: "Non-mutating stress-preview evidence is incomplete", description: "Preview work remains isolated from primary execution, but capacity or persistence prevented complete preview evidence."}
+        labels: {service: polymarket-bot, family: live_execution, severity: warning, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false

@@ -86,46 +86,6 @@ groups:
         annotations: {summary: "Orders remain unresolved after reconciliation", description: "One or more process-owned orders remain ambiguous or nonterminal across the persistence window."}
         labels: {service: polymarket-bot, family: reconciliation, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
         isPaused: false
-      - uid: reconciliation_opportunity_loss
-        title: Sustained execution opportunity loss
-        condition: C
-        data:
-          - refId: A
-            datasourceUid: prometheus
-            relativeTimeRange: {from: 900, to: 0}
-            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "sum by (process_id) (increase({__name__=~\"polymarket_umr_(scheduled_buckets_skipped|marketability_lost)_total\"}[10m]))", instant: true, refId: A}
-          - refId: B
-            datasourceUid: __expr__
-            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
-          - refId: C
-            datasourceUid: __expr__
-            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [3], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
-        noDataState: OK
-        execErrState: Error
-        for: 3m
-        annotations: {summary: "Scheduled opportunities are repeatedly skipped or lose marketability", description: "This measures execution opportunity loss, not confirmed missed fills."}
-        labels: {service: polymarket-bot, family: reconciliation, severity: warning, environment: $GRAFANA_ALERT_ENVIRONMENT}
-        isPaused: false
-      - uid: reconciliation_decision_post_latency
-        title: Decision-to-POST latency is excessive
-        condition: C
-        data:
-          - refId: A
-            datasourceUid: prometheus
-            relativeTimeRange: {from: 900, to: 0}
-            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "histogram_quantile(0.95, sum by (process_id, le) (rate(polymarket_umr_stage_duration_seconds_bucket{stage=\"decision_to_venue_post\"}[10m])))", instant: true, refId: A}
-          - refId: B
-            datasourceUid: __expr__
-            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
-          - refId: C
-            datasourceUid: __expr__
-            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [1], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
-        noDataState: OK
-        execErrState: Error
-        for: 5m
-        annotations: {summary: "Qualified decisions are taking too long to reach the venue POST", description: "The process-scoped p95 decision-to-POST latency exceeded one second for five minutes."}
-        labels: {service: polymarket-bot, family: reconciliation, severity: warning, environment: $GRAFANA_ALERT_ENVIRONMENT}
-        isPaused: false
       - uid: reconciliation_http_recovered_fill
         title: HTTP fallback recovered websocket-missed fills
         condition: C

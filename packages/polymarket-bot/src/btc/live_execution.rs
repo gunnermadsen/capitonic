@@ -101,7 +101,7 @@ impl LivePrePostGuard for BtcLiveExecutionAdapter {
 
     fn observe_post_result(
         &self,
-        _request: &OrderRequest,
+        request: &OrderRequest,
         latency: std::time::Duration,
         outcome: &'static str,
     ) {
@@ -110,6 +110,21 @@ impl LivePrePostGuard for BtcLiveExecutionAdapter {
             "venue_post_to_acknowledgement",
             latency.as_secs_f64(),
         );
+        if let Some(evaluated_at) = request
+            .metadata
+            .get("decision_at")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        {
+            super::unified_model_runtime::telemetry::duration(
+                self.expected_process_id,
+                "decision_to_venue_acknowledgement",
+                (Utc::now() - evaluated_at.with_timezone(&Utc))
+                    .num_milliseconds()
+                    .max(0) as f64
+                    / 1_000.0,
+            );
+        }
         super::unified_model_runtime::telemetry::event(
             self.expected_process_id,
             "venue_post_outcomes",
@@ -971,6 +986,34 @@ mod tests {
             order.request.metadata["live_execution_gate"]["post_attempted"],
             false
         );
+    }
+
+    #[test]
+    fn post_result_records_decision_to_acknowledgement_latency() {
+        let decision_at = Utc::now() - Duration::milliseconds(25);
+        let process_id = Uuid::new_v4();
+        let fake = Arc::new(FakeVenue::default());
+        let venue = adapter(
+            &fake,
+            seeded_registry("market", "token", decision_at, decision_at, dec!(10)),
+            process_id,
+        );
+        let mut request = guarded_request(decision_at, process_id, "market", "token", dec!(5));
+        request.metadata["decision_at"] = serde_json::json!(decision_at);
+
+        venue.observe_post_result(
+            &request,
+            std::time::Duration::from_millis(7),
+            "acknowledged",
+        );
+
+        let metrics = super::super::unified_model_runtime::telemetry::prometheus_metrics();
+        assert!(metrics.contains(&format!(
+            "process_id=\"{process_id}\",stage=\"decision_to_venue_acknowledgement\""
+        )));
+        assert!(metrics.contains(&format!(
+            "process_id=\"{process_id}\",stage=\"venue_post_to_acknowledgement\""
+        )));
     }
 
     #[tokio::test]

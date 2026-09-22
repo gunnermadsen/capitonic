@@ -671,6 +671,15 @@ WHERE process_id = $1
   AND decision_at = $4
 "#;
 
+const MERGE_STRATEGY_DECISION_METADATA_SQL: &str = r#"
+UPDATE polymarket.btc_strategy_decisions
+SET metadata = metadata || $5
+WHERE process_id = $1
+  AND run_id = $2
+  AND decision_id = $3
+  AND decision_at = $4
+"#;
+
 const AUTHORIZE_PENDING_STRATEGY_DECISION_SQL: &str = r#"
 UPDATE polymarket.btc_strategy_decisions
 SET status = 'approved'
@@ -2744,6 +2753,29 @@ impl BtcRepository {
         Ok(())
     }
 
+    pub async fn merge_strategy_decision_metadata(
+        &self,
+        process_id: Uuid,
+        run_id: Uuid,
+        decision_id: Uuid,
+        decision_at: DateTime<Utc>,
+        metadata: serde_json::Value,
+    ) -> Result<()> {
+        let result = sqlx::query(MERGE_STRATEGY_DECISION_METADATA_SQL)
+            .bind(process_id)
+            .bind(run_id)
+            .bind(decision_id)
+            .bind(decision_at)
+            .bind(metadata)
+            .execute(&self.pool)
+            .await
+            .context("failed to merge BTC decision metadata")?;
+        if result.rows_affected() != 1 {
+            bail!("BTC decision metadata merge did not update exactly one row");
+        }
+        Ok(())
+    }
+
     pub async fn authorize_pending_strategy_decision(
         &self,
         process_id: Uuid,
@@ -4020,6 +4052,14 @@ mod tests {
         let decision_update = UPDATE_STRATEGY_DECISION_EXECUTION_SQL.to_ascii_lowercase();
         assert!(decision_update.contains("where process_id = $1"));
         assert!(decision_update.contains("and run_id = $2"));
+
+        let metadata_merge = MERGE_STRATEGY_DECISION_METADATA_SQL.to_ascii_lowercase();
+        assert!(metadata_merge.contains("set metadata = metadata || $5"));
+        assert!(metadata_merge.contains("where process_id = $1"));
+        assert!(metadata_merge.contains("and run_id = $2"));
+        assert!(metadata_merge.contains("and decision_id = $3"));
+        assert!(metadata_merge.contains("and decision_at = $4"));
+        assert!(!metadata_merge.contains("set status"));
 
         let discovery = DISCOVER_PENDING_SETTLEMENTS_SQL.to_ascii_lowercase();
         assert!(discovery.contains("with order_identity as materialized"));

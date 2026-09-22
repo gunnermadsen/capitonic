@@ -108,6 +108,10 @@ if [ ! -f "${SRC_DIR}/alerting/rules-reconciliation.yml" ]; then
   echo "Missing Grafana reconciliation alert provisioning source" >&2
   exit 1
 fi
+if [ ! -f "${SRC_DIR}/alerting/rules-live-execution.yml" ]; then
+  echo "Missing Grafana live-execution alert provisioning source" >&2
+  exit 1
+fi
 
 cp "${SRC_DIR}/dashboards/dashboards.yml" "${DST_DIR}/dashboards/dashboards.yml"
 cp "${SRC_DIR}/alerting/rules-clob-market-data.yml" "${DST_DIR}/alerting/rules-clob-market-data.yml"
@@ -119,6 +123,7 @@ cp "${SRC_DIR}/alerting/rules-market-data-pipeline.yml" "${DST_DIR}/alerting/rul
 cp "${SRC_DIR}/alerting/rules-worker-allocation.yml" "${DST_DIR}/alerting/rules-worker-allocation.yml"
 cp "${SRC_DIR}/alerting/rules-umr.yml" "${DST_DIR}/alerting/rules-umr.yml"
 cp "${SRC_DIR}/alerting/rules-reconciliation.yml" "${DST_DIR}/alerting/rules-reconciliation.yml"
+cp "${SRC_DIR}/alerting/rules-live-execution.yml" "${DST_DIR}/alerting/rules-live-execution.yml"
 
 cat > "${DST_DIR}/datasources/postgres.yml" <<EOF
 apiVersion: 1
