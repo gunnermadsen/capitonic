@@ -186,12 +186,9 @@ pub(super) fn user_ws_heartbeat_ack_timed_out(
 
 pub(super) fn live_capital_exposure_gate(
     resulting_exposure: Decimal,
-    max_daily_loss_usd: Option<Decimal>,
     max_open_notional_usd: Option<Decimal>,
 ) -> Option<LiveExecutionGateReason> {
-    if max_daily_loss_usd.is_some_and(|maximum| resulting_exposure > maximum) {
-        Some(LiveExecutionGateReason::DailyLossLimit)
-    } else if max_open_notional_usd.is_some_and(|maximum| resulting_exposure > maximum) {
+    if max_open_notional_usd.is_some_and(|maximum| resulting_exposure > maximum) {
         Some(LiveExecutionGateReason::OpenNotionalLimit)
     } else {
         None

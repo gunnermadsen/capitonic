@@ -1012,19 +1012,20 @@ impl LiveVenue {
         request: &OrderRequest,
         ignored_client_order_id: Option<Uuid>,
     ) -> std::result::Result<LiveSubmissionRiskAssessment, LiveSubmissionRiskFailure> {
-        let max_daily_loss_usd = self
-            .bound_execution()
-            .map_err(|error| {
-                LiveSubmissionRiskFailure::new(
-                    LiveExecutionGateReason::ExposureEvidenceUnavailable,
-                    error,
-                )
-            })?
-            .max_daily_loss_usd;
-        let assessment = |gate_reason, daily_pnl| LiveSubmissionRiskAssessment {
+        let execution = self.bound_execution().map_err(|error| {
+            LiveSubmissionRiskFailure::new(
+                LiveExecutionGateReason::ExposureEvidenceUnavailable,
+                error,
+            )
+        })?;
+        let max_daily_loss_usd = execution.max_daily_loss_usd;
+        let max_open_notional_usd = execution.max_open_notional_usd;
+        let max_open_positions = execution.max_open_positions;
+        let assessment = |gate_reason, daily_pnl, exposure| LiveSubmissionRiskAssessment {
             gate_reason,
             daily_pnl,
             max_daily_loss_usd,
+            exposure,
         };
         let identity = canonical_configured_account_identity(
             &self.config,
@@ -1053,6 +1054,7 @@ impl LiveVenue {
         if !process_accounting_entry_safe {
             return Ok(assessment(
                 Some(LiveExecutionGateReason::ProcessAccountingReadiness),
+                None,
                 None,
             ));
         }
@@ -1168,19 +1170,30 @@ impl LiveVenue {
                     error,
                 )
             })?;
-        if let Some(reason) = live_capital_exposure_gate(
-            resulting_exposure,
-            max_daily_loss_usd,
-            self.bound_execution()
-                .map_err(|error| {
-                    LiveSubmissionRiskFailure::new(
-                        LiveExecutionGateReason::ExposureEvidenceUnavailable,
-                        error,
-                    )
-                })?
-                .max_open_notional_usd,
-        ) {
-            return Ok(assessment(Some(reason), recognized_net_pnl));
+        let mut markets = exposure
+            .exposed_market_ids
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>();
+        let open_market_count = markets.len();
+        markets.insert(request.market_id.clone());
+        let exposure_evidence = LiveSubmissionExposureEvidence {
+            open_exposure_usd: exposure.total_exposure_usd,
+            requested_exposure_usd: requested_exposure.total_exposure_usd,
+            resulting_exposure_usd: resulting_exposure,
+            open_market_count,
+            resulting_market_count: markets.len(),
+            max_open_notional_usd,
+            max_open_positions,
+            has_unredeemed_settlement: exposure.has_unredeemed_settlement,
+        };
+        if let Some(reason) = live_capital_exposure_gate(resulting_exposure, max_open_notional_usd)
+        {
+            return Ok(assessment(
+                Some(reason),
+                recognized_net_pnl,
+                Some(exposure_evidence),
+            ));
         }
 
         if let (Some(max_daily_loss_usd), Some(daily_pnl)) =
@@ -1190,29 +1203,16 @@ impl LiveVenue {
                 return Ok(assessment(
                     Some(LiveExecutionGateReason::DailyLossLimit),
                     Some(daily_pnl),
+                    Some(exposure_evidence),
                 ));
             }
         }
 
-        let mut markets = exposure
-            .exposed_market_ids
-            .into_iter()
-            .collect::<HashSet<_>>();
-        markets.insert(request.market_id.clone());
-        if self
-            .bound_execution()
-            .map_err(|error| {
-                LiveSubmissionRiskFailure::new(
-                    LiveExecutionGateReason::ExposureEvidenceUnavailable,
-                    error,
-                )
-            })?
-            .max_open_positions
-            .is_some_and(|maximum| markets.len() > maximum)
-        {
+        if max_open_positions.is_some_and(|maximum| markets.len() > maximum) {
             return Ok(assessment(
                 Some(LiveExecutionGateReason::OpenPositionLimit),
                 recognized_net_pnl,
+                Some(exposure_evidence),
             ));
         }
 
@@ -1276,10 +1276,15 @@ impl LiveVenue {
                 return Ok(assessment(
                     Some(LiveExecutionGateReason::OpenNotionalLimit),
                     recognized_net_pnl,
+                    Some(exposure_evidence),
                 ));
             }
         }
-        Ok(assessment(None, recognized_net_pnl))
+        Ok(assessment(
+            None,
+            recognized_net_pnl,
+            Some(exposure_evidence),
+        ))
     }
 
     pub(super) async fn current_entry_gate_reason(

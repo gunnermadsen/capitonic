@@ -728,17 +728,14 @@ mod tests {
     }
 
     #[test]
-    fn cumulative_capital_exposure_enforces_the_daily_hard_cap() {
+    fn cumulative_capital_exposure_enforces_only_the_open_notional_limit() {
+        assert_eq!(live_capital_exposure_gate(dec!(10), Some(dec!(30))), None);
         assert_eq!(
-            live_capital_exposure_gate(dec!(10), Some(dec!(10)), Some(dec!(30))),
+            live_capital_exposure_gate(dec!(10.01), Some(dec!(30))),
             None
         );
         assert_eq!(
-            live_capital_exposure_gate(dec!(10.01), Some(dec!(10)), Some(dec!(30))),
-            Some(LiveExecutionGateReason::DailyLossLimit)
-        );
-        assert_eq!(
-            live_capital_exposure_gate(dec!(5.01), Some(dec!(10)), Some(dec!(5))),
+            live_capital_exposure_gate(dec!(5.01), Some(dec!(5))),
             Some(LiveExecutionGateReason::OpenNotionalLimit)
         );
     }

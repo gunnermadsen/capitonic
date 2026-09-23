@@ -332,6 +332,14 @@ pub fn live_submission_risk_check(
     daily_loss_headroom_usd: Option<f64>,
     pending_redemption_count: usize,
     credited_count: usize,
+    open_exposure_usd: Option<f64>,
+    requested_exposure_usd: Option<f64>,
+    resulting_exposure_usd: Option<f64>,
+    open_market_count: Option<usize>,
+    resulting_market_count: Option<usize>,
+    open_notional_headroom_usd: Option<f64>,
+    open_position_headroom: Option<f64>,
+    has_unredeemed_settlement: Option<bool>,
 ) {
     update(id, |p| {
         *p.submission_risk_counters
@@ -359,6 +367,43 @@ pub fn live_submission_risk_check(
             "live_daily_loss_credited_settlements",
             credited_count as f64,
         );
+        for (name, value) in [
+            ("live_submission_open_exposure_usd", open_exposure_usd),
+            (
+                "live_submission_requested_exposure_usd",
+                requested_exposure_usd,
+            ),
+            (
+                "live_submission_resulting_exposure_usd",
+                resulting_exposure_usd,
+            ),
+            (
+                "live_submission_open_notional_headroom_usd",
+                open_notional_headroom_usd,
+            ),
+            (
+                "live_submission_open_position_headroom",
+                open_position_headroom,
+            ),
+        ] {
+            if let Some(value) = value.filter(|value| value.is_finite()) {
+                p.gauges.insert(name, value);
+            }
+        }
+        if let Some(value) = open_market_count {
+            p.gauges
+                .insert("live_submission_open_market_count", value as f64);
+        }
+        if let Some(value) = resulting_market_count {
+            p.gauges
+                .insert("live_submission_resulting_market_count", value as f64);
+        }
+        if let Some(value) = has_unredeemed_settlement {
+            p.gauges.insert(
+                "live_submission_has_unredeemed_settlement",
+                f64::from(value),
+            );
+        }
     });
 }
 pub fn member_active(id: Uuid, member_id: &str, active: bool) {
@@ -1207,6 +1252,14 @@ mod router_tests {
             None,
             0,
             0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         );
         let failed = prometheus_metrics();
         assert!(failed.contains(&format!(
@@ -1225,6 +1278,14 @@ mod router_tests {
             Some(5.21306),
             1,
             0,
+            Some(0.0),
+            Some(1.82963),
+            Some(1.82963),
+            Some(0),
+            Some(1),
+            Some(1.17037),
+            Some(0.0),
+            Some(true),
         );
         let recovered = prometheus_metrics();
         assert!(recovered.contains(&format!(
@@ -1235,6 +1296,15 @@ mod router_tests {
         )));
         assert!(recovered.contains(&format!(
             "polymarket_umr_live_daily_loss_net_pnl_usd{{process_id=\"{id}\"}} 2.21306"
+        )));
+        assert!(recovered.contains(&format!(
+            "polymarket_umr_live_submission_open_exposure_usd{{process_id=\"{id}\"}} 0"
+        )));
+        assert!(recovered.contains(&format!(
+            "polymarket_umr_live_submission_resulting_market_count{{process_id=\"{id}\"}} 1"
+        )));
+        assert!(recovered.contains(&format!(
+            "polymarket_umr_live_submission_has_unredeemed_settlement{{process_id=\"{id}\"}} 1"
         )));
     }
 }

@@ -131,6 +131,14 @@ impl ExecutionVenue for LiveVenue {
                     None,
                     0,
                     0,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
                 );
                 warn!(
                     client_order_id = %request.client_order_id,
@@ -153,6 +161,17 @@ impl ExecutionVenue for LiveVenue {
             .daily_pnl
             .map(|evidence| (evidence.pending_redemption_count, evidence.credited_count))
             .unwrap_or_default();
+        let exposure = risk_result.exposure;
+        let open_notional_headroom_usd = exposure.and_then(|evidence| {
+            evidence
+                .max_open_notional_usd
+                .and_then(|maximum| (maximum - evidence.resulting_exposure_usd).to_f64())
+        });
+        let open_position_headroom = exposure.and_then(|evidence| {
+            evidence
+                .max_open_positions
+                .map(|maximum| maximum as f64 - evidence.resulting_market_count as f64)
+        });
         crate::btc::unified_model_runtime::telemetry::live_submission_risk_check(
             process_id,
             if risk_result.gate_reason.is_some() {
@@ -169,6 +188,14 @@ impl ExecutionVenue for LiveVenue {
             daily_loss_headroom_usd,
             pending_redemption_count,
             credited_count,
+            exposure.and_then(|evidence| evidence.open_exposure_usd.to_f64()),
+            exposure.and_then(|evidence| evidence.requested_exposure_usd.to_f64()),
+            exposure.and_then(|evidence| evidence.resulting_exposure_usd.to_f64()),
+            exposure.map(|evidence| evidence.open_market_count),
+            exposure.map(|evidence| evidence.resulting_market_count),
+            open_notional_headroom_usd,
+            open_position_headroom,
+            exposure.map(|evidence| evidence.has_unredeemed_settlement),
         );
         if let Some(reason) = risk_result.gate_reason {
             return live_execution_gate_closed_order(request, reason);

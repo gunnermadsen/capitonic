@@ -176,6 +176,19 @@ struct LiveSubmissionRiskAssessment {
     gate_reason: Option<LiveExecutionGateReason>,
     daily_pnl: Option<LiveDailyPnlEvidence>,
     max_daily_loss_usd: Option<Decimal>,
+    exposure: Option<LiveSubmissionExposureEvidence>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LiveSubmissionExposureEvidence {
+    open_exposure_usd: Decimal,
+    requested_exposure_usd: Decimal,
+    resulting_exposure_usd: Decimal,
+    open_market_count: usize,
+    resulting_market_count: usize,
+    max_open_notional_usd: Option<Decimal>,
+    max_open_positions: Option<usize>,
+    has_unredeemed_settlement: bool,
 }
 
 #[derive(Debug)]

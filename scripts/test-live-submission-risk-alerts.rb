@@ -1,5 +1,6 @@
 require 'yaml'
 require 'open3'
+require 'json'
 
 root = File.expand_path('..', __dir__)
 path = "#{root}/common/configs/grafana/provisioning/alerting/rules-live-execution.yml"
@@ -49,5 +50,16 @@ output, status = Open3.capture2e(
 )
 puts output
 abort 'Live submission-risk Prometheus expression tests failed' unless status.success?
+
+dashboard = JSON.parse(File.read("#{root}/common/configs/grafana/dashboards/live-trading-health.json"))
+panels = dashboard.fetch('panels').to_h { |panel| [panel.fetch('title'), panel] }
+exposure_panel = panels.fetch('Live Open Exposure Admission')
+market_panel = panels.fetch('Open Markets & Pending Redemption')
+exposure_queries = exposure_panel.fetch('targets').map { |target| target.fetch('expr') }.join('\n')
+market_queries = market_panel.fetch('targets').map { |target| target.fetch('expr') }.join('\n')
+raise 'open exposure dashboard lost resulting exposure' unless exposure_queries.include?('polymarket_umr_live_submission_resulting_exposure_usd')
+raise 'open exposure dashboard lost notional headroom' unless exposure_queries.include?('polymarket_umr_live_submission_open_notional_headroom_usd')
+raise 'open market dashboard lost resulting market count' unless market_queries.include?('polymarket_umr_live_submission_resulting_market_count')
+raise 'open market dashboard lost pending redemption state' unless market_queries.include?('polymarket_umr_live_submission_has_unredeemed_settlement')
 
 puts "PASS #{selected.size} live submission-risk alert contracts"

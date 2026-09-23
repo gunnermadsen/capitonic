@@ -140,7 +140,7 @@ WHERE f.process_id = $1
     WHERE settlement.process_id = $1
       AND settlement.order_id = f.order_id
       AND settlement.execution_mode = 'live'
-      AND settlement.credit_status = 'credited'
+      AND settlement.credit_status IN ('pending', 'credited')
   )
   AND NOT EXISTS (
     SELECT 1
@@ -367,9 +367,9 @@ struct LiveExposureFillRow {
 
 /// Conservative, process-owned capital exposure used by the live submission gate.
 ///
-/// Filled BUY exposure is intentionally cumulative until an exact, credited live redemption or a
-/// fully applied, process-owned manual exit is persisted. Unrecognized SELL activity and market
-/// resolution alone do not release it.
+/// Filled BUY exposure is intentionally cumulative until an exact official live settlement or a
+/// fully applied, process-owned manual exit is persisted. A resolved settlement awaiting
+/// redemption is a liquidity constraint, not open market risk.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LiveProcessExposureSnapshot {
     pub process_id: Uuid,
@@ -1086,9 +1086,9 @@ impl Store {
     ///
     /// Pending/unknown/nonterminal orders reserve their full requested notional and deterministic
     /// dynamic fee. Every historical live BUY fill retains its actual notional and fee until the
-    /// settlement ledger contains exact credited exchange-redemption evidence or reconciliation
-    /// persists an exact, fully applied, process-owned manual exit. This does not infer release
-    /// from an unapplied SELL or market resolution alone.
+    /// settlement ledger contains exact official-resolution evidence or reconciliation persists
+    /// an exact, fully applied, process-owned manual exit. Redemption remains governed separately
+    /// by the account collateral balance and does not keep resolved market risk open.
     pub async fn conservative_live_process_exposure(
         &self,
         process_id: Uuid,
@@ -4642,7 +4642,7 @@ mod tests {
             SELECT_LIVE_PROCESS_EXPOSURE_FILLS_SQL.contains("settlement.execution_mode = 'live'")
         );
         assert!(SELECT_LIVE_PROCESS_EXPOSURE_FILLS_SQL
-            .contains("settlement.credit_status = 'credited'"));
+            .contains("settlement.credit_status IN ('pending', 'credited')"));
         assert!(SELECT_LIVE_PROCESS_EXPOSURE_FILLS_SQL.contains("exit_order.process_id = $1"));
         assert!(SELECT_LIVE_PROCESS_EXPOSURE_FILLS_SQL
             .contains("account_exit.applied_exit_size = account_exit.size"));
