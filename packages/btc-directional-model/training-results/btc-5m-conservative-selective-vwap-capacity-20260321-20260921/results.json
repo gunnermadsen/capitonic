@@ -1,0 +1,49 @@
+{
+  "schema_version": "btc-conservative-selective-vwap-capacity-result-pointer-v1",
+  "run_id": "20260923T011753Z",
+  "run_path": "/Volumes/docker-data/polymarket-bot/artifacts/training/btc-directional-model/conservative-selective-vwap-capacity/20260923T011753Z",
+  "producing_commit": "cde94adcdeb637d7a7b7c5da1898ea0f30441167",
+  "source_panel_sha256": "33990603cc3621cf3b3e6d17fa15ffc611d619cf4e6e761a153b78d36ddecd31",
+  "model_artifact_sha256": "65d41630a2211cf2979e5fa952d34fb494bbc85c7027bc100d35b96bdbe86453",
+  "metrics_sha256": "6cf58ed7bd0bae356bd237a0e1b9726f3c980aa301ecbb61cb82def331a8ce74",
+  "predictions_sha256": "2013547b2a0e5eb8aeb170503b4a813df10274db901b1e3bf2d3de454ddf8f54",
+  "coverage": {
+    "range_start": "2026-03-21T00:05:00Z",
+    "range_end_exclusive": "2026-09-22T00:00:00Z",
+    "rows": 1957522,
+    "markets": 52906,
+    "vwap_execution_rows_per_quantity": 785446,
+    "vwap_execution_markets_per_quantity": 25993,
+    "vwap_quantities": [5, 10, 15, 20, 25, 30, 40, 50, 75, 100, 125, 150, 175, 200]
+  },
+  "parameter_lock": {
+    "baseline_model_sha256": "88744a1cc1fb0af824a902212906944ea7873433e672111d38a740afc3e01481",
+    "model_name": "price_l31_leaf200_l2_4",
+    "learning_rate": 0.03,
+    "max_iter": 300,
+    "max_bins": 127,
+    "max_leaf_nodes": 31,
+    "min_samples_leaf": 200,
+    "l2_regularization": 4.0,
+    "random_seed": 20260917,
+    "predictive_features_include_vwap": false
+  },
+  "walk_forward_probability": {
+    "brier": 0.16748615131789057,
+    "ece": 0.004764378843741322,
+    "log_loss": 0.5016863470867005
+  },
+  "capacity_summary": {
+    "5": {"trades": 925, "precision": 0.707027027027027, "stressed_profit_factor": 2.300837919528032, "compensation_ratio": 1.0488718533187085, "longest_losing_streak": 7, "qualified": false},
+    "75": {"trades": 704, "precision": 0.7798295454545454, "stressed_profit_factor": 3.02889553327403, "compensation_ratio": 1.169381857169031, "longest_losing_streak": 4, "qualified": false},
+    "100": {"trades": 693, "precision": 0.7821067821067821, "stressed_profit_factor": 3.093811645884039, "compensation_ratio": 1.1601882675324542, "longest_losing_streak": 4, "qualified": false},
+    "125": {"trades": 696, "precision": 0.7830459770114943, "stressed_profit_factor": 3.1044850453971073, "compensation_ratio": 1.162599101107002, "longest_losing_streak": 4, "qualified": false},
+    "150": {"trades": 711, "precision": 0.7805907172995781, "stressed_profit_factor": 3.0207720073147724, "compensation_ratio": 1.1777427422782611, "longest_losing_streak": 4, "qualified": false},
+    "175": {"trades": 673, "precision": 0.7890044576523031, "stressed_profit_factor": 3.1826405981910173, "compensation_ratio": 1.174947815924855, "longest_losing_streak": 4, "qualified": false},
+    "200": {"trades": 672, "precision": 0.7901785714285714, "stressed_profit_factor": 3.208480043866506, "compensation_ratio": 1.1737512452376655, "longest_losing_streak": 4, "qualified": false}
+  },
+  "qualification_status": "failed_unchanged_conservative_gates",
+  "deployment_status": "not_deployed",
+  "clean_run": true,
+  "prior_results_used_for_training_or_selection": false
+}
