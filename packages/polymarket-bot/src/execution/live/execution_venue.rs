@@ -66,8 +66,15 @@ impl ExecutionVenue for LiveVenue {
         let process_id = self.validate_request_process(&request)?;
         let pre_post_guard = pre_post_guard
             .context("process-bound live venue submission requires an adjacent pre-POST guard")?;
+        let order_path = LiveOrderPathAttempt::new(
+            self.reconciliation_metrics.clone(),
+            process_id,
+            request.client_order_id,
+            &request.market_id,
+        );
         let _submit_guard = self.submit_guard.lock().await;
         if let Some(existing) = self.find_existing_order(&request).await? {
+            order_path.finish("deduplicated", "existing_client_order");
             return Ok(existing);
         }
         let notional = request.price * request.size;
@@ -76,12 +83,14 @@ impl ExecutionVenue for LiveVenue {
             .max_order_notional_usd
             .is_some_and(|maximum| notional > maximum)
         {
+            order_path.finish("rejected", "per_order_notional_limit");
             return live_execution_gate_closed_order(
                 request,
                 LiveExecutionGateReason::PerOrderNotionalLimit,
             );
         }
         if !self.order_submission_enabled() {
+            order_path.finish("rejected", "order_submission_disabled");
             return live_execution_gate_closed_order(
                 request,
                 LiveExecutionGateReason::OrderSubmissionDisabled,
@@ -92,29 +101,63 @@ impl ExecutionVenue for LiveVenue {
             global.halted
         };
         if global_halted {
+            order_path.finish("rejected", "global_halt");
             return live_execution_gate_closed_order(request, LiveExecutionGateReason::GlobalHalt);
         }
         if let Some(reason) = self.current_entry_gate_reason().await? {
+            order_path.finish("rejected", reason.as_str());
             return live_execution_gate_closed_order(request, reason);
         }
         let store = self.store()?;
+        let stage_started = std::time::Instant::now();
         let client = match self
             .authenticated_client()
             .await
             .context("failed to prepare authenticated Polymarket CLOB client")
         {
-            Ok(client) => client,
+            Ok(client) => {
+                order_path.stage(
+                    "authenticated_client",
+                    "ready",
+                    "ready",
+                    stage_started.elapsed(),
+                );
+                client
+            }
             Err(error) if is_retryable_live_pre_submit_error(&error) => {
+                order_path.stage(
+                    "authenticated_client",
+                    "unavailable",
+                    "transient_failure",
+                    stage_started.elapsed(),
+                );
+                order_path.finish("rejected", "authenticated_client_unavailable");
                 return live_pre_submit_transient_gate_order(
                     request,
                     "authenticated_client",
                     &error,
                 );
             }
-            Err(error) => return Err(error),
+            Err(error) => {
+                order_path.stage(
+                    "authenticated_client",
+                    "error",
+                    "hard_failure",
+                    stage_started.elapsed(),
+                );
+                order_path.finish("error", "authenticated_client_failure");
+                return Err(error);
+            }
         };
         let token_id =
-            U256::from_str(&request.token_id).context("failed to parse CLOB token_id")?;
+            match U256::from_str(&request.token_id).context("failed to parse CLOB token_id") {
+                Ok(token_id) => token_id,
+                Err(error) => {
+                    order_path.finish("error", "invalid_token_id");
+                    return Err(error);
+                }
+            };
+        let stage_started = std::time::Instant::now();
         let (risk_result, metadata_result) = tokio::join!(
             self.enforce_submission_risk(process_id, &request, None),
             self.prewarm_order_metadata(&client, token_id),
@@ -122,6 +165,12 @@ impl ExecutionVenue for LiveVenue {
         let risk_result = match risk_result {
             Ok(result) => result,
             Err(failure) => {
+                order_path.stage(
+                    "risk_and_metadata",
+                    "evidence_error",
+                    failure.gate_reason.as_str(),
+                    stage_started.elapsed(),
+                );
                 crate::btc::unified_model_runtime::telemetry::live_submission_risk_check(
                     process_id,
                     "evidence_error",
@@ -147,6 +196,7 @@ impl ExecutionVenue for LiveVenue {
                     error = %format!("{:#}", failure.error),
                     "live pre-submit risk validation rejected this order; preserving trading process liveness"
                 );
+                order_path.finish("rejected", failure.gate_reason.as_str());
                 return live_execution_gate_closed_order(request, failure.gate_reason);
             }
         };
@@ -198,18 +248,46 @@ impl ExecutionVenue for LiveVenue {
             exposure.map(|evidence| evidence.has_unredeemed_settlement),
         );
         if let Some(reason) = risk_result.gate_reason {
+            order_path.stage(
+                "risk_and_metadata",
+                "rejected",
+                reason.as_str(),
+                stage_started.elapsed(),
+            );
+            order_path.finish("rejected", reason.as_str());
             return live_execution_gate_closed_order(request, reason);
         }
         if let Err(error) = metadata_result {
             if is_retryable_live_pre_submit_error(&error) {
+                order_path.stage(
+                    "risk_and_metadata",
+                    "unavailable",
+                    "order_metadata",
+                    stage_started.elapsed(),
+                );
+                order_path.finish("rejected", "order_metadata_unavailable");
                 return live_pre_submit_transient_gate_order(request, "order_metadata", &error);
             }
+            order_path.stage(
+                "risk_and_metadata",
+                "error",
+                "order_metadata",
+                stage_started.elapsed(),
+            );
+            order_path.finish("error", "order_metadata_failure");
             return Err(error);
         }
+        order_path.stage(
+            "risk_and_metadata",
+            "allowed",
+            "allowed",
+            stage_started.elapsed(),
+        );
 
         // Complete all local validation, CLOB metadata reads and signing before claiming a pending
         // order. The durable row is then written immediately before the only operation whose
         // outcome can be ambiguous: the venue POST.
+        let stage_started = std::time::Instant::now();
         let signable = match client
             .limit_order()
             .token_id(token_id)
@@ -221,56 +299,170 @@ impl ExecutionVenue for LiveVenue {
             .await
             .context("failed to build Polymarket CLOB order")
         {
-            Ok(signable) => signable,
+            Ok(signable) => {
+                order_path.stage("order_build", "ready", "ready", stage_started.elapsed());
+                signable
+            }
             Err(error) if is_retryable_live_pre_submit_error(&error) => {
+                order_path.stage(
+                    "order_build",
+                    "unavailable",
+                    "transient_failure",
+                    stage_started.elapsed(),
+                );
+                order_path.finish("rejected", "order_build_unavailable");
                 return live_pre_submit_transient_gate_order(request, "order_build", &error);
             }
-            Err(error) => return Err(error),
+            Err(error) => {
+                order_path.stage(
+                    "order_build",
+                    "error",
+                    "hard_failure",
+                    stage_started.elapsed(),
+                );
+                order_path.finish("error", "order_build_failure");
+                return Err(error);
+            }
         };
-        let signer = self
-            .signer
-            .as_deref()
-            .context("missing live submit signer")?;
-        let signed = client
+        let signer = match self.signer.as_deref().context("missing live submit signer") {
+            Ok(signer) => signer,
+            Err(error) => {
+                order_path.finish("error", "missing_signer");
+                return Err(error);
+            }
+        };
+        let stage_started = std::time::Instant::now();
+        let signed = match client
             .sign(signer, signable)
             .await
-            .context("failed to sign Polymarket CLOB order")?;
-        let (pending_order, newly_created) = store.create_pending_order(&request).await?;
+            .context("failed to sign Polymarket CLOB order")
+        {
+            Ok(signed) => {
+                order_path.stage("order_signing", "ready", "ready", stage_started.elapsed());
+                signed
+            }
+            Err(error) => {
+                order_path.stage(
+                    "order_signing",
+                    "error",
+                    "signing_failure",
+                    stage_started.elapsed(),
+                );
+                order_path.finish("error", "signing_failure");
+                return Err(error);
+            }
+        };
+        let stage_started = std::time::Instant::now();
+        let (pending_order, newly_created) = match store.create_pending_order(&request).await {
+            Ok(result) => {
+                order_path.stage(
+                    "pending_persistence",
+                    "persisted",
+                    "persisted",
+                    stage_started.elapsed(),
+                );
+                result
+            }
+            Err(error) => {
+                order_path.stage(
+                    "pending_persistence",
+                    "error",
+                    "persistence_failure",
+                    stage_started.elapsed(),
+                );
+                order_path.finish("error", "pending_persistence_failure");
+                return Err(error);
+            }
+        };
         if !newly_created {
+            order_path.finish("deduplicated", "pending_order_exists");
             return Ok(pending_order);
         }
+        let stage_started = std::time::Instant::now();
         let final_gate_reason = match self.final_submission_gate_reason().await {
             Ok(reason) => reason,
             Err(error) => {
                 persist_pre_submit_hard_failure(&store, &pending_order, &error).await?;
+                order_path.stage(
+                    "final_submission_gate",
+                    "error",
+                    "gate_evidence_failure",
+                    stage_started.elapsed(),
+                );
+                order_path.finish("error", "final_submission_gate_failure");
                 return Err(error);
             }
         };
         if let Some(reason) = final_gate_reason {
-            return persist_pre_submit_gate_rejection(&store, pending_order, reason).await;
+            order_path.stage(
+                "final_submission_gate",
+                "rejected",
+                reason.as_str(),
+                stage_started.elapsed(),
+            );
+            return persist_instrumented_pre_submit_gate_rejection(
+                &store,
+                pending_order,
+                reason,
+                order_path,
+            )
+            .await;
         }
+        order_path.stage(
+            "final_submission_gate",
+            "allowed",
+            "allowed",
+            stage_started.elapsed(),
+        );
         let admitted_safety_generation = {
             let global = self.global_entry_gate.lock().await;
             if global.halted || global.safety_generation == u64::MAX {
-                return persist_pre_submit_gate_rejection(
+                return persist_instrumented_pre_submit_gate_rejection(
                     &store,
                     pending_order,
                     LiveExecutionGateReason::GlobalHalt,
+                    order_path,
                 )
                 .await;
             }
             global.safety_generation
         };
+        let stage_started = std::time::Instant::now();
         let guard_reason = match pre_post_guard.validate_pre_post(&request).await {
             Ok(reason) => reason,
             Err(error) => {
                 persist_pre_submit_hard_failure(&store, &pending_order, &error).await?;
+                order_path.stage(
+                    "pre_post_guard",
+                    "error",
+                    "guard_evidence_failure",
+                    stage_started.elapsed(),
+                );
+                order_path.finish("error", "pre_post_guard_failure");
                 return Err(error);
             }
         };
         if let Some(reason) = guard_reason {
-            return persist_pre_submit_gate_rejection(&store, pending_order, reason).await;
+            order_path.stage(
+                "pre_post_guard",
+                "rejected",
+                reason.as_str(),
+                stage_started.elapsed(),
+            );
+            return persist_instrumented_pre_submit_gate_rejection(
+                &store,
+                pending_order,
+                reason,
+                order_path,
+            )
+            .await;
         }
+        order_path.stage(
+            "pre_post_guard",
+            "allowed",
+            "allowed",
+            stage_started.elapsed(),
+        );
         // Revalidate the checked process authorization after every awaited check and immediately
         // before the venue POST. A safety halt changes the generation and converts this pending
         // order into a durable zero-POST rejection.
@@ -280,10 +472,17 @@ impl ExecutionVenue for LiveVenue {
             commit_live_post_attempt(&mut global, &mut state, admitted_safety_generation)
         };
         if let Some(reason) = commit_reason {
-            return persist_pre_submit_gate_rejection(&store, pending_order, reason).await;
+            return persist_instrumented_pre_submit_gate_rejection(
+                &store,
+                pending_order,
+                reason,
+                order_path,
+            )
+            .await;
         }
         pre_post_guard.observe_post_attempt(&request);
         let post_started = std::time::Instant::now();
+        order_path.event("venue_post", "attempted", "attempted");
         let submit_result = client
             .post_order(signed)
             .await
@@ -296,10 +495,26 @@ impl ExecutionVenue for LiveVenue {
                     post_started.elapsed(),
                     "acknowledged",
                 );
+                order_path.stage(
+                    "venue_post",
+                    "acknowledged",
+                    "venue_acknowledged",
+                    post_started.elapsed(),
+                );
                 let raw_ack = post_order_response_payload(&response);
-                store
+                let result = store
                     .mark_order_submitted(request.client_order_id, &response.order_id, raw_ack)
-                    .await
+                    .await;
+                match result {
+                    Ok(order) => {
+                        order_path.finish("acknowledged", "venue_acknowledged");
+                        Ok(order)
+                    }
+                    Err(error) => {
+                        order_path.finish("error", "acknowledgement_persistence_failure");
+                        Err(error)
+                    }
+                }
             }
             Ok(response) => {
                 pre_post_guard.observe_post_result(
@@ -311,14 +526,27 @@ impl ExecutionVenue for LiveVenue {
                     request.order_type,
                     response.error_msg.as_deref(),
                 );
+                order_path.stage(
+                    "venue_post",
+                    "rejected",
+                    reject_reason,
+                    post_started.elapsed(),
+                );
                 let raw = with_live_venue_reject_reason(
                     post_order_response_payload(&response),
                     reject_reason,
                 );
-                let failed_order = self
+                let failed_order = match self
                     .store()?
                     .mark_order_submit_failed(request.client_order_id, "venue_rejected", raw)
-                    .await?;
+                    .await
+                {
+                    Ok(order) => order,
+                    Err(error) => {
+                        order_path.finish("error", "rejection_persistence_failure");
+                        return Err(error);
+                    }
+                };
                 let error_msg = response
                     .error_msg
                     .unwrap_or_else(|| "unknown rejection".to_string());
@@ -327,6 +555,7 @@ impl ExecutionVenue for LiveVenue {
                     error = %error_msg,
                     "Polymarket CLOB definitively rejected order; preserving trading process liveness"
                 );
+                order_path.finish("venue_rejected", reject_reason);
                 Ok(failed_order)
             }
             Err(error) => {
@@ -339,7 +568,13 @@ impl ExecutionVenue for LiveVenue {
                 if is_definitive_live_submit_error(&error) {
                     let reject_reason =
                         definitive_live_venue_reject_reason(request.order_type, Some(&error_chain));
-                    let failed_order = store
+                    order_path.stage(
+                        "venue_post",
+                        "rejected",
+                        reject_reason,
+                        post_started.elapsed(),
+                    );
+                    let failed_order = match store
                         .mark_order_submit_failed(
                             request.client_order_id,
                             "venue_rejected",
@@ -351,15 +586,29 @@ impl ExecutionVenue for LiveVenue {
                                 reject_reason,
                             ),
                         )
-                        .await?;
+                        .await
+                    {
+                        Ok(order) => order,
+                        Err(persistence_error) => {
+                            order_path.finish("error", "rejection_persistence_failure");
+                            return Err(persistence_error);
+                        }
+                    };
                     warn!(
                         client_order_id = %request.client_order_id,
                         error = %error_chain,
                         "Polymarket CLOB definitively rejected order; preserving trading process liveness"
                     );
+                    order_path.finish("venue_rejected", reject_reason);
                     return Ok(failed_order);
                 } else {
-                    store
+                    order_path.stage(
+                        "venue_post",
+                        "transport_failure",
+                        "ambiguous_transport_failure",
+                        post_started.elapsed(),
+                    );
+                    if let Err(persistence_error) = store
                         .mark_order_submit_unknown(
                             request.client_order_id,
                             "ambiguous_submit_error",
@@ -368,9 +617,14 @@ impl ExecutionVenue for LiveVenue {
                                 "error_chain": error_chain
                             }),
                         )
-                        .await?;
+                        .await
+                    {
+                        order_path.finish("error", "ambiguous_persistence_failure");
+                        return Err(persistence_error);
+                    }
                     self.mark_idempotency_dirty().await;
                 }
+                order_path.finish("ambiguous", "transport_failure");
                 Err(error)
             }
         }
@@ -1551,5 +1805,23 @@ impl ExecutionVenue for LiveVenue {
         drop(global);
         drop(state);
         self.live_status().await
+    }
+}
+
+async fn persist_instrumented_pre_submit_gate_rejection(
+    store: &Store,
+    pending: OrderRecord,
+    reason: LiveExecutionGateReason,
+    order_path: LiveOrderPathAttempt,
+) -> Result<OrderRecord> {
+    match persist_pre_submit_gate_rejection(store, pending, reason).await {
+        Ok(order) => {
+            order_path.finish("rejected", reason.as_str());
+            Ok(order)
+        }
+        Err(error) => {
+            order_path.finish("error", "gate_rejection_persistence_failure");
+            Err(error)
+        }
     }
 }

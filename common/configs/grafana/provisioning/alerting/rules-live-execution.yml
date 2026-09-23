@@ -186,3 +186,43 @@ groups:
         annotations: {summary: "Non-mutating stress-preview evidence is incomplete", description: "Preview work remains isolated from primary execution, but capacity or persistence prevented complete preview evidence."}
         labels: {service: polymarket-bot, family: live_execution, severity: warning, environment: $GRAFANA_ALERT_ENVIRONMENT}
         isPaused: false
+      - uid: live_order_path_unclassified_exit
+        title: Live order path exited without a terminal classification
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 600, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "sum by (process_id) (increase(polymarket_live_order_path_terminal_outcomes_total{outcome=\"error\",reason=\"unclassified_exit\"}[5m]))", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations: {summary: "A live order path ended without a bounded outcome", description: "The qualified order did not produce an explicit acknowledgement, venue rejection, local rejection, ambiguity, or deduplication outcome. Correlate the process-scoped Loki terminal event and durable order record."}
+        labels: {service: polymarket-bot, family: live_execution, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
+      - uid: live_order_path_stuck
+        title: Live order path remains in flight
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 300, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "min_over_time(polymarket_live_order_path_in_flight[2m])", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations: {summary: "A live order invocation has remained in flight for two minutes", description: "Inspect the Internal Live Order Stage Latency and Live Order Execution Funnel panels to identify the last completed stage. Observability does not cancel or block the order."}
+        labels: {service: polymarket-bot, family: live_execution, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false

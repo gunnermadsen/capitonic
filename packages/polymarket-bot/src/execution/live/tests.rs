@@ -873,6 +873,13 @@ mod tests {
         let order = submit_with_test_guard(&venue, request).await.unwrap();
 
         assert_live_gate_rejection(&order, LiveExecutionGateReason::PerOrderNotionalLimit);
+        let metrics = prometheus_metrics();
+        assert!(metrics.contains(&format!(
+            "polymarket_live_order_path_terminal_outcomes_total{{process_id=\"{process_id}\",outcome=\"rejected\",reason=\"per_order_notional_limit\"}} 1"
+        )));
+        assert!(metrics.contains(&format!(
+            "polymarket_live_order_path_in_flight{{process_id=\"{process_id}\"}} 0"
+        )));
     }
 
     #[tokio::test]
