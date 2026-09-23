@@ -226,7 +226,7 @@ groups:
         annotations: {summary: "A live order invocation has remained in flight for two minutes", description: "Inspect the Internal Live Order Stage Latency and Live Order Execution Funnel panels to identify the last completed stage. Observability does not cancel or block the order."}
         labels: {service: polymarket-bot, family: live_execution, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
         isPaused: false
-      - uid: approved_live_decision_without_order_outcome
+      - uid: approved_live_decision_no_order
         title: Approved live decision has no order outcome
         condition: C
         data:
@@ -286,7 +286,7 @@ groups:
         annotations: {summary: "A live order path remains active beyond its configured operation deadline", description: "Inspect CLOB stage timeout and submission-lock metrics for the affected process."}
         labels: {service: polymarket-bot, family: live_execution, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
         isPaused: false
-      - uid: runtime_terminated_after_transport_failure
+      - uid: runtime_terminated_transport
         title: Trading runtime terminated after transport failure
         condition: C
         data:
