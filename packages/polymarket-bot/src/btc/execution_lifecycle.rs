@@ -348,6 +348,28 @@ impl BtcExecutionLifecycle for LiveExecutionLifecycle {
 
         match attempt {
             Ok((reconciliation, pending_redemption_count)) => {
+                let missing_order_results = repository
+                    .approved_live_decisions_without_order_result(
+                        process_id,
+                        chrono::Utc::now()
+                            - chrono::Duration::from_std(self.reconcile_interval)
+                                .unwrap_or_else(|_| chrono::Duration::seconds(30)),
+                    )
+                    .await?;
+                super::unified_model_runtime::telemetry::gauge(
+                    process_id,
+                    "approved_live_decisions_without_order_result",
+                    missing_order_results as f64,
+                );
+                if missing_order_results > 0 {
+                    warn!(
+                        event = "approved_live_decision_without_order_result",
+                        process_id = %process_id,
+                        run_id = %run_id,
+                        missing_order_results,
+                        "approved live decisions exceeded the execution deadline without a durable order result"
+                    );
+                }
                 let reason =
                     live_reconciliation_gate_reason(&reconciliation, pending_redemption_count)
                         .map(str::to_string);

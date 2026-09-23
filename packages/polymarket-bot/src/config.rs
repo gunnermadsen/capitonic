@@ -61,6 +61,7 @@ pub struct LiveExecutionConfig {
     pub user_ws_stale: Duration,
     pub reconcile_interval: Duration,
     pub stale_reconcile: Duration,
+    pub clob_operation_timeout: Duration,
     pub clob_api_key: Option<String>,
     pub clob_secret: Option<String>,
     pub clob_passphrase: Option<String>,
@@ -93,6 +94,10 @@ impl AppConfig {
             stale_reconcile: Duration::from_secs(parse_u64(
                 "POLYMARKET_LIVE_STALE_RECONCILE_SECS",
                 60,
+            )),
+            clob_operation_timeout: Duration::from_millis(parse_u64(
+                "POLYMARKET_LIVE_CLOB_OPERATION_TIMEOUT_MS",
+                5_000,
             )),
             clob_api_key: first_non_empty_env(&["POLYMARKET_CLOB_API_KEY"]),
             clob_secret: first_non_empty_env(&["POLYMARKET_CLOB_SECRET"]),
@@ -173,6 +178,9 @@ impl AppConfig {
 
 impl LiveExecutionConfig {
     pub fn validate_for_live(&self) -> Result<()> {
+        if self.clob_operation_timeout.is_zero() {
+            bail!("POLYMARKET_LIVE_CLOB_OPERATION_TIMEOUT_MS must be positive");
+        }
         if self.user_ws_url.trim().is_empty() {
             bail!("POLYMARKET_LIVE_USER_WS_URL is required for live execution");
         }

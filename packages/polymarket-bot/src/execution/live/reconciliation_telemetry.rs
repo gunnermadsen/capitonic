@@ -94,6 +94,19 @@ pub(super) fn record_process_execution_outcome(process_id: Uuid, outcome: &'stat
     }
 }
 
+pub(crate) fn record_transport_runtime_termination(process_id: Uuid) {
+    let mut registry = REGISTRY
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    registry.retain(|entry| entry.strong_count() > 0);
+    for metrics in registry.iter().filter_map(Weak::upgrade) {
+        if metrics.process_id == process_id {
+            metrics.record_transport_runtime_outcome("terminated");
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 struct DurationHistogram {
     buckets: [u64; 8],
@@ -345,6 +358,12 @@ struct MetricsState {
     order_path_in_flight: u64,
     order_path_last_activity_timestamp: i64,
     entry_eligibility_changes: BTreeMap<&'static str, u64>,
+    clob_operation_durations: BTreeMap<&'static str, DurationHistogram>,
+    clob_operation_timeouts: BTreeMap<&'static str, u64>,
+    submit_guard_wait: DurationHistogram,
+    transport_runtime_outcomes: BTreeMap<&'static str, u64>,
+    unresolved_submit_unknown: usize,
+    oldest_submit_unknown_age_seconds: f64,
 }
 
 pub(super) struct LiveReconciliationMetrics {
@@ -476,6 +495,53 @@ impl LiveReconciliationMetrics {
         state.reconciliation_entry_safe = entry_safe;
     }
 
+    pub(super) fn record_clob_operation(
+        &self,
+        stage: &'static str,
+        elapsed: std::time::Duration,
+        timed_out: bool,
+    ) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state
+            .clob_operation_durations
+            .entry(stage)
+            .or_default()
+            .observe(elapsed.as_secs_f64());
+        if timed_out {
+            *state.clob_operation_timeouts.entry(stage).or_default() += 1;
+        }
+    }
+
+    pub(super) fn record_submit_guard_wait(&self, elapsed: std::time::Duration) {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .submit_guard_wait
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub(super) fn record_transport_runtime_outcome(&self, outcome: &'static str) {
+        *self
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .transport_runtime_outcomes
+            .entry(outcome)
+            .or_default() += 1;
+    }
+
+    pub(super) fn record_submit_unknown_state(
+        &self,
+        count: usize,
+        oldest_age_seconds: f64,
+    ) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let resolved = count < state.unresolved_submit_unknown;
+        state.unresolved_submit_unknown = count;
+        state.oldest_submit_unknown_age_seconds = oldest_age_seconds;
+        resolved
+    }
+
     fn record_order_path_started(&self) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.order_path_in_flight = state.order_path_in_flight.saturating_add(1);
@@ -586,6 +652,48 @@ impl LiveReconciliationMetrics {
         for ((outcome, reason), count) in &state.order_path_terminal_outcomes {
             let _ = writeln!(output, "polymarket_live_order_path_terminal_outcomes_total{{{labels},outcome=\"{outcome}\",reason=\"{reason}\"}} {count}");
         }
+        for (stage, histogram) in &state.clob_operation_durations {
+            for (index, bound) in DURATION_BUCKETS.iter().enumerate() {
+                let _ = writeln!(output, "polymarket_live_clob_operation_duration_seconds_bucket{{{labels},stage=\"{stage}\",le=\"{bound}\"}} {}", histogram.buckets[index]);
+            }
+            let _ = writeln!(output, "polymarket_live_clob_operation_duration_seconds_bucket{{{labels},stage=\"{stage}\",le=\"+Inf\"}} {}", histogram.count);
+            let _ = writeln!(output, "polymarket_live_clob_operation_duration_seconds_sum{{{labels},stage=\"{stage}\"}} {}", histogram.sum);
+            let _ = writeln!(output, "polymarket_live_clob_operation_duration_seconds_count{{{labels},stage=\"{stage}\"}} {}", histogram.count);
+        }
+        for (stage, count) in &state.clob_operation_timeouts {
+            let _ = writeln!(output, "polymarket_live_clob_operation_timeouts_total{{{labels},stage=\"{stage}\"}} {count}");
+        }
+        for (index, bound) in DURATION_BUCKETS.iter().enumerate() {
+            let _ = writeln!(output, "polymarket_live_submission_guard_wait_seconds_bucket{{{labels},le=\"{bound}\"}} {}", state.submit_guard_wait.buckets[index]);
+        }
+        let _ = writeln!(
+            output,
+            "polymarket_live_submission_guard_wait_seconds_bucket{{{labels},le=\"+Inf\"}} {}",
+            state.submit_guard_wait.count
+        );
+        let _ = writeln!(
+            output,
+            "polymarket_live_submission_guard_wait_seconds_sum{{{labels}}} {}",
+            state.submit_guard_wait.sum
+        );
+        let _ = writeln!(
+            output,
+            "polymarket_live_submission_guard_wait_seconds_count{{{labels}}} {}",
+            state.submit_guard_wait.count
+        );
+        for (outcome, count) in &state.transport_runtime_outcomes {
+            let _ = writeln!(output, "polymarket_live_transport_runtime_outcomes_total{{{labels},outcome=\"{outcome}\"}} {count}");
+        }
+        let _ = writeln!(
+            output,
+            "polymarket_live_submit_unknown_orders{{{labels}}} {}",
+            state.unresolved_submit_unknown
+        );
+        let _ = writeln!(
+            output,
+            "polymarket_live_submit_unknown_oldest_age_seconds{{{labels}}} {}",
+            state.oldest_submit_unknown_age_seconds
+        );
         let _ = writeln!(
             output,
             "polymarket_live_order_path_in_flight{{{labels}}} {}",
@@ -682,6 +790,12 @@ pub fn prometheus_metrics() -> String {
     output.push_str("# HELP polymarket_live_order_path_terminal_outcomes_total Exactly one terminal classification for each live order path invocation.\n# TYPE polymarket_live_order_path_terminal_outcomes_total counter\n");
     output.push_str("# HELP polymarket_live_order_path_in_flight Live order path invocations that have not reached a terminal classification.\n# TYPE polymarket_live_order_path_in_flight gauge\n");
     output.push_str("# HELP polymarket_live_order_path_last_activity_timestamp_seconds Unix timestamp of the latest live order path transition.\n# TYPE polymarket_live_order_path_last_activity_timestamp_seconds gauge\n");
+    output.push_str("# HELP polymarket_live_clob_operation_duration_seconds Guarded CLOB operation duration by bounded stage.\n# TYPE polymarket_live_clob_operation_duration_seconds histogram\n");
+    output.push_str("# HELP polymarket_live_clob_operation_timeouts_total Guarded CLOB operation deadline expirations by bounded stage.\n# TYPE polymarket_live_clob_operation_timeouts_total counter\n");
+    output.push_str("# HELP polymarket_live_submission_guard_wait_seconds Time spent waiting for process-safe live submission ownership.\n# TYPE polymarket_live_submission_guard_wait_seconds histogram\n");
+    output.push_str("# HELP polymarket_live_transport_runtime_outcomes_total Runtime disposition after a live transport-class submission failure.\n# TYPE polymarket_live_transport_runtime_outcomes_total counter\n");
+    output.push_str("# HELP polymarket_live_submit_unknown_orders Durable unresolved submissions whose POST outcome remains unknown.\n# TYPE polymarket_live_submit_unknown_orders gauge\n");
+    output.push_str("# HELP polymarket_live_submit_unknown_oldest_age_seconds Age of the oldest durable unresolved submission.\n# TYPE polymarket_live_submit_unknown_oldest_age_seconds gauge\n");
     let _ = writeln!(
         output,
         "polymarket_live_user_ws_events_total {}",

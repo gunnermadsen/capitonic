@@ -1770,6 +1770,7 @@ impl BtcProcessRunner {
             self.config.run_id,
             fee_rate,
         )?;
+        order_metadata["plan_id"] = serde_json::json!(plan_id);
         let decision_book = if intent.outcome == BtcOutcome::Up {
             &snapshot.up_book
         } else {
@@ -2818,6 +2819,10 @@ fn build_directional_model_feature_snapshot(
 
 #[async_trait]
 impl BtcStrategyRunner for BtcProcessRunner {
+    fn process_id(&self) -> Option<Uuid> {
+        Some(self.config.process_id)
+    }
+
     fn observe_schedule(&self, lag: std::time::Duration, interval: std::time::Duration) {
         umr_telemetry::duration(
             self.config.process_id,

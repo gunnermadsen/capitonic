@@ -2952,6 +2952,43 @@ impl BtcRepository {
         Ok(())
     }
 
+    /// Counts a bounded set of approved live decisions whose execution deadline elapsed without
+    /// any durable order result. This is an invariant measurement only; reconciliation remains the
+    /// owner of order state and this query never mutates or retries a submission.
+    pub async fn approved_live_decisions_without_order_result(
+        &self,
+        process_id: Uuid,
+        older_than: DateTime<Utc>,
+    ) -> Result<i64> {
+        sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT COUNT(*)::bigint
+            FROM (
+              SELECT d.decision_id
+              FROM polymarket.btc_strategy_decisions d
+              WHERE d.process_id = $1
+                AND d.execution_mode = 'live'
+                AND d.action = 'buy'
+                AND d.status = 'approved'
+                AND d.decision_at < $2
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM polymarket.orders o
+                  WHERE o.process_id = d.process_id
+                    AND o.raw_payload #>> '{request,metadata,decision_id}' = d.decision_id::text
+                )
+              ORDER BY d.decision_at, d.decision_id
+              LIMIT 101
+            ) missing
+            "#,
+        )
+        .bind(process_id)
+        .bind(older_than)
+        .fetch_one(&self.pool)
+        .await
+        .context("failed to measure approved live decisions without an order result")
+    }
+
     /// Replays canonical durable resolution evidence for exact process-owned filled orders that
     /// missed realtime delivery. This is bounded by process and never calls a provider.
     pub async fn recover_process_official_resolutions(

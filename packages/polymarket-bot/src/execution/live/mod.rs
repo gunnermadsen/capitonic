@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    future::Future,
     str::FromStr,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -85,6 +86,7 @@ use reconciliation_telemetry::*;
 use user_stream::*;
 
 pub use reconciliation_telemetry::prometheus_metrics;
+pub(crate) use reconciliation_telemetry::record_transport_runtime_termination;
 
 type AuthenticatedClient = SdkClient<Authenticated<Normal>>;
 

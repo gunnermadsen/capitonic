@@ -226,3 +226,103 @@ groups:
         annotations: {summary: "A live order invocation has remained in flight for two minutes", description: "Inspect the Internal Live Order Stage Latency and Live Order Execution Funnel panels to identify the last completed stage. Observability does not cancel or block the order."}
         labels: {service: polymarket-bot, family: live_execution, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
         isPaused: false
+      - uid: approved_live_decision_without_order_outcome
+        title: Approved live decision has no order outcome
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 300, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "polymarket_umr_approved_live_decisions_without_order_result", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations: {summary: "An approved live decision exceeded its execution deadline without a durable order result", description: "Inspect the process-scoped decision and order-plan identifiers in Loki and btc_strategy_decisions."}
+        labels: {service: polymarket-bot, family: live_execution, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
+      - uid: unresolved_submit_unknown_age
+        title: Unknown live submission remains unresolved
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 600, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "polymarket_live_submit_unknown_oldest_age_seconds", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [90], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations: {summary: "A submit_unknown order exceeded the reconciliation threshold", description: "New entries remain blocked only for the affected process while automatic reconciliation continues."}
+        labels: {service: polymarket-bot, family: live_execution, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
+      - uid: live_order_path_beyond_deadline
+        title: Live order path exceeded its operation deadline
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 300, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "polymarket_live_order_path_in_flight > 0 and on(process_id) (time() - polymarket_live_order_path_last_activity_timestamp_seconds > 10)", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 30s
+        annotations: {summary: "A live order path remains active beyond its configured operation deadline", description: "Inspect CLOB stage timeout and submission-lock metrics for the affected process."}
+        labels: {service: polymarket-bot, family: live_execution, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
+      - uid: runtime_terminated_after_transport_failure
+        title: Trading runtime terminated after transport failure
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 600, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "sum by (process_id) (increase(polymarket_live_transport_runtime_outcomes_total{outcome=\"terminated\"}[5m]))", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations: {summary: "A transport-class execution error unexpectedly terminated a trading process", description: "Ordinary CLOB timeouts and connection failures must preserve durable process intent."}
+        labels: {service: polymarket-bot, family: live_execution, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
+      - uid: sustained_clob_timeout_or_lock_wait
+        title: Sustained CLOB timeouts or submission lock wait
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 900, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "sum by (process_id) (rate(polymarket_live_clob_operation_timeouts_total[10m])) or histogram_quantile(0.95, sum by (process_id, le) (rate(polymarket_live_submission_guard_wait_seconds_bucket[10m])))", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [0.05], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations: {summary: "CLOB operations or submission ownership are persistently delayed", description: "Inspect bounded stage labels and p95 submission-lock wait before latency consumes market freshness."}
+        labels: {service: polymarket-bot, family: live_execution, severity: warning, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false

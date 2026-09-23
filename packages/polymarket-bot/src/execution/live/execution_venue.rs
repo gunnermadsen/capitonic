@@ -72,7 +72,11 @@ impl ExecutionVenue for LiveVenue {
             request.client_order_id,
             &request.market_id,
         );
+        let guard_wait_started = std::time::Instant::now();
         let _submit_guard = self.submit_guard.lock().await;
+        if let Some(metrics) = &self.reconciliation_metrics {
+            metrics.record_submit_guard_wait(guard_wait_started.elapsed());
+        }
         if let Some(existing) = self.find_existing_order(&request).await? {
             order_path.finish("deduplicated", "existing_client_order");
             return Ok(existing);
@@ -111,7 +115,7 @@ impl ExecutionVenue for LiveVenue {
         let store = self.store()?;
         let stage_started = std::time::Instant::now();
         let client = match self
-            .authenticated_client()
+            .clob_operation("authentication", self.authenticated_client())
             .await
             .context("failed to prepare authenticated Polymarket CLOB client")
         {
@@ -125,18 +129,28 @@ impl ExecutionVenue for LiveVenue {
                 client
             }
             Err(error) if is_retryable_live_pre_submit_error(&error) => {
+                if let Some(metrics) = &self.reconciliation_metrics {
+                    metrics.record_transport_runtime_outcome("preserved");
+                }
                 order_path.stage(
                     "authenticated_client",
                     "unavailable",
                     "transient_failure",
                     stage_started.elapsed(),
                 );
-                order_path.finish("rejected", "authenticated_client_unavailable");
-                return live_pre_submit_transient_gate_order(
-                    request,
-                    "authenticated_client",
-                    &error,
+                order_path.finish(
+                    if is_clob_operation_timeout(&error) {
+                        "definitive_zero_post"
+                    } else {
+                        "rejected"
+                    },
+                    if is_clob_operation_timeout(&error) {
+                        "authentication_timeout"
+                    } else {
+                        "authenticated_client_unavailable"
+                    },
                 );
+                return live_pre_submit_transient_gate_order(request, "authentication", &error);
             }
             Err(error) => {
                 order_path.stage(
@@ -160,11 +174,19 @@ impl ExecutionVenue for LiveVenue {
         let stage_started = std::time::Instant::now();
         let (risk_result, metadata_result) = tokio::join!(
             self.enforce_submission_risk(process_id, &request, None),
-            self.prewarm_order_metadata(&client, token_id),
+            self.clob_operation(
+                "order_metadata",
+                self.prewarm_order_metadata(&client, token_id),
+            ),
         );
         let risk_result = match risk_result {
             Ok(result) => result,
             Err(failure) => {
+                if is_transient_failure(&failure.error) {
+                    if let Some(metrics) = &self.reconciliation_metrics {
+                        metrics.record_transport_runtime_outcome("preserved");
+                    }
+                }
                 order_path.stage(
                     "risk_and_metadata",
                     "evidence_error",
@@ -259,13 +281,27 @@ impl ExecutionVenue for LiveVenue {
         }
         if let Err(error) = metadata_result {
             if is_retryable_live_pre_submit_error(&error) {
+                if let Some(metrics) = &self.reconciliation_metrics {
+                    metrics.record_transport_runtime_outcome("preserved");
+                }
                 order_path.stage(
                     "risk_and_metadata",
                     "unavailable",
                     "order_metadata",
                     stage_started.elapsed(),
                 );
-                order_path.finish("rejected", "order_metadata_unavailable");
+                order_path.finish(
+                    if is_clob_operation_timeout(&error) {
+                        "definitive_zero_post"
+                    } else {
+                        "rejected"
+                    },
+                    if is_clob_operation_timeout(&error) {
+                        "order_metadata_timeout"
+                    } else {
+                        "order_metadata_unavailable"
+                    },
+                );
                 return live_pre_submit_transient_gate_order(request, "order_metadata", &error);
             }
             order_path.stage(
@@ -288,14 +324,19 @@ impl ExecutionVenue for LiveVenue {
         // order. The durable row is then written immediately before the only operation whose
         // outcome can be ambiguous: the venue POST.
         let stage_started = std::time::Instant::now();
-        let signable = match client
-            .limit_order()
-            .token_id(token_id)
-            .side(sdk_side(request.side))
-            .price(sdk_decimal(request.price)?)
-            .size(sdk_decimal(request.size)?)
-            .order_type(sdk_order_type(request.order_type)?)
-            .build()
+        let signable = match self
+            .clob_operation("order_build", async {
+                client
+                    .limit_order()
+                    .token_id(token_id)
+                    .side(sdk_side(request.side))
+                    .price(sdk_decimal(request.price)?)
+                    .size(sdk_decimal(request.size)?)
+                    .order_type(sdk_order_type(request.order_type)?)
+                    .build()
+                    .await
+                    .map_err(Into::into)
+            })
             .await
             .context("failed to build Polymarket CLOB order")
         {
@@ -304,13 +345,27 @@ impl ExecutionVenue for LiveVenue {
                 signable
             }
             Err(error) if is_retryable_live_pre_submit_error(&error) => {
+                if let Some(metrics) = &self.reconciliation_metrics {
+                    metrics.record_transport_runtime_outcome("preserved");
+                }
                 order_path.stage(
                     "order_build",
                     "unavailable",
                     "transient_failure",
                     stage_started.elapsed(),
                 );
-                order_path.finish("rejected", "order_build_unavailable");
+                order_path.finish(
+                    if is_clob_operation_timeout(&error) {
+                        "definitive_zero_post"
+                    } else {
+                        "rejected"
+                    },
+                    if is_clob_operation_timeout(&error) {
+                        "order_build_timeout"
+                    } else {
+                        "order_build_unavailable"
+                    },
+                );
                 return live_pre_submit_transient_gate_order(request, "order_build", &error);
             }
             Err(error) => {
@@ -483,8 +538,10 @@ impl ExecutionVenue for LiveVenue {
         pre_post_guard.observe_post_attempt(&request);
         let post_started = std::time::Instant::now();
         order_path.event("venue_post", "attempted", "attempted");
-        let submit_result = client
-            .post_order(signed)
+        let submit_result = self
+            .clob_operation("venue_post", async {
+                client.post_order(signed).await.map_err(Into::into)
+            })
             .await
             .context("Polymarket CLOB order submit failed");
 
@@ -608,7 +665,7 @@ impl ExecutionVenue for LiveVenue {
                         "ambiguous_transport_failure",
                         post_started.elapsed(),
                     );
-                    if let Err(persistence_error) = store
+                    let unknown_order = match store
                         .mark_order_submit_unknown(
                             request.client_order_id,
                             "ambiguous_submit_error",
@@ -619,13 +676,28 @@ impl ExecutionVenue for LiveVenue {
                         )
                         .await
                     {
-                        order_path.finish("error", "ambiguous_persistence_failure");
-                        return Err(persistence_error);
-                    }
+                        Ok(order) => order,
+                        Err(persistence_error) => {
+                            order_path.finish("error", "ambiguous_persistence_failure");
+                            return Err(persistence_error);
+                        }
+                    };
                     self.mark_idempotency_dirty().await;
+                    self.request_post_order_reconciliation();
+                    if let Some(metrics) = &self.reconciliation_metrics {
+                        metrics.record_transport_runtime_outcome("preserved");
+                    }
+                    warn!(
+                        process_id = %process_id,
+                        client_order_id = %request.client_order_id,
+                        plan_id = ?request.metadata.get("plan_id"),
+                        decision_id = ?request.metadata.get("decision_id"),
+                        error = %error_chain,
+                        "live POST outcome is unknown; durable unresolved order blocks only this process while reconciliation retries"
+                    );
+                    order_path.finish("submit_unknown", "transport_failure");
+                    return Ok(unknown_order);
                 }
-                order_path.finish("ambiguous", "transport_failure");
-                Err(error)
             }
         }
     }
@@ -658,9 +730,13 @@ impl ExecutionVenue for LiveVenue {
         store
             .mark_cancel_requested(order_id, json!({"requested_at": Utc::now()}))
             .await?;
-        let client = self.authenticated_client().await?;
-        let response = client
-            .cancel_order(order_id)
+        let client = self
+            .clob_operation("authentication", self.authenticated_client())
+            .await?;
+        let response = self
+            .clob_operation("cancel_order", async {
+                client.cancel_order(order_id).await.map_err(Into::into)
+            })
             .await
             .context("Polymarket CLOB cancel_order failed")?;
         if response.canceled.iter().any(|id| id == order_id) {
@@ -705,9 +781,13 @@ impl ExecutionVenue for LiveVenue {
 
         // The unbound venue is reserved for the explicitly wallet-wide administrative halt path.
         let store = self.store()?;
-        let client = self.authenticated_client().await?;
-        let response = client
-            .cancel_all_orders()
+        let client = self
+            .clob_operation("authentication", self.authenticated_client())
+            .await?;
+        let response = self
+            .clob_operation("cancel_all", async {
+                client.cancel_all_orders().await.map_err(Into::into)
+            })
             .await
             .context("Polymarket CLOB cancel_all failed")?;
         let raw = json!({
@@ -721,21 +801,26 @@ impl ExecutionVenue for LiveVenue {
     }
 
     async fn get_balances(&self) -> Result<Vec<(String, Decimal)>> {
-        let client = self.authenticated_client().await?;
-        let balance = client
-            .balance_allowance(
-                BalanceAllowanceRequest::builder()
-                    .asset_type(AssetType::Collateral)
-                    .signature_type(parse_signature_type(self.config.signature_type.as_deref())?)
-                    .build(),
-            )
+        let client = self
+            .clob_operation("authentication", self.authenticated_client())
+            .await?;
+        let request = BalanceAllowanceRequest::builder()
+            .asset_type(AssetType::Collateral)
+            .signature_type(parse_signature_type(self.config.signature_type.as_deref())?)
+            .build();
+        let balance = self
+            .clob_operation("balance", async {
+                client.balance_allowance(request).await.map_err(Into::into)
+            })
             .await
             .context("Polymarket CLOB balance_allowance failed")?;
         Ok(vec![("USDC".to_string(), local_decimal(balance.balance)?)])
     }
 
     async fn get_open_orders(&self) -> Result<Vec<OrderRecord>> {
-        let client = self.authenticated_client().await?;
+        let client = self
+            .clob_operation("authentication", self.authenticated_client())
+            .await?;
         self.all_open_order_responses(&client)
             .await?
             .into_iter()
@@ -750,24 +835,32 @@ impl ExecutionVenue for LiveVenue {
             .post_order_reconciliation_generation
             .load(Ordering::Acquire);
         let (source, fallback_reason, continuity_generation) = {
-            let readiness = self.readiness_state.lock().await;
-            let transport = self.transport_state.lock().await;
-            if readiness.last_rest_reconcile_at.is_none() {
-                ("startup", None, transport.continuity_generation)
-            } else if transport.continuity_uncertain {
+            let has_reconciled = self
+                .readiness_state
+                .lock()
+                .await
+                .last_rest_reconcile_at
+                .is_some();
+            let (continuity_uncertain, fallback_reason, continuity_generation) = {
+                let transport = self.transport_state.lock().await;
                 (
-                    "http_fallback",
+                    transport.continuity_uncertain,
                     transport.fallback_reason,
                     transport.continuity_generation,
                 )
+            };
+            if !has_reconciled {
+                ("startup", None, continuity_generation)
+            } else if continuity_uncertain {
+                ("http_fallback", fallback_reason, continuity_generation)
             } else if post_order_generation
                 > self
                     .post_order_reconciled_generation
                     .load(Ordering::Acquire)
             {
-                ("post_order", None, transport.continuity_generation)
+                ("post_order", None, continuity_generation)
             } else {
-                ("http_periodic", None, transport.continuity_generation)
+                ("http_periodic", None, continuity_generation)
             }
         };
         if let Some(metrics) = &self.reconciliation_metrics {
@@ -830,6 +923,30 @@ impl ExecutionVenue for LiveVenue {
             } else {
                 Vec::new()
             };
+            if self.bound_process_id.is_some()
+                && self
+                    .resolve_mature_submit_unknown_orders(
+                        &store,
+                        &local_nonterminal,
+                        &open_orders,
+                        &trades,
+                        checked_at,
+                    )
+                    .await
+                    .map_err(|error| StagedReconciliationError {
+                        stage: ReconciliationStage::OrderOwnership,
+                        error,
+                    })?
+                    > 0
+            {
+                local_nonterminal = at_stage(
+                    ReconciliationStage::LocalOrders,
+                    self.bounded_nonterminal_orders(
+                        self.bound_process_id.expect("bound process checked above"),
+                    )
+                    .await,
+                )?;
+            }
             let balances = at_stage(
                 ReconciliationStage::Balances,
                 self.get_balances().await,
@@ -928,16 +1045,19 @@ impl ExecutionVenue for LiveVenue {
             // wallet only after authenticated REST evidence has been backfilled durably.
             let account_reconcile = at_stage(
                 ReconciliationStage::AccountReconciliation,
-                self.run_account_reconcile(AccountReconcileRequest {
-                    account_address: None,
-                    lookback_hours: Some(1),
-                    process_id: self.bound_process_id,
-                    account_ref: self.bound_account_ref.clone(),
-                    credential_account_fingerprint_sha256: None,
-                    dry_run: false,
-                    token_id: None,
-                    source: Some("poll".to_string()),
-                })
+                self.clob_operation(
+                    "account_reconciliation",
+                    self.run_account_reconcile(AccountReconcileRequest {
+                        account_address: None,
+                        lookback_hours: Some(1),
+                        process_id: self.bound_process_id,
+                        account_ref: self.bound_account_ref.clone(),
+                        credential_account_fingerprint_sha256: None,
+                        dry_run: false,
+                        token_id: None,
+                        source: Some("poll".to_string()),
+                    }),
+                )
                 .await
                 .context("live account reconciliation polling backup failed"),
             )?;
@@ -975,6 +1095,15 @@ impl ExecutionVenue for LiveVenue {
             } else {
                 open_orders.len()
             };
+            let submit_unknown_count = local_nonterminal
+                .iter()
+                .filter(|order| order.state == OrderState::Unknown)
+                .count();
+            let oldest_submit_unknown_age_seconds = local_nonterminal
+                .iter()
+                .filter(|order| order.state == OrderState::Unknown)
+                .map(|order| (checked_at - order.created_at).num_milliseconds().max(0) as f64 / 1_000.0)
+                .fold(0.0_f64, f64::max);
             // Wallet trades are account-scoped and may belong to a sibling sleeve or an exact
             // reconciled manual exit. The account reconciliation report is the authoritative
             // ownership result; keep the raw REST count diagnostic-only to avoid double-counting.
@@ -1001,6 +1130,8 @@ impl ExecutionVenue for LiveVenue {
                 foreign_venue_orders,
                 foreign_wallet_trades,
                 http_fills_recovered,
+                submit_unknown_count,
+                oldest_submit_unknown_age_seconds,
             ))
         }
         .await;
@@ -1014,6 +1145,8 @@ impl ExecutionVenue for LiveVenue {
             foreign_venue_orders,
             foreign_wallet_trades,
             http_fills_recovered,
+            submit_unknown_count,
+            oldest_submit_unknown_age_seconds,
         ) = match reconcile_result {
             Ok(result) => result,
             Err(failure) => {
@@ -1130,6 +1263,17 @@ impl ExecutionVenue for LiveVenue {
         }
         if let Some(metrics) = &self.reconciliation_metrics {
             metrics.record_report(&report, http_fills_recovered);
+            if metrics.record_submit_unknown_state(
+                submit_unknown_count,
+                oldest_submit_unknown_age_seconds,
+            ) {
+                tracing::info!(
+                    event = "submit_unknown_resolved",
+                    process_id = ?self.bound_process_id,
+                    remaining = submit_unknown_count,
+                    "reconciliation resolved a previously unknown live submission"
+                );
+            }
         }
         self.post_order_reconciled_generation
             .store(post_order_generation, Ordering::Release);
@@ -1209,9 +1353,9 @@ impl ExecutionVenue for LiveVenue {
     }
 
     async fn live_status(&self) -> Result<LiveVenueStatus> {
-        let transport = self.transport_state.lock().await;
-        let state = self.readiness_state.lock().await;
-        let global = self.global_entry_gate.lock().await;
+        let transport = self.transport_state.lock().await.clone();
+        let state = self.readiness_state.lock().await.clone();
+        let global = self.global_entry_gate.lock().await.clone();
         let now = Utc::now();
         let last_user_ws_pong_age_secs = stateful_age_seconds(transport.last_user_ws_pong_at, now);
         let last_rest_reconcile_age_secs = stateful_age_seconds(state.last_rest_reconcile_at, now);
