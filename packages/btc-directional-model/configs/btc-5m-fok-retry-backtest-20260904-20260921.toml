@@ -2,7 +2,7 @@
 predictions = "/Volumes/docker-data/polymarket-bot/artifacts/training/btc-directional-model/conservative-selective-vwap-capacity/20260923T011753Z/predictions/walk-forward.parquet"
 predictions_sha256 = "2013547b2a0e5eb8aeb170503b4a813df10274db901b1e3bf2d3de454ddf8f54"
 archive_root = "/Volumes/docker-data/polymarket-bot/orderbook-drain/canonical-v1"
-start = "2026-07-14T00:00:00Z"
+start = "2026-09-04T00:00:00Z"
 end = "2026-09-22T00:00:00Z"
 database_start = "2026-09-04T00:00:00Z"
 model_key = "btc-5m-conservative-selective-development-live-pilot-20260921-v1"
