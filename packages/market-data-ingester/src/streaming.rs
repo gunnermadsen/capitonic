@@ -1539,4 +1539,67 @@ mod tests {
             "market_data_ingester_clob_bootstrap_ready{product=\"product\",scope=\"current\"} 1"
         ));
     }
+
+    #[test]
+    fn renders_resolution_websocket_pipeline_metrics() {
+        const PRODUCT: &str = "polymarket_btc_five_minute_resolutions";
+        let metrics = StreamingMetrics::default();
+        metrics
+            .source_reconnects
+            .lock()
+            .unwrap()
+            .insert((PRODUCT.to_owned(), "consumer_backpressure".to_owned()), 3);
+        metrics
+            .source_connection_ready
+            .lock()
+            .unwrap()
+            .insert(PRODUCT.to_owned(), 1);
+        metrics
+            .source_last_event_micros
+            .lock()
+            .unwrap()
+            .insert(PRODUCT.to_owned(), 2_000_000);
+        metrics
+            .persistence_latency_micros
+            .lock()
+            .unwrap()
+            .insert(PRODUCT.to_owned(), 250_000);
+        let mut pipeline = RealtimePipelineMetrics {
+            websocket_frames: 11,
+            websocket_frames_processed: 9,
+            websocket_bytes: 2_048,
+            websocket_queue_depth: 32,
+            websocket_queue_capacity: 128,
+            websocket_queue_high_watermark: 96,
+            websocket_queue_overflows: 2,
+            ..Default::default()
+        };
+        pipeline
+            .websocket_queue_delay
+            .observe(Duration::from_millis(20));
+        metrics
+            .realtime_pipeline
+            .lock()
+            .unwrap()
+            .insert(PRODUCT.to_owned(), pipeline);
+
+        let rendered = metrics.render();
+        for expected in [
+            "ingester_source_reconnects_total{product=\"polymarket_btc_five_minute_resolutions\",reason=\"consumer_backpressure\"} 3",
+            "ingester_source_connection_ready{product=\"polymarket_btc_five_minute_resolutions\"} 1",
+            "ingester_source_last_event_timestamp_seconds{product=\"polymarket_btc_five_minute_resolutions\"} 2",
+            "ingester_source_persistence_latency_seconds{product=\"polymarket_btc_five_minute_resolutions\"} 0.25",
+            "market_data_ingester_websocket_frames_total{product=\"polymarket_btc_five_minute_resolutions\"} 11",
+            "market_data_ingester_websocket_frames_processed_total{product=\"polymarket_btc_five_minute_resolutions\"} 9",
+            "market_data_ingester_websocket_bytes_total{product=\"polymarket_btc_five_minute_resolutions\"} 2048",
+            "market_data_ingester_websocket_queue_depth{product=\"polymarket_btc_five_minute_resolutions\"} 32",
+            "market_data_ingester_websocket_queue_capacity{product=\"polymarket_btc_five_minute_resolutions\"} 128",
+            "market_data_ingester_websocket_queue_utilization_ratio{product=\"polymarket_btc_five_minute_resolutions\"} 0.25",
+            "market_data_ingester_websocket_queue_high_watermark{product=\"polymarket_btc_five_minute_resolutions\"} 96",
+            "market_data_ingester_websocket_queue_overflow_total{product=\"polymarket_btc_five_minute_resolutions\"} 2",
+            "market_data_ingester_websocket_queue_delay_seconds_count{product=\"polymarket_btc_five_minute_resolutions\"} 1",
+        ] {
+            assert!(rendered.contains(expected), "missing {expected}");
+        }
+    }
 }

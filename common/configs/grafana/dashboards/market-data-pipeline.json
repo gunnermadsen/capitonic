@@ -5180,6 +5180,155 @@
       ],
       "title": "Unresolved Required Products",
       "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 153},
+      "id": 70,
+      "panels": [],
+      "title": "Polymarket Resolution Websocket",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Connection and subscription readiness for the resolution websocket session.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [{"options": {"0": {"color": "red", "text": "DISCONNECTED"}, "1": {"color": "green", "text": "CONNECTED"}}, "type": "value"}],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": 0}, {"color": "green", "value": 1}]}
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 154},
+      "id": 71,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "wideLayout": true},
+      "pluginVersion": "12.4.2",
+      "targets": [{"editorMode": "code", "expr": "max(ingester_source_connection_ready{product=\"polymarket_btc_five_minute_resolutions\"}) or vector(0)", "instant": true, "legendFormat": "Resolution websocket", "refId": "A"}],
+      "title": "Resolution Websocket State",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Current health reported by the existing resolution strategy state metric.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [{"options": {"0": {"color": "red", "text": "UNHEALTHY"}, "1": {"color": "yellow", "text": "DEGRADED"}, "2": {"color": "green", "text": "HEALTHY"}}, "type": "value"}],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": 0}, {"color": "yellow", "value": 1}, {"color": "green", "value": 2}]}
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 154},
+      "id": 72,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "wideLayout": true},
+      "pluginVersion": "12.4.2",
+      "targets": [{"editorMode": "code", "expr": "2 * max(market_data_ingester_strategy_state{strategy=\"polymarket_btc_five_minute_resolutions\",health_status=\"healthy\"}) or 1 * max(market_data_ingester_strategy_state{strategy=\"polymarket_btc_five_minute_resolutions\",health_status=\"degraded\"}) or 0 * max(market_data_ingester_strategy_state{strategy=\"polymarket_btc_five_minute_resolutions\",health_status=\"unhealthy\"})", "instant": true, "legendFormat": "Resolution strategy", "refId": "A"}],
+      "title": "Resolution Strategy Health",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Provider close events that exactly match the bounded slow-consumer send-buffer-full reason.",
+      "fieldConfig": {"defaults": {"color": {"fixedColor": "red", "mode": "fixed"}, "custom": {"drawStyle": "bars", "fillOpacity": 70, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "none"}}, "min": 0, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 12, "x": 12, "y": 154},
+      "id": 73,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+      "pluginVersion": "12.4.2",
+      "targets": [{"editorMode": "code", "expr": "increase(ingester_source_reconnects_total{product=\"polymarket_btc_five_minute_resolutions\",reason=\"slow_consumer_send_buffer_full\"}[$__rate_interval])", "legendFormat": "slow consumer", "refId": "A"}],
+      "title": "Slow-Consumer Disconnect Events",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Failed resolution websocket sessions grouped by their bounded reconnect reason.",
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "bars", "fillOpacity": 35, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}, "min": 0, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 159},
+      "id": 74,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "pluginVersion": "12.4.2",
+      "targets": [{"editorMode": "code", "expr": "sum by (reason) (increase(ingester_source_reconnects_total{product=\"polymarket_btc_five_minute_resolutions\"}[$__rate_interval]))", "legendFormat": "{{reason}}", "refId": "A"}],
+      "title": "Reconnects by Cause",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Current raw-frame queue utilization and the highest utilization observed during the previous scrape window.",
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 15, "lineWidth": 2, "showPoints": "never", "stacking": {"group": "A", "mode": "none"}}, "max": 1, "min": 0, "unit": "percentunit"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 159},
+      "id": 75,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {"editorMode": "code", "expr": "max(market_data_ingester_websocket_queue_utilization_ratio{product=\"polymarket_btc_five_minute_resolutions\"})", "legendFormat": "current", "refId": "A"},
+        {"editorMode": "code", "expr": "max(market_data_ingester_websocket_queue_high_watermark{product=\"polymarket_btc_five_minute_resolutions\"}) / clamp_min(max(market_data_ingester_websocket_queue_capacity{product=\"polymarket_btc_five_minute_resolutions\"}), 1)", "legendFormat": "scrape-window high-watermark", "refId": "B"}
+      ],
+      "title": "Frame Queue Utilization",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "p99 time raw resolution frames spend in the bounded handoff before processing begins.",
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 12, "lineWidth": 2, "showPoints": "never", "stacking": {"group": "A", "mode": "none"}}, "min": 0, "unit": "s"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 166},
+      "id": 76,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+      "pluginVersion": "12.4.2",
+      "targets": [{"editorMode": "code", "expr": "histogram_quantile(0.99, sum by (le) (rate(market_data_ingester_websocket_queue_delay_seconds_bucket{product=\"polymarket_btc_five_minute_resolutions\"}[$__rate_interval])))", "legendFormat": "p99 queue delay", "refId": "A"}],
+      "title": "Frame Queue Delay p99",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Resolution websocket data-frame arrival and completed-processing rates.",
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 12, "lineWidth": 2, "showPoints": "never", "stacking": {"group": "A", "mode": "none"}}, "min": 0, "unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 166},
+      "id": 77,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {"editorMode": "code", "expr": "sum(rate(market_data_ingester_websocket_frames_total{product=\"polymarket_btc_five_minute_resolutions\"}[$__rate_interval]))", "legendFormat": "received", "refId": "A"},
+        {"editorMode": "code", "expr": "sum(rate(market_data_ingester_websocket_frames_processed_total{product=\"polymarket_btc_five_minute_resolutions\"}[$__rate_interval]))", "legendFormat": "processed", "refId": "B"}
+      ],
+      "title": "Frames Received vs Processed",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Immediate failures to hand a raw resolution frame into the fixed 128-frame queue.",
+      "fieldConfig": {"defaults": {"color": {"fixedColor": "red", "mode": "fixed"}, "custom": {"drawStyle": "bars", "fillOpacity": 70, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "none"}}, "min": 0, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 173},
+      "id": 78,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+      "pluginVersion": "12.4.2",
+      "targets": [{"editorMode": "code", "expr": "increase(market_data_ingester_websocket_queue_overflow_total{product=\"polymarket_btc_five_minute_resolutions\"}[$__rate_interval])", "legendFormat": "queue overflow", "refId": "A"}],
+      "title": "Queue Overflow Events",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Latest successful realtime resolution persistence latency.",
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 12, "lineWidth": 2, "showPoints": "never", "stacking": {"group": "A", "mode": "none"}}, "min": 0, "unit": "s"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 173},
+      "id": 79,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
+      "pluginVersion": "12.4.2",
+      "targets": [{"editorMode": "code", "expr": "max(ingester_source_persistence_latency_seconds{product=\"polymarket_btc_five_minute_resolutions\"})", "legendFormat": "persistence latency", "refId": "A"}],
+      "title": "Resolution Persistence Latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "loki", "uid": "loki"},
+      "description": "Structured resolution websocket terminal events with bounded disconnect reason and session context.",
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 180},
+      "id": 80,
+      "options": {"cellHeight": "sm", "showHeader": true},
+      "pluginVersion": "12.4.2",
+      "targets": [{"datasource": {"type": "loki", "uid": "loki"}, "editorMode": "code", "expr": "{service_name=\"ingester\",strategy=\"polymarket_btc_five_minute_resolutions\"} |= \"Polymarket resolution websocket session terminated\" | json", "queryType": "range", "refId": "A"}],
+      "title": "Recent Session Terminations",
+      "transformations": [{"id": "labelsToFields", "options": {"mode": "columns"}}],
+      "type": "table"
     }
   ],
   "preload": false,
@@ -5226,6 +5375,6 @@
   "timezone": "browser",
   "title": "Market Data Pipeline",
   "uid": "market-data-pipeline",
-  "version": 15,
+  "version": 16,
   "weekStart": ""
 }
