@@ -72,6 +72,7 @@ const MAX_IDENTIFIER_BYTES: usize = 512;
 const MAX_SOURCE_HASH_BYTES: usize = 256;
 const MAX_NUMERIC_BYTES: usize = 64;
 const MAX_PROVIDER_CLOCK_LEAD_MILLISECONDS: i64 = 5_000;
+const WEBSOCKET_READ_BUFFER_BYTES: usize = 256 * 1024;
 const WEBSOCKET_EVENT_BUFFER: usize = 4_096;
 const PERSISTENCE_COMMAND_BUFFER: usize = 32;
 const PUBLICATION_COMMAND_BUFFER: usize = 1_024;
@@ -2238,7 +2239,6 @@ fn clob_subscription(markets: &[MarketContract]) -> String {
     json!({
         "assets_ids": clob_assets(markets),
         "type": "market",
-        "custom_feature_enabled": true,
         "initial_dump": true
     })
     .to_string()
@@ -2249,7 +2249,6 @@ fn clob_subscription_operation(assets: &[String], subscribe: bool) -> String {
         json!({
             "assets_ids": assets,
             "operation": "subscribe",
-            "custom_feature_enabled": true,
             "initial_dump": true
         })
     } else {
@@ -4004,7 +4003,7 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                 // this boundary would leave readiness driven by the shared Tokio
                 // reactor and would not isolate intake scheduling in practice.
                 let websocket_config = WebSocketConfig::default()
-                    .read_buffer_size(64 * 1024)
+                    .read_buffer_size(WEBSOCKET_READ_BUFFER_BYTES)
                     .write_buffer_size(16 * 1024)
                     .max_write_buffer_size(64 * 1024)
                     .max_message_size(Some(MAX_WEBSOCKET_FRAME_BYTES))
@@ -5798,6 +5797,7 @@ mod tests {
             serde_json::from_str::<Value>(&clob_subscription(&markets)).expect("subscription JSON");
         assert_eq!(payload["type"], "market");
         assert_eq!(payload["initial_dump"], true);
+        assert!(payload.get("custom_feature_enabled").is_none());
         assert_eq!(
             payload["assets_ids"],
             json!([
@@ -5811,6 +5811,15 @@ mod tests {
         );
         assert!(payload.get("asset_ids").is_none());
 
+        let subscribe = serde_json::from_str::<Value>(&clob_subscription_operation(
+            &["7".to_owned(), "8".to_owned()],
+            true,
+        ))
+        .expect("subscribe operation");
+        assert_eq!(subscribe["operation"], "subscribe");
+        assert_eq!(subscribe["initial_dump"], true);
+        assert!(subscribe.get("custom_feature_enabled").is_none());
+
         let desired = vec![current, successor];
         let delta = subscription_delta(&markets, &desired);
         assert_eq!(delta.added, Vec::<String>::new());
@@ -5820,6 +5829,11 @@ mod tests {
                 .expect("operation");
         assert_eq!(operation["operation"], "unsubscribe");
         assert_eq!(operation["assets_ids"], json!(["3", "4"]));
+    }
+
+    #[test]
+    fn websocket_read_buffer_absorbs_orderbook_bursts() {
+        assert_eq!(WEBSOCKET_READ_BUFFER_BYTES, 256 * 1024);
     }
 
     #[test]
