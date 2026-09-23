@@ -117,7 +117,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Five-minute p99 delay in scheduling the socket task's 100ms runtime probe.",
+      "description": "Five-minute p99 time that raw orderbook frames spend in the bounded socket-to-consumer queue before processing starts.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1677,12 +1677,319 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Encrypted TCP bytes waiting unread in the kernel divided by the effective SO_RCVBUF reported by the connected orderbook socket. Current is the latest 250ms sample; sampled peak preserves the highest value between Prometheus collections. Sustained values near 100% indicate that the client is not draining the kernel receive queue fast enough.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "SO_RCVBUF utilized",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "area"
+            }
+          },
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 0.5
+              },
+              {
+                "color": "red",
+                "value": 0.8
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 42
+      },
+      "id": 67,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "max(market_data_ingester_clob_socket_receive_buffer_utilization_ratio{product=\"polymarket_btc_five_minute_orderbooks\"})",
+          "legendFormat": "current sampled pressure",
+          "refId": "A"
+        },
+        {
+          "expr": "max(market_data_ingester_clob_socket_receive_buffer_high_watermark_ratio{product=\"polymarket_btc_five_minute_orderbooks\"})",
+          "legendFormat": "sampled peak between scrapes",
+          "refId": "B"
+        }
+      ],
+      "title": "Kernel Receive Queue Pressure",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Delay between each 250ms socket-pressure probe deadline and when the dedicated CLOB socket runtime actually executes it. This isolates runtime or host scheduling stalls from downstream parsing and persistence latency.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "Scheduling delay",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "area"
+            }
+          },
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 25
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 42
+      },
+      "id": 68,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "1000 * max(market_data_ingester_clob_socket_probe_schedule_delay_seconds{product=\"polymarket_btc_five_minute_orderbooks\"})",
+          "legendFormat": "latest probe delay",
+          "refId": "A"
+        },
+        {
+          "expr": "1000 * max(market_data_ingester_clob_socket_probe_schedule_delay_high_watermark_seconds{product=\"polymarket_btc_five_minute_orderbooks\"})",
+          "legendFormat": "peak delay between scrapes",
+          "refId": "B"
+        }
+      ],
+      "title": "Socket Runtime Scheduling Delay",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Configured Tungstenite read allocation, effective kernel SO_RCVBUF, and the highest sampled unread kernel bytes between Prometheus collections. Tungstenite's value is a read-size optimization, not a fixed overflow queue; SO_RCVBUF is the kernel capacity relevant to TCP backpressure.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "Bytes",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "min": 0,
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 42
+      },
+      "id": 69,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "max(market_data_ingester_clob_tungstenite_read_buffer_bytes{product=\"polymarket_btc_five_minute_orderbooks\"})",
+          "legendFormat": "Tungstenite read allocation",
+          "refId": "A"
+        },
+        {
+          "expr": "max(market_data_ingester_clob_socket_receive_buffer_bytes{product=\"polymarket_btc_five_minute_orderbooks\"})",
+          "legendFormat": "effective SO_RCVBUF",
+          "refId": "B"
+        },
+        {
+          "expr": "max(market_data_ingester_clob_socket_unread_high_watermark_bytes{product=\"polymarket_btc_five_minute_orderbooks\"})",
+          "legendFormat": "sampled unread peak",
+          "refId": "C"
+        }
+      ],
+      "title": "CLOB Receive Capacity",
+      "type": "timeseries"
+    },
+    {
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 42
+        "y": 50
       },
       "id": 51,
       "panels": [],
@@ -1721,7 +2028,7 @@
         "h": 5,
         "w": 6,
         "x": 0,
-        "y": 43
+        "y": 51
       },
       "id": 1,
       "options": {
@@ -1799,7 +2106,7 @@
         "h": 5,
         "w": 4,
         "x": 6,
-        "y": 43
+        "y": 51
       },
       "id": 12,
       "options": {
@@ -1863,7 +2170,7 @@
         "h": 5,
         "w": 4,
         "x": 10,
-        "y": 43
+        "y": 51
       },
       "id": 3,
       "options": {
@@ -1979,7 +2286,7 @@
         "h": 8,
         "w": 10,
         "x": 14,
-        "y": 43
+        "y": 51
       },
       "id": 5,
       "options": {
@@ -2068,7 +2375,7 @@
         "h": 5,
         "w": 3,
         "x": 0,
-        "y": 48
+        "y": 56
       },
       "id": 13,
       "options": {
@@ -2146,7 +2453,7 @@
         "h": 5,
         "w": 3,
         "x": 3,
-        "y": 48
+        "y": 56
       },
       "id": 11,
       "options": {
@@ -2251,7 +2558,7 @@
         "h": 5,
         "w": 4,
         "x": 6,
-        "y": 48
+        "y": 56
       },
       "id": 27,
       "options": {
@@ -2330,7 +2637,7 @@
         "h": 10,
         "w": 4,
         "x": 10,
-        "y": 48
+        "y": 56
       },
       "id": 2,
       "options": {
@@ -2448,7 +2755,7 @@
         "h": 8,
         "w": 10,
         "x": 14,
-        "y": 51
+        "y": 59
       },
       "id": 7,
       "options": {
@@ -2531,7 +2838,7 @@
         "h": 5,
         "w": 3,
         "x": 0,
-        "y": 53
+        "y": 61
       },
       "id": 20,
       "options": {
@@ -2609,7 +2916,7 @@
         "h": 5,
         "w": 3,
         "x": 3,
-        "y": 53
+        "y": 61
       },
       "id": 21,
       "options": {
@@ -2727,7 +3034,7 @@
         "h": 5,
         "w": 4,
         "x": 6,
-        "y": 53
+        "y": 61
       },
       "id": 9,
       "options": {
@@ -2837,7 +3144,7 @@
         "h": 24,
         "w": 7,
         "x": 0,
-        "y": 58
+        "y": 66
       },
       "id": 22,
       "options": {
@@ -2930,7 +3237,7 @@
         "h": 8,
         "w": 7,
         "x": 7,
-        "y": 58
+        "y": 66
       },
       "id": 23,
       "options": {
@@ -3030,7 +3337,7 @@
         "h": 8,
         "w": 10,
         "x": 14,
-        "y": 59
+        "y": 67
       },
       "id": 4,
       "options": {
@@ -3127,7 +3434,7 @@
         "h": 8,
         "w": 7,
         "x": 7,
-        "y": 66
+        "y": 74
       },
       "id": 6,
       "options": {
@@ -3228,7 +3535,7 @@
         "h": 7,
         "w": 10,
         "x": 14,
-        "y": 67
+        "y": 75
       },
       "id": 24,
       "options": {
@@ -3319,7 +3626,7 @@
         "h": 8,
         "w": 7,
         "x": 7,
-        "y": 74
+        "y": 82
       },
       "id": 8,
       "options": {
@@ -3416,7 +3723,7 @@
         "h": 17,
         "w": 10,
         "x": 14,
-        "y": 74
+        "y": 82
       },
       "id": 18,
       "options": {
@@ -3512,7 +3819,7 @@
         "h": 9,
         "w": 14,
         "x": 0,
-        "y": 82
+        "y": 90
       },
       "id": 15,
       "options": {
@@ -3547,7 +3854,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 91
+        "y": 99
       },
       "id": 10,
       "panels": [],
@@ -3621,7 +3928,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 92
+        "y": 100
       },
       "id": 17,
       "options": {
@@ -3721,7 +4028,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 92
+        "y": 100
       },
       "id": 14,
       "options": {
@@ -3821,7 +4128,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 100
+        "y": 108
       },
       "id": 25,
       "options": {
@@ -3924,7 +4231,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 100
+        "y": 108
       },
       "id": 16,
       "options": {
@@ -3959,7 +4266,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 108
+        "y": 116
       },
       "id": 28,
       "panels": [],
@@ -4001,7 +4308,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 109
+        "y": 117
       },
       "id": 29,
       "options": {
@@ -4045,7 +4352,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 109
+        "y": 117
       },
       "id": 30,
       "options": {
@@ -4145,7 +4452,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 118
+        "y": 126
       },
       "id": 52,
       "options": {
@@ -4249,7 +4556,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 118
+        "y": 126
       },
       "id": 53,
       "options": {
@@ -4352,7 +4659,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 125
+        "y": 133
       },
       "id": 54,
       "options": {
@@ -4391,7 +4698,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 132
+        "y": 140
       },
       "id": 60,
       "panels": [],
@@ -4659,7 +4966,7 @@
         "h": 5,
         "w": 6,
         "x": 18,
-        "y": 133
+        "y": 141
       },
       "id": 64,
       "options": {
@@ -4774,7 +5081,7 @@
         "h": 7,
         "w": 16,
         "x": 0,
-        "y": 138
+        "y": 146
       },
       "id": 65,
       "options": {
@@ -4841,7 +5148,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 138
+        "y": 146
       },
       "id": 66,
       "options": {
@@ -4919,6 +5226,6 @@
   "timezone": "browser",
   "title": "Market Data Pipeline",
   "uid": "market-data-pipeline",
-  "version": 14,
+  "version": 15,
   "weekStart": ""
 }
