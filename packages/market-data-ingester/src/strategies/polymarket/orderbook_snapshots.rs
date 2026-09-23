@@ -38,6 +38,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use super::clob_socket_diagnostics::{
+    probe_schedule_delay, ClobSocketDiagnostics, ClobSocketPressure,
+};
+
 use crate::{
     domain::{
         CaptureArtifact, IngesterProfile, IngesterStrategyKey, RealtimeWorkerStrategy,
@@ -73,6 +77,7 @@ const MAX_SOURCE_HASH_BYTES: usize = 256;
 const MAX_NUMERIC_BYTES: usize = 64;
 const MAX_PROVIDER_CLOCK_LEAD_MILLISECONDS: i64 = 5_000;
 const WEBSOCKET_READ_BUFFER_BYTES: usize = 256 * 1024;
+const CLOB_SOCKET_PROBE_INTERVAL: Duration = Duration::from_millis(250);
 const WEBSOCKET_EVENT_BUFFER: usize = 4_096;
 const PERSISTENCE_COMMAND_BUFFER: usize = 32;
 const PUBLICATION_COMMAND_BUFFER: usize = 1_024;
@@ -4039,6 +4044,28 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                     }
                     Ok(Ok((websocket, _))) => websocket,
                 };
+                let socket_diagnostics =
+                    match ClobSocketDiagnostics::duplicate(websocket.get_ref().get_ref()) {
+                        Ok(diagnostics) => {
+                            crate::streaming::set_clob_socket_capacity(
+                                STRATEGY_KEY.as_str(),
+                                WEBSOCKET_READ_BUFFER_BYTES,
+                                diagnostics.receive_buffer_bytes(),
+                            );
+                            Some(diagnostics)
+                        }
+                        Err(error) => {
+                            crate::streaming::observe_clob_socket_probe_failure(
+                                STRATEGY_KEY.as_str(),
+                            );
+                            warn!(
+                                error_code = "polymarket_clob_socket_probe_unavailable",
+                                error = %error,
+                                "CLOB socket pressure instrumentation is unavailable for this connection"
+                            );
+                            None
+                        }
+                    };
                 run_clob_socket(
                     websocket,
                     subscription,
@@ -4046,11 +4073,14 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                     frame_sender,
                     control_write_sender,
                     worker_shutdown,
-                    ClobSocketTiming {
-                        ping_interval,
-                        pong_timeout,
-                        read_timeout,
-                        write_timeout,
+                    ClobSocketRuntime {
+                        timing: ClobSocketTiming {
+                            ping_interval,
+                            pong_timeout,
+                            read_timeout,
+                            write_timeout,
+                        },
+                        diagnostics: socket_diagnostics,
                     },
                 )
                 .await
@@ -4563,6 +4593,21 @@ struct ClobSocketTiming {
     write_timeout: Duration,
 }
 
+struct ClobSocketRuntime {
+    timing: ClobSocketTiming,
+    diagnostics: Option<ClobSocketDiagnostics>,
+}
+
+impl ClobSocketRuntime {
+    #[cfg(test)]
+    fn without_diagnostics(timing: ClobSocketTiming) -> Self {
+        Self {
+            timing,
+            diagnostics: None,
+        }
+    }
+}
+
 fn enqueue_clob_control(
     sender: &mpsc::Sender<Message>,
     message: Message,
@@ -4586,13 +4631,17 @@ async fn run_clob_socket<S>(
     frame_sender: mpsc::Sender<ClobFrame>,
     control_write_sender: mpsc::Sender<ClobControlWrite>,
     worker_shutdown: CancellationToken,
-    timing: ClobSocketTiming,
+    runtime: ClobSocketRuntime,
 ) -> Result<(), StrategyError>
 where
     S: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
         + futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
         + Unpin,
 {
+    let ClobSocketRuntime {
+        timing,
+        diagnostics: socket_diagnostics,
+    } = runtime;
     let ClobSocketTiming {
         ping_interval,
         pong_timeout,
@@ -4629,11 +4678,42 @@ where
     tokio::pin!(read_sleep);
     let pong_sleep = tokio::time::sleep_until(Instant::now() + Duration::from_secs(86_400));
     tokio::pin!(pong_sleep);
+    let mut probe_tick = tokio::time::interval_at(
+        Instant::now() + CLOB_SOCKET_PROBE_INTERVAL,
+        CLOB_SOCKET_PROBE_INTERVAL,
+    );
+    probe_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut pong_deadline = None;
+    let connection_started_at = Instant::now();
+    let mut last_pressure = None;
+    let mut latest_probe_delay = Duration::ZERO;
+    let mut max_probe_delay = Duration::ZERO;
     loop {
         tokio::select! {
             biased;
             _ = worker_shutdown.cancelled() => return Ok(()),
+            scheduled_at = probe_tick.tick(), if socket_diagnostics.is_some() => {
+                let observed_at = Instant::now();
+                latest_probe_delay = probe_schedule_delay(scheduled_at, observed_at);
+                max_probe_delay = max_probe_delay.max(latest_probe_delay);
+                let Some(diagnostics) = socket_diagnostics.as_ref() else {
+                    continue;
+                };
+                match diagnostics.sample() {
+                    Ok(pressure) => {
+                        last_pressure = Some(pressure);
+                        crate::streaming::observe_clob_socket_pressure(
+                            STRATEGY_KEY.as_str(),
+                            pressure.unread_bytes,
+                            pressure.receive_buffer_bytes,
+                            latest_probe_delay,
+                        );
+                    }
+                    Err(_) => crate::streaming::observe_clob_socket_probe_failure(
+                        STRATEGY_KEY.as_str(),
+                    ),
+                }
+            }
             frame = stream.next() => {
                 let queued_at = Instant::now();
                 let frame = match frame {
@@ -4674,10 +4754,49 @@ where
                         pong_deadline = None;
                         continue;
                     }
-                    Some(Ok(Message::Close(frame))) => return Err(source_error(
-                        "polymarket_clob_closed",
-                        format!("Polymarket CLOB websocket closed: {frame:?}"),
-                    )),
+                    Some(Ok(Message::Close(frame))) => {
+                        let close_code = frame.as_ref().map(|frame| u16::from(frame.code));
+                        let close_reason = frame
+                            .as_ref()
+                            .map(|frame| frame.reason.as_str())
+                            .unwrap_or_default();
+                        let slow_consumer = close_code == Some(1013)
+                            && close_reason.eq_ignore_ascii_case(
+                                "slow consumer: send buffer full",
+                            );
+                        crate::streaming::observe_clob_remote_close(
+                            STRATEGY_KEY.as_str(),
+                            slow_consumer,
+                        );
+                        if let Some(diagnostics) = socket_diagnostics.as_ref() {
+                            match diagnostics.sample() {
+                                Ok(pressure) => {
+                                    last_pressure = Some(pressure);
+                                    crate::streaming::observe_clob_socket_pressure(
+                                        STRATEGY_KEY.as_str(),
+                                        pressure.unread_bytes,
+                                        pressure.receive_buffer_bytes,
+                                        latest_probe_delay,
+                                    );
+                                }
+                                Err(_) => crate::streaming::observe_clob_socket_probe_failure(
+                                    STRATEGY_KEY.as_str(),
+                                ),
+                            }
+                        }
+                        log_clob_remote_close(
+                            close_code,
+                            close_reason,
+                            connection_started_at.elapsed(),
+                            last_pressure,
+                            latest_probe_delay,
+                            max_probe_delay,
+                        );
+                        return Err(source_error(
+                            "polymarket_clob_closed",
+                            format!("Polymarket CLOB websocket closed: {frame:?}"),
+                        ));
+                    }
                     Some(Ok(_)) => continue,
                     Some(Err(error)) => return Err(source_error(
                         "polymarket_clob_read_failed",
@@ -4726,6 +4845,29 @@ where
             }
         }
     }
+}
+
+fn log_clob_remote_close(
+    close_code: Option<u16>,
+    close_reason: &str,
+    connection_age: Duration,
+    pressure: Option<ClobSocketPressure>,
+    latest_probe_delay: Duration,
+    max_probe_delay: Duration,
+) {
+    warn!(
+        error_code = "polymarket_clob_remote_close_snapshot",
+        close_code = close_code.unwrap_or(1005),
+        close_reason,
+        connection_age_ms = u64::try_from(connection_age.as_millis()).unwrap_or(u64::MAX),
+        socket_unread_bytes = pressure.map(|value| value.unread_bytes),
+        socket_receive_buffer_bytes = pressure.map(|value| value.receive_buffer_bytes),
+        socket_receive_buffer_utilization = pressure.map(ClobSocketPressure::utilization),
+        socket_probe_schedule_delay_ms = latest_probe_delay.as_secs_f64() * 1_000.0,
+        socket_probe_schedule_delay_max_ms = max_probe_delay.as_secs_f64() * 1_000.0,
+        tungstenite_read_buffer_bytes = WEBSOCKET_READ_BUFFER_BYTES,
+        "Polymarket CLOB remote close transport snapshot"
+    );
 }
 
 async fn send_websocket_message<S>(
@@ -4931,7 +5073,7 @@ mod tests {
             frames,
             control_writes,
             shutdown.clone(),
-            test_socket_timing(),
+            ClobSocketRuntime::without_diagnostics(test_socket_timing()),
         ));
 
         match tokio::time::timeout(Duration::from_secs(1), receiver.recv())
@@ -4965,7 +5107,7 @@ mod tests {
             frames,
             control_writes,
             CancellationToken::new(),
-            timing,
+            ClobSocketRuntime::without_diagnostics(timing),
         ));
         for n in 0..20 {
             let message = Message::Text(format!("frame-{n}").into());
@@ -5003,7 +5145,7 @@ mod tests {
             frames,
             control_writes,
             shutdown.clone(),
-            test_socket_timing(),
+            ClobSocketRuntime::without_diagnostics(test_socket_timing()),
         ));
         assert_eq!(
             server.next().await.unwrap().unwrap(),
@@ -5075,7 +5217,7 @@ mod tests {
             frames,
             control_writes,
             shutdown.clone(),
-            timing,
+            ClobSocketRuntime::without_diagnostics(timing),
         ));
         assert_eq!(
             server.next().await.unwrap().unwrap(),
@@ -5112,7 +5254,7 @@ mod tests {
             frames,
             control_writes,
             shutdown.clone(),
-            test_socket_timing(),
+            ClobSocketRuntime::without_diagnostics(test_socket_timing()),
         ));
         tokio::task::yield_now().await;
         shutdown.cancel();
@@ -5138,7 +5280,7 @@ mod tests {
             frames,
             control_writes,
             CancellationToken::new(),
-            timing,
+            ClobSocketRuntime::without_diagnostics(timing),
         ));
         assert_eq!(
             server.next().await.unwrap().unwrap(),
@@ -5168,7 +5310,7 @@ mod tests {
             frames,
             control_writes,
             shutdown.clone(),
-            timing,
+            ClobSocketRuntime::without_diagnostics(timing),
         ));
         assert_eq!(
             server.next().await.unwrap().unwrap(),
@@ -5202,7 +5344,7 @@ mod tests {
             frames,
             control_writes,
             CancellationToken::new(),
-            timing,
+            ClobSocketRuntime::without_diagnostics(timing),
         ));
         assert_eq!(
             server.next().await.unwrap().unwrap(),
@@ -5397,7 +5539,7 @@ mod tests {
             frames,
             control_writes,
             CancellationToken::new(),
-            test_socket_timing(),
+            ClobSocketRuntime::without_diagnostics(test_socket_timing()),
         ));
         assert_eq!(
             server.next().await.unwrap().unwrap(),
@@ -5430,7 +5572,7 @@ mod tests {
             frames,
             control_writes,
             CancellationToken::new(),
-            test_socket_timing(),
+            ClobSocketRuntime::without_diagnostics(test_socket_timing()),
         ));
         assert_eq!(
             server.next().await.unwrap().unwrap(),
