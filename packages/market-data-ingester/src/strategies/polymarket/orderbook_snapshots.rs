@@ -3684,55 +3684,54 @@ struct DiscoveryWorker {
     handle: JoinHandle<()>,
 }
 
-enum ClobIoEvent {
-    Frame {
-        message: Message,
-        received_at: DateTime<Utc>,
-        queued_at: Instant,
-    },
-    Failed(StrategyError),
-    ControlWrite {
-        elapsed: Duration,
-        failed: bool,
-    },
+struct ClobFrame {
+    message: Message,
+    received_at: DateTime<Utc>,
+    queued_at: Instant,
 }
 
-// A terminal socket event must be delivered exactly once. Polling an ended
-// stream again can produce an immediately-ready EOF loop and manufacture
-// queue pressure after the remote peer has already closed the connection.
+struct ClobControlWrite {
+    elapsed: Duration,
+    failed: bool,
+}
+
+// A terminal socket event is returned exactly once through the socket task's
+// result. It must never wait behind data frames or re-poll an ended stream.
 //
 // LATENCY CONTRACT: the successful data-frame path must do nothing except
 // enqueue the already-decoded websocket message. Do not add logging, metrics,
 // parsing, book work, persistence, publication, or other accounting here.
 // Polymarket closes clients that do not drain its socket promptly; even useful
 // observability on this side of the channel can therefore damage downstream
-// trade-data quality. Perform that work after `io_receiver.recv()` instead.
-async fn enqueue_clob_io_event(sender: &mpsc::Sender<ClobIoEvent>, event: ClobIoEvent) -> bool {
-    if matches!(event, ClobIoEvent::Failed(_)) {
-        let _ = sender.send(event).await;
-        return false;
+// trade-data quality. Perform that work after `frame_receiver.recv()` instead.
+fn enqueue_clob_frame(
+    sender: &mpsc::Sender<ClobFrame>,
+    frame: ClobFrame,
+) -> Result<(), StrategyError> {
+    sender.try_send(frame).map_err(|error| match error {
+        mpsc::error::TrySendError::Full(_) => source_error(
+            "polymarket_clob_consumer_backpressure",
+            "Polymarket CLOB processing fell behind the bounded websocket buffer",
+        ),
+        mpsc::error::TrySendError::Closed(_) => source_error(
+            "polymarket_clob_io_receiver_stopped",
+            "Polymarket CLOB frame receiver stopped",
+        ),
+    })
+}
+
+fn observe_clob_terminal_error(error: &StrategyError, queue_depth: usize) {
+    if error.code != "polymarket_clob_consumer_backpressure" {
+        return;
     }
-    match sender.try_send(event) {
-        Ok(()) => true,
-        Err(mpsc::error::TrySendError::Closed(_)) => false,
-        Err(mpsc::error::TrySendError::Full(_)) => {
-            crate::streaming::observe_websocket_queue_overflow(STRATEGY_KEY.as_str());
-            warn!(
-                strategy = %STRATEGY_KEY,
-                queue_depth = WEBSOCKET_EVENT_BUFFER,
-                queue_capacity = WEBSOCKET_EVENT_BUFFER,
-                error_code = "polymarket_clob_consumer_backpressure",
-                "raw Polymarket websocket frame queue is full"
-            );
-            let _ = sender
-                .send(ClobIoEvent::Failed(source_error(
-                    "polymarket_clob_consumer_backpressure",
-                    "Polymarket CLOB processing fell behind the bounded websocket buffer",
-                )))
-                .await;
-            false
-        }
-    }
+    crate::streaming::observe_websocket_queue_overflow(STRATEGY_KEY.as_str());
+    warn!(
+        strategy = %STRATEGY_KEY,
+        queue_depth,
+        queue_capacity = WEBSOCKET_EVENT_BUFFER,
+        error_code = error.code,
+        "raw Polymarket websocket frame queue is full"
+    );
 }
 
 struct ClobIoWorker {
@@ -3987,7 +3986,10 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
         };
         let mut active_markets = subscription_markets(&discovered, Utc::now(), &self.config);
         let (outgoing_sender, outgoing_receiver) = mpsc::channel::<Message>(64);
-        let (io_sender, mut io_receiver) = mpsc::channel::<ClobIoEvent>(WEBSOCKET_EVENT_BUFFER);
+        let (frame_sender, mut frame_receiver) = mpsc::channel::<ClobFrame>(WEBSOCKET_EVENT_BUFFER);
+        let (control_write_sender, mut control_write_receiver) =
+            mpsc::channel::<ClobControlWrite>(CLOB_CONTROL_BUFFER);
+        let (terminal_sender, mut terminal_receiver) = oneshot::channel();
         let io_shutdown = CancellationToken::new();
         let worker_shutdown = io_shutdown.clone();
         let websocket_url = self.config.websocket_url.clone();
@@ -3997,55 +3999,54 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
         let read_timeout = Duration::from_millis(self.config.read_timeout_ms);
         let write_timeout = Duration::from_millis(self.config.connect_timeout_ms);
         let _io_worker = spawn_clob_io_worker(io_shutdown, async move {
-            // The socket must be created on this runtime. Creating it before
-            // this boundary would leave readiness driven by the shared Tokio
-            // reactor and would not isolate intake scheduling in practice.
-            let websocket_config = WebSocketConfig::default()
-                .read_buffer_size(64 * 1024)
-                .write_buffer_size(16 * 1024)
-                .max_write_buffer_size(64 * 1024)
-                .max_message_size(Some(MAX_WEBSOCKET_FRAME_BYTES))
-                .max_frame_size(Some(MAX_WEBSOCKET_FRAME_BYTES));
-            let websocket = match tokio::time::timeout(
-                write_timeout,
-                connect_async_with_config(&websocket_url, Some(websocket_config), true),
-            )
-            .await
-            {
-                Err(_) => {
-                    let _ = io_sender
-                        .send(ClobIoEvent::Failed(source_error(
+            let result = async move {
+                // The socket must be created on this runtime. Creating it before
+                // this boundary would leave readiness driven by the shared Tokio
+                // reactor and would not isolate intake scheduling in practice.
+                let websocket_config = WebSocketConfig::default()
+                    .read_buffer_size(64 * 1024)
+                    .write_buffer_size(16 * 1024)
+                    .max_write_buffer_size(64 * 1024)
+                    .max_message_size(Some(MAX_WEBSOCKET_FRAME_BYTES))
+                    .max_frame_size(Some(MAX_WEBSOCKET_FRAME_BYTES));
+                let websocket = match tokio::time::timeout(
+                    write_timeout,
+                    connect_async_with_config(&websocket_url, Some(websocket_config), true),
+                )
+                .await
+                {
+                    Err(_) => {
+                        return Err(source_error(
                             "polymarket_clob_connect_timeout",
                             "timed out connecting to Polymarket CLOB websocket",
-                        )))
-                        .await;
-                    return;
-                }
-                Ok(Err(error)) => {
-                    let _ = io_sender
-                        .send(ClobIoEvent::Failed(source_error(
+                        ))
+                    }
+                    Ok(Err(error)) => {
+                        return Err(source_error(
                             "polymarket_clob_connect_failed",
                             format!("failed to connect Polymarket CLOB websocket: {error}"),
-                        )))
-                        .await;
-                    return;
-                }
-                Ok(Ok((websocket, _))) => websocket,
-            };
-            run_clob_socket(
-                websocket,
-                subscription,
-                outgoing_receiver,
-                io_sender,
-                worker_shutdown,
-                ClobSocketTiming {
-                    ping_interval,
-                    pong_timeout,
-                    read_timeout,
-                    write_timeout,
-                },
-            )
+                        ))
+                    }
+                    Ok(Ok((websocket, _))) => websocket,
+                };
+                run_clob_socket(
+                    websocket,
+                    subscription,
+                    outgoing_receiver,
+                    frame_sender,
+                    control_write_sender,
+                    worker_shutdown,
+                    ClobSocketTiming {
+                        ping_interval,
+                        pong_timeout,
+                        read_timeout,
+                        write_timeout,
+                    },
+                )
+                .await
+            }
             .await;
+            let _ = terminal_sender.send(result);
         })?;
 
         let mut registry = BookRegistry::new(connection_epoch, &active_markets)?;
@@ -4062,6 +4063,7 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
             Some(Instant::now() + Duration::from_millis(self.config.bootstrap_timeout_ms));
         let mut missing_current_since = None;
         let mut last_data_frame_at = None;
+        let mut control_write_open = true;
 
         loop {
             let disabled_deadline = Instant::now() + Duration::from_secs(86_400);
@@ -4244,9 +4246,28 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                         }
                     }
                 }
-                event = io_receiver.recv() => {
+                terminal = &mut terminal_receiver => {
+                    let error = match terminal {
+                        Ok(Err(error)) => error,
+                        Ok(Ok(())) | Err(_) => source_error(
+                            "polymarket_clob_io_worker_stopped",
+                            "Polymarket CLOB socket worker stopped unexpectedly",
+                        ),
+                    };
+                    observe_clob_terminal_error(&error, frame_receiver.len());
+                    return Err(error);
+                }
+                control_write = control_write_receiver.recv(), if control_write_open => {
+                    match control_write {
+                        Some(ClobControlWrite { elapsed, failed }) => {
+                            crate::streaming::observe_clob_control_write(STRATEGY_KEY.as_str(), elapsed, failed);
+                        }
+                        None => control_write_open = false,
+                    }
+                }
+                event = frame_receiver.recv() => {
                     match event {
-                        Some(ClobIoEvent::Frame { message, received_at, queued_at }) => {
+                        Some(ClobFrame { message, received_at, queued_at }) => {
                             // All optional frame accounting belongs after dequeue.
                             // Moving it above the channel can starve socket reads and
                             // cause provider slow-consumer disconnects.
@@ -4260,7 +4281,7 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                             );
                             crate::streaming::set_websocket_queue_depth(
                                 STRATEGY_KEY.as_str(),
-                                io_receiver.len(),
+                                frame_receiver.len(),
                                 WEBSOCKET_EVENT_BUFFER,
                             );
                             let frame_bytes = match &message {
@@ -4291,15 +4312,17 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                             );
                             processing_result?;
                         }
-                        Some(ClobIoEvent::ControlWrite { elapsed, failed }) => {
-                            crate::streaming::observe_clob_control_write(STRATEGY_KEY.as_str(), elapsed, failed);
-                            continue;
+                        None => {
+                            let error = match (&mut terminal_receiver).await {
+                                Ok(Err(error)) => error,
+                                Ok(Ok(())) | Err(_) => source_error(
+                                    "polymarket_clob_io_worker_stopped",
+                                    "Polymarket CLOB socket worker stopped unexpectedly",
+                                ),
+                            };
+                            observe_clob_terminal_error(&error, frame_receiver.len());
+                            return Err(error);
                         }
-                        Some(ClobIoEvent::Failed(error)) => return Err(error),
-                        None => return Err(source_error(
-                            "polymarket_clob_io_worker_stopped",
-                            "Polymarket CLOB socket worker stopped unexpectedly",
-                        )),
                     }
                     let current_window = aligned_market_window(Utc::now());
                     let current_ready = registry.market_bootstrapped(current_window);
@@ -4544,10 +4567,12 @@ async fn run_clob_socket<S>(
     websocket: S,
     subscription: String,
     mut outgoing_receiver: mpsc::Receiver<Message>,
-    io_sender: mpsc::Sender<ClobIoEvent>,
+    frame_sender: mpsc::Sender<ClobFrame>,
+    control_write_sender: mpsc::Sender<ClobControlWrite>,
     worker_shutdown: CancellationToken,
     timing: ClobSocketTiming,
-) where
+) -> Result<(), StrategyError>
+where
     S: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
         + futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
         + Unpin,
@@ -4570,7 +4595,7 @@ async fn run_clob_socket<S>(
             let result = send_websocket_message(&mut sink, command, write_timeout).await;
             // Low-frequency control-write evidence only. Optional telemetry must
             // never wait behind data or turn a full data queue into another fault.
-            let _ = io_sender.try_send(ClobIoEvent::ControlWrite {
+            let _ = control_write_sender.try_send(ClobControlWrite {
                 elapsed: started.elapsed(),
                 failed: result.is_err(),
             });
@@ -4592,9 +4617,9 @@ async fn run_clob_socket<S>(
         tokio::pin!(pong_sleep);
         tokio::select! {
             biased;
-            _ = worker_shutdown.cancelled() => return,
+            _ = worker_shutdown.cancelled() => return Ok(()),
             frame = stream.next() => {
-                let event = match frame {
+                let frame = match frame {
                     Some(Ok(Message::Text(text))) => {
                         let value = text.as_str();
                         if acknowledge_text_pong(value, &mut pong_deadline) {
@@ -4602,10 +4627,7 @@ async fn run_clob_socket<S>(
                             continue;
                         }
                         if value.eq_ignore_ascii_case("PING") {
-                            if let Err(error) = enqueue_clob_control(&control_sender, Message::Text("PONG".into())) {
-                                let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
-                                return;
-                            }
+                            enqueue_clob_control(&control_sender, Message::Text("PONG".into()))?;
                             read_deadline = Instant::now() + read_timeout;
                             pong_deadline = None;
                             continue;
@@ -4615,22 +4637,19 @@ async fn run_clob_socket<S>(
                             pong_deadline = None;
                             continue;
                         }
-                        ClobIoEvent::Frame {
+                        ClobFrame {
                             message: Message::Text(text),
                             received_at: Utc::now(),
                             queued_at: Instant::now(),
                         }
                     }
-                    Some(Ok(Message::Binary(bytes))) => ClobIoEvent::Frame {
+                    Some(Ok(Message::Binary(bytes))) => ClobFrame {
                         message: Message::Binary(bytes),
                         received_at: Utc::now(),
                         queued_at: Instant::now(),
                     },
                     Some(Ok(Message::Ping(payload))) => {
-                        if let Err(error) = enqueue_clob_control(&control_sender, Message::Pong(payload)) {
-                            let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
-                            return;
-                        }
+                        enqueue_clob_control(&control_sender, Message::Pong(payload))?;
                         read_deadline = Instant::now() + read_timeout;
                         pong_deadline = None;
                         continue;
@@ -4640,16 +4659,16 @@ async fn run_clob_socket<S>(
                         pong_deadline = None;
                         continue;
                     }
-                    Some(Ok(Message::Close(frame))) => ClobIoEvent::Failed(source_error(
+                    Some(Ok(Message::Close(frame))) => return Err(source_error(
                         "polymarket_clob_closed",
                         format!("Polymarket CLOB websocket closed: {frame:?}"),
                     )),
                     Some(Ok(_)) => continue,
-                    Some(Err(error)) => ClobIoEvent::Failed(source_error(
+                    Some(Err(error)) => return Err(source_error(
                         "polymarket_clob_read_failed",
                         format!("failed to read Polymarket CLOB websocket: {error}"),
                     )),
-                    None => ClobIoEvent::Failed(source_error(
+                    None => return Err(source_error(
                         "polymarket_clob_eof",
                         "Polymarket CLOB websocket ended",
                     )),
@@ -4658,46 +4677,33 @@ async fn run_clob_socket<S>(
                 // frames are moved directly into the bounded handoff before
                 // timestamp canonicalization, metrics, parsing, or other
                 // optional work.
-                if !enqueue_clob_io_event(&io_sender, event).await {
-                    return;
-                }
+                enqueue_clob_frame(&frame_sender, frame)?;
                 read_deadline = Instant::now() + read_timeout;
                 pong_deadline = None;
             }
             result = &mut writer => {
-                if let Err(error) = result {
-                    let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
-                }
-                return;
+                return result;
             },
             _ = &mut pong_sleep, if pong_deadline.is_some() => {
-                let _ = io_sender.send(ClobIoEvent::Failed(source_error(
+                return Err(source_error(
                     "polymarket_clob_pong_timeout",
                     "Polymarket CLOB did not acknowledge the oldest text PING",
-                ))).await;
-                return;
+                ));
             }
             _ = tokio::time::sleep_until(read_deadline) => {
-                let _ = io_sender.send(ClobIoEvent::Failed(source_error(
+                return Err(source_error(
                     "polymarket_clob_read_timeout",
                     "Polymarket CLOB websocket produced no frames before its read-idle deadline",
-                ))).await;
-                return;
+                ));
             }
             _ = ping.tick() => {
                 let sent_at = Instant::now();
-                if let Err(error) = enqueue_clob_control(&control_sender, Message::Text("PING".into())) {
-                    let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
-                    return;
-                }
+                enqueue_clob_control(&control_sender, Message::Text("PING".into()))?;
                 pong_deadline.get_or_insert(sent_at + pong_timeout);
             }
             command = outgoing_receiver.recv() => {
-                let Some(command) = command else { return; };
-                if let Err(error) = enqueue_clob_control(&control_sender, command) {
-                    let _ = io_sender.send(ClobIoEvent::Failed(error)).await;
-                    return;
-                }
+                let Some(command) = command else { return Ok(()); };
+                enqueue_clob_control(&control_sender, command)?;
             }
         }
     }
@@ -4877,21 +4883,12 @@ mod tests {
         }
     }
 
-    async fn next_data_frame(receiver: &mut mpsc::Receiver<ClobIoEvent>) -> Message {
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                match receiver.recv().await {
-                    Some(ClobIoEvent::Frame { message, .. }) => return message,
-                    Some(ClobIoEvent::ControlWrite { .. }) => {}
-                    Some(ClobIoEvent::Failed(error)) => {
-                        panic!("unexpected socket failure: {error}")
-                    }
-                    None => panic!("socket worker ended"),
-                }
-            }
-        })
-        .await
-        .expect("data keeps draining during a stalled write")
+    async fn next_data_frame(receiver: &mut mpsc::Receiver<ClobFrame>) -> Message {
+        tokio::time::timeout(Duration::from_secs(1), receiver.recv())
+            .await
+            .expect("data keeps draining during a stalled write")
+            .expect("socket worker remains active")
+            .message
     }
 
     #[tokio::test]
@@ -4905,13 +4902,15 @@ mod tests {
             .send(Message::Text("book-frame".into()))
             .await
             .expect("data frame is ready before the socket loop starts");
-        let (events, mut receiver) = mpsc::channel(64);
+        let (frames, mut receiver) = mpsc::channel(64);
+        let (control_writes, _control_write_receiver) = mpsc::channel(64);
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(run_clob_socket(
             client,
             "initial-subscription".into(),
             command_receiver,
-            events,
+            frames,
+            control_writes,
             shutdown.clone(),
             test_socket_timing(),
         ));
@@ -4921,7 +4920,7 @@ mod tests {
             .expect("socket loop produces an event")
             .expect("socket event channel remains open")
         {
-            ClobIoEvent::Frame {
+            ClobFrame {
                 message: Message::Text(text),
                 ..
             } => assert_eq!(text, "book-frame"),
@@ -4929,21 +4928,23 @@ mod tests {
         }
 
         shutdown.cancel();
-        task.await.unwrap();
+        task.await.unwrap().unwrap();
     }
 
     #[tokio::test]
     async fn stalled_clob_subscription_drains_frames_then_reports_write_timeout() {
         let (client, mut server, gate) = clob_socket_pair(true).await;
         let (_commands, command_receiver) = mpsc::channel(64);
-        let (events, mut receiver) = mpsc::channel(64);
+        let (frames, mut receiver) = mpsc::channel(64);
+        let (control_writes, mut control_write_receiver) = mpsc::channel(64);
         let mut timing = test_socket_timing();
         timing.write_timeout = Duration::from_millis(300);
         let task = tokio::spawn(run_clob_socket(
             client,
             "initial-subscription".into(),
             command_receiver,
-            events,
+            frames,
+            control_writes,
             CancellationToken::new(),
             timing,
         ));
@@ -4953,39 +4954,35 @@ mod tests {
             assert_eq!(next_data_frame(&mut receiver).await, message);
         }
         assert!(gate.attempts.load(std::sync::atomic::Ordering::SeqCst) > 0);
-        let mut observed_failure = false;
-        let error = tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                match receiver.recv().await {
-                    Some(ClobIoEvent::ControlWrite { elapsed, failed }) => {
-                        assert!(failed);
-                        assert!(elapsed >= timing.write_timeout);
-                        observed_failure = true;
-                    }
-                    Some(ClobIoEvent::Failed(error)) => return error,
-                    _ => panic!("expected write timeout"),
-                }
-            }
-        })
-        .await
-        .unwrap();
-        assert!(observed_failure);
+        let ClobControlWrite { elapsed, failed } =
+            tokio::time::timeout(Duration::from_secs(1), control_write_receiver.recv())
+                .await
+                .unwrap()
+                .expect("write outcome is reported");
+        assert!(failed);
+        assert!(elapsed >= timing.write_timeout);
+        let error = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
         assert_eq!(error.code, "polymarket_clob_write_timeout");
         assert_eq!(error.kind, StrategyErrorKind::TransientSource);
-        task.await.unwrap();
     }
 
     #[tokio::test]
     async fn stalled_clob_control_writes_preserve_reads_order_and_pong_responses() {
         let (client, mut server, gate) = clob_socket_pair(false).await;
         let (commands, command_receiver) = mpsc::channel(64);
-        let (events, mut receiver) = mpsc::channel(64);
+        let (frames, mut receiver) = mpsc::channel(64);
+        let (control_writes, _control_write_receiver) = mpsc::channel(64);
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(run_clob_socket(
             client,
             "initial-subscription".into(),
             command_receiver,
-            events,
+            frames,
+            control_writes,
             shutdown.clone(),
             test_socket_timing(),
         ));
@@ -5039,6 +5036,7 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(1), task)
             .await
             .unwrap()
+            .unwrap()
             .unwrap();
     }
 
@@ -5046,7 +5044,8 @@ mod tests {
     async fn stalled_periodic_ping_does_not_suspend_clob_reads() {
         let (client, mut server, gate) = clob_socket_pair(false).await;
         let (_commands, command_receiver) = mpsc::channel(64);
-        let (events, mut receiver) = mpsc::channel(64);
+        let (frames, mut receiver) = mpsc::channel(64);
+        let (control_writes, _control_write_receiver) = mpsc::channel(64);
         let shutdown = CancellationToken::new();
         let mut timing = test_socket_timing();
         timing.ping_interval = Duration::from_millis(20);
@@ -5054,7 +5053,8 @@ mod tests {
             client,
             "subscribe".into(),
             command_receiver,
-            events,
+            frames,
+            control_writes,
             shutdown.clone(),
             timing,
         ));
@@ -5076,20 +5076,22 @@ mod tests {
         server.send(frame.clone()).await.unwrap();
         assert_eq!(next_data_frame(&mut receiver).await, frame);
         shutdown.cancel();
-        task.await.unwrap();
+        task.await.unwrap().unwrap();
     }
 
     #[tokio::test]
     async fn stalled_clob_write_cancels_without_waiting_for_write_timeout() {
         let (client, _server, _) = clob_socket_pair(true).await;
         let (_commands, command_receiver) = mpsc::channel(64);
-        let (events, _receiver) = mpsc::channel(64);
+        let (frames, _receiver) = mpsc::channel(64);
+        let (control_writes, _control_write_receiver) = mpsc::channel(64);
         let shutdown = CancellationToken::new();
         let task = tokio::spawn(run_clob_socket(
             client,
             "subscribe".into(),
             command_receiver,
-            events,
+            frames,
+            control_writes,
             shutdown.clone(),
             test_socket_timing(),
         ));
@@ -5097,6 +5099,7 @@ mod tests {
         shutdown.cancel();
         tokio::time::timeout(Duration::from_millis(100), task)
             .await
+            .unwrap()
             .unwrap()
             .unwrap();
     }
@@ -5208,165 +5211,25 @@ mod tests {
             .expect("dedicated I/O thread stops when its owner is dropped");
     }
 
-    // Keep the receiver alive throughout teardown, as capture_session does on
-    // bootstrap timeout. A broken join is released before asserting so this
-    // regression fails with a timeout instead of hanging the test process.
-    fn assert_clob_teardown_releases_full_queue(overflow: bool) {
-        let (sender, mut receiver) = mpsc::channel(1);
-        let frame = || ClobIoEvent::Frame {
-            message: Message::Binary(Vec::new().into()),
-            received_at: Utc::now(),
-            queued_at: Instant::now(),
-        };
-        sender
-            .try_send(frame())
-            .unwrap_or_else(|_| panic!("empty queue"));
-        let (blocked_sender, blocked_receiver) = std::sync::mpsc::channel();
-        let worker = spawn_clob_io_worker(CancellationToken::new(), async move {
-            let event = if overflow {
-                frame()
-            } else {
-                ClobIoEvent::Failed(source_error("polymarket_clob_closed", "remote close"))
-            };
-            let send = enqueue_clob_io_event(&sender, event);
-            tokio::pin!(send);
-            assert!(futures_util::poll!(&mut send).is_pending());
-            blocked_sender.send(()).expect("test observes blocked send");
-            send.await;
-        })
-        .expect("socket worker starts");
-        blocked_receiver
-            .recv_timeout(Duration::from_secs(2))
-            .expect("failure send blocks behind the full queue");
-        let (joined_sender, joined_receiver) = std::sync::mpsc::channel();
-        let teardown = thread::spawn(move || {
-            drop(worker);
-            joined_sender.send(()).expect("test observes joined worker");
-        });
-        let joined = joined_receiver.recv_timeout(Duration::from_secs(2));
-        receiver.close();
-        teardown.join().expect("teardown thread finishes");
-        assert!(
-            joined.is_ok(),
-            "socket teardown waited for an undrained receiver"
-        );
-        assert!(matches!(receiver.try_recv(), Ok(ClobIoEvent::Frame { .. })));
-
-        // Teardown must leave a replacement socket worker free to deliver data.
-        let (sender, mut receiver) = mpsc::channel(1);
-        let (sent_sender, sent_receiver) = std::sync::mpsc::channel();
-        let replacement = spawn_clob_io_worker(CancellationToken::new(), async move {
-            assert!(enqueue_clob_io_event(&sender, frame()).await);
-            sent_sender
-                .send(())
-                .expect("test observes replacement data");
-        })
-        .expect("replacement socket worker starts");
-        sent_receiver
-            .recv_timeout(Duration::from_secs(2))
-            .expect("replacement delivers promptly");
-        drop(replacement);
-        assert!(matches!(receiver.try_recv(), Ok(ClobIoEvent::Frame { .. })));
-    }
-
     #[test]
-    fn clob_io_teardown_cancels_blocked_overflow_and_allows_restart() {
-        assert_clob_teardown_releases_full_queue(true);
-    }
-
-    #[test]
-    fn clob_io_teardown_cancels_blocked_terminal_event_and_allows_restart() {
-        assert_clob_teardown_releases_full_queue(false);
-    }
-
-    #[tokio::test]
-    async fn terminal_socket_event_stops_reader_before_repeated_eof() {
-        for code in [
-            "polymarket_clob_closed",
-            "polymarket_clob_read_failed",
-            "polymarket_clob_eof",
-        ] {
-            let (sender, mut receiver) = mpsc::channel(8);
-            let reader = tokio::spawn(async move {
-                let mut polls = 0;
-                loop {
-                    polls += 1;
-                    let event = ClobIoEvent::Failed(source_error(code, "terminal socket"));
-                    if !enqueue_clob_io_event(&sender, event).await {
-                        return polls;
-                    }
-                }
-            });
-            assert_eq!(
-                tokio::time::timeout(Duration::from_secs(1), reader)
-                    .await
-                    .expect("reader must stop at the first terminal event")
-                    .unwrap(),
-                1
-            );
-            match receiver.recv().await.unwrap() {
-                ClobIoEvent::Failed(error) => assert_eq!(error.code, code),
-                _ => panic!("expected original terminal error"),
-            }
-            assert!(receiver.recv().await.is_none());
-        }
-    }
-
-    #[tokio::test]
-    async fn terminal_socket_event_preserves_cause_behind_queued_frame() {
-        let (sender, mut receiver) = mpsc::channel(1);
-        sender
-            .try_send(ClobIoEvent::Frame {
-                message: Message::Binary(Vec::new().into()),
-                received_at: Utc::now(),
-                queued_at: Instant::now(),
-            })
-            .unwrap_or_else(|_| panic!("empty queue"));
-        let send = enqueue_clob_io_event(
-            &sender,
-            ClobIoEvent::Failed(source_error(
-                "polymarket_clob_closed",
-                "slow consumer: send buffer full",
-            )),
-        );
-        tokio::pin!(send);
-        assert!(futures_util::poll!(&mut send).is_pending());
-        assert!(matches!(
-            receiver.recv().await,
-            Some(ClobIoEvent::Frame { .. })
-        ));
-        assert!(!send.await);
-        match receiver.recv().await.unwrap() {
-            ClobIoEvent::Failed(error) => assert_eq!(error.code, "polymarket_clob_closed"),
-            _ => panic!("expected original remote close"),
-        }
-        assert!(matches!(
-            receiver.try_recv(),
-            Err(mpsc::error::TryRecvError::Empty)
-        ));
-    }
-
-    #[tokio::test]
-    async fn websocket_frame_handoff_preserves_owned_payload() {
+    fn websocket_frame_handoff_preserves_owned_payload() {
         let (sender, mut receiver) = mpsc::channel(1);
         let message = Message::Binary(vec![1_u8, 2, 3, 4].into());
         let payload_address = match &message {
             Message::Binary(payload) => payload.as_ptr(),
             _ => unreachable!(),
         };
-        assert!(
-            enqueue_clob_io_event(
-                &sender,
-                ClobIoEvent::Frame {
-                    message,
-                    received_at: Utc::now(),
-                    queued_at: Instant::now(),
-                },
-            )
-            .await
-        );
-        match receiver.recv().await.unwrap() {
-            ClobIoEvent::Frame {
+        assert!(enqueue_clob_frame(
+            &sender,
+            ClobFrame {
+                message,
+                received_at: Utc::now(),
+                queued_at: Instant::now(),
+            },
+        )
+        .is_ok());
+        match receiver.try_recv().unwrap() {
+            ClobFrame {
                 message: Message::Binary(payload),
                 ..
             } => {
@@ -5376,10 +5239,10 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn full_data_queue_still_reports_consumer_backpressure() {
+    #[test]
+    fn full_data_queue_fails_immediately_without_displacing_frames() {
         let (sender, mut receiver) = mpsc::channel(1);
-        let frame = || ClobIoEvent::Frame {
+        let frame = || ClobFrame {
             message: Message::Binary(Vec::new().into()),
             received_at: Utc::now(),
             queued_at: Instant::now(),
@@ -5387,22 +5250,75 @@ mod tests {
         sender
             .try_send(frame())
             .unwrap_or_else(|_| panic!("empty queue"));
-        let send = enqueue_clob_io_event(&sender, frame());
-        tokio::pin!(send);
-        // Poll the handoff while the data queue is full, then make room for
-        // its terminal backpressure report.
-        assert!(futures_util::poll!(&mut send).is_pending());
-        assert!(matches!(
-            receiver.recv().await,
-            Some(ClobIoEvent::Frame { .. })
+        let error = enqueue_clob_frame(&sender, frame()).unwrap_err();
+        assert_eq!(error.code, "polymarket_clob_consumer_backpressure");
+        assert!(matches!(receiver.try_recv(), Ok(ClobFrame { .. })));
+    }
+
+    #[tokio::test]
+    async fn full_frame_queue_terminates_socket_without_waiting_for_consumer() {
+        let (client, mut server, _) = clob_socket_pair(false).await;
+        let (_commands, command_receiver) = mpsc::channel(1);
+        let (frames, mut frame_receiver) = mpsc::channel(1);
+        let (control_writes, _control_write_receiver) = mpsc::channel(1);
+        let task = tokio::spawn(run_clob_socket(
+            client,
+            "subscribe".into(),
+            command_receiver,
+            frames,
+            control_writes,
+            CancellationToken::new(),
+            test_socket_timing(),
         ));
-        assert!(!send.await);
-        match receiver.recv().await.unwrap() {
-            ClobIoEvent::Failed(error) => {
-                assert_eq!(error.code, "polymarket_clob_consumer_backpressure")
-            }
-            _ => panic!("expected genuine data backpressure"),
-        }
+        assert_eq!(
+            server.next().await.unwrap().unwrap(),
+            Message::Text("subscribe".into())
+        );
+        server.send(Message::Text("first".into())).await.unwrap();
+        server.send(Message::Text("overflow".into())).await.unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("full frame queue terminates the socket immediately")
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code, "polymarket_clob_consumer_backpressure");
+        assert_eq!(
+            frame_receiver.try_recv().unwrap().message,
+            Message::Text("first".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_socket_error_is_not_blocked_by_full_frame_queue() {
+        let (client, mut server, _) = clob_socket_pair(false).await;
+        let (_commands, command_receiver) = mpsc::channel(1);
+        let (frames, mut frame_receiver) = mpsc::channel(1);
+        let (control_writes, _control_write_receiver) = mpsc::channel(1);
+        let task = tokio::spawn(run_clob_socket(
+            client,
+            "subscribe".into(),
+            command_receiver,
+            frames,
+            control_writes,
+            CancellationToken::new(),
+            test_socket_timing(),
+        ));
+        assert_eq!(
+            server.next().await.unwrap().unwrap(),
+            Message::Text("subscribe".into())
+        );
+        server.send(Message::Text("queued".into())).await.unwrap();
+        server.send(Message::Close(None)).await.unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("terminal socket error bypasses the full frame queue")
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code, "polymarket_clob_closed");
+        assert_eq!(
+            frame_receiver.try_recv().unwrap().message,
+            Message::Text("queued".into())
+        );
     }
 
     #[test]
