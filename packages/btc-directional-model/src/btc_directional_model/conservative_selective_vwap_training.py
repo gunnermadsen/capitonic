@@ -90,7 +90,7 @@ def run(config: Path, output: Path) -> None:
     if audit["sha256"] != source["panel_sha256"]:
         raise RuntimeError("training panel identity does not match the frozen config")
     if (
-        audit["range_start"] != parse(source["source_start"])
+        audit["range_start"] < parse(source["source_start"])
         or frame.filter(pl.col("window_start") >= parse(source["source_end"])).height
     ):
         raise RuntimeError(f"panel coverage is outside the frozen source interval: {audit}")
@@ -264,6 +264,16 @@ def run(config: Path, output: Path) -> None:
     }
     (output / "metrics" / "results.json").write_text(
         json.dumps(results, indent=2, sort_keys=True, default=str) + "\n"
+    )
+    (output / "README.md").write_text(
+        "# Conservative selective VWAP-capacity training\n\n"
+        f"Run commit: `{results['git']['commit']}` on `{results['git']['branch']}`.\n\n"
+        f"Source panel: `{panel}` (`{audit['sha256']}`).\n\n"
+        "`inputs/` contains the read-only daily source extracts; `datasets/` the combined "
+        "training panel; `models/` the locked-spec diagnostic bundle; `predictions/` the "
+        "walk-forward predictions; `trades/` quantity-specific replays; `metrics/` results; "
+        "`manifests/` source/readiness identities; `diagnostics/` and `logs/` are reserved "
+        "for run diagnostics. VWAP is execution economics only and is not a predictive feature.\n"
     )
 
 

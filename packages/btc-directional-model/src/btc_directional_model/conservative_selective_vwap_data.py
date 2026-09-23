@@ -12,6 +12,7 @@ import polars as pl
 
 from .core_extract import file_sha256
 from .core_features import derive_core_point_in_time_features
+from .conservative_selective_training import PRICE_FEATURES, VOLUME_FEATURES
 from .multivenue_early_entry_data import ENTRY_SECONDS, _attach_execution_60_240
 from .twap60_training_data import DataPaths, extract_tournament_sources, load_source_group
 
@@ -98,11 +99,7 @@ def build(
     )
     base = pl.read_parquet(base_panel)
     rebuilt = _tail_panel(paths, validation_start)
-    features = [
-        name
-        for name in base.columns
-        if name.startswith("btc_") or name in {"seconds_elapsed_scaled", "seconds_remaining_scaled"}
-    ]
+    features = [name for name in (*PRICE_FEATURES, *VOLUME_FEATURES) if name in base.columns]
     overlap_base = base.filter(
         (pl.col("window_start") >= validation_start) & (pl.col("window_start") < append_start)
     ).select("market_id", "observed_at", *features)
@@ -118,11 +115,18 @@ def build(
     )
     mismatches = {}
     for name in features:
+        rebuilt_name = f"{name}_rebuilt"
+        null_disagreement = overlap.filter(
+            pl.col(name).is_null() != pl.col(rebuilt_name).is_null()
+        ).height
         delta = overlap.select(
-            (pl.col(name).fill_nan(None) - pl.col(f"{name}_rebuilt").fill_nan(None)).abs().max()
+            (pl.col(name) - pl.col(rebuilt_name)).abs().max()
         ).item()
-        if delta is not None and delta > 1e-9:
-            mismatches[name] = delta
+        if null_disagreement or (delta is not None and delta > 1e-9):
+            mismatches[name] = {
+                "maximum_absolute_delta": delta,
+                "null_disagreement_rows": null_disagreement,
+            }
     if overlap.height == 0 or mismatches:
         raise RuntimeError(
             f"feature parity failed: overlap_rows={overlap.height}, mismatches={mismatches}"

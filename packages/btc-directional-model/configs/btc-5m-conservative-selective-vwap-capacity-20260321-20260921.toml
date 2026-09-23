@@ -1,0 +1,64 @@
+[training]
+profile = "btc_5m_conservative_selective_vwap_capacity"
+model_family = "btc-5m-conservative-selective"
+training_only = true
+paper_only = true
+live_capital_allowed = false
+random_seed = 20260917
+stability_seeds = [20260917, 20260929, 20261013]
+minimum_fit_days = 28
+calibration_days = 7
+selection_days = 7
+test_days = 14
+locked_model_name = "price_l31_leaf200_l2_4"
+baseline_run = "/Volumes/docker-data/polymarket-bot/artifacts/training/btc-directional-model/conservative-selective/20260917T171105Z"
+baseline_model_sha256 = "88744a1cc1fb0af824a902212906944ea7873433e672111d38a740afc3e01481"
+
+[source]
+panel = "/Volumes/docker-data/polymarket-bot/artifacts/training/btc-directional-model/conservative-selective-vwap-capacity/20260923T011753Z/datasets/vwap-admission-panel-20260321-20260921.parquet"
+panel_sha256 = "33990603cc3621cf3b3e6d17fa15ffc611d619cf4e6e761a153b78d36ddecd31"
+source_start = "2026-03-21T00:00:00Z"
+source_end = "2026-09-22T00:00:00Z"
+
+[model]
+learning_rate = 0.03
+max_iter = 300
+max_bins = 127
+
+[calibration]
+safety_floor = 0.02
+reliability_bins = 10
+
+[policy]
+quantity = 5
+confidence_floors = [0.72, 0.76, 0.80, 0.84, 0.88]
+minimum_stressed_edges = [0.03, 0.05, 0.08, 0.10]
+maximum_share_costs = [0.55, 0.60, 0.65]
+minimum_selection_trades = 5
+minimum_selection_precision = 0.70
+maximum_compensation_ratio = 2.0
+execution_reserve_per_share = 0.005
+stress_slippage_per_share = 0.010
+
+[execution]
+vwap_quantities = [5, 10, 15, 20, 25, 30, 40, 50, 75, 100, 125, 150, 175, 200]
+
+[qualification]
+minimum_historical_trades = 60
+minimum_historical_weeks = 8
+minimum_precision = 0.78
+minimum_historical_wilson = 0.68
+maximum_ece = 0.04
+maximum_selected_ece = 0.07
+minimum_stressed_profit_factor = 1.50
+maximum_compensation_ratio = 2.0
+maximum_losing_streak = 3
+maximum_best_day_positive_pnl_share = 0.25
+minimum_positive_month_fraction = 0.70
+
+[[models]]
+name = "price_l31_leaf200_l2_4"
+max_leaf_nodes = 31
+min_samples_leaf = 200
+l2_regularization = 4.0
+include_aggregate_volume = false
