@@ -1,0 +1,39 @@
+[source]
+predictions = "/Volumes/docker-data/polymarket-bot/artifacts/training/btc-directional-model/conservative-selective-vwap-capacity/20260923T011753Z/predictions/walk-forward.parquet"
+predictions_sha256 = "2013547b2a0e5eb8aeb170503b4a813df10274db901b1e3bf2d3de454ddf8f54"
+archive_root = "/Volumes/docker-data/polymarket-bot/orderbook-drain/canonical-v1"
+start = "2026-07-14T00:00:00Z"
+end = "2026-09-22T00:00:00Z"
+database_start = "2026-09-04T00:00:00Z"
+model_key = "btc-5m-conservative-selective-development-live-pilot-20260921-v1"
+model_sha256 = "a26e1a7fbc014c362ec20251b6242c1953e8a59a0c34dfab2912a90c459405c7"
+
+[policy]
+start_second = 30
+end_second = 210
+minimum_confidence = 0.88
+minimum_stressed_edge = 0.10
+maximum_share_cost = 0.55
+execution_reserve_per_share = 0.005
+stress_slippage_per_share = 0.010
+
+[execution]
+max_book_age_ms = 2000
+maximum_limit_price = 0.55
+maximum_depth_participation = 0.25
+require_exit_book = true
+
+[[scenarios]]
+name = "live_primary"
+latency_ms = 150
+depth_haircut = 0.80
+
+[[scenarios]]
+name = "latency_300ms_depth_65pct"
+latency_ms = 300
+depth_haircut = 0.65
+
+[[scenarios]]
+name = "latency_600ms_depth_50pct"
+latency_ms = 600
+depth_haircut = 0.50
