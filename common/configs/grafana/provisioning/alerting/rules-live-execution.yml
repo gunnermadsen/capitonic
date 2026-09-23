@@ -106,6 +106,66 @@ groups:
         annotations: {summary: "Scheduled candidates are evaluated more than one second late", description: "Sustained evaluation lag can consume market-data freshness and execution opportunity budgets."}
         labels: {service: polymarket-bot, family: live_execution, severity: warning, environment: $GRAFANA_ALERT_ENVIRONMENT}
         isPaused: false
+      - uid: live_daily_loss_evidence_unavailable
+        title: Live daily-loss evidence is unavailable
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 600, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "sum by (process_id, reason) (increase(polymarket_umr_live_submission_risk_checks_total{outcome=\"evidence_error\",reason=\"daily_loss_evidence_unavailable\"}[5m]))", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations: {summary: "A qualified live order was blocked by invalid daily-loss evidence", description: "The order did not reach Polymarket. Inspect the process-scoped settlement lineage and daily-loss metrics; pending redemption alone must not cause this failure."}
+        labels: {service: polymarket-bot, family: live_execution, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
+      - uid: live_submission_reconcile_conflict
+        title: Live submission evidence contradicts reconciliation health
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 600, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "(1 - polymarket_umr_live_submission_risk_evidence_ready) and on(process_id) (time() - polymarket_umr_live_submission_risk_last_check_timestamp_seconds < 300) and on(process_id) (polymarket_live_reconciliation_entry_safe == 1)", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 1m
+        annotations: {summary: "Reconciliation is clean but qualified live submission evidence is unavailable", description: "The last five minutes contain a live pre-submit evidence failure while process accounting reconciliation remains entry-safe."}
+        labels: {service: polymarket-bot, family: live_execution, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
+      - uid: live_capital_evidence_unavailable
+        title: Live capital admission evidence is unavailable
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 600, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "sum by (process_id, reason) (increase(polymarket_umr_live_submission_risk_checks_total{outcome=\"evidence_error\",reason=~\"account_identity_evidence_unavailable|exposure_evidence_unavailable|account_order_evidence_unavailable|collateral_evidence_unavailable\"}[5m]))", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [0], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 0s
+        annotations: {summary: "A qualified live order could not prove capital admission", description: "The order was safely withheld before Polymarket POST. The bounded reason identifies identity, exposure, account-order, or collateral evidence."}
+        labels: {service: polymarket-bot, family: live_execution, severity: warning, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
       - uid: live_execution_preview_capacity
         title: Stress preview capacity is unavailable
         condition: C

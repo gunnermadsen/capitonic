@@ -112,6 +112,7 @@ struct Process {
     last_observation: f64,
     last_success: f64,
     counters: BTreeMap<(&'static str, String), u64>,
+    submission_risk_counters: BTreeMap<(&'static str, &'static str), u64>,
     gauges: BTreeMap<&'static str, f64>,
     histograms: BTreeMap<&'static str, Histogram>,
     latest: Option<PredictionRecord>,
@@ -191,6 +192,34 @@ pub fn register(
         ] {
             for reason in reasons {
                 p.counters.entry((metric, (*reason).into())).or_default();
+            }
+        }
+        for (outcome, reasons) in [
+            ("allowed", &["allowed"][..]),
+            (
+                "rejected",
+                &[
+                    "process_accounting_readiness",
+                    "daily_loss_limit",
+                    "open_notional_limit",
+                    "open_position_limit",
+                ][..],
+            ),
+            (
+                "evidence_error",
+                &[
+                    "account_identity_evidence_unavailable",
+                    "exposure_evidence_unavailable",
+                    "daily_loss_evidence_unavailable",
+                    "account_order_evidence_unavailable",
+                    "collateral_evidence_unavailable",
+                ][..],
+            ),
+        ] {
+            for reason in reasons {
+                p.submission_risk_counters
+                    .entry((outcome, *reason))
+                    .or_default();
             }
         }
     });
@@ -291,6 +320,46 @@ pub fn gauge(id: Uuid, name: &'static str, value: f64) {
             p.gauges.insert(name, value);
         });
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn live_submission_risk_check(
+    id: Uuid,
+    outcome: &'static str,
+    reason: &'static str,
+    evidence_ready: bool,
+    daily_net_pnl_usd: Option<f64>,
+    daily_loss_headroom_usd: Option<f64>,
+    pending_redemption_count: usize,
+    credited_count: usize,
+) {
+    update(id, |p| {
+        *p.submission_risk_counters
+            .entry((outcome, reason))
+            .or_default() += 1;
+        p.gauges.insert(
+            "live_submission_risk_evidence_ready",
+            f64::from(evidence_ready),
+        );
+        p.gauges.insert(
+            "live_submission_risk_last_check_timestamp_seconds",
+            Utc::now().timestamp_millis() as f64 / 1000.0,
+        );
+        if let Some(value) = daily_net_pnl_usd.filter(|value| value.is_finite()) {
+            p.gauges.insert("live_daily_loss_net_pnl_usd", value);
+        }
+        if let Some(value) = daily_loss_headroom_usd.filter(|value| value.is_finite()) {
+            p.gauges.insert("live_daily_loss_headroom_usd", value);
+        }
+        p.gauges.insert(
+            "live_daily_loss_pending_redemption_settlements",
+            pending_redemption_count as f64,
+        );
+        p.gauges.insert(
+            "live_daily_loss_credited_settlements",
+            credited_count as f64,
+        );
+    });
 }
 pub fn member_active(id: Uuid, member_id: &str, active: bool) {
     update(id, |p| {
@@ -801,6 +870,7 @@ pub fn prometheus_metrics() -> String {
                     last_observation: p.last_observation,
                     last_success: p.last_success,
                     counters: p.counters.clone(),
+                    submission_risk_counters: p.submission_risk_counters.clone(),
                     gauges,
                     histograms: p.histograms.clone(),
                     calibration_count: p.calibration_count,
@@ -1016,6 +1086,15 @@ pub fn prometheus_metrics() -> String {
                 escaped(&reason)
             );
         }
+        if declared.insert("live_submission_risk_checks_total".into()) {
+            out.push_str("# HELP polymarket_umr_live_submission_risk_checks_total Process-scoped live pre-submit risk checks by bounded outcome and reason.\n# TYPE polymarket_umr_live_submission_risk_checks_total counter\n");
+        }
+        for ((outcome, reason), value) in p.submission_risk_counters {
+            let _ = writeln!(
+                out,
+                "polymarket_umr_live_submission_risk_checks_total{{{labels},outcome=\"{outcome}\",reason=\"{reason}\"}} {value}"
+            );
+        }
         for (stage, h) in p.histograms {
             if declared.insert("stage_duration_seconds".into()) {
                 out.push_str("# HELP polymarket_umr_stage_duration_seconds UMR stage latency in seconds.\n# TYPE polymarket_umr_stage_duration_seconds histogram\n");
@@ -1107,5 +1186,55 @@ mod router_tests {
         assert!(scoped.contains("outcome=\"win\"} 1"));
         assert!(scoped.contains("polymarket_umr_model_member_realized_pnl_usd"));
         assert!(scoped.contains("polymarket_umr_model_member_entry_second_count"));
+    }
+
+    #[test]
+    fn live_submission_risk_exports_zero_baselines_and_first_evidence_failure() {
+        let id = Uuid::new_v4();
+        register(id, Uuid::new_v4(), "config", "live", None);
+
+        let initial = prometheus_metrics();
+        assert!(initial.contains(&format!(
+            "polymarket_umr_live_submission_risk_checks_total{{process_id=\"{id}\",outcome=\"evidence_error\",reason=\"daily_loss_evidence_unavailable\"}} 0"
+        )));
+
+        live_submission_risk_check(
+            id,
+            "evidence_error",
+            "daily_loss_evidence_unavailable",
+            false,
+            None,
+            None,
+            0,
+            0,
+        );
+        let failed = prometheus_metrics();
+        assert!(failed.contains(&format!(
+            "polymarket_umr_live_submission_risk_checks_total{{process_id=\"{id}\",outcome=\"evidence_error\",reason=\"daily_loss_evidence_unavailable\"}} 1"
+        )));
+        assert!(failed.contains(&format!(
+            "polymarket_umr_live_submission_risk_evidence_ready{{process_id=\"{id}\"}} 0"
+        )));
+
+        live_submission_risk_check(
+            id,
+            "allowed",
+            "allowed",
+            true,
+            Some(2.21306),
+            Some(5.21306),
+            1,
+            0,
+        );
+        let recovered = prometheus_metrics();
+        assert!(recovered.contains(&format!(
+            "polymarket_umr_live_submission_risk_evidence_ready{{process_id=\"{id}\"}} 1"
+        )));
+        assert!(recovered.contains(&format!(
+            "polymarket_umr_live_daily_loss_pending_redemption_settlements{{process_id=\"{id}\"}} 1"
+        )));
+        assert!(recovered.contains(&format!(
+            "polymarket_umr_live_daily_loss_net_pnl_usd{{process_id=\"{id}\"}} 2.21306"
+        )));
     }
 }

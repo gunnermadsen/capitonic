@@ -1011,12 +1011,38 @@ impl LiveVenue {
         process_id: Uuid,
         request: &OrderRequest,
         ignored_client_order_id: Option<Uuid>,
-    ) -> Result<Option<LiveExecutionGateReason>> {
+    ) -> std::result::Result<LiveSubmissionRiskAssessment, LiveSubmissionRiskFailure> {
+        let max_daily_loss_usd = self
+            .bound_execution()
+            .map_err(|error| {
+                LiveSubmissionRiskFailure::new(
+                    LiveExecutionGateReason::ExposureEvidenceUnavailable,
+                    error,
+                )
+            })?
+            .max_daily_loss_usd;
+        let assessment = |gate_reason, daily_pnl| LiveSubmissionRiskAssessment {
+            gate_reason,
+            daily_pnl,
+            max_daily_loss_usd,
+        };
         let identity = canonical_configured_account_identity(
             &self.config,
             self.bound_account_ref()
-                .context("live risk checks require a process account_ref")?,
-        )?;
+                .context("live risk checks require a process account_ref")
+                .map_err(|error| {
+                    LiveSubmissionRiskFailure::new(
+                        LiveExecutionGateReason::AccountIdentityEvidenceUnavailable,
+                        error,
+                    )
+                })?,
+        )
+        .map_err(|error| {
+            LiveSubmissionRiskFailure::new(
+                LiveExecutionGateReason::AccountIdentityEvidenceUnavailable,
+                error,
+            )
+        })?;
         let (process_accounting_entry_safe, reconciled_fingerprint) = {
             let state = self.readiness_state.lock().await;
             (
@@ -1025,25 +1051,52 @@ impl LiveVenue {
             )
         };
         if !process_accounting_entry_safe {
-            return Ok(Some(LiveExecutionGateReason::ProcessAccountingReadiness));
+            return Ok(assessment(
+                Some(LiveExecutionGateReason::ProcessAccountingReadiness),
+                None,
+            ));
         }
         if reconciled_fingerprint.as_deref() != Some(identity.fingerprint_sha256.as_str()) {
-            bail!("live process reconciliation identity does not match configured credentials");
+            return Err(LiveSubmissionRiskFailure::new(
+                LiveExecutionGateReason::AccountIdentityEvidenceUnavailable,
+                anyhow::anyhow!(
+                    "live process reconciliation identity does not match configured credentials"
+                ),
+            ));
         }
 
-        let store = self.store()?;
-        let max_daily_loss_usd = self.bound_execution()?.max_daily_loss_usd;
+        let store = self.store().map_err(|error| {
+            LiveSubmissionRiskFailure::new(
+                LiveExecutionGateReason::ExposureEvidenceUnavailable,
+                error,
+            )
+        })?;
         let account_ref = (request.side == OrderSide::Buy)
             .then(|| {
                 self.bound_account_ref()
                     .context("live account capital admission requires account_ref")
             })
-            .transpose()?;
-        let exposure_read =
-            store.conservative_live_process_exposure(process_id, ignored_client_order_id);
+            .transpose()
+            .map_err(|error| {
+                LiveSubmissionRiskFailure::new(
+                    LiveExecutionGateReason::AccountIdentityEvidenceUnavailable,
+                    error,
+                )
+            })?;
+        let exposure_read = async {
+            store
+                .conservative_live_process_exposure(process_id, ignored_client_order_id)
+                .await
+                .map_err(|error| {
+                    LiveSubmissionRiskFailure::new(
+                        LiveExecutionGateReason::ExposureEvidenceUnavailable,
+                        error,
+                    )
+                })
+        };
         let daily_pnl_read = async {
             let Some(_) = max_daily_loss_usd else {
-                return Ok::<_, anyhow::Error>(None);
+                return Ok::<_, LiveSubmissionRiskFailure>(None);
             };
             let now = Utc::now();
             let day_start = now
@@ -1052,32 +1105,45 @@ impl LiveVenue {
                 .expect("midnight is a valid UTC time")
                 .and_utc();
             let day_end = day_start + chrono::Duration::days(1);
-            Ok(Some(
-                store
-                    .recognized_live_process_net_pnl_for_utc_day(
-                        process_id, day_start, day_end, now,
+            store
+                .recognized_live_process_net_pnl_for_utc_day(process_id, day_start, day_end, now)
+                .await
+                .map(Some)
+                .map_err(|error| {
+                    LiveSubmissionRiskFailure::new(
+                        LiveExecutionGateReason::DailyLossEvidenceUnavailable,
+                        error,
                     )
-                    .await?,
-            ))
+                })
         };
         let account_orders_read = async {
             let Some(account_ref) = account_ref else {
-                return Ok::<_, anyhow::Error>(None);
+                return Ok::<_, LiveSubmissionRiskFailure>(None);
             };
-            Ok(Some(
-                store
-                    .live_account_nonterminal_orders(
-                        account_ref,
-                        (MAX_CLOB_RECONCILIATION_ROWS + 1) as i64,
+            store
+                .live_account_nonterminal_orders(
+                    account_ref,
+                    (MAX_CLOB_RECONCILIATION_ROWS + 1) as i64,
+                )
+                .await
+                .map(Some)
+                .map_err(|error| {
+                    LiveSubmissionRiskFailure::new(
+                        LiveExecutionGateReason::AccountOrderEvidenceUnavailable,
+                        error,
                     )
-                    .await?,
-            ))
+                })
         };
         let collateral_read = async {
             if request.side != OrderSide::Buy {
-                return Ok::<_, anyhow::Error>(None);
+                return Ok::<_, LiveSubmissionRiskFailure>(None);
             }
-            Ok(Some(self.get_balances().await?))
+            self.get_balances().await.map(Some).map_err(|error| {
+                LiveSubmissionRiskFailure::new(
+                    LiveExecutionGateReason::CollateralEvidenceUnavailable,
+                    error,
+                )
+            })
         };
         let (exposure, recognized_net_pnl, account_orders, balances) = tokio::try_join!(
             exposure_read,
@@ -1085,24 +1151,46 @@ impl LiveVenue {
             account_orders_read,
             collateral_read,
         )?;
-        let requested_exposure = Store::conservative_live_request_exposure(request)?;
+        let requested_exposure =
+            Store::conservative_live_request_exposure(request).map_err(|error| {
+                LiveSubmissionRiskFailure::new(
+                    LiveExecutionGateReason::ExposureEvidenceUnavailable,
+                    error,
+                )
+            })?;
         let resulting_exposure = exposure
             .total_exposure_usd
             .checked_add(requested_exposure.total_exposure_usd)
-            .context("live requested capital exposure overflow")?;
+            .context("live requested capital exposure overflow")
+            .map_err(|error| {
+                LiveSubmissionRiskFailure::new(
+                    LiveExecutionGateReason::ExposureEvidenceUnavailable,
+                    error,
+                )
+            })?;
         if let Some(reason) = live_capital_exposure_gate(
             resulting_exposure,
-            self.bound_execution()?.max_daily_loss_usd,
-            self.bound_execution()?.max_open_notional_usd,
+            max_daily_loss_usd,
+            self.bound_execution()
+                .map_err(|error| {
+                    LiveSubmissionRiskFailure::new(
+                        LiveExecutionGateReason::ExposureEvidenceUnavailable,
+                        error,
+                    )
+                })?
+                .max_open_notional_usd,
         ) {
-            return Ok(Some(reason));
+            return Ok(assessment(Some(reason), recognized_net_pnl));
         }
 
-        if let (Some(max_daily_loss_usd), Some(recognized_net_pnl)) =
+        if let (Some(max_daily_loss_usd), Some(daily_pnl)) =
             (max_daily_loss_usd, recognized_net_pnl)
         {
-            if recognized_net_pnl <= -max_daily_loss_usd {
-                return Ok(Some(LiveExecutionGateReason::DailyLossLimit));
+            if daily_pnl.net_pnl <= -max_daily_loss_usd {
+                return Ok(assessment(
+                    Some(LiveExecutionGateReason::DailyLossLimit),
+                    Some(daily_pnl),
+                ));
             }
         }
 
@@ -1112,19 +1200,31 @@ impl LiveVenue {
             .collect::<HashSet<_>>();
         markets.insert(request.market_id.clone());
         if self
-            .bound_execution()?
+            .bound_execution()
+            .map_err(|error| {
+                LiveSubmissionRiskFailure::new(
+                    LiveExecutionGateReason::ExposureEvidenceUnavailable,
+                    error,
+                )
+            })?
             .max_open_positions
             .is_some_and(|maximum| markets.len() > maximum)
         {
-            return Ok(Some(LiveExecutionGateReason::OpenPositionLimit));
+            return Ok(assessment(
+                Some(LiveExecutionGateReason::OpenPositionLimit),
+                recognized_net_pnl,
+            ));
         }
 
         if let (Some(account_orders), Some(balances)) = (account_orders, balances) {
             if account_orders.len() > MAX_CLOB_RECONCILIATION_ROWS {
-                bail!(
-                    "live account exceeds the bounded {}-order capital admission window",
-                    MAX_CLOB_RECONCILIATION_ROWS
-                );
+                return Err(LiveSubmissionRiskFailure::new(
+                    LiveExecutionGateReason::AccountOrderEvidenceUnavailable,
+                    anyhow::anyhow!(
+                        "live account exceeds the bounded {}-order capital admission window",
+                        MAX_CLOB_RECONCILIATION_ROWS
+                    ),
+                ));
             }
             let mut reserved = Decimal::ZERO;
             for order in account_orders {
@@ -1135,24 +1235,51 @@ impl LiveVenue {
                 }
                 reserved = reserved
                     .checked_add(
-                        Store::conservative_live_request_exposure(&order.request)?
+                        Store::conservative_live_request_exposure(&order.request)
+                            .map_err(|error| {
+                                LiveSubmissionRiskFailure::new(
+                                    LiveExecutionGateReason::AccountOrderEvidenceUnavailable,
+                                    error,
+                                )
+                            })?
                             .total_exposure_usd,
                     )
-                    .context("live account buy reservation overflow")?;
+                    .context("live account buy reservation overflow")
+                    .map_err(|error| {
+                        LiveSubmissionRiskFailure::new(
+                            LiveExecutionGateReason::AccountOrderEvidenceUnavailable,
+                            error,
+                        )
+                    })?;
             }
             let available_collateral = balances
                 .into_iter()
                 .find_map(|(asset, balance)| (asset == "USDC").then_some(balance))
-                .context("live account collateral balance is unavailable")?;
+                .context("live account collateral balance is unavailable")
+                .map_err(|error| {
+                    LiveSubmissionRiskFailure::new(
+                        LiveExecutionGateReason::CollateralEvidenceUnavailable,
+                        error,
+                    )
+                })?;
             if reserved
                 .checked_add(requested_exposure.total_exposure_usd)
-                .context("live account requested reservation overflow")?
+                .context("live account requested reservation overflow")
+                .map_err(|error| {
+                    LiveSubmissionRiskFailure::new(
+                        LiveExecutionGateReason::CollateralEvidenceUnavailable,
+                        error,
+                    )
+                })?
                 > available_collateral
             {
-                return Ok(Some(LiveExecutionGateReason::OpenNotionalLimit));
+                return Ok(assessment(
+                    Some(LiveExecutionGateReason::OpenNotionalLimit),
+                    recognized_net_pnl,
+                ));
             }
         }
-        Ok(None)
+        Ok(assessment(None, recognized_net_pnl))
     }
 
     pub(super) async fn current_entry_gate_reason(

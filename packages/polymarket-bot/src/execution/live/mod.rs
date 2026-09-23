@@ -34,7 +34,7 @@ use polymarket_client_sdk_v2::{
     types::{Address, Decimal as SdkDecimal, U256},
     POLYGON,
 };
-use rust_decimal::Decimal;
+use rust_decimal::{prelude::ToPrimitive, Decimal};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::Sha256;
@@ -62,7 +62,7 @@ use crate::{
     idempotency::event_hash,
     models::{EffectiveProcessExecutionConfig, FillRecord, OrderRecord, OrderRequest},
     models::{FillSource, OrderSide, OrderState, OrderType},
-    store::{validate_live_cumulative_fill_economics, Store},
+    store::{validate_live_cumulative_fill_economics, LiveDailyPnlEvidence, Store},
 };
 
 mod diagnostics;
@@ -169,6 +169,28 @@ struct CanonicalLiveAccountIdentity {
     signer_address: String,
     signature_type: SignatureType,
     fingerprint_sha256: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LiveSubmissionRiskAssessment {
+    gate_reason: Option<LiveExecutionGateReason>,
+    daily_pnl: Option<LiveDailyPnlEvidence>,
+    max_daily_loss_usd: Option<Decimal>,
+}
+
+#[derive(Debug)]
+struct LiveSubmissionRiskFailure {
+    gate_reason: LiveExecutionGateReason,
+    error: anyhow::Error,
+}
+
+impl LiveSubmissionRiskFailure {
+    fn new(gate_reason: LiveExecutionGateReason, error: impl Into<anyhow::Error>) -> Self {
+        Self {
+            gate_reason,
+            error: error.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -121,20 +121,56 @@ impl ExecutionVenue for LiveVenue {
         );
         let risk_result = match risk_result {
             Ok(result) => result,
-            Err(error) => {
+            Err(failure) => {
+                crate::btc::unified_model_runtime::telemetry::live_submission_risk_check(
+                    process_id,
+                    "evidence_error",
+                    failure.gate_reason.as_str(),
+                    false,
+                    None,
+                    None,
+                    0,
+                    0,
+                );
                 warn!(
                     client_order_id = %request.client_order_id,
                     process_id = ?request.process_id,
-                    error = %format!("{error:#}"),
+                    gate_reason = failure.gate_reason.as_str(),
+                    error = %format!("{:#}", failure.error),
                     "live pre-submit risk validation rejected this order; preserving trading process liveness"
                 );
-                return live_execution_gate_closed_order(
-                    request,
-                    LiveExecutionGateReason::ProcessAccountingReadiness,
-                );
+                return live_execution_gate_closed_order(request, failure.gate_reason);
             }
         };
-        if let Some(reason) = risk_result {
+        let daily_net_pnl_usd = risk_result
+            .daily_pnl
+            .and_then(|evidence| evidence.net_pnl.to_f64());
+        let daily_loss_headroom_usd = risk_result
+            .daily_pnl
+            .zip(risk_result.max_daily_loss_usd)
+            .and_then(|(evidence, maximum)| (evidence.net_pnl + maximum).to_f64());
+        let (pending_redemption_count, credited_count) = risk_result
+            .daily_pnl
+            .map(|evidence| (evidence.pending_redemption_count, evidence.credited_count))
+            .unwrap_or_default();
+        crate::btc::unified_model_runtime::telemetry::live_submission_risk_check(
+            process_id,
+            if risk_result.gate_reason.is_some() {
+                "rejected"
+            } else {
+                "allowed"
+            },
+            risk_result
+                .gate_reason
+                .map(LiveExecutionGateReason::as_str)
+                .unwrap_or("allowed"),
+            true,
+            daily_net_pnl_usd,
+            daily_loss_headroom_usd,
+            pending_redemption_count,
+            credited_count,
+        );
+        if let Some(reason) = risk_result.gate_reason {
             return live_execution_gate_closed_order(request, reason);
         }
         if let Err(error) = metadata_result {

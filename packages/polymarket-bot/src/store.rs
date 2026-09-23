@@ -211,19 +211,19 @@ SELECT EXISTS (
 )
 "#;
 
-const SELECT_CREDITED_LIVE_PROCESS_SETTLEMENTS_SQL: &str = r#"
+const SELECT_RESOLVED_LIVE_PROCESS_SETTLEMENTS_SQL: &str = r#"
 SELECT settlement_id, run_id, process_id, order_id, market_id, token_id, fill_ids,
   official_outcome, official_winning_token_id,
   official_resolution_received_at, official_resolution_source,
   filled_size, entry_notional, entry_fees, payout, net_pnl,
-  credited_at, credit_attempts, credit_evidence, created_at, updated_at
+  credit_status, credited_at, credit_attempts, credit_evidence, created_at, updated_at
 FROM polymarket.btc_paper_settlement_ledger
 WHERE process_id = $1
   AND execution_mode = 'live'
-  AND credit_status = 'credited'
-  AND credited_at >= $2
-  AND credited_at < $3
-ORDER BY credited_at DESC, order_id, settlement_id
+  AND credit_status IN ('pending', 'credited')
+  AND official_resolution_received_at >= $2
+  AND official_resolution_received_at < $3
+ORDER BY official_resolution_received_at DESC, order_id, settlement_id
 LIMIT $4
 "#;
 
@@ -278,11 +278,19 @@ struct LiveDailySettlementRow {
     entry_fees: Decimal,
     payout: Decimal,
     net_pnl: Decimal,
+    credit_status: String,
     credited_at: Option<DateTime<Utc>>,
     credit_attempts: i64,
     credit_evidence: serde_json::Value,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiveDailyPnlEvidence {
+    pub net_pnl: Decimal,
+    pub pending_redemption_count: usize,
+    pub credited_count: usize,
 }
 
 #[derive(Debug, FromRow)]
@@ -1181,17 +1189,17 @@ impl Store {
         })
     }
 
-    /// Returns recognized live settlement PnL for exactly one process and UTC accounting day.
-    /// The evidence window is deliberately bounded and independently replays the persisted live
-    /// fills. Any pending, malformed, cross-process, or internally inconsistent evidence fails
-    /// closed instead of understating the daily loss used by the submit gate.
+    /// Returns economically resolved live settlement PnL for exactly one process and UTC
+    /// accounting day. Redemption status does not change the immutable resolution timestamp or
+    /// economics. The bounded evidence replay still fails closed on malformed, cross-process, or
+    /// internally inconsistent evidence.
     pub async fn recognized_live_process_net_pnl_for_utc_day(
         &self,
         process_id: Uuid,
         day_start: DateTime<Utc>,
         day_end: DateTime<Utc>,
         as_of: DateTime<Utc>,
-    ) -> Result<Decimal> {
+    ) -> Result<LiveDailyPnlEvidence> {
         if process_id.is_nil() {
             bail!("live daily loss evidence requires a non-nil process_id");
         }
@@ -1204,21 +1212,8 @@ impl Store {
             bail!("live daily loss evidence interval must be exactly one UTC day");
         }
 
-        let pending =
-            sqlx::query_scalar::<_, bool>(SELECT_PENDING_LIVE_PROCESS_SETTLEMENT_EXISTS_SQL)
-                .bind(process_id)
-                .fetch_one(&self.pool)
-                .await
-                .context("failed to inspect pending live process settlements")?;
-        if pending {
-            bail!(
-                "live process {} has pending settlement evidence; daily loss is ambiguous",
-                process_id
-            );
-        }
-
         let settlements = sqlx::query_as::<_, LiveDailySettlementRow>(
-            SELECT_CREDITED_LIVE_PROCESS_SETTLEMENTS_SQL,
+            SELECT_RESOLVED_LIVE_PROCESS_SETTLEMENTS_SQL,
         )
         .bind(process_id)
         .bind(day_start)
@@ -1226,7 +1221,7 @@ impl Store {
         .bind(MAX_LIVE_DAILY_SETTLEMENTS + 1)
         .fetch_all(&self.pool)
         .await
-        .context("failed to load credited live process settlements for UTC day")?;
+        .context("failed to load resolved live process settlements for UTC day")?;
         let validation_as_of = sqlx::query_scalar::<_, DateTime<Utc>>("SELECT clock_timestamp()")
             .fetch_one(&self.pool)
             .await
@@ -1291,6 +1286,8 @@ impl Store {
         }
 
         let mut net_pnl = Decimal::ZERO;
+        let mut pending_redemption_count = 0usize;
+        let mut credited_count = 0usize;
         for settlement in &settlements {
             let fill_ids = settlement_fill_ids
                 .get(&settlement.settlement_id)
@@ -1329,6 +1326,11 @@ impl Store {
                 bail!("live settlement economics do not replay from exact persisted fills");
             }
             net_pnl += settlement.net_pnl;
+            match settlement.credit_status.as_str() {
+                "pending" => pending_redemption_count += 1,
+                "credited" => credited_count += 1,
+                _ => bail!("live daily loss evidence has an invalid credit status"),
+            }
         }
 
         let account_exits = sqlx::query_as::<_, LiveDailyAccountExitRow>(
@@ -1393,7 +1395,11 @@ impl Store {
             net_pnl +=
                 account_exit.net_proceeds - account_exit.entry_notional - account_exit.entry_fees;
         }
-        Ok(net_pnl)
+        Ok(LiveDailyPnlEvidence {
+            net_pnl,
+            pending_redemption_count,
+            credited_count,
+        })
     }
 
     pub async fn find_order_by_client_order_id(
@@ -3793,11 +3799,65 @@ fn validate_live_daily_settlement(
     day_end: DateTime<Utc>,
     as_of: DateTime<Utc>,
 ) -> Result<()> {
+    if settlement.official_resolution_received_at < day_start
+        || settlement.official_resolution_received_at >= day_end
+        || settlement.official_resolution_received_at
+            > as_of
+                .checked_add_signed(LIVE_EXTERNAL_EVENT_CLOCK_SKEW)
+                .context("live settlement resolution clock window overflow")?
+        || settlement.created_at
+            < settlement
+                .official_resolution_received_at
+                .checked_sub_signed(LIVE_EXTERNAL_EVENT_CLOCK_SKEW)
+                .context("live settlement creation clock window overflow")?
+        || settlement.updated_at < settlement.created_at
+        || settlement.updated_at > as_of
+    {
+        bail!("live settlement is outside the proven UTC-day resolution window");
+    }
+    if settlement.order_id.trim().is_empty()
+        || settlement.market_id.trim().is_empty()
+        || settlement.token_id.trim().is_empty()
+        || settlement.official_winning_token_id.trim().is_empty()
+        || !matches!(settlement.official_outcome.as_str(), "up" | "down")
+        || !matches!(
+            settlement.official_resolution_source.as_str(),
+            "clob_websocket" | "clob_rest_reconciliation" | "gamma_rest_reconciliation"
+        )
+    {
+        bail!("live settlement has invalid official-resolution identity");
+    }
+    let expected_payout = if settlement.token_id == settlement.official_winning_token_id {
+        settlement.filled_size
+    } else {
+        Decimal::ZERO
+    };
+    if settlement.filled_size <= Decimal::ZERO
+        || settlement.entry_notional < Decimal::ZERO
+        || settlement.entry_fees < Decimal::ZERO
+        || settlement.payout != expected_payout
+        || settlement.net_pnl
+            != settlement.payout - settlement.entry_notional - settlement.entry_fees
+    {
+        bail!("live settlement has inconsistent economics");
+    }
+    if settlement.credit_status == "pending" {
+        if settlement.credited_at.is_some()
+            || settlement.credit_attempts < 0
+            || !settlement.credit_evidence.is_object()
+        {
+            bail!("pending live settlement has inconsistent redemption evidence");
+        }
+        return Ok(());
+    }
+    if settlement.credit_status != "credited" {
+        bail!("live settlement has an invalid credit status");
+    }
     let credited_at = settlement
         .credited_at
         .context("credited live settlement is missing credited_at")?;
-    if credited_at < day_start || credited_at >= day_end || credited_at > as_of {
-        bail!("credited live settlement is outside the proven UTC-day observation window");
+    if credited_at > as_of {
+        bail!("credited live settlement is outside the proven observation window");
     }
     let latest_resolution_receipt = credited_at
         .checked_add_signed(LIVE_EXTERNAL_EVENT_CLOCK_SKEW)
@@ -3824,33 +3884,6 @@ fn validate_live_daily_settlement(
             settlement.credit_attempts,
         );
     }
-    if settlement.order_id.trim().is_empty()
-        || settlement.market_id.trim().is_empty()
-        || settlement.token_id.trim().is_empty()
-        || settlement.official_winning_token_id.trim().is_empty()
-        || !matches!(settlement.official_outcome.as_str(), "up" | "down")
-        || !matches!(
-            settlement.official_resolution_source.as_str(),
-            "clob_websocket" | "clob_rest_reconciliation" | "gamma_rest_reconciliation"
-        )
-    {
-        bail!("credited live settlement has invalid official-resolution identity");
-    }
-    let expected_payout = if settlement.token_id == settlement.official_winning_token_id {
-        settlement.filled_size
-    } else {
-        Decimal::ZERO
-    };
-    if settlement.filled_size <= Decimal::ZERO
-        || settlement.entry_notional < Decimal::ZERO
-        || settlement.entry_fees < Decimal::ZERO
-        || settlement.payout != expected_payout
-        || settlement.net_pnl
-            != settlement.payout - settlement.entry_notional - settlement.entry_fees
-    {
-        bail!("credited live settlement has inconsistent economics");
-    }
-
     let evidence = settlement
         .credit_evidence
         .as_object()
@@ -4171,11 +4204,12 @@ mod tests {
             validate_live_exposure_fill, LiveDailySettlementRow, LiveExposureFillRow,
             LiveExposureOrderRow, HEARTBEAT_ACTIVE_TRADING_PROCESS_SQL, INSERT_FILL_IDENTITY_SQL,
             INSERT_FILL_SQL, INSERT_ORDER_SQL, RECORD_IDEMPOTENT_TRADING_PROCESS_EVENT_SQL,
-            SELECT_CREDITED_LIVE_PROCESS_SETTLEMENTS_SQL, SELECT_FILL_IDENTITY_SQL,
-            SELECT_FILL_SQL, SELECT_LIVE_PROCESS_CROSS_OWNED_FILL_EXISTS_SQL,
+            SELECT_FILL_IDENTITY_SQL, SELECT_FILL_SQL,
+            SELECT_LIVE_PROCESS_CROSS_OWNED_FILL_EXISTS_SQL,
             SELECT_LIVE_PROCESS_EXPOSURE_FILLS_SQL, SELECT_LIVE_PROCESS_EXPOSURE_ORDERS_SQL,
             SELECT_LIVE_PROCESS_UNPROVEN_FILLED_ORDER_EXISTS_SQL, SELECT_LIVE_SETTLEMENT_FILLS_SQL,
             SELECT_PENDING_LIVE_PROCESS_SETTLEMENT_EXISTS_SQL,
+            SELECT_RESOLVED_LIVE_PROCESS_SETTLEMENTS_SQL,
         },
     };
 
@@ -4313,6 +4347,7 @@ mod tests {
             entry_fees: Decimal::ZERO,
             payout: Decimal::ZERO,
             net_pnl: dec!(-4.2),
+            credit_status: "credited".to_string(),
             credited_at: Some(credited_at),
             credit_attempts: 1,
             credit_evidence: evidence,
@@ -4330,6 +4365,7 @@ mod tests {
 
         settlement.official_resolution_received_at =
             credited_at + crate::execution::LIVE_EXTERNAL_EVENT_CLOCK_SKEW;
+        settlement.created_at = credited_at;
         settlement.credit_evidence["official_resolution_received_at"] =
             serde_json::json!(settlement.official_resolution_received_at);
         validate_live_daily_settlement(
@@ -4348,6 +4384,54 @@ mod tests {
             credited_at - Duration::hours(1),
             credited_at + Duration::hours(1),
             credited_at + Duration::seconds(1),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn resolved_live_winner_remains_daily_pnl_evidence_while_redemption_is_pending() {
+        let as_of = Utc::now();
+        let resolution_at = as_of - Duration::minutes(2);
+        let settlement = LiveDailySettlementRow {
+            settlement_id: Uuid::from_u128(41),
+            run_id: Uuid::from_u128(42),
+            process_id: Uuid::from_u128(43),
+            order_id: "order".to_string(),
+            market_id: "market".to_string(),
+            token_id: "up-token".to_string(),
+            fill_ids: serde_json::json!([Uuid::from_u128(44)]),
+            official_outcome: "up".to_string(),
+            official_winning_token_id: "up-token".to_string(),
+            official_resolution_received_at: resolution_at,
+            official_resolution_source: "clob_websocket".to_string(),
+            filled_size: dec!(5),
+            entry_notional: dec!(2.7),
+            entry_fees: dec!(0.08694),
+            payout: dec!(5),
+            net_pnl: dec!(2.21306),
+            credit_status: "pending".to_string(),
+            credited_at: None,
+            credit_attempts: 0,
+            credit_evidence: serde_json::json!({}),
+            created_at: resolution_at,
+            updated_at: resolution_at,
+        };
+
+        validate_live_daily_settlement(
+            &settlement,
+            resolution_at - Duration::hours(1),
+            resolution_at + Duration::hours(1),
+            as_of,
+        )
+        .unwrap();
+
+        let mut malformed = settlement;
+        malformed.credited_at = Some(as_of);
+        assert!(validate_live_daily_settlement(
+            &malformed,
+            resolution_at - Duration::hours(1),
+            resolution_at + Duration::hours(1),
+            as_of,
         )
         .is_err());
     }
@@ -4527,12 +4611,15 @@ mod tests {
         assert!(
             SELECT_PENDING_LIVE_PROCESS_SETTLEMENT_EXISTS_SQL.contains("credit_status = 'pending'")
         );
-        assert!(SELECT_CREDITED_LIVE_PROCESS_SETTLEMENTS_SQL.contains("process_id = $1"));
-        assert!(SELECT_CREDITED_LIVE_PROCESS_SETTLEMENTS_SQL.contains("execution_mode = 'live'"));
-        assert!(SELECT_CREDITED_LIVE_PROCESS_SETTLEMENTS_SQL.contains("credit_status = 'credited'"));
-        assert!(SELECT_CREDITED_LIVE_PROCESS_SETTLEMENTS_SQL.contains("credited_at >= $2"));
-        assert!(SELECT_CREDITED_LIVE_PROCESS_SETTLEMENTS_SQL.contains("credited_at < $3"));
-        assert!(SELECT_CREDITED_LIVE_PROCESS_SETTLEMENTS_SQL.contains("LIMIT $4"));
+        assert!(SELECT_RESOLVED_LIVE_PROCESS_SETTLEMENTS_SQL.contains("process_id = $1"));
+        assert!(SELECT_RESOLVED_LIVE_PROCESS_SETTLEMENTS_SQL.contains("execution_mode = 'live'"));
+        assert!(SELECT_RESOLVED_LIVE_PROCESS_SETTLEMENTS_SQL
+            .contains("credit_status IN ('pending', 'credited')"));
+        assert!(SELECT_RESOLVED_LIVE_PROCESS_SETTLEMENTS_SQL
+            .contains("official_resolution_received_at >= $2"));
+        assert!(SELECT_RESOLVED_LIVE_PROCESS_SETTLEMENTS_SQL
+            .contains("official_resolution_received_at < $3"));
+        assert!(SELECT_RESOLVED_LIVE_PROCESS_SETTLEMENTS_SQL.contains("LIMIT $4"));
         assert!(SELECT_LIVE_SETTLEMENT_FILLS_SQL.contains("i.fill_id = ANY($1::uuid[])"));
         assert!(SELECT_LIVE_SETTLEMENT_FILLS_SQL.contains("f.timestamp_utc = i.timestamp_utc"));
     }
