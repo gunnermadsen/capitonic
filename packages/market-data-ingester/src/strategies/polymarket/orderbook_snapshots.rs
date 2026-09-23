@@ -3685,8 +3685,19 @@ struct DiscoveryWorker {
 
 struct ClobFrame {
     message: Message,
-    received_at: DateTime<Utc>,
     queued_at: Instant,
+}
+
+fn clob_frame_received_at(
+    queued_at: Instant,
+    dequeued_at: Instant,
+    observed_at: DateTime<Utc>,
+) -> DateTime<Utc> {
+    let queue_delay = dequeued_at.saturating_duration_since(queued_at);
+    TimeDelta::from_std(queue_delay)
+        .ok()
+        .and_then(|delay| observed_at.checked_sub_signed(delay))
+        .unwrap_or(observed_at)
 }
 
 struct ClobControlWrite {
@@ -4266,17 +4277,23 @@ impl PolymarketBtcFiveMinuteOrderbooksStrategy {
                 }
                 event = frame_receiver.recv() => {
                     match event {
-                        Some(ClobFrame { message, received_at, queued_at }) => {
+                        Some(ClobFrame { message, queued_at }) => {
                             // All optional frame accounting belongs after dequeue.
                             // Moving it above the channel can starve socket reads and
                             // cause provider slow-consumer disconnects.
-                            let received_at = canonical_timestamp(received_at);
+                            let dequeued_at = Instant::now();
+                            let queue_delay = dequeued_at.saturating_duration_since(queued_at);
+                            let received_at = canonical_timestamp(clob_frame_received_at(
+                                queued_at,
+                                dequeued_at,
+                                Utc::now(),
+                            ));
                             let interframe = last_data_frame_at
                                 .replace(queued_at)
                                 .map(|previous| queued_at.saturating_duration_since(previous));
                             crate::streaming::observe_websocket_queue_delay(
                                 STRATEGY_KEY.as_str(),
-                                queued_at.elapsed(),
+                                queue_delay,
                             );
                             crate::streaming::set_websocket_queue_depth(
                                 STRATEGY_KEY.as_str(),
@@ -4608,53 +4625,52 @@ where
     tokio::pin!(writer);
     let mut ping = tokio::time::interval_at(Instant::now() + ping_interval, ping_interval);
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut read_deadline = Instant::now() + read_timeout;
+    let read_sleep = tokio::time::sleep_until(Instant::now() + read_timeout);
+    tokio::pin!(read_sleep);
+    let pong_sleep = tokio::time::sleep_until(Instant::now() + Duration::from_secs(86_400));
+    tokio::pin!(pong_sleep);
     let mut pong_deadline = None;
     loop {
-        let disabled_deadline = Instant::now() + Duration::from_secs(86_400);
-        let pong_sleep = tokio::time::sleep_until(pong_deadline.unwrap_or(disabled_deadline));
-        tokio::pin!(pong_sleep);
         tokio::select! {
             biased;
             _ = worker_shutdown.cancelled() => return Ok(()),
             frame = stream.next() => {
+                let queued_at = Instant::now();
                 let frame = match frame {
                     Some(Ok(Message::Text(text))) => {
                         let value = text.as_str();
                         if acknowledge_text_pong(value, &mut pong_deadline) {
-                            read_deadline = Instant::now() + read_timeout;
+                            read_sleep.as_mut().reset(queued_at + read_timeout);
                             continue;
                         }
                         if value.eq_ignore_ascii_case("PING") {
                             enqueue_clob_control(&control_sender, Message::Text("PONG".into()))?;
-                            read_deadline = Instant::now() + read_timeout;
+                            read_sleep.as_mut().reset(queued_at + read_timeout);
                             pong_deadline = None;
                             continue;
                         }
                         if value.is_empty() {
-                            read_deadline = Instant::now() + read_timeout;
+                            read_sleep.as_mut().reset(queued_at + read_timeout);
                             pong_deadline = None;
                             continue;
                         }
                         ClobFrame {
                             message: Message::Text(text),
-                            received_at: Utc::now(),
-                            queued_at: Instant::now(),
+                            queued_at,
                         }
                     }
                     Some(Ok(Message::Binary(bytes))) => ClobFrame {
                         message: Message::Binary(bytes),
-                        received_at: Utc::now(),
-                        queued_at: Instant::now(),
+                        queued_at,
                     },
                     Some(Ok(Message::Ping(payload))) => {
                         enqueue_clob_control(&control_sender, Message::Pong(payload))?;
-                        read_deadline = Instant::now() + read_timeout;
+                        read_sleep.as_mut().reset(queued_at + read_timeout);
                         pong_deadline = None;
                         continue;
                     }
                     Some(Ok(Message::Pong(_))) => {
-                        read_deadline = Instant::now() + read_timeout;
+                        read_sleep.as_mut().reset(queued_at + read_timeout);
                         pong_deadline = None;
                         continue;
                     }
@@ -4677,7 +4693,7 @@ where
                 // timestamp canonicalization, metrics, parsing, or other
                 // optional work.
                 enqueue_clob_frame(&frame_sender, frame)?;
-                read_deadline = Instant::now() + read_timeout;
+                read_sleep.as_mut().reset(queued_at + read_timeout);
                 pong_deadline = None;
             }
             result = &mut writer => {
@@ -4689,7 +4705,7 @@ where
                     "Polymarket CLOB did not acknowledge the oldest text PING",
                 ));
             }
-            _ = tokio::time::sleep_until(read_deadline) => {
+            _ = &mut read_sleep => {
                 return Err(source_error(
                     "polymarket_clob_read_timeout",
                     "Polymarket CLOB websocket produced no frames before its read-idle deadline",
@@ -4698,7 +4714,11 @@ where
             _ = ping.tick() => {
                 let sent_at = Instant::now();
                 enqueue_clob_control(&control_sender, Message::Text("PING".into()))?;
-                pong_deadline.get_or_insert(sent_at + pong_timeout);
+                if pong_deadline.is_none() {
+                    let deadline = sent_at + pong_timeout;
+                    pong_deadline = Some(deadline);
+                    pong_sleep.as_mut().reset(deadline);
+                }
             }
             command = outgoing_receiver.recv() => {
                 let Some(command) = command else { return Ok(()); };
@@ -5103,6 +5123,103 @@ mod tests {
             .unwrap();
     }
 
+    #[tokio::test]
+    async fn clob_read_timeout_expires_when_the_socket_is_silent() {
+        let (client, mut server, _) = clob_socket_pair(false).await;
+        let (_commands, command_receiver) = mpsc::channel(1);
+        let (frames, _receiver) = mpsc::channel(1);
+        let (control_writes, _control_write_receiver) = mpsc::channel(1);
+        let mut timing = test_socket_timing();
+        timing.read_timeout = Duration::from_millis(100);
+        let task = tokio::spawn(run_clob_socket(
+            client,
+            "subscribe".into(),
+            command_receiver,
+            frames,
+            control_writes,
+            CancellationToken::new(),
+            timing,
+        ));
+        assert_eq!(
+            server.next().await.unwrap().unwrap(),
+            Message::Text("subscribe".into())
+        );
+        let error = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("silent socket reaches its pinned read deadline")
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code, "polymarket_clob_read_timeout");
+    }
+
+    #[tokio::test]
+    async fn clob_data_frames_reset_the_pinned_read_timeout() {
+        let (client, mut server, _) = clob_socket_pair(false).await;
+        let (_commands, command_receiver) = mpsc::channel(1);
+        let (frames, mut receiver) = mpsc::channel(4);
+        let (control_writes, _control_write_receiver) = mpsc::channel(1);
+        let shutdown = CancellationToken::new();
+        let mut timing = test_socket_timing();
+        timing.read_timeout = Duration::from_millis(250);
+        let task = tokio::spawn(run_clob_socket(
+            client,
+            "subscribe".into(),
+            command_receiver,
+            frames,
+            control_writes,
+            shutdown.clone(),
+            timing,
+        ));
+        assert_eq!(
+            server.next().await.unwrap().unwrap(),
+            Message::Text("subscribe".into())
+        );
+        for n in 0..3 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let frame = Message::Text(format!("book-{n}").into());
+            server.send(frame.clone()).await.unwrap();
+            assert_eq!(next_data_frame(&mut receiver).await, frame);
+        }
+        assert!(!task.is_finished());
+        shutdown.cancel();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn repeated_clob_pings_do_not_extend_the_oldest_pong_deadline() {
+        let (client, mut server, _) = clob_socket_pair(false).await;
+        let (_commands, command_receiver) = mpsc::channel(1);
+        let (frames, _receiver) = mpsc::channel(1);
+        let (control_writes, _control_write_receiver) = mpsc::channel(8);
+        let mut timing = test_socket_timing();
+        timing.ping_interval = Duration::from_millis(40);
+        timing.pong_timeout = Duration::from_millis(150);
+        timing.read_timeout = Duration::from_secs(1);
+        let task = tokio::spawn(run_clob_socket(
+            client,
+            "subscribe".into(),
+            command_receiver,
+            frames,
+            control_writes,
+            CancellationToken::new(),
+            timing,
+        ));
+        assert_eq!(
+            server.next().await.unwrap().unwrap(),
+            Message::Text("subscribe".into())
+        );
+        assert_eq!(
+            server.next().await.unwrap().unwrap(),
+            Message::Text("PING".into())
+        );
+        let error = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("oldest unanswered PING reaches its pinned pong deadline")
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.code, "polymarket_clob_pong_timeout");
+    }
+
     #[test]
     fn clob_control_queue_overflow_is_bounded_and_recoverable() {
         let (sender, _receiver) = mpsc::channel(CLOB_CONTROL_BUFFER);
@@ -5222,7 +5339,6 @@ mod tests {
             &sender,
             ClobFrame {
                 message,
-                received_at: Utc::now(),
                 queued_at: Instant::now(),
             },
         )
@@ -5239,11 +5355,25 @@ mod tests {
     }
 
     #[test]
+    fn dequeued_clob_frame_recovers_wall_time_from_monotonic_queue_delay() {
+        let queued_at = Instant::now();
+        let dequeued_at = queued_at + Duration::from_millis(37);
+        let observed_at = at(1_783_902_600_137);
+        assert_eq!(
+            clob_frame_received_at(queued_at, dequeued_at, observed_at),
+            at(1_783_902_600_100)
+        );
+        assert_eq!(
+            clob_frame_received_at(dequeued_at, queued_at, observed_at),
+            observed_at
+        );
+    }
+
+    #[test]
     fn full_data_queue_fails_immediately_without_displacing_frames() {
         let (sender, mut receiver) = mpsc::channel(1);
         let frame = || ClobFrame {
             message: Message::Binary(Vec::new().into()),
-            received_at: Utc::now(),
             queued_at: Instant::now(),
         };
         sender
