@@ -1,6 +1,6 @@
 # BTC ignored training archive inventory
 
-This inventory covers `/Volumes/docker-data/archives/polymarket-bot/ml-training/btc-directional-model-ignored-training-20260825-fa05ed3.tar.zst`. The archive remains the source artifact. Inspection used a temporary extracted directory, which was removed after the inventory was verified. Its four model artifact groups were subsequently moved to the canonical SSD root as described below.
+This inventory covers `/Volumes/docker-data/capitonic-btc-directional-model/btc-directional-model-ignored-training-20260825-fa05ed3.tar.zst`, originally stored at `/Volumes/docker-data/archives/polymarket-bot/ml-training/`. The archive remains the source artifact. Inspection used a temporary extracted directory, which was removed after the inventory was verified. Its four model artifact groups were subsequently moved to the canonical SSD root as described below.
 
 ## Identity and verification
 
@@ -125,3 +125,5 @@ On 2026-09-24, the four directories under the archive's `packages/btc-directiona
 - `btc-core-20260421-20260720/`
 
 The 48 model artifact files total 69,402,045 bytes. Every destination file was verified against its source SHA-256. The archive's `.DS_Store` file was excluded. `artifact-bundle-migration-20260825-fa05ed3.json` and `artifact-bundle-inventory-20260825-fa05ed3.sha256` in the canonical root record the source paths, archive identity, destination paths, sizes, and per-file checksums. The temporary extraction was removed. This transfer did not qualify or authorize any model for deployment.
+
+The tarball and its `.sha256` sidecar were then moved from the legacy `archives/polymarket-bot/ml-training/` directory into the canonical model root. The tarball still hashes to `bb927adea127ac93394b187970e36c9394e669a0aa16d0f2f874cfeca398e5a9`. The sidecar now names the new path, and the bundle migration manifest records both the original and current archive locations. The tarball contents were not changed.
