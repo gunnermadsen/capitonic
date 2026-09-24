@@ -2697,12 +2697,18 @@ impl Store {
         let started = Instant::now();
         let result = sqlx::query_as::<_, (Decimal, Decimal)>(
             r#"
-            SELECT COALESCE(SUM(size), 0)::numeric,
-                   COALESCE(SUM(price * size), 0)::numeric
-            FROM polymarket.fills
-            WHERE order_id = $1
-              AND process_id = $2
-              AND source = 'live'
+            SELECT COALESCE(economics.filled_size, 0)::numeric,
+                   COALESCE(economics.filled_notional, 0)::numeric
+            -- Timescale partial aggregation can produce no row for an unfilled order.
+            FROM (VALUES (1)) AS anchor(dummy)
+            LEFT JOIN LATERAL (
+              SELECT SUM(size)::numeric AS filled_size,
+                     SUM(price * size)::numeric AS filled_notional
+              FROM polymarket.fills
+              WHERE order_id = $1
+                AND process_id = $2
+                AND source = 'live'
+            ) economics ON true
             "#,
         )
         .bind(order_id)
