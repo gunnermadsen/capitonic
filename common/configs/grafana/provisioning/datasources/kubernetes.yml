@@ -1,0 +1,21 @@
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    basicAuth: true
+    basicAuthUser: ${PROMETHEUS_BASIC_AUTH_USER}
+    secureJsonData:
+      basicAuthPassword: ${PROMETHEUS_BASIC_AUTH_PASSWORD}
+    jsonData:
+      httpMethod: POST
+      timeInterval: 20s
+    editable: false
+  - name: Loki
+    type: loki
+    uid: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false
