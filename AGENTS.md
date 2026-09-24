@@ -274,13 +274,15 @@ done
 - Before creating or first applying a migration on its feature or defect branch, present a plan identifying its exact database effects, affected objects, data scope, rollback behavior, and expected locking or operational risk.
 - Approval of that plan, including `execute the plan`, authorizes creating the migration, deploying it for branch validation, and repeating that validation as needed without renewed approval, provided the migration and stated effects have not changed.
 - Before application, confirm that the migration files are committed and that the complete pending migration list exactly matches the approved set. Stop if an approved migration was already applied or any additional migration is pending.
-- Apply approved migrations only by recreating the `db-migrate` container from the project Compose configuration:
+- For a Compose database, apply approved migrations only by recreating the
+  `db-migrate` container from the project Compose configuration:
 
 ```bash
 docker compose up -d --force-recreate --no-deps db-migrate
 ```
 
-- Do not run TypeORM commands directly on the host or through another container. After application, verify the migration ledger and intended schema or data state.
+- For the isolated Kubernetes development database in namespace `capitonic`, apply approved migrations only through a separately invoked, one-shot `db-migrate` Job from `capitonic-helm-chart/charts/db-migrate`. The Job must use the committed migration image and connect only to that Kubernetes database. Do not run it as a Helm hook or database startup action.
+- Do not run TypeORM commands directly on the host or through any other container. After application, verify the migration ledger and intended schema or data state.
 - Any database correction, reversal, or rollback requires its own approved TypeORM migration. Never repair or reverse database state with an ad hoc command or script.
 - Never create or modify trading processes through migrations; use the established API.
 - Keep diagnostic reads bounded and index-conscious. Do not run scans or queries likely to starve database resources.
