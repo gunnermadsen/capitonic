@@ -49,7 +49,7 @@ Use `statefulset/prometheus`, `statefulset/loki`, or `daemonset/alloy` for those
 - Loki, Prometheus, and Grafana PVCs are Bound on `local-path`.
 - Prometheus self, Loki, and Alloy targets are up; unavailable future trading services are not configured as development targets yet.
 - Alloy delivers current `capitonic` pod logs to Loki without persistent delivery errors.
-- Grafana reports a healthy API, provisions its shared dashboards and both datasources, and can query Prometheus and Loki.
+- Grafana reports a healthy API, provisions its shared dashboards and the Prometheus, Loki, and PostgreSQL datasources, and can query each deployed dependency.
 - Monitoring configuration is provisioned only through the charts. After successful observability deployment, record the repository-required `provisioned/observability/dev/<timestamp>` tag on the exact deployed commit.
 
 No database migration, Rust image build, Docker Compose edit, or trading-process change is part of this rollout.

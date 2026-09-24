@@ -594,7 +594,7 @@ This plan preserves the existing Compose configuration as the current deployment
 ## Repository review notes (remaining for later services)
 
 - `AGENTS.md` currently requires ingester workers to be created and scaled only through the Compose `ingester-worker` service. A Kubernetes worker Deployment requires an explicit, narrowly scoped repository-policy amendment before rollout.
-- The Kubernetes `db-migrate` Job exception is committed on `docs/model-training-artifact-lifecycle`. Bring that policy commit into the deployment lineage under repository branch rules before running the Job. A new empty development database still needs its baseline migration ledger established.
+- The Kubernetes `db-migrate` Job policy is in the deployment lineage. The Job established the baseline migration ledger in the new empty development database; later schema changes still require committed, approved TypeORM migrations.
 - Existing shared configuration contains Docker-specific discovery and hostnames. In particular, Alloy reads `/var/run/docker.sock`, Prometheus has static Compose targets, and PgBouncer points to `timescaledb-0`. The Helm path needs additive Kubernetes-specific rendering or overlays while leaving the Compose source configuration intact.
 - The plan provisions a new development database but does not specify whether existing data should be copied. Treat the database as empty until the intended data scope and a separate safe data-migration procedure are defined.
 
