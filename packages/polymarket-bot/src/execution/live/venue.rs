@@ -256,13 +256,21 @@ impl LiveVenue {
     pub(super) async fn persist_fill_from_live_event(
         store: &Store,
         event: &LiveVenueEvent,
+        path: LiveEventPath,
     ) -> Result<usize> {
-        let fills = live_fill_records_from_event(store, event).await?;
+        let fills = live_fill_records_from_event(store, event, path).await?;
         for (order, fill) in &fills {
-            let (prior_filled_size, _) = store.order_filled_economics(&order.order_id).await?;
+            let process_id = order
+                .request
+                .process_id
+                .context("live fill order has no process identity")?;
+            let (prior_filled_size, _) = store
+                .order_filled_economics(&order.order_id, process_id, path.before_insert_site())
+                .await?;
             store.insert_fill(fill).await?;
-            let (cumulative_filled_size, cumulative_filled_notional) =
-                store.order_filled_economics(&order.order_id).await?;
+            let (cumulative_filled_size, cumulative_filled_notional) = store
+                .order_filled_economics(&order.order_id, process_id, path.after_insert_site())
+                .await?;
             validate_live_cumulative_fill_economics(
                 &order.request,
                 cumulative_filled_size,
@@ -281,7 +289,13 @@ impl LiveVenue {
                         "raw_payload": event.raw_payload,
                     }),
                 )
-                .await?;
+                .await?
+                .with_context(|| {
+                    format!(
+                        "live user event fill progress could not find local order {}",
+                        order.order_id
+                    )
+                })?;
             if cumulative_filled_size > prior_filled_size {
                 if let Some(process_id) = order.request.process_id {
                     let latency = (fill.filled_at - order.updated_at)
@@ -308,6 +322,7 @@ impl LiveVenue {
     pub(super) async fn persist_order_update_from_live_event(
         store: &Store,
         event: &LiveVenueEvent,
+        path: LiveEventPath,
     ) -> Result<bool> {
         if !matches!(event.event_type.as_str(), "order" | "cancellation")
             || !is_cancelled_order_status(event.event_status.as_deref())
@@ -334,7 +349,9 @@ impl LiveVenue {
             .await?;
         if let Some(order) = cancelled {
             if let Some(process_id) = order.request.process_id {
-                let (filled_size, _) = store.order_filled_economics(&order.order_id).await?;
+                let (filled_size, _) = store
+                    .order_filled_economics(&order.order_id, process_id, path.cancellation_site())
+                    .await?;
                 if filled_size == Decimal::ZERO {
                     record_process_execution_outcome(process_id, "acknowledged_unfilled");
                 }
@@ -346,9 +363,17 @@ impl LiveVenue {
     pub(super) async fn backfill_fills_from_live_events(&self) -> Result<usize> {
         let store = self.store()?;
         let mut processed = 0usize;
-        for event in store.recent_live_trade_events(500).await? {
-            let persisted = LiveVenue::persist_fill_from_live_event(&store, &event).await?;
+        for (event_id, event) in store.unapplied_live_trade_events(500).await? {
+            let persisted = LiveVenue::persist_fill_from_live_event(
+                &store,
+                &event,
+                LiveEventPath::ReconciliationReplay,
+            )
+            .await?;
             if persisted > 0 {
+                // The event is marked only after every resolved fill and its order progress are durable.
+                // Events without a local fill stay eligible if ownership is established later.
+                store.mark_live_trade_event_applied(event_id).await?;
                 processed = processed.saturating_add(persisted);
             } else if let Some(account_address) = configured_account_address(&self.config)? {
                 if let Some(account_trade) = account_trade_from_live_event(&account_address, &event)
@@ -358,7 +383,12 @@ impl LiveVenue {
             }
         }
         for event in store.recent_live_order_events(500).await? {
-            let _ = LiveVenue::persist_order_update_from_live_event(&store, &event).await?;
+            let _ = LiveVenue::persist_order_update_from_live_event(
+                &store,
+                &event,
+                LiveEventPath::ReconciliationReplay,
+            )
+            .await?;
         }
         Ok(processed)
     }

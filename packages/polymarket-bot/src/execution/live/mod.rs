@@ -281,3 +281,47 @@ impl LiveVenueEvent {
         }))
     }
 }
+
+#[derive(Clone, Copy)]
+enum LiveEventPath {
+    UserStream,
+    ReconciliationReplay,
+}
+
+impl LiveEventPath {
+    fn before_insert_site(self) -> crate::store::FillEconomicsSite {
+        match self {
+            Self::UserStream => crate::store::FillEconomicsSite::UserStreamBeforeInsert,
+            Self::ReconciliationReplay => {
+                crate::store::FillEconomicsSite::ReconciliationReplayBeforeInsert
+            }
+        }
+    }
+
+    fn after_insert_site(self) -> crate::store::FillEconomicsSite {
+        match self {
+            Self::UserStream => crate::store::FillEconomicsSite::UserStreamAfterInsert,
+            Self::ReconciliationReplay => {
+                crate::store::FillEconomicsSite::ReconciliationReplayAfterInsert
+            }
+        }
+    }
+
+    fn cancellation_site(self) -> crate::store::FillEconomicsSite {
+        match self {
+            Self::UserStream => crate::store::FillEconomicsSite::UserStreamCancellation,
+            Self::ReconciliationReplay => {
+                crate::store::FillEconomicsSite::ReconciliationReplayCancellation
+            }
+        }
+    }
+
+    fn legacy_identity_site(self) -> crate::store::FillIdentitySite {
+        match self {
+            Self::UserStream => crate::store::FillIdentitySite::UserStreamLegacyTrade,
+            Self::ReconciliationReplay => {
+                crate::store::FillIdentitySite::ReconciliationReplayLegacyTrade
+            }
+        }
+    }
+}

@@ -125,7 +125,10 @@ pub(super) async fn persist_rest_fill_backfill(
     let mut fill_ids_by_order: HashMap<String, Vec<Uuid>> = HashMap::new();
     let mut recovered_count = 0usize;
     for fill in &fills {
-        let already_durable = store.find_fill_order_id(fill.fill_id).await?.is_some();
+        let already_durable = store
+            .find_fill_order_id(fill.fill_id, crate::store::FillIdentitySite::RestBackfill)
+            .await?
+            .is_some();
         store.insert_fill(fill).await?;
         if !already_durable {
             recovered_count = recovered_count.saturating_add(1);
@@ -144,8 +147,16 @@ pub(super) async fn persist_rest_fill_backfill(
         let order = local_orders
             .get(order_id.as_str())
             .context("live REST fill progress points to missing local order")?;
-        let (cumulative_filled_size, cumulative_filled_notional) =
-            store.order_filled_economics(&order_id).await?;
+        let (cumulative_filled_size, cumulative_filled_notional) = store
+            .order_filled_economics(
+                &order_id,
+                order
+                    .request
+                    .process_id
+                    .context("live REST fill order has no process identity")?,
+                crate::store::FillEconomicsSite::RestBackfill,
+            )
+            .await?;
         validate_live_cumulative_fill_economics(
             &order.request,
             cumulative_filled_size,
@@ -186,6 +197,7 @@ pub(super) async fn persist_rest_fill_backfill(
 pub(super) async fn live_fill_records_from_event(
     store: &Store,
     event: &LiveVenueEvent,
+    path: LiveEventPath,
 ) -> Result<Vec<(OrderRecord, FillRecord)>> {
     if event.event_type != "trade" || !is_fill_trade_status(event.event_status.as_deref()) {
         return Ok(Vec::new());
@@ -203,7 +215,9 @@ pub(super) async fn live_fill_records_from_event(
         &Uuid::NAMESPACE_URL,
         format!("polymarket:trade:{trade_id}").as_bytes(),
     );
-    let legacy_order_id = store.find_fill_order_id(legacy_fill_id).await?;
+    let legacy_order_id = store
+        .find_fill_order_id(legacy_fill_id, path.legacy_identity_site())
+        .await?;
     let mut resolved_order_ids = HashSet::new();
     let mut resolved = Vec::new();
     for candidate in live_event_order_id_candidates(&event.raw_payload) {

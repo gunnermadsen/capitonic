@@ -1,4 +1,8 @@
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
+
+mod fill_read_telemetry;
+pub use fill_read_telemetry::{FillEconomicsSite, FillIdentitySite};
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
@@ -1441,22 +1445,36 @@ impl Store {
         row.map(order_from_db_row).transpose()
     }
 
-    pub async fn find_fill_order_id(&self, fill_id: Uuid) -> Result<Option<String>> {
-        sqlx::query_scalar::<_, String>(
+    pub async fn find_fill_order_id(
+        &self,
+        fill_id: Uuid,
+        site: FillIdentitySite,
+    ) -> Result<Option<String>> {
+        let started = Instant::now();
+        let result = sqlx::query_scalar::<_, String>(
             r#"
+            WITH identity AS MATERIALIZED (
+                SELECT fill_id, timestamp_utc
+                FROM polymarket.fill_identities
+                WHERE fill_id = $1
+            )
             SELECT fill.order_id
-            FROM polymarket.fills fill
-            JOIN polymarket.fill_identities identity
-              ON identity.fill_id = fill.fill_id
-             AND identity.timestamp_utc = fill.timestamp_utc
-            WHERE fill.fill_id = $1
+            FROM identity
+            CROSS JOIN LATERAL (
+                SELECT order_id
+                FROM polymarket.fills
+                WHERE fill_id = identity.fill_id
+                  AND timestamp_utc = identity.timestamp_utc
+                LIMIT 1
+            ) fill
             LIMIT 1
             "#,
         )
         .bind(fill_id)
         .fetch_optional(&self.pool)
-        .await
-        .context("failed to resolve canonical fill order identity")
+        .await;
+        fill_read_telemetry::observe_identity(site, &result, started.elapsed());
+        result.context("failed to resolve canonical fill order identity")
     }
 
     /// Resolves explicit venue order identities to orders owned by one trading process. The input
@@ -2670,19 +2688,33 @@ impl Store {
             .await
     }
 
-    pub async fn order_filled_economics(&self, order_id: &str) -> Result<(Decimal, Decimal)> {
-        sqlx::query_as::<_, (Decimal, Decimal)>(
+    pub async fn order_filled_economics(
+        &self,
+        order_id: &str,
+        process_id: Uuid,
+        site: FillEconomicsSite,
+    ) -> Result<(Decimal, Decimal)> {
+        let started = Instant::now();
+        let result = sqlx::query_as::<_, (Decimal, Decimal)>(
             r#"
             SELECT COALESCE(SUM(size), 0)::numeric,
                    COALESCE(SUM(price * size), 0)::numeric
             FROM polymarket.fills
             WHERE order_id = $1
+              AND process_id = $2
+              AND source = 'live'
             "#,
         )
         .bind(order_id)
+        .bind(process_id)
         .fetch_one(&self.pool)
-        .await
-        .context("failed to calculate cumulative order fill economics")
+        .await;
+        fill_read_telemetry::observe_economics(site, result.is_ok(), started.elapsed());
+        result.context("failed to calculate cumulative order fill economics")
+    }
+
+    pub fn fill_read_prometheus_metrics() -> String {
+        fill_read_telemetry::prometheus_metrics()
     }
 
     /// Applies cumulative fill progress without permitting a late partial-fill event to downgrade
@@ -2942,21 +2974,49 @@ impl Store {
         Ok(inserted)
     }
 
-    pub async fn recent_live_trade_events(&self, limit: i64) -> Result<Vec<LiveVenueEvent>> {
-        self.recent_live_events_by_type("trade", limit).await
+    pub async fn unapplied_live_trade_events(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<(Uuid, LiveVenueEvent)>> {
+        self.recent_live_events_by_type("trade", true, limit).await
     }
 
     pub async fn recent_live_order_events(&self, limit: i64) -> Result<Vec<LiveVenueEvent>> {
-        self.recent_live_events_by_type("order", limit).await
+        Ok(self
+            .recent_live_events_by_type("order", false, limit)
+            .await?
+            .into_iter()
+            .map(|(_, event)| event)
+            .collect())
+    }
+
+    pub async fn mark_live_trade_event_applied(&self, event_id: Uuid) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE polymarket.live_venue_events
+            SET applied = true, apply_error = NULL
+            WHERE event_id = $1
+              AND source = 'user_ws'
+              AND event_type = 'trade'
+              AND applied = false
+            "#,
+        )
+        .bind(event_id)
+        .execute(&self.pool)
+        .await
+        .context("failed to mark durably applied live trade event")?;
+        Ok(())
     }
 
     async fn recent_live_events_by_type(
         &self,
         event_type: &str,
+        unapplied_only: bool,
         limit: i64,
-    ) -> Result<Vec<LiveVenueEvent>> {
+    ) -> Result<Vec<(Uuid, LiveVenueEvent)>> {
         #[derive(sqlx::FromRow)]
         struct Row {
+            event_id: Uuid,
             source: String,
             event_type: String,
             venue_event_id: Option<String>,
@@ -2968,31 +3028,38 @@ impl Store {
 
         let rows = sqlx::query_as::<_, Row>(
             r#"
-            SELECT source, event_type, venue_event_id, venue_order_id,
+            SELECT event_id, source, event_type, venue_event_id, venue_order_id,
                    venue_trade_id, event_status, raw_payload
             FROM polymarket.live_venue_events
             WHERE source = 'user_ws'
               AND event_type = $1
+              AND (NOT $3 OR applied = false)
             ORDER BY created_at DESC
             LIMIT $2
             "#,
         )
         .bind(event_type)
         .bind(limit.clamp(1, 1000))
+        .bind(unapplied_only)
         .fetch_all(&self.pool)
         .await
         .context("failed to list recent live venue events")?;
 
         Ok(rows
             .into_iter()
-            .map(|row| LiveVenueEvent {
-                source: row.source,
-                event_type: row.event_type,
-                venue_event_id: row.venue_event_id,
-                venue_order_id: row.venue_order_id,
-                venue_trade_id: row.venue_trade_id,
-                event_status: row.event_status,
-                raw_payload: row.raw_payload,
+            .map(|row| {
+                (
+                    row.event_id,
+                    LiveVenueEvent {
+                        source: row.source,
+                        event_type: row.event_type,
+                        venue_event_id: row.venue_event_id,
+                        venue_order_id: row.venue_order_id,
+                        venue_trade_id: row.venue_trade_id,
+                        event_status: row.event_status,
+                        raw_payload: row.raw_payload,
+                    },
+                )
             })
             .collect())
     }
