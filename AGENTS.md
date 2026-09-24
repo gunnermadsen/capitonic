@@ -201,6 +201,7 @@ done
 
 - Run model training, backtesting, and data preparation from the assigned `training/...` worktree, with all generated data and artifacts stored under the canonical SSD training root defined in `docs/model-training-artifact-lifecycle.md`.
 - Never commit Parquet files, generated datasets, checkpoints, predictions, raw backtest outputs, logs, or large model artifacts. Archive completed and superseded training artifacts on the SSD.
+- Never create or commit a repository-root `training-results/` directory. Store all new training-result outcomes in their SSD run directory; Git may contain only concise reports and provenance pointers under maintained documentation or package paths.
 - Keep only maintained source code, configuration, tests, concise results, and provenance pointers in Git. Promote reusable Python modules into `packages/btc-directional-model` before merging the training branch.
 - Admit a selected immutable model artifact into `packages/btc-directional-model` only for an explicitly authorized UMR deployment. Record its source run, SHA-256, manifest, and qualification evidence.
 - UMR adapters may translate canonical inputs and model outputs only. They must reuse existing feature, inference, persistence, admission, observability, identity, and recovery contracts without duplicating their logic.

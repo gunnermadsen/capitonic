@@ -53,6 +53,8 @@ Use only the directories required by the run:
 
 Generated artifacts remain on the SSD. Do not place them in the repository and then archive them later.
 
+Do not create a repository-root `training-results/` directory. New training-result outcomes, including raw metrics, diagnostics, backtests and provenance manifests, belong in the timestamped SSD run. Commit only a concise report or pointer when it is needed to explain or locate the archived evidence.
+
 ## Run manifest
 
 Every run must have a manifest or `README.md` under `manifests/` recording:
@@ -101,6 +103,12 @@ Archive completed and superseded runs under the same canonical root without chan
 - Do not rewrite Git history merely to remove files from the current tree.
 - Do not remove a deployed runtime bundle until its replacement and rollback compatibility are verified.
 - Treat legacy paths as read-only provenance until a deliberate migration validates and updates every reference.
+
+### Archived legacy runs
+
+| Original repository path | Canonical SSD run |
+| --- | --- |
+| `training-results/btc-5m-micro-edge-tournament-20260607-20260914/20260915T030000Z` | `/Volumes/docker-data/capitonic-btc-directional-model/btc-5m-micro-edge-tournament-20260607-20260914-20260915T030000Z` |
 
 ## Deployment admission
 
