@@ -130,6 +130,30 @@ pub async fn create_object(
     .map_err(db_error)
 }
 
+pub async fn reset_publication(
+    context: &DrainContext,
+    publication: &Publication,
+) -> Result<(), DrainExecutionError> {
+    let changed = sqlx::query(
+        "UPDATE ingester.drain_objects SET status='staging',job_id=$2,row_count=NULL,\
+         relative_path=NULL,sha256=NULL,byte_size=NULL,published_at=NULL,\
+         updated_at=clock_timestamp() WHERE object_id=$1 AND status='published'",
+    )
+    .bind(publication.object_id)
+    .bind(context.job_id)
+    .execute(&context.pool)
+    .await
+    .map_err(db_error)?
+    .rows_affected();
+    if changed != 1 {
+        return Err(invalid(
+            "drain_publication_changed",
+            "published chunk changed before it could be exported again",
+        ));
+    }
+    Ok(())
+}
+
 pub fn start_writer(
     staging: PathBuf,
     schema: Arc<Schema>,

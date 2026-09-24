@@ -24,9 +24,7 @@ pub enum DrainMode {
 pub struct DrainRequest {
     pub strategy_key: String,
     pub cutoff: DateTime<Utc>,
-    #[serde(default)]
     pub dry_run: bool,
-    #[serde(default)]
     pub mode: DrainMode,
     #[serde(default)]
     pub execution: ExecutionSelector,
@@ -104,14 +102,26 @@ mod tests {
     use super::{DrainMode, DrainRequest};
 
     #[test]
-    fn omitted_mode_preserves_destructive_drain_contract() {
-        let request: DrainRequest = serde_json::from_value(serde_json::json!({
+    fn destructive_fields_must_be_explicit() {
+        let omitted: Result<DrainRequest, _> = serde_json::from_value(serde_json::json!({
             "strategy_key": "dataset",
             "cutoff": "2026-01-01T00:00:00Z"
+        }));
+        assert!(omitted.is_err());
+        let omitted_dry_run: Result<DrainRequest, _> = serde_json::from_value(serde_json::json!({
+            "strategy_key": "dataset",
+            "cutoff": "2026-01-01T00:00:00Z",
+            "mode": "drain"
+        }));
+        assert!(omitted_dry_run.is_err());
+        let explicit: DrainRequest = serde_json::from_value(serde_json::json!({
+            "strategy_key": "dataset",
+            "cutoff": "2026-01-01T00:00:00Z",
+            "mode": "drain",
+            "dry_run": false
         }))
         .unwrap();
-        assert_eq!(request.mode, DrainMode::Drain);
-        assert!(request.mode.removes_source_data());
+        assert!(explicit.mode.removes_source_data());
     }
 
     #[test]
@@ -119,7 +129,8 @@ mod tests {
         let request: DrainRequest = serde_json::from_value(serde_json::json!({
             "strategy_key": "dataset",
             "cutoff": "2026-01-01T00:00:00Z",
-            "mode": "reconcile"
+            "mode": "reconcile",
+            "dry_run": false
         }))
         .unwrap();
         assert_eq!(request.mode, DrainMode::Reconcile);

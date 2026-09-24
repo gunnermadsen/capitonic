@@ -61,9 +61,9 @@ Send `Authorization: Bearer <admin-token>` with every drain request. Submit work
 - `POST /drains/{job_id}/cancel`
 - `POST /drains/{job_id}/retry`
 
-A submission must contain `strategy_key`, `cutoff`, `mode`, and `dry_run`; `execution` is optional. Set `mode` to `reconcile`; API-scheduled drains are copy-only. Set `dry_run` explicitly: `true` reports eligible work without publishing Parquet, while `false` publishes verified Parquet without removing source data. Do not omit `mode` or `dry_run`, and do not submit `mode: "drain"`.
+A submission must contain `strategy_key`, `cutoff`, `mode`, and `dry_run`; `execution` is optional. `mode: "reconcile"` publishes verified Parquet without removing source data. `mode: "drain"` removes only verified, closed Timescale chunks through the allowlisted database function after source parity is checked. Set `dry_run: true` to preview eligible chunks without publishing or removing data. Both `mode` and `dry_run` are required; omitting either is rejected. Only one queued or running drain job per strategy is allowed.
 
-`execution` may specify either `required_worker_id` or `required_deployment`, never both. Source removal is not a drain API operation; it requires a separately approved, guarded database migration after manifest validation.
+`execution` may specify either `required_worker_id` or `required_deployment`, never both. The Binance spot L2 snapshot, Binance one-second candle, and canonical Polymarket orderbook drains retain at least one day. A cutoff removes only chunks whose end is at or before that time; the active chunk remains in PostgreSQL. One-off historical drain scripts remain copy-only and require a separately approved migration for source removal.
 
 ## API
 

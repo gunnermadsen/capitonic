@@ -241,7 +241,14 @@ async fn submit_drain(
         .drains
         .submit(&request, strategy.descriptor().contract_version)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::CONFLICT,
+                "drain_strategy_busy",
+                "another drain job for this dataset is queued or running",
+            )
+        })?;
     Ok((StatusCode::ACCEPTED, Json(job)))
 }
 

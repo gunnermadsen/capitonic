@@ -32,7 +32,7 @@ const SPEC: RetainedDrainSpec = RetainedDrainSpec {
     relation: "market_data.binance_spot_btcusdt_one_second_ohlcv",
     schema: "market_data",
     table: "binance_spot_btcusdt_one_second_ohlcv",
-    retention_days: Some(14),
+    retention_days: Some(1),
 };
 const BATCH_ROWS: usize = 20_000;
 
@@ -199,6 +199,15 @@ impl RetainedDrainAdapter for BinanceOneSecondOhlcvDrain {
     fn root(&self) -> &Path {
         &self.root
     }
+    async fn source_count(
+        &self,
+        context: &DrainContext,
+        chunk: &Chunk,
+    ) -> Result<Option<i64>, DrainExecutionError> {
+        sqlx::query_scalar("SELECT count(*) FROM market_data.binance_spot_btcusdt_one_second_ohlcv WHERE open_timestamp >= $1 AND open_timestamp < $2")
+            .bind(chunk.range_start).bind(chunk.range_end).fetch_one(&context.pool).await
+            .map(Some).map_err(db_error)
+    }
     async fn export_chunk(
         &self,
         context: &DrainContext,
@@ -245,10 +254,11 @@ async fn publish(
     count: i64,
 ) -> Result<Publication, DrainExecutionError> {
     let relative = format!(
-        "verified-chunks-v1/year={}/month={}/day={}/{object_id}.parquet",
+        "verified-chunks-v1/year={}/month={}/day={}/{object_id}-{}.parquet",
         chunk.range_start.format("%Y"),
         chunk.range_start.format("%m"),
-        chunk.range_start.format("%d")
+        chunk.range_start.format("%d"),
+        context.lease_token
     );
     let (sha, size) = publish_file(&staging, root, &relative, count).await?;
     sqlx::query_as("UPDATE ingester.drain_objects SET row_count=$2,relative_path=$3,sha256=$4,byte_size=$5,status='published',published_at=clock_timestamp(),updated_at=clock_timestamp() WHERE object_id=$1 AND status='staging' RETURNING object_id,row_count,relative_path,sha256::text,byte_size,status").bind(object_id).bind(count).bind(relative).bind(sha).bind(size).fetch_one(&context.pool).await.map_err(db_error)

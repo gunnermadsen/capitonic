@@ -28,7 +28,7 @@ const SPEC: RetainedDrainSpec = RetainedDrainSpec {
     relation: "market_data.binance_spot_btcusdt_l2_snapshots",
     schema: "market_data",
     table: "binance_spot_btcusdt_l2_snapshots",
-    retention_days: Some(14),
+    retention_days: Some(1),
 };
 const BATCH_ROWS: usize = 250;
 pub struct BinanceSpotL2SnapshotsDrain {
@@ -175,6 +175,15 @@ impl RetainedDrainAdapter for BinanceSpotL2SnapshotsDrain {
     fn root(&self) -> &Path {
         &self.root
     }
+    async fn source_count(
+        &self,
+        context: &DrainContext,
+        chunk: &Chunk,
+    ) -> Result<Option<i64>, DrainExecutionError> {
+        sqlx::query_scalar("SELECT count(*) FROM market_data.binance_spot_btcusdt_l2_snapshots WHERE source_timestamp >= $1 AND source_timestamp < $2")
+            .bind(chunk.range_start).bind(chunk.range_end).fetch_one(&context.pool).await
+            .map(Some).map_err(db_error)
+    }
     async fn export_chunk(
         &self,
         c: &DrainContext,
@@ -218,10 +227,11 @@ async fn publish(
     count: i64,
 ) -> Result<Publication, DrainExecutionError> {
     let rel = format!(
-        "verified-chunks-v1/year={}/month={}/day={}/{id}.parquet",
+        "verified-chunks-v1/year={}/month={}/day={}/{id}-{}.parquet",
         ch.range_start.format("%Y"),
         ch.range_start.format("%m"),
-        ch.range_start.format("%d")
+        ch.range_start.format("%d"),
+        c.lease_token
     );
     let (sha, size) = publish_file(&staging, root, &rel, count).await?;
     sqlx::query_as("UPDATE ingester.drain_objects SET row_count=$2,relative_path=$3,sha256=$4,byte_size=$5,status='published',published_at=clock_timestamp(),updated_at=clock_timestamp() WHERE object_id=$1 AND status='staging' RETURNING object_id,row_count,relative_path,sha256::text,byte_size,status").bind(id).bind(count).bind(rel).bind(sha).bind(size).fetch_one(&c.pool).await.map_err(db_error)

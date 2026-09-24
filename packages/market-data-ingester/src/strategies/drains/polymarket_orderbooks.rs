@@ -20,7 +20,7 @@ use super::{
 
 pub const KEY: &str = "polymarket_btc_five_minute_orderbooks";
 pub const RELATION: &str = "polymarket.btc_five_minute_orderbook_snapshots";
-const RETENTION_DAYS: i64 = 14;
+const RETENTION_DAYS: i64 = 1;
 const BATCH_ROWS: usize = 2_000;
 const SPEC: RetainedDrainSpec = RetainedDrainSpec {
     key: KEY,
@@ -110,7 +110,7 @@ impl PolymarketOrderbooksDrain {
             chunk.range_start.format("%m"),
             chunk.range_start.format("%d"),
         );
-        let relative_path = format!("{partition}/{object_id}.parquet");
+        let relative_path = format!("{partition}/{object_id}-{}.parquet", context.lease_token);
         let (sha256, byte_size) = publish_file(&staging, &self.root, &relative_path, count).await?;
         sqlx::query_as::<_, Publication>(
             "UPDATE ingester.drain_objects SET row_count=$2,relative_path=$3,sha256=$4,\
@@ -137,6 +137,16 @@ impl RetainedDrainAdapter for PolymarketOrderbooksDrain {
 
     fn root(&self) -> &std::path::Path {
         &self.root
+    }
+
+    async fn source_count(
+        &self,
+        context: &DrainContext,
+        chunk: &Chunk,
+    ) -> Result<Option<i64>, DrainExecutionError> {
+        sqlx::query_scalar("SELECT count(*) FROM polymarket.btc_five_minute_orderbook_snapshots WHERE sampled_at >= $1 AND sampled_at < $2")
+            .bind(chunk.range_start).bind(chunk.range_end).fetch_one(&context.pool).await
+            .map(Some).map_err(db_error)
     }
 
     async fn export_chunk(

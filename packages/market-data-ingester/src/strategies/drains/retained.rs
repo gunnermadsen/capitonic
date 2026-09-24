@@ -10,8 +10,8 @@ use crate::domain::{
 };
 
 use super::common::{
-    archived_publications, db_error, existing_publication, invalid, verify_existing, Chunk,
-    Publication,
+    archived_publications, db_error, existing_publication, invalid, reset_publication,
+    verify_existing, Chunk, Publication,
 };
 
 pub struct RetainedDrainSpec {
@@ -23,7 +23,7 @@ pub struct RetainedDrainSpec {
 }
 
 const CHUNK_REMOVAL_LOCK_TIMEOUT: &str = "500ms";
-const CHUNK_REMOVAL_STATEMENT_TIMEOUT: &str = "10s";
+const CHUNK_REMOVAL_STATEMENT_TIMEOUT: &str = "120s";
 const CHUNK_REMOVAL_RETRY_LIMIT: usize = 20;
 const CHUNK_REMOVAL_RETRY_INITIAL: StdDuration = StdDuration::from_millis(250);
 const CHUNK_REMOVAL_RETRY_MAX: StdDuration = StdDuration::from_secs(5);
@@ -33,6 +33,13 @@ const CHUNK_REMOVAL_PACING: StdDuration = StdDuration::from_millis(100);
 pub trait RetainedDrainAdapter: Send + Sync {
     fn spec(&self) -> &RetainedDrainSpec;
     fn root(&self) -> &Path;
+    async fn source_count(
+        &self,
+        _context: &DrainContext,
+        _chunk: &Chunk,
+    ) -> Result<Option<i64>, DrainExecutionError> {
+        Ok(None)
+    }
     async fn export_chunk(
         &self,
         context: &DrainContext,
@@ -110,6 +117,18 @@ pub async fn execute(
         .iter()
         .filter(|chunk| chunk.range_end <= request.cutoff)
         .count();
+    let eligible_chunks = copyable
+        .iter()
+        .filter(|chunk| chunk.range_end <= request.cutoff)
+        .map(|chunk| {
+            json!({
+                "schema": chunk.chunk_schema,
+                "name": chunk.chunk_name,
+                "start": chunk.range_start,
+                "end": chunk.range_end,
+            })
+        })
+        .collect::<Vec<_>>();
     let removable = if request.mode.removes_source_data() {
         eligible
     } else {
@@ -125,6 +144,7 @@ pub async fn execute(
                 "copyable_closed_chunks": copyable.len(),
                 "cutoff": request.cutoff,
                 "eligible_chunks": eligible,
+                "eligible_chunk_ranges": eligible_chunks,
                 "mode": request.mode,
                 "open_chunks": chunks.len() - copyable.len(),
                 "relation": spec.relation,
@@ -145,11 +165,9 @@ pub async fn execute(
         summary: json!({}),
     };
     let archived = archived_publications(&context, spec.key).await?;
-    for item in &archived {
-        verify_existing(adapter.root(), &item.publication()).await?;
-    }
-    let mut verified_existing_objects = archived.len();
+    let mut verified_existing_objects = 0usize;
     let mut objects_created = 0usize;
+    let mut chunks_removed = 0usize;
     for chunk in copyable {
         if context.shutdown.is_cancelled() {
             return Err(DrainExecutionError::new(
@@ -160,14 +178,17 @@ pub async fn execute(
         }
         let publication = match existing_publication(&context, spec.key, &chunk).await? {
             Some(publication) => {
-                if !archived
-                    .iter()
-                    .any(|item| item.object_id == publication.object_id)
-                {
-                    verify_existing(adapter.root(), &publication).await?;
+                let source_count = adapter.source_count(&context, &chunk).await?;
+                let verified = verify_existing(adapter.root(), &publication).await;
+                if should_republish(source_count, publication.row_count, verified.is_ok()) {
+                    reset_publication(&context, &publication).await?;
+                    objects_created += 1;
+                    adapter.export_chunk(&context, &chunk).await?
+                } else {
+                    verified?;
                     verified_existing_objects += 1;
+                    publication
                 }
-                publication
             }
             None => {
                 objects_created += 1;
@@ -179,6 +200,7 @@ pub async fn execute(
         outcome.bytes_written += publication.byte_size;
         if request.mode.removes_source_data() && chunk.range_end <= request.cutoff {
             outcome.rows_removed += remove_verified_chunk(&context, &publication).await?;
+            chunks_removed += 1;
             tokio::select! {
                 _ = context.shutdown.cancelled() => return Err(cancelled()),
                 _ = tokio::time::sleep(CHUNK_REMOVAL_PACING) => {}
@@ -191,6 +213,7 @@ pub async fn execute(
         "live_tail_from": chunks.iter().filter(|chunk| chunk.range_end > snapshot_at).map(|chunk| chunk.range_start).min(),
         "mode": request.mode,
         "objects_created": objects_created,
+        "chunks_removed": chunks_removed,
         "relation": spec.relation,
         "retention_days": spec.retention_days,
         "snapshot_at": snapshot_at,
@@ -199,6 +222,23 @@ pub async fn execute(
         "verified_existing_objects": verified_existing_objects,
     });
     Ok(outcome)
+}
+
+fn should_republish(source_count: Option<i64>, published_count: i64, file_valid: bool) -> bool {
+    source_count.is_some_and(|count| count != published_count || !file_valid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_republish;
+
+    #[test]
+    fn stale_or_missing_publication_must_be_exported_again() {
+        assert!(should_republish(Some(101), 100, true));
+        assert!(should_republish(Some(100), 100, false));
+        assert!(!should_republish(Some(100), 100, true));
+        assert!(!should_republish(None, 100, true));
+    }
 }
 
 async fn remove_verified_chunk(

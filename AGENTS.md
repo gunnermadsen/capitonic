@@ -258,6 +258,7 @@ done
 - Store all backtesting and model-training data only in Parquet format, including weather-model predictions and Kraken futures test data.
 - Direct Chainlink Data Streams reference prices use only `market_data.chainlink_btcusd_reference_prices`; PMData reference prices use only `market_data.pmdata_chainlink_btcusd_reference_prices`. Strategies must call the corresponding shared persistence function and must not issue table-specific insert SQL.
 - A one-off historical drain is copy-only: it may read source tables and write canonical Parquet, but it must not mutate its database sources. Source removal happens only through a separately guarded database migration after complete manifest validation.
+- A registered ingester drain job is distinct from a one-off historical drain. It may remove allowlisted, verified, closed Timescale chunks through a committed `db-migrate` function after the drain contract's source-parity and durable-publication checks succeed. The drain worker must not issue ad hoc DELETE, TRUNCATE, or DROP commands.
 
 ## Temporary code and scripts
 - Do not commit one-off scripts, diagnostic probes, data insertion helpers, scratch files, or other temporary artifacts. Keep them outside the repository, such as under `/tmp`, and delete them when finished. The `scripts/` directory is only for maintained, reusable project tooling.
@@ -271,6 +272,7 @@ done
 - Every such change must be a committed TypeScript TypeORM migration under `packages/db-migrate/src/migrations`. Required SQL must be contained in that migration and executed through its TypeORM `QueryRunner`.
 - Never alter database state through a standalone SQL file, one-off shell, Python, Rust, JavaScript, or TypeScript script, interactive `psql`, ORM synchronization, application startup, another service, host-side migration command, or temporary migration file. There is no exceptional one-off mutation path.
 - Established runtime persistence and shared backfill contracts may perform their normal application writes. Bounded read-only diagnostics are also permitted. Neither exception may be used for schema changes, administrative backfills, cleanup, corrections, or reference-data mutation.
+- The registered ingester drain worker may invoke only the committed, allowlisted `db-migrate` drain-removal function for verified closed chunks. This is the sole runtime exception for source removal; one-off drains and other administrative mutations remain migration-only.
 
 ## Migration Authorization and Execution
 

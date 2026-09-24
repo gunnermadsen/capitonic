@@ -64,9 +64,27 @@ impl DrainRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
-    pub async fn submit(&self, request: &DrainRequest, version: i32) -> Result<DrainJobRecord> {
+    pub async fn submit(
+        &self,
+        request: &DrainRequest,
+        version: i32,
+    ) -> Result<Option<DrainJobRecord>> {
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(&request.strategy_key)
+            .execute(&mut *transaction)
+            .await?;
+        let active: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM ingester.drain_jobs WHERE strategy_key=$1 AND status IN ('queued','running'))",
+        )
+        .bind(&request.strategy_key)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if active {
+            return Ok(None);
+        }
         let q=format!("INSERT INTO ingester.drain_jobs (strategy_key,strategy_contract_version,cutoff,dry_run,mode,required_worker_id,required_deployment) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING {COLUMNS}");
-        sqlx::query_as(&q)
+        let job = sqlx::query_as(&q)
             .bind(&request.strategy_key)
             .bind(version)
             .bind(request.cutoff)
@@ -74,9 +92,11 @@ impl DrainRepository {
             .bind(request.mode.as_str())
             .bind(request.execution.required_worker_id.as_deref())
             .bind(request.execution.required_deployment.as_deref())
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *transaction)
             .await
-            .context("submit drain job")
+            .context("submit drain job")?;
+        transaction.commit().await?;
+        Ok(Some(job))
     }
     pub async fn get(&self, id: Uuid) -> Result<Option<DrainJobRecord>> {
         let q = format!("SELECT {COLUMNS} FROM ingester.drain_jobs WHERE job_id=$1");
