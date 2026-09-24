@@ -6,6 +6,26 @@ groups:
     folder: Polymarket Trading Path
     interval: 30s
     rules:
+      - uid: live_fill_read_latency
+        title: Live fill read latency is sustained above budget
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange: {from: 900, to: 0}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "histogram_quantile(0.95, sum by (operation, site, le) (rate(polymarket_live_fill_read_duration_seconds_bucket{result!=\"error\"}[10m]))) and on (operation, site) (sum by (operation, site) (increase(polymarket_live_fill_read_duration_seconds_count{result!=\"error\"}[10m])) >= 30)", instant: true, refId: A}
+          - refId: B
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
+          - refId: C
+            datasourceUid: __expr__
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [0.05], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations: {summary: "Live fill read p95 exceeds 50 ms under sustained activity", description: "Client-observed store read latency includes pool wait, SQL execution, transfer, and decoding. This alert requires a Prometheus estimate of at least 30 completed non-error reads at one operation and site in ten minutes; it does not measure database CPU or assert execution failure."}
+        labels: {service: polymarket-bot, family: live_execution, severity: warning, environment: $GRAFANA_ALERT_ENVIRONMENT}
+        isPaused: false
       - uid: live_execution_decision_post_latency
         title: Decision-to-POST latency is excessive
         condition: C

@@ -259,10 +259,25 @@ impl LiveVenue {
     ) -> Result<usize> {
         let fills = live_fill_records_from_event(store, event).await?;
         for (order, fill) in &fills {
-            let (prior_filled_size, _) = store.order_filled_economics(&order.order_id).await?;
+            let process_id = order
+                .request
+                .process_id
+                .context("live fill order has no process identity")?;
+            let (prior_filled_size, _) = store
+                .order_filled_economics(
+                    &order.order_id,
+                    process_id,
+                    crate::store::FillEconomicsSite::WebsocketBeforeInsert,
+                )
+                .await?;
             store.insert_fill(fill).await?;
-            let (cumulative_filled_size, cumulative_filled_notional) =
-                store.order_filled_economics(&order.order_id).await?;
+            let (cumulative_filled_size, cumulative_filled_notional) = store
+                .order_filled_economics(
+                    &order.order_id,
+                    process_id,
+                    crate::store::FillEconomicsSite::WebsocketAfterInsert,
+                )
+                .await?;
             validate_live_cumulative_fill_economics(
                 &order.request,
                 cumulative_filled_size,
@@ -334,7 +349,13 @@ impl LiveVenue {
             .await?;
         if let Some(order) = cancelled {
             if let Some(process_id) = order.request.process_id {
-                let (filled_size, _) = store.order_filled_economics(&order.order_id).await?;
+                let (filled_size, _) = store
+                    .order_filled_economics(
+                        &order.order_id,
+                        process_id,
+                        crate::store::FillEconomicsSite::WebsocketCancellation,
+                    )
+                    .await?;
                 if filled_size == Decimal::ZERO {
                     record_process_execution_outcome(process_id, "acknowledged_unfilled");
                 }

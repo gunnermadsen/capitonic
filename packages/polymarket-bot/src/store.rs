@@ -1,4 +1,8 @@
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
+
+mod fill_read_telemetry;
+pub use fill_read_telemetry::{FillEconomicsSite, FillIdentitySite};
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
@@ -1441,22 +1445,36 @@ impl Store {
         row.map(order_from_db_row).transpose()
     }
 
-    pub async fn find_fill_order_id(&self, fill_id: Uuid) -> Result<Option<String>> {
-        sqlx::query_scalar::<_, String>(
+    pub async fn find_fill_order_id(
+        &self,
+        fill_id: Uuid,
+        site: FillIdentitySite,
+    ) -> Result<Option<String>> {
+        let started = Instant::now();
+        let result = sqlx::query_scalar::<_, String>(
             r#"
+            WITH identity AS MATERIALIZED (
+                SELECT fill_id, timestamp_utc
+                FROM polymarket.fill_identities
+                WHERE fill_id = $1
+            )
             SELECT fill.order_id
-            FROM polymarket.fills fill
-            JOIN polymarket.fill_identities identity
-              ON identity.fill_id = fill.fill_id
-             AND identity.timestamp_utc = fill.timestamp_utc
-            WHERE fill.fill_id = $1
+            FROM identity
+            CROSS JOIN LATERAL (
+                SELECT order_id
+                FROM polymarket.fills
+                WHERE fill_id = identity.fill_id
+                  AND timestamp_utc = identity.timestamp_utc
+                LIMIT 1
+            ) fill
             LIMIT 1
             "#,
         )
         .bind(fill_id)
         .fetch_optional(&self.pool)
-        .await
-        .context("failed to resolve canonical fill order identity")
+        .await;
+        fill_read_telemetry::observe_identity(site, &result, started.elapsed());
+        result.context("failed to resolve canonical fill order identity")
     }
 
     /// Resolves explicit venue order identities to orders owned by one trading process. The input
@@ -2670,19 +2688,33 @@ impl Store {
             .await
     }
 
-    pub async fn order_filled_economics(&self, order_id: &str) -> Result<(Decimal, Decimal)> {
-        sqlx::query_as::<_, (Decimal, Decimal)>(
+    pub async fn order_filled_economics(
+        &self,
+        order_id: &str,
+        process_id: Uuid,
+        site: FillEconomicsSite,
+    ) -> Result<(Decimal, Decimal)> {
+        let started = Instant::now();
+        let result = sqlx::query_as::<_, (Decimal, Decimal)>(
             r#"
             SELECT COALESCE(SUM(size), 0)::numeric,
                    COALESCE(SUM(price * size), 0)::numeric
             FROM polymarket.fills
             WHERE order_id = $1
+              AND process_id = $2
+              AND source = 'live'
             "#,
         )
         .bind(order_id)
+        .bind(process_id)
         .fetch_one(&self.pool)
-        .await
-        .context("failed to calculate cumulative order fill economics")
+        .await;
+        fill_read_telemetry::observe_economics(site, result.is_ok(), started.elapsed());
+        result.context("failed to calculate cumulative order fill economics")
+    }
+
+    pub fn fill_read_prometheus_metrics() -> String {
+        fill_read_telemetry::prometheus_metrics()
     }
 
     /// Applies cumulative fill progress without permitting a late partial-fill event to downgrade
