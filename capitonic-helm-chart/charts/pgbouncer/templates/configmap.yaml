@@ -14,4 +14,4 @@ data:
   pgbouncer.ini: |-
 {{ required "run scripts/helm/bake-assets.py before Helm: missing PgBouncer config" (.Files.Get "assets/pgbouncer.ini") | nindent 4 }}
   pgbouncer-entrypoint.sh: |-
-{{ required "run scripts/helm/bake-assets.py before Helm: missing PgBouncer startup script" (.Files.Get "assets/pgbouncer-entrypoint.sh") | nindent 4 }}
+{{ required "run scripts/helm/bake-assets.py before Helm: missing PgBouncer startup script" (.Files.Get "assets/pgbouncer-entrypoint.sh") | indent 4 }}
