@@ -1,0 +1,41 @@
+{
+  "schema_version": "btc-fok-retry-result-pointer-v1",
+  "run_id": "20260923T141630Z",
+  "run_path": "/Volumes/docker-data/polymarket-bot/artifacts/backtests/btc-directional-model/fok-retry/20260923T141630Z",
+  "coverage_start": "2026-09-04T00:00:00Z",
+  "coverage_end_exclusive": "2026-09-22T00:00:00Z",
+  "model_key": "btc-5m-conservative-selective-development-live-pilot-20260921-v1",
+  "model_sha256": "a26e1a7fbc014c362ec20251b6242c1953e8a59a0c34dfab2912a90c459405c7",
+  "prediction_sha256": "2013547b2a0e5eb8aeb170503b4a813df10274db901b1e3bf2d3de454ddf8f54",
+  "results_sha256": "9598f8dbf2b7f8732017c5f6e015c482729ce7267b877f68abdc781c62671954",
+  "comparison_sha256": "2249ac09655b896cf6d37cf69026f353b4fd7502fd8c6d0a5de446d05cbb326a",
+  "attempts_sha256": "8ba0cfac6b3953bb1f166c57369bdf4d84b316c658837166c6ecea91ad8a6c3a",
+  "trades_sha256": "58d8d41f7a696c710967bb94e7bd5f356f85b7586254154ef85058ff8ff1fbf7",
+  "primary_scenario": {
+    "latency_ms": 150,
+    "visible_depth_haircut": 0.80,
+    "maximum_depth_participation": 0.25,
+    "maximum_limit_price": 0.55,
+    "maximum_book_age_ms": 2000
+  },
+  "quantity_summary": {
+    "5": {"one_shot_fills": 11, "continual_fills": 20, "recovered": 9, "continual_precision": 0.55, "continual_stress_pnl": 5.90, "continual_stress_profit_factor": 1.2799525504},
+    "10": {"one_shot_fills": 11, "continual_fills": 20, "recovered": 9, "continual_precision": 0.55, "continual_stress_pnl": 11.80, "continual_stress_profit_factor": 1.2799525504},
+    "15": {"one_shot_fills": 11, "continual_fills": 20, "recovered": 9, "continual_precision": 0.55, "continual_stress_pnl": 19.13, "continual_stress_profit_factor": 1.3025701858},
+    "20": {"one_shot_fills": 11, "continual_fills": 21, "recovered": 10, "continual_precision": 0.5238095238, "continual_stress_pnl": 14.5016, "continual_stress_profit_factor": 1.1518835674},
+    "25": {"one_shot_fills": 11, "continual_fills": 21, "recovered": 10, "continual_precision": 0.5238095238, "continual_stress_pnl": 18.0766, "continual_stress_profit_factor": 1.1514227029},
+    "30": {"one_shot_fills": 11, "continual_fills": 21, "recovered": 10, "continual_precision": 0.5238095238, "continual_stress_pnl": 21.6516, "continual_stress_profit_factor": 1.1511155903},
+    "40": {"one_shot_fills": 10, "continual_fills": 19, "recovered": 9, "continual_precision": 0.5263157895, "continual_stress_pnl": 35.80, "continual_stress_profit_factor": 1.2185592186},
+    "50": {"one_shot_fills": 10, "continual_fills": 19, "recovered": 9, "continual_precision": 0.5263157895, "continual_stress_pnl": 45.75, "continual_stress_profit_factor": 1.2239902081},
+    "75": {"one_shot_fills": 8, "continual_fills": 16, "recovered": 8, "continual_precision": 0.4375, "continual_stress_pnl": -51.35784, "continual_stress_profit_factor": 0.8315446002},
+    "100": {"one_shot_fills": 8, "continual_fills": 15, "recovered": 7, "continual_precision": 0.40, "continual_stress_pnl": -117.35784, "continual_stress_profit_factor": 0.7112968266},
+    "125": {"one_shot_fills": 6, "continual_fills": 13, "recovered": 7, "continual_precision": 0.3846153846, "continual_stress_pnl": -139.48284, "continual_stress_profit_factor": 0.6802685616},
+    "150": {"one_shot_fills": 3, "continual_fills": 10, "recovered": 7, "continual_precision": 0.50, "continual_stress_pnl": 29.30216, "continual_stress_profit_factor": 1.0897215469},
+    "175": {"one_shot_fills": 2, "continual_fills": 10, "recovered": 8, "continual_precision": 0.50, "continual_stress_pnl": 50.67296, "continual_stress_profit_factor": 1.1409049983},
+    "200": {"one_shot_fills": 2, "continual_fills": 8, "recovered": 6, "continual_precision": 0.50, "continual_stress_pnl": 56.63712, "continual_stress_profit_factor": 1.1758916770}
+  },
+  "conclusion": "Continual inference recovered fills after definitive FOK rejection at every tested quantity. Exact execution reduced realized opportunity substantially relative to assumed-fill training results; quantities 75 through 125 had negative stressed PnL under continual exact execution in the matched window.",
+  "runtime_changed": false,
+  "model_retrained": false,
+  "deployed": false
+}
