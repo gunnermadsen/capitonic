@@ -321,14 +321,10 @@ Tasks:
 11. Confirm Prometheus targets are healthy.
 12. Confirm Grafana dashboards render against the expected datasources.
 
-Soak period:
-
-- several hours of continuous operation;
-- no sustained scrape failures;
-- no unexplained Alloy delivery errors;
-- no persistent pod restarts;
-- no storage or resource pressure;
-- dashboards accessible throughout the soak.
+Monitoring acceptance is a current health check, not a multi-hour soak. Verify
+ready pods, Bound storage, healthy scrape targets, fresh logs, and working
+Grafana datasources before adding dependent services. Run the extended system
+soak after the code-driven microservices are deployed and producing data.
 
 ### Database, PgBouncer, and migrations rollout
 
@@ -336,9 +332,8 @@ Monitoring entry gate, checked on 2026-09-24: Alloy, Grafana, Loki, and
 Prometheus each have one ready pod with zero restarts; all three monitoring
 PVCs are Bound. Prometheus reports its three configured targets healthy,
 Loki receives fresh namespace logs, and both provisioned Grafana datasource
-health checks pass. This is about one hour of runtime, so the several-hour
-monitoring soak gate remains open and must be checked again before deploying
-the database.
+health checks pass. Recheck current health after any Rancher Desktop restart
+and before deploying the database; no monitoring-only soak is required.
 
 Deployment boundary: create a **new, isolated, empty development database**.
 Do not copy the Compose database, switch existing applications to Kubernetes,
@@ -352,12 +347,14 @@ Predeployment gates:
    `AGENTS.md` currently allows migration application only through the Compose
    `db-migrate` container. Authorize and make a narrowly scoped policy change
    for the controlled Kubernetes Job, or stop before migration execution.
-2. Size the Rancher Desktop node and database together. The current node has
-   two allocatable CPUs and about 5.8 GiB of memory; the development Compose
-   database requests four CPUs and 6 GiB and tunes PostgreSQL for that
-   capacity. Increase the VM allocation or approve a documented development
-   database tuning profile before scheduling TimescaleDB. Reserve capacity for
-   monitoring and later services. Do not copy the Compose tuning unchanged.
+2. Size the Rancher Desktop node and database together. Rancher Desktop is
+   configured for eight CPUs and 8 GiB of memory; after restart, Kubernetes
+   reported eight allocatable CPUs and about 7.75 GiB allocatable memory.
+   The development Compose database
+   has a 6 GiB limit and tunes PostgreSQL for that capacity. Set database
+   requests, limits, and tuning within the actual node budget, reserving
+   capacity for monitoring and later services; do not copy Compose tuning
+   unchanged.
 3. Confirm free host disk, the selected database PVC capacity, and a recovery
    method before creating data. The local-path StorageClass cannot expand a
    claim in place and has a Delete reclaim policy. Pin immutable, locally
@@ -424,18 +421,10 @@ with the expected ledger and zero pending migrations; role permissions and
 session/transaction routes match the existing contract; backend connections
 remain below the configured limit; Grafana's provisioned database datasource
 passes a read-only query; database and PgBouncer metrics and fresh logs appear;
-and all four monitoring services remain healthy. Continue the sustained soak
-without migration retries, connection exhaustion, storage errors, or new
-monitoring failures before deploying application services.
-
-Soak period:
-
-- sustained database health;
-- no migration retries;
-- no PgBouncer connection exhaustion;
-- no unexpected restarts;
-- no storage errors;
-- no monitoring regressions.
+and all four monitoring services remain healthy. Check for migration retries,
+connection exhaustion, restarts, and storage errors before deploying
+application services. The extended soak belongs to the integrated system once
+the code-driven services are producing data.
 
 ### Ingester and workers rollout
 
