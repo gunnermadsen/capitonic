@@ -343,10 +343,10 @@ a separate, explicit data-scope and recovery plan.
 
 Predeployment gates:
 
-1. Resolve the repository policy conflict before executing migrations:
-   `AGENTS.md` currently allows migration application only through the Compose
-   `db-migrate` container. Authorize and make a narrowly scoped policy change
-   for the controlled Kubernetes Job, or stop before migration execution.
+1. The Kubernetes Job exception is committed in `AGENTS.md` on
+   `docs/model-training-artifact-lifecycle`. Follow repository branch policy
+   to bring that commit into the deployment lineage before executing the Job.
+   The existing pending-migration approval and exact-list gates still apply.
 2. Size the Rancher Desktop node and database together. Rancher Desktop is
    configured for eight CPUs and 8 GiB of memory; after restart, Kubernetes
    reported eight allocatable CPUs and about 7.75 GiB allocatable memory.
@@ -366,29 +366,30 @@ Predeployment gates:
 
 Implementation and order:
 
-1. Add independent `charts/timescaledb`, `charts/pgbouncer`, and
-   `charts/db-migrate` releases to `capitonic-helm-chart`; keep all resources
+1. Add independent `charts/timescaledb`, `charts/db-migrate`, and
+   `charts/pgbouncer` releases to `capitonic-helm-chart`; keep all resources
    in namespace `capitonic` with the existing names and labels. Use a
    single-replica TimescaleDB StatefulSet with a retained data PVC, a headless
    governing Service, a stable client Service, probes, bounded resources, and
    graceful shutdown. Do not add database HA to this single-node environment.
-2. Use a PgBouncer Deployment and ClusterIP Service. Bake the canonical
+2. Model db-migrate as a separately invoked, one-shot Kubernetes Job after
+   the policy and migration-authorization gates are met. Connect directly to
+   the new TimescaleDB Service as `postgres`, using the existing image and
+   committed TypeORM runner. Do not put migration execution in database pod
+   startup or in a Helm hook that could rerun on an ordinary upgrade. Record
+   the exact image, Job result, migration ledger, and pending-count result.
+3. Use a PgBouncer Deployment and ClusterIP Service. Bake the canonical
    `common/configs/pgbouncer/pgbouncer.ini` into ignored chart assets, changing
    only the Kubernetes database hostname in the generated copy. Bake the
    existing `common/scripts/pgbouncer-entrypoint.sh` unchanged. Keep all
    session and transaction aliases, pool sizes, and the 30-backend global
    ceiling. Source password values only from main-worktree `.env` files into
    Kubernetes Secrets; do not commit, print, or bake secret values.
-3. Render, lint, and inspect the charts and generated assets. Deploy and
+4. Render, lint, and inspect the charts and generated assets. Deploy and
    verify TimescaleDB first, including storage persistence across a pod
-   restart. Deploy PgBouncer next; check its readiness and each route with
-   the intended least-privilege identity after migration creates those roles.
-4. Model db-migrate as a separately invoked, one-shot Kubernetes Job after
-   the policy and migration-authorization gates are met. Connect directly to
-   the new TimescaleDB Service as `postgres`, using the existing image and
-   committed TypeORM runner. Do not put migration execution in database pod
-   startup or in a Helm hook that could rerun on an ordinary upgrade. Record
-   the exact image, Job result, migration ledger, and pending-count result.
+   restart. Run and verify the migration Job next. Deploy PgBouncer only after
+   its service roles exist; check its readiness and every route with the
+   intended least-privilege identity.
 5. After the Job succeeds, add a PostgreSQL datasource to the canonical
    Kubernetes Grafana provisioning file in `common/configs/`, with its
    credentials from `.env` and its route through PgBouncer. Bake and upgrade
@@ -593,7 +594,7 @@ This plan preserves the existing Compose configuration as the current deployment
 ## Repository review notes (remaining for later services)
 
 - `AGENTS.md` currently requires ingester workers to be created and scaled only through the Compose `ingester-worker` service. A Kubernetes worker Deployment requires an explicit, narrowly scoped repository-policy amendment before rollout.
-- `AGENTS.md` currently permits applying migrations only by recreating the Compose `db-migrate` container. Running the same committed migrations in a Kubernetes Job requires an explicit repository-policy amendment before execution. A new empty development database may still need its baseline migration ledger established.
+- The Kubernetes `db-migrate` Job exception is committed on `docs/model-training-artifact-lifecycle`. Bring that policy commit into the deployment lineage under repository branch rules before running the Job. A new empty development database still needs its baseline migration ledger established.
 - Existing shared configuration contains Docker-specific discovery and hostnames. In particular, Alloy reads `/var/run/docker.sock`, Prometheus has static Compose targets, and PgBouncer points to `timescaledb-0`. The Helm path needs additive Kubernetes-specific rendering or overlays while leaving the Compose source configuration intact.
 - The plan provisions a new development database but does not specify whether existing data should be copied. Treat the database as empty until the intended data scope and a separate safe data-migration procedure are defined.
 
