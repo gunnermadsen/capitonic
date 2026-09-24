@@ -73,7 +73,7 @@ common/
     pgbouncer-entrypoint.sh
 ```
 
-The Helm process should package or bake those files into Kubernetes ConfigMaps rather than duplicate them manually inside each chart. New startup scripts belong in `scripts/`; existing Compose startup scripts currently live in `common/scripts/` and remain there until a separately authorized path change can preserve Compose behavior. No startup script is required by the monitoring chart.
+The Helm process should package or bake those files into Kubernetes ConfigMaps rather than duplicate them manually inside each chart. `common/scripts/` remains the source for microservice startup scripts; root `scripts/` holds project utilities, including Helm bake and deployment commands. No startup script is required by the monitoring chart.
 
 The standardized bake process should:
 
@@ -533,6 +533,6 @@ This plan preserves the existing Compose configuration as the current deployment
 
 - Development monitoring deploys Loki and Prometheus as single-replica StatefulSets with independent `local-path` PVCs, Grafana as a single-replica `Recreate` Deployment with its own PVC, and Alloy as a namespace-scoped DaemonSet.
 - Development does not deploy node-exporter or cAdvisor. Existing Compose files remain unchanged; their later removal is outside this task.
-- `common/configs/` remains authoritative for checked-in service configuration. `scripts/` owns maintained bake/deployment tooling. Runtime `.env` files remain authoritative for secrets. `scripts/helm/deploy-monitoring.py` creates temporary ignored chart assets from these sources and removes them after each run. Generated assets are never edited in the chart or committed.
+- `common/configs/` remains authoritative for checked-in service configuration, and `common/scripts/` remains authoritative for microservice startup scripts. Root `scripts/` owns project utilities, including maintained bake/deployment tooling. Runtime `.env` files remain authoritative for secrets. `scripts/helm/deploy-monitoring.py` creates temporary ignored chart assets from these sources and removes them after each run. Generated assets are never edited in the chart or committed.
 - Only the Grafana Prometheus alert and available dashboards are provisioned in the monitoring rollout. Database and trading alerts/datasources are installed with their owning services after those dependencies exist.
 - See `docs/capitonic-k3s-monitoring-standards.md` for the bake command, chart layout, storage, access, and verification standards.
