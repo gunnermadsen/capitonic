@@ -1067,7 +1067,7 @@ fn apply_binance_one_second_kline(
         .find(|existing| existing.open_timestamp == kline.open_timestamp)
     {
         ensure!(
-            existing == &kline,
+            same_binance_one_second_exchange_fact(existing, &kline),
             "Binance one-second stream conflicts with hydrated runtime candle"
         );
         return Ok(false);
@@ -1081,6 +1081,28 @@ fn apply_binance_one_second_kline(
         Err(_) if is_forward_discontinuity => Ok(true),
         Err(error) => Err(error),
     }
+}
+
+fn same_binance_one_second_exchange_fact(
+    left: &BinanceOneSecondKline,
+    right: &BinanceOneSecondKline,
+) -> bool {
+    left.open_timestamp == right.open_timestamp
+        && left.close_timestamp == right.close_timestamp
+        && left.open_price == right.open_price
+        && left.high_price == right.high_price
+        && left.low_price == right.low_price
+        && left.close_price == right.close_price
+        && left.base_volume == right.base_volume
+        && left.quote_volume == right.quote_volume
+        && left.trade_count == right.trade_count
+        && left.taker_buy_base_volume == right.taker_buy_base_volume
+        && left.taker_buy_quote_volume == right.taker_buy_quote_volume
+        && left.first_aggregate_trade_id == right.first_aggregate_trade_id
+        && left.last_aggregate_trade_id == right.last_aggregate_trade_id
+        && left.first_source_timestamp == right.first_source_timestamp
+        && left.source_complete == right.source_complete
+        && left.synthetic == right.synthetic
 }
 
 fn stream_timestamp(micros: i64, field: &'static str) -> Result<DateTime<Utc>> {
@@ -2003,17 +2025,38 @@ mod tests {
     #[test]
     fn hydrated_stream_replay_deduplicates_without_regressing_window() {
         let start = Utc.with_ymd_and_hms(2026, 9, 23, 17, 29, 58).unwrap();
-        let replay = stream_candle(start + chrono::Duration::seconds(1));
+        let hydrated = stream_candle(start + chrono::Duration::seconds(1));
+        let mut replay = hydrated.clone();
+        replay.last_source_timestamp += chrono::Duration::milliseconds(1);
+        replay.max_received_at += chrono::Duration::milliseconds(250);
         let latest = stream_candle(start + chrono::Duration::seconds(2));
         let mut window = crate::btc::BinanceOneSecondWindow::from_completed(vec![
             stream_candle(start),
-            replay.clone(),
+            hydrated.clone(),
             latest.clone(),
         ])
         .unwrap();
 
         assert!(!apply_binance_one_second_kline(&mut window, replay).unwrap());
+        assert_eq!(window.completed().get(1), Some(&hydrated));
         assert_eq!(window.completed().back(), Some(&latest));
+    }
+
+    #[test]
+    fn hydrated_stream_replay_rejects_changed_exchange_economics() {
+        let start = Utc.with_ymd_and_hms(2026, 9, 23, 17, 29, 58).unwrap();
+        let hydrated = stream_candle(start);
+        let mut conflicting = hydrated.clone();
+        conflicting.close_price += Decimal::ONE;
+        let mut window =
+            crate::btc::BinanceOneSecondWindow::from_completed(vec![hydrated.clone()]).unwrap();
+
+        let error = apply_binance_one_second_kline(&mut window, conflicting).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("conflicts with hydrated runtime candle"));
+        assert_eq!(window.completed().front(), Some(&hydrated));
     }
 
     #[test]
