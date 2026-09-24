@@ -205,7 +205,9 @@ It should:
 - fail visibly when migration execution fails;
 - be independently verifiable before dependent services start.
 
-No schema changes are part of this migration plan.
+The Job runs only the repository's committed migration code. On a fresh database,
+that code establishes the existing schema baseline and then applies migrations
+not already recorded in its ledger; this rollout does not author new migrations.
 
 ### Ingester chart
 
@@ -330,24 +332,101 @@ Soak period:
 
 ### Database, PgBouncer, and migrations rollout
 
-Deploy:
+Monitoring entry gate, checked on 2026-09-24: Alloy, Grafana, Loki, and
+Prometheus each have one ready pod with zero restarts; all three monitoring
+PVCs are Bound. Prometheus reports its three configured targets healthy,
+Loki receives fresh namespace logs, and both provisioned Grafana datasource
+health checks pass. This is about one hour of runtime, so the several-hour
+monitoring soak gate remains open and must be checked again before deploying
+the database.
 
-- TimescaleDB;
-- PgBouncer;
-- db-migrate Job.
+Deployment boundary: create a **new, isolated, empty development database**.
+Do not copy the Compose database, switch existing applications to Kubernetes,
+or run migrations against the Compose database during this rollout. Preserve
+the Compose services and configuration as they are. A data copy would require
+a separate, explicit data-scope and recovery plan.
 
-Tasks:
+Predeployment gates:
 
-1. Create development PVCs.
-2. Deploy TimescaleDB.
-3. Verify database readiness and persistent storage.
-4. Deploy PgBouncer.
-5. Verify each service identity and pool route.
-6. Run the committed migration set through the db-migrate Job.
-7. Verify migration completion and ledger state.
-8. Confirm Grafana can read the database through its intended route.
-9. Confirm PgBouncer pool behavior and bounded connection counts.
-10. Confirm database health metrics and logs appear in the monitoring stack.
+1. Resolve the repository policy conflict before executing migrations:
+   `AGENTS.md` currently allows migration application only through the Compose
+   `db-migrate` container. Authorize and make a narrowly scoped policy change
+   for the controlled Kubernetes Job, or stop before migration execution.
+2. Size the Rancher Desktop node and database together. The current node has
+   two allocatable CPUs and about 5.8 GiB of memory; the development Compose
+   database requests four CPUs and 6 GiB and tunes PostgreSQL for that
+   capacity. Increase the VM allocation or approve a documented development
+   database tuning profile before scheduling TimescaleDB. Reserve capacity for
+   monitoring and later services. Do not copy the Compose tuning unchanged.
+3. Confirm free host disk, the selected database PVC capacity, and a recovery
+   method before creating data. The local-path StorageClass cannot expand a
+   claim in place and has a Delete reclaim policy. Pin immutable, locally
+   available arm64 image identities for TimescaleDB, PgBouncer, and db-migrate;
+   verify the migration image contains the intended committed migration set.
+4. Confirm the exact pending migration list and its effects against the empty
+   database before running the Job. Do not add new migration code as part of
+   this Helm rollout.
+
+Implementation and order:
+
+1. Add independent `charts/timescaledb`, `charts/pgbouncer`, and
+   `charts/db-migrate` releases to `capitonic-helm-chart`; keep all resources
+   in namespace `capitonic` with the existing names and labels. Use a
+   single-replica TimescaleDB StatefulSet with a retained data PVC, a headless
+   governing Service, a stable client Service, probes, bounded resources, and
+   graceful shutdown. Do not add database HA to this single-node environment.
+2. Use a PgBouncer Deployment and ClusterIP Service. Bake the canonical
+   `common/configs/pgbouncer/pgbouncer.ini` into ignored chart assets, changing
+   only the Kubernetes database hostname in the generated copy. Bake the
+   existing `common/scripts/pgbouncer-entrypoint.sh` unchanged. Keep all
+   session and transaction aliases, pool sizes, and the 30-backend global
+   ceiling. Source password values only from main-worktree `.env` files into
+   Kubernetes Secrets; do not commit, print, or bake secret values.
+3. Render, lint, and inspect the charts and generated assets. Deploy and
+   verify TimescaleDB first, including storage persistence across a pod
+   restart. Deploy PgBouncer next; check its readiness and each route with
+   the intended least-privilege identity after migration creates those roles.
+4. Model db-migrate as a separately invoked, one-shot Kubernetes Job after
+   the policy and migration-authorization gates are met. Connect directly to
+   the new TimescaleDB Service as `postgres`, using the existing image and
+   committed TypeORM runner. Do not put migration execution in database pod
+   startup or in a Helm hook that could rerun on an ordinary upgrade. Record
+   the exact image, Job result, migration ledger, and pending-count result.
+5. After the Job succeeds, add a PostgreSQL datasource to the canonical
+   Kubernetes Grafana provisioning file in `common/configs/`, with its
+   credentials from `.env` and its route through PgBouncer. Bake and upgrade
+   Grafana through Helm. Provision database and PgBouncer health metrics
+   through the existing observability stack, then verify a bounded read-only
+   query, metrics, and fresh logs without disrupting the four monitoring
+   releases. Record the required observability provisioning tag for the exact
+   deployed commit.
+
+Expected effects of the existing migration runner on this **empty** database:
+the fresh-install baseline creates the TimescaleDB and pgcrypto extensions,
+the `ingester`, `market_data`, and `polymarket` schemas, 47 application tables,
+their functions, indexes, and hypertables, and 113 historical migration-ledger
+entries. The seven later committed migrations create four PostgreSQL service
+roles and grants; seed 11 ingester profiles (eight have desired state
+`running`, though no ingester is deployed in this rollout); change the Binance
+one-second profile's websocket URL; add drain job events and a trigger;
+extend and secure verified-drain functions. No existing operational rows are
+copied. The baseline and profile seed are irreversible migrations. On this
+empty database, schema locks are local to the new database; creating
+TimescaleDB objects and indexes may use CPU and disk, and the migration Job
+must complete before any dependent service starts. A failed or partial Job is
+investigated from its logs and ledger; never reset or reverse database state
+with an ad hoc command. Preserve the PVC for recovery and use an approved
+TypeORM migration for any later correction.
+
+Acceptance: the database and PgBouncer remain ready without restart loops;
+the PVC is Bound and survives a database pod restart; the Job completes once
+with the expected ledger and zero pending migrations; role permissions and
+session/transaction routes match the existing contract; backend connections
+remain below the configured limit; Grafana's provisioned database datasource
+passes a read-only query; database and PgBouncer metrics and fresh logs appear;
+and all four monitoring services remain healthy. Continue the sustained soak
+without migration retries, connection exhaustion, storage errors, or new
+monitoring failures before deploying application services.
 
 Soak period:
 
