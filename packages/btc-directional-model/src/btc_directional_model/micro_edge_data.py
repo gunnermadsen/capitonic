@@ -27,26 +27,40 @@ from .multivenue_early_entry_data import (
 )
 from .time_bucket_source_preparation import _write_json, _write_parquet
 
-ARCHIVE = Path(
-    "/Volumes/docker-data/archives/polymarket-bot-worktrees/time-bucket-specialist-tournament"
-)
-OLD = "/Users/gunnermadsen/development/polymarket-bot/worktress/time-bucket-specialist-tournament/"
+CANONICAL_ROOT = Path("/Volumes/docker-data/capitonic-btc-directional-model")
 PACKAGE = Path(__file__).resolve().parents[2]
 CACHE = PACKAGE / "data/btc-micro-edge-20260607-20260914"
 START = datetime(2026, 6, 7, tzinfo=UTC)
 END = datetime(2026, 9, 15, tzinfo=UTC)
-BASE = ARCHIVE / "packages/btc-directional-model/data"
+BASE = (
+    CANONICAL_ROOT
+    / "btc-5m-time-bucket-specialist-tournament-20260321-20260914-20260914T171438Z"
+    / "inputs/shared-data"
+)
+SOURCE_ROOTS = {
+    Path(
+        "/Users/gunnermadsen/development/polymarket-bot/worktress/time-bucket-specialist-tournament/packages/btc-directional-model/data"
+    ): BASE,
+    Path(
+        "/Volumes/docker-data/archives/polymarket-bot-worktrees/btc-latent-twap-settlement-risk/packages/btc-directional-model/data"
+    ): (
+        CANONICAL_ROOT
+        / "btc-5m-latent-twap-settlement-risk-20260607-20260828-20260828T174703Z"
+        / "inputs/shared-data"
+    ),
+}
 
 
 def resolve_source(value: str) -> Path:
     p = Path(value)
     if p.is_file():
         return p
-    if value.startswith(OLD):
-        p = ARCHIVE / value[len(OLD) :]
-    if not p.is_file():
-        raise FileNotFoundError(value)
-    return p
+    for source_root, canonical_root in SOURCE_ROOTS.items():
+        if p.is_relative_to(source_root):
+            candidate = canonical_root / p.relative_to(source_root)
+            if candidate.is_file():
+                return candidate
+    raise FileNotFoundError(value)
 
 
 def snapshot_last_day() -> None:

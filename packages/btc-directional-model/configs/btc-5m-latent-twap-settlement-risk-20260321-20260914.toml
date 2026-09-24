@@ -55,7 +55,7 @@ minimum_trades = 100
 
 [paths]
 source_cache = "data/btc-time-bucket-early-source-20260321-20260914"
-source_frame = "/Volumes/docker-data/archives/polymarket-bot-worktrees/btc-latent-twap-settlement-risk/packages/btc-directional-model/data/btc-latent-twap-settlement-risk-20260607-20260828/tournament-frame.parquet"
+source_frame = "/Volumes/docker-data/capitonic-btc-directional-model/btc-5m-latent-twap-settlement-risk-20260607-20260828-20260828T174703Z/inputs/shared-data/btc-latent-twap-settlement-risk-20260607-20260828/tournament-frame.parquet"
 source_manifest = "data/btc-time-bucket-early-source-20260321-20260914/source-manifest.json"
 label_audit = "data/btc-time-bucket-early-source-20260321-20260914/label-audit.parquet"
 source_frame_sha256 = "223f70125de38f5d0143a5ddb13067d1ac3d12928fb4f8c8bfe4f68352c82d26"
