@@ -11,4 +11,4 @@ metadata:
     capitonic.io/rollout-domain: monitoring
 data:
   loki.yml: |-
-{{ .Files.Get "assets/loki.yml" | nindent 4 }}
+{{ required "run scripts/helm/bake-monitoring.py before Helm: missing Loki config" (.Files.Get "assets/loki.yml") | nindent 4 }}
