@@ -12,7 +12,7 @@ selection_days = 7
 test_days = 14
 
 [source]
-panel = "/Volumes/docker-data/archives/polymarket-bot-worktrees/time-bucket-specialist-tournament/packages/btc-directional-model/data/btc-full-coverage-vwap-admission-20260321-20260914/vwap-admission-panel.parquet"
+panel = "/Volumes/docker-data/capitonic-btc-directional-model/btc-5m-time-bucket-specialist-tournament-20260321-20260914-20260914T171438Z/inputs/shared-data/btc-full-coverage-vwap-admission-20260321-20260914/vwap-admission-panel.parquet"
 panel_sha256 = "f11e3bc597dfd546d667c5f610791fd48feab0015217c64278fc06e46612bffa"
 source_start = "2026-03-21T00:00:00Z"
 sealed_start = "2026-08-24T00:00:00Z"
