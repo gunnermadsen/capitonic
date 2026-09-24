@@ -77,6 +77,15 @@ struct RealtimePipelineMetrics {
     websocket_interframe: LatencyHistogram,
     clob_control_write: LatencyHistogram,
     clob_control_write_failures: u64,
+    clob_tungstenite_read_buffer_bytes: u64,
+    clob_socket_receive_buffer_bytes: u64,
+    clob_socket_unread_bytes: u64,
+    clob_socket_unread_high_watermark_bytes: u64,
+    clob_socket_probe_schedule_delay_micros: u64,
+    clob_socket_probe_schedule_delay_high_watermark_micros: u64,
+    clob_socket_probe_failures: u64,
+    clob_remote_slow_consumer_closes: u64,
+    clob_remote_other_closes: u64,
     clob_frame_parse: LatencyHistogram,
     clob_book_apply: LatencyHistogram,
     clob_sample_build: LatencyHistogram,
@@ -500,6 +509,58 @@ pub fn observe_clob_control_write(product_key: &str, elapsed: Duration, failed: 
     });
 }
 
+// Called only by the low-frequency socket probe, never by data-frame intake.
+pub fn set_clob_socket_capacity(
+    product_key: &str,
+    tungstenite_read_buffer_bytes: usize,
+    socket_receive_buffer_bytes: u64,
+) {
+    with_pipeline_metrics(product_key, |metrics| {
+        metrics.clob_tungstenite_read_buffer_bytes =
+            u64::try_from(tungstenite_read_buffer_bytes).unwrap_or(u64::MAX);
+        metrics.clob_socket_receive_buffer_bytes = socket_receive_buffer_bytes;
+        metrics.clob_socket_unread_bytes = 0;
+    });
+}
+
+// Called at 4 Hz by the socket runtime, never by data-frame intake.
+pub fn observe_clob_socket_pressure(
+    product_key: &str,
+    unread_bytes: u64,
+    receive_buffer_bytes: u64,
+    schedule_delay: Duration,
+) {
+    with_pipeline_metrics(product_key, |metrics| {
+        let delay_micros = u64::try_from(schedule_delay.as_micros()).unwrap_or(u64::MAX);
+        metrics.clob_socket_receive_buffer_bytes = receive_buffer_bytes;
+        metrics.clob_socket_unread_bytes = unread_bytes;
+        metrics.clob_socket_unread_high_watermark_bytes = metrics
+            .clob_socket_unread_high_watermark_bytes
+            .max(unread_bytes);
+        metrics.clob_socket_probe_schedule_delay_micros = delay_micros;
+        metrics.clob_socket_probe_schedule_delay_high_watermark_micros = metrics
+            .clob_socket_probe_schedule_delay_high_watermark_micros
+            .max(delay_micros);
+    });
+}
+
+pub fn observe_clob_socket_probe_failure(product_key: &str) {
+    with_pipeline_metrics(product_key, |metrics| {
+        metrics.clob_socket_probe_failures = metrics.clob_socket_probe_failures.saturating_add(1);
+    });
+}
+
+pub fn observe_clob_remote_close(product_key: &str, slow_consumer: bool) {
+    with_pipeline_metrics(product_key, |metrics| {
+        if slow_consumer {
+            metrics.clob_remote_slow_consumer_closes =
+                metrics.clob_remote_slow_consumer_closes.saturating_add(1);
+        } else {
+            metrics.clob_remote_other_closes = metrics.clob_remote_other_closes.saturating_add(1);
+        }
+    });
+}
+
 pub fn observe_clob_frame_processing(
     product_key: &str,
     parse: Duration,
@@ -879,6 +940,9 @@ impl StreamingMetrics {
             let snapshot = metrics.clone();
             for values in metrics.values_mut() {
                 values.websocket_queue_high_watermark = values.websocket_queue_depth;
+                values.clob_socket_unread_high_watermark_bytes = values.clob_socket_unread_bytes;
+                values.clob_socket_probe_schedule_delay_high_watermark_micros =
+                    values.clob_socket_probe_schedule_delay_micros;
             }
             snapshot
         };
@@ -1029,6 +1093,16 @@ impl StreamingMetrics {
             "market_data_ingester_prometheus_render_duration_seconds {previous_render_duration}\n"
         ));
         out.push_str("# HELP market_data_ingester_clob_control_write_failures_total Observed failed CLOB control writes; terminal failure logs remain authoritative if telemetry cannot enqueue.\n# TYPE market_data_ingester_clob_control_write_failures_total counter\n");
+        out.push_str("# HELP market_data_ingester_clob_tungstenite_read_buffer_bytes Configured Tungstenite read allocation and maximum underlying read size.\n# TYPE market_data_ingester_clob_tungstenite_read_buffer_bytes gauge\n");
+        out.push_str("# HELP market_data_ingester_clob_socket_receive_buffer_bytes Effective kernel SO_RCVBUF reported by the connected socket.\n# TYPE market_data_ingester_clob_socket_receive_buffer_bytes gauge\n");
+        out.push_str("# HELP market_data_ingester_clob_socket_unread_bytes Encrypted TCP bytes waiting unread in the kernel receive queue at the latest low-frequency probe.\n# TYPE market_data_ingester_clob_socket_unread_bytes gauge\n");
+        out.push_str("# HELP market_data_ingester_clob_socket_unread_high_watermark_bytes Highest kernel unread-byte sample since the previous Prometheus collection.\n# TYPE market_data_ingester_clob_socket_unread_high_watermark_bytes gauge\n");
+        out.push_str("# HELP market_data_ingester_clob_socket_receive_buffer_utilization_ratio Latest sampled kernel unread bytes divided by effective SO_RCVBUF.\n# TYPE market_data_ingester_clob_socket_receive_buffer_utilization_ratio gauge\n");
+        out.push_str("# HELP market_data_ingester_clob_socket_receive_buffer_high_watermark_ratio Highest sampled kernel receive-buffer utilization since the previous Prometheus collection.\n# TYPE market_data_ingester_clob_socket_receive_buffer_high_watermark_ratio gauge\n");
+        out.push_str("# HELP market_data_ingester_clob_socket_probe_schedule_delay_seconds Delay between the socket-pressure probe deadline and execution.\n# TYPE market_data_ingester_clob_socket_probe_schedule_delay_seconds gauge\n");
+        out.push_str("# HELP market_data_ingester_clob_socket_probe_schedule_delay_high_watermark_seconds Highest socket-pressure probe scheduling delay since the previous Prometheus collection.\n# TYPE market_data_ingester_clob_socket_probe_schedule_delay_high_watermark_seconds gauge\n");
+        out.push_str("# HELP market_data_ingester_clob_socket_probe_failures_total Failed low-frequency socket-pressure samples.\n# TYPE market_data_ingester_clob_socket_probe_failures_total counter\n");
+        out.push_str("# HELP market_data_ingester_clob_remote_closes_total Remote CLOB close frames by bounded reason classification.\n# TYPE market_data_ingester_clob_remote_closes_total counter\n");
         for name in [
             "market_data_ingester_websocket_queue_delay_seconds",
             "market_data_ingester_websocket_interframe_seconds",
@@ -1103,6 +1177,27 @@ impl StreamingMetrics {
                 "market_data_ingester_clob_control_write_failures_total{{product=\"{key}\"}} {}\n",
                 metrics.clob_control_write_failures
             ));
+            let socket_utilization = ratio_u64(
+                metrics.clob_socket_unread_bytes,
+                metrics.clob_socket_receive_buffer_bytes,
+            );
+            let socket_high_watermark_utilization = ratio_u64(
+                metrics.clob_socket_unread_high_watermark_bytes,
+                metrics.clob_socket_receive_buffer_bytes,
+            );
+            out.push_str(&format!(
+                "market_data_ingester_clob_tungstenite_read_buffer_bytes{{product=\"{key}\"}} {}\nmarket_data_ingester_clob_socket_receive_buffer_bytes{{product=\"{key}\"}} {}\nmarket_data_ingester_clob_socket_unread_bytes{{product=\"{key}\"}} {}\nmarket_data_ingester_clob_socket_unread_high_watermark_bytes{{product=\"{key}\"}} {}\nmarket_data_ingester_clob_socket_receive_buffer_utilization_ratio{{product=\"{key}\"}} {socket_utilization}\nmarket_data_ingester_clob_socket_receive_buffer_high_watermark_ratio{{product=\"{key}\"}} {socket_high_watermark_utilization}\nmarket_data_ingester_clob_socket_probe_schedule_delay_seconds{{product=\"{key}\"}} {}\nmarket_data_ingester_clob_socket_probe_schedule_delay_high_watermark_seconds{{product=\"{key}\"}} {}\nmarket_data_ingester_clob_socket_probe_failures_total{{product=\"{key}\"}} {}\nmarket_data_ingester_clob_remote_closes_total{{product=\"{key}\",code=\"1013\",reason=\"slow_consumer_send_buffer_full\"}} {}\nmarket_data_ingester_clob_remote_closes_total{{product=\"{key}\",code=\"other\",reason=\"other\"}} {}\n",
+                metrics.clob_tungstenite_read_buffer_bytes,
+                metrics.clob_socket_receive_buffer_bytes,
+                metrics.clob_socket_unread_bytes,
+                metrics.clob_socket_unread_high_watermark_bytes,
+                metrics.clob_socket_probe_schedule_delay_micros as f64 / 1_000_000.0,
+                metrics.clob_socket_probe_schedule_delay_high_watermark_micros as f64
+                    / 1_000_000.0,
+                metrics.clob_socket_probe_failures,
+                metrics.clob_remote_slow_consumer_closes,
+                metrics.clob_remote_other_closes,
+            ));
             render_histogram(
                 &mut out,
                 "market_data_ingester_clob_frame_parse_seconds",
@@ -1147,6 +1242,14 @@ fn ratio(depth: usize, capacity: usize) -> f64 {
         0.0
     } else {
         depth as f64 / capacity as f64
+    }
+}
+
+fn ratio_u64(value: u64, capacity: u64) -> f64 {
+    if capacity == 0 {
+        0.0
+    } else {
+        value as f64 / capacity as f64
     }
 }
 
@@ -1342,6 +1445,14 @@ mod tests {
             websocket_queue_high_watermark: 7,
             publication_queue_depth: 1,
             publication_queue_capacity: 4,
+            clob_tungstenite_read_buffer_bytes: 262_144,
+            clob_socket_receive_buffer_bytes: 1_048_576,
+            clob_socket_unread_bytes: 262_144,
+            clob_socket_unread_high_watermark_bytes: 524_288,
+            clob_socket_probe_schedule_delay_micros: 2_000,
+            clob_socket_probe_schedule_delay_high_watermark_micros: 20_000,
+            clob_socket_probe_failures: 1,
+            clob_remote_slow_consumer_closes: 2,
             clob_current_market_ready: true,
             ..Default::default()
         };
@@ -1368,6 +1479,18 @@ mod tests {
         ));
         assert!(rendered.contains(
             "market_data_ingester_clob_control_write_failures_total{product=\"product\"} 1"
+        ));
+        assert!(rendered.contains(
+            "market_data_ingester_clob_socket_receive_buffer_utilization_ratio{product=\"product\"} 0.25"
+        ));
+        assert!(rendered.contains(
+            "market_data_ingester_clob_socket_receive_buffer_high_watermark_ratio{product=\"product\"} 0.5"
+        ));
+        assert!(rendered.contains(
+            "market_data_ingester_clob_socket_probe_schedule_delay_high_watermark_seconds{product=\"product\"} 0.02"
+        ));
+        assert!(rendered.contains(
+            "market_data_ingester_clob_remote_closes_total{product=\"product\",code=\"1013\",reason=\"slow_consumer_send_buffer_full\"} 2"
         ));
         assert!(rendered.contains(
             "ingester_source_reconnects_total{product=\"product\",reason=\"read_idle\"} 2"
@@ -1415,5 +1538,68 @@ mod tests {
         assert!(rendered.contains(
             "market_data_ingester_clob_bootstrap_ready{product=\"product\",scope=\"current\"} 1"
         ));
+    }
+
+    #[test]
+    fn renders_resolution_websocket_pipeline_metrics() {
+        const PRODUCT: &str = "polymarket_btc_five_minute_resolutions";
+        let metrics = StreamingMetrics::default();
+        metrics
+            .source_reconnects
+            .lock()
+            .unwrap()
+            .insert((PRODUCT.to_owned(), "consumer_backpressure".to_owned()), 3);
+        metrics
+            .source_connection_ready
+            .lock()
+            .unwrap()
+            .insert(PRODUCT.to_owned(), 1);
+        metrics
+            .source_last_event_micros
+            .lock()
+            .unwrap()
+            .insert(PRODUCT.to_owned(), 2_000_000);
+        metrics
+            .persistence_latency_micros
+            .lock()
+            .unwrap()
+            .insert(PRODUCT.to_owned(), 250_000);
+        let mut pipeline = RealtimePipelineMetrics {
+            websocket_frames: 11,
+            websocket_frames_processed: 9,
+            websocket_bytes: 2_048,
+            websocket_queue_depth: 32,
+            websocket_queue_capacity: 4_096,
+            websocket_queue_high_watermark: 96,
+            websocket_queue_overflows: 2,
+            ..Default::default()
+        };
+        pipeline
+            .websocket_queue_delay
+            .observe(Duration::from_millis(20));
+        metrics
+            .realtime_pipeline
+            .lock()
+            .unwrap()
+            .insert(PRODUCT.to_owned(), pipeline);
+
+        let rendered = metrics.render();
+        for expected in [
+            "ingester_source_reconnects_total{product=\"polymarket_btc_five_minute_resolutions\",reason=\"consumer_backpressure\"} 3",
+            "ingester_source_connection_ready{product=\"polymarket_btc_five_minute_resolutions\"} 1",
+            "ingester_source_last_event_timestamp_seconds{product=\"polymarket_btc_five_minute_resolutions\"} 2",
+            "ingester_source_persistence_latency_seconds{product=\"polymarket_btc_five_minute_resolutions\"} 0.25",
+            "market_data_ingester_websocket_frames_total{product=\"polymarket_btc_five_minute_resolutions\"} 11",
+            "market_data_ingester_websocket_frames_processed_total{product=\"polymarket_btc_five_minute_resolutions\"} 9",
+            "market_data_ingester_websocket_bytes_total{product=\"polymarket_btc_five_minute_resolutions\"} 2048",
+            "market_data_ingester_websocket_queue_depth{product=\"polymarket_btc_five_minute_resolutions\"} 32",
+            "market_data_ingester_websocket_queue_capacity{product=\"polymarket_btc_five_minute_resolutions\"} 4096",
+            "market_data_ingester_websocket_queue_utilization_ratio{product=\"polymarket_btc_five_minute_resolutions\"} 0.0078125",
+            "market_data_ingester_websocket_queue_high_watermark{product=\"polymarket_btc_five_minute_resolutions\"} 96",
+            "market_data_ingester_websocket_queue_overflow_total{product=\"polymarket_btc_five_minute_resolutions\"} 2",
+            "market_data_ingester_websocket_queue_delay_seconds_count{product=\"polymarket_btc_five_minute_resolutions\"} 1",
+        ] {
+            assert!(rendered.contains(expected), "missing {expected}");
+        }
     }
 }

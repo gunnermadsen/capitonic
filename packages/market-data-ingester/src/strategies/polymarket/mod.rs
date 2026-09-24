@@ -2,6 +2,7 @@
 
 mod backfill;
 pub mod chainlink_twap;
+mod clob_socket_diagnostics;
 pub mod market_contracts;
 pub mod orderbook_snapshots;
 pub mod resolutions;

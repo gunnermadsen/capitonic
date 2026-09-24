@@ -3043,17 +3043,19 @@ dependencies = [
  "protoc-bin-vendored",
  "reqwest 0.12.28",
  "rust_decimal",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",
  "sha3 0.10.9",
+ "socket2 0.6.3",
  "sqlx",
  "subtle",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
- "tokio-tungstenite 0.26.2",
+ "tokio-tungstenite 0.29.0",
  "tokio-util",
  "tonic",
  "tonic-build",
@@ -5589,6 +5591,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tungstenite 0.29.0",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]

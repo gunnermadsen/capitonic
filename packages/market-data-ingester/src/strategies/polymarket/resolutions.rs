@@ -9,7 +9,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -22,7 +22,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool, Postgres, QueryBuilder, Transaction};
-use tokio::{sync::mpsc, task::JoinHandle, time::Instant};
+use tokio::{
+    sync::{mpsc, oneshot},
+    task::JoinHandle,
+    time::Instant,
+};
 use tokio_tungstenite::{
     connect_async_with_config,
     tungstenite::{protocol::WebSocketConfig, Message},
@@ -65,6 +69,10 @@ const MAX_GAP_REPAIRS_PER_CYCLE: i64 = 8;
 const MAX_GAP_CANDIDATES_PER_CYCLE: i64 = 64;
 const MAX_ABSENT_REPAIR_ATTEMPTS: i32 = 20;
 const RESOLUTION_GAP_REASON: &str = "polymarket_resolution_unavailable";
+const RESOLUTION_FRAME_BUFFER: usize = 4_096;
+const RESOLUTION_CONTROL_BUFFER: usize = 16;
+const RESOLUTION_FACT_BUFFER: usize = 1;
+const RESOLUTION_TERMINAL_BUFFER: usize = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
@@ -485,9 +493,39 @@ enum ReconciliationResult {
 }
 
 #[derive(Debug)]
-enum ProducerNotice {
-    Fact(Box<ResolutionFact>),
-    Error(StrategyError),
+struct QueuedResolutionFrame {
+    message: Message,
+    queued_at: Instant,
+    received_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Default)]
+struct ResolutionSessionProgress {
+    last_frame_dequeued_at: Option<DateTime<Utc>>,
+    last_fact_persisted_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug)]
+struct ResolutionFactNotice {
+    fact: Box<ResolutionFact>,
+    progress: Arc<Mutex<ResolutionSessionProgress>>,
+}
+
+#[derive(Debug)]
+struct ResolutionSessionFailure {
+    error: StrategyError,
+    disconnect_reason: &'static str,
+    close_code: Option<u16>,
+    close_reason: String,
+    queue_depth: usize,
+}
+
+struct CancelResolutionSocket(CancellationToken);
+
+impl Drop for CancelResolutionSocket {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -604,7 +642,7 @@ impl RealtimeWorkerStrategy for PolymarketBtcFiveMinuteResolutionsStrategy {
         };
         self.reconcile_open_artifact(&mut state).await?;
         let producer_shutdown = shutdown.child_token();
-        let (producer, mut notices) = start_websocket_producer(
+        let (producer, mut facts, mut terminals) = start_websocket_producer(
             self.client.clone(),
             self.config.clone(),
             producer_shutdown.clone(),
@@ -622,8 +660,8 @@ impl RealtimeWorkerStrategy for PolymarketBtcFiveMinuteResolutionsStrategy {
                     self.seal_artifact(&mut state, true).await?;
                     return Ok(());
                 }
-                notice = notices.recv() => {
-                    let Some(notice) = notice else {
+                terminal = terminals.recv() => {
+                    let Some(error) = terminal else {
                         producer_shutdown.cancel();
                         let producer_result = await_producer(producer).await;
                         let seal_result = self.seal_artifact(&mut state, false).await;
@@ -634,12 +672,45 @@ impl RealtimeWorkerStrategy for PolymarketBtcFiveMinuteResolutionsStrategy {
                             "Polymarket resolution websocket worker stopped unexpectedly",
                         ));
                     };
-                    let result = match notice {
-                        ProducerNotice::Fact(fact) => {
-                            self.persist_websocket_fact(&mut state, *fact).await
+                    match error.kind {
+                        StrategyErrorKind::LeaseLost => {
+                            producer_shutdown.cancel();
+                            await_producer(producer).await?;
+                            return self.finish_owned_drain(&mut state).await;
                         }
-                        ProducerNotice::Error(error) => Err(error),
+                        StrategyErrorKind::TransientSource | StrategyErrorKind::TransientDatabase => {
+                            self.mark_degraded(&error).await?;
+                            warn!(
+                                strategy = %STRATEGY_KEY,
+                                error_code = error.code,
+                                error = %error,
+                                "Polymarket resolution websocket path degraded and will retry"
+                            );
+                        }
+                        _ => {
+                            producer_shutdown.cancel();
+                            await_producer(producer).await?;
+                            let _ = self.seal_artifact(&mut state, false).await;
+                            return Err(error);
+                        }
+                    }
+                }
+                notice = facts.recv() => {
+                    let Some(ResolutionFactNotice { fact, progress }) = notice else {
+                        continue;
                     };
+                    let persistence_started_at = Instant::now();
+                    let result = self.persist_websocket_fact(&mut state, *fact).await;
+                    if result.is_ok() {
+                        crate::streaming::observe_persistence(
+                            STRATEGY_KEY.as_str(),
+                            persistence_started_at.elapsed(),
+                        );
+                        progress
+                            .lock()
+                            .expect("resolution session progress lock")
+                            .last_fact_persisted_at = Some(microsecond_timestamp(Utc::now()));
+                    }
                     if let Err(error) = result {
                         match error.kind {
                             StrategyErrorKind::LeaseLost => {
@@ -2699,50 +2770,98 @@ fn start_websocket_producer(
     shutdown: CancellationToken,
 ) -> (
     JoinHandle<Result<(), StrategyError>>,
-    mpsc::Receiver<ProducerNotice>,
+    mpsc::Receiver<ResolutionFactNotice>,
+    mpsc::Receiver<StrategyError>,
 ) {
-    let (sender, receiver) = mpsc::channel(128);
-    let handle =
-        tokio::spawn(async move { run_websocket_producer(client, config, sender, shutdown).await });
-    (handle, receiver)
+    let (fact_sender, fact_receiver) = mpsc::channel(RESOLUTION_FACT_BUFFER);
+    let (terminal_sender, terminal_receiver) = mpsc::channel(RESOLUTION_TERMINAL_BUFFER);
+    let handle = tokio::spawn(async move {
+        run_websocket_producer(client, config, fact_sender, terminal_sender, shutdown).await
+    });
+    (handle, fact_receiver, terminal_receiver)
 }
 
 async fn run_websocket_producer(
     client: Client,
     config: PolymarketBtcFiveMinuteResolutionsConfig,
-    sender: mpsc::Sender<ProducerNotice>,
+    fact_sender: mpsc::Sender<ResolutionFactNotice>,
+    terminal_sender: mpsc::Sender<StrategyError>,
     shutdown: CancellationToken,
 ) -> Result<(), StrategyError> {
     let mut reconnect_delay = Duration::from_millis(config.reconnect_initial_ms);
     let maximum_reconnect_delay = Duration::from_millis(config.reconnect_max_ms);
+    crate::streaming::set_websocket_queue_depth(STRATEGY_KEY.as_str(), 0, RESOLUTION_FRAME_BUFFER);
     loop {
         if shutdown.is_cancelled() {
             return Ok(());
         }
+        let connection_id = Uuid::new_v4();
         let started_at = Instant::now();
-        match capture_websocket_session(&client, &config, &sender, &shutdown).await {
+        let progress = Arc::new(Mutex::new(ResolutionSessionProgress::default()));
+        let result = capture_websocket_session(
+            &client,
+            &config,
+            &fact_sender,
+            &shutdown,
+            connection_id,
+            started_at,
+            Arc::clone(&progress),
+        )
+        .await;
+        crate::streaming::set_source_connection_ready(STRATEGY_KEY.as_str(), false);
+        crate::streaming::set_websocket_queue_depth(
+            STRATEGY_KEY.as_str(),
+            0,
+            RESOLUTION_FRAME_BUFFER,
+        );
+        match result {
             Ok(()) if shutdown.is_cancelled() => return Ok(()),
             Ok(()) => {
-                let error = source_error(
-                    "polymarket_resolution_websocket_session_ended",
-                    "Polymarket resolution websocket session ended without shutdown",
+                let failure = resolution_session_failure(
+                    source_error(
+                        "polymarket_resolution_websocket_session_ended",
+                        "Polymarket resolution websocket session ended without shutdown",
+                    ),
+                    0,
+                    None,
+                    String::new(),
                 );
-                if sender.send(ProducerNotice::Error(error)).await.is_err() {
+                observe_resolution_session_failure(
+                    &failure,
+                    connection_id,
+                    started_at.elapsed(),
+                    &progress,
+                );
+                if terminal_sender.send(failure.error).await.is_err() {
                     return Ok(());
                 }
             }
-            Err(error) if error.kind == StrategyErrorKind::Shutdown => return Ok(()),
-            Err(error)
+            Err(failure) if failure.error.kind == StrategyErrorKind::Shutdown => return Ok(()),
+            Err(failure)
                 if matches!(
-                    error.kind,
+                    failure.error.kind,
                     StrategyErrorKind::TransientSource | StrategyErrorKind::TransientDatabase
                 ) =>
             {
-                if sender.send(ProducerNotice::Error(error)).await.is_err() {
+                observe_resolution_session_failure(
+                    &failure,
+                    connection_id,
+                    started_at.elapsed(),
+                    &progress,
+                );
+                if terminal_sender.send(failure.error).await.is_err() {
                     return Ok(());
                 }
             }
-            Err(error) => return Err(error),
+            Err(failure) => {
+                log_resolution_session_failure(
+                    &failure,
+                    connection_id,
+                    started_at.elapsed(),
+                    &progress,
+                );
+                return Err(failure.error);
+            }
         }
         if started_at.elapsed() >= Duration::from_secs(60) {
             reconnect_delay = Duration::from_millis(config.reconnect_initial_ms);
@@ -2761,15 +2880,24 @@ async fn run_websocket_producer(
 async fn capture_websocket_session(
     client: &Client,
     config: &PolymarketBtcFiveMinuteResolutionsConfig,
-    sender: &mpsc::Sender<ProducerNotice>,
+    fact_sender: &mpsc::Sender<ResolutionFactNotice>,
     shutdown: &CancellationToken,
-) -> Result<(), StrategyError> {
-    let mut identities =
-        discover_subscription_identities(client, config, Utc::now(), shutdown).await?;
+    connection_id: Uuid,
+    connection_started_at: Instant,
+    progress: Arc<Mutex<ResolutionSessionProgress>>,
+) -> Result<(), ResolutionSessionFailure> {
+    let mut identities = discover_subscription_identities(client, config, Utc::now(), shutdown)
+        .await
+        .map_err(|error| resolution_session_failure(error, 0, None, String::new()))?;
     if identities.is_empty() {
-        return Err(source_error(
-            "polymarket_resolution_no_subscriptions",
-            "Gamma exposed no BTC five-minute markets for the bounded websocket subscription set",
+        return Err(resolution_session_failure(
+            source_error(
+                "polymarket_resolution_no_subscriptions",
+                "Gamma exposed no BTC five-minute markets for the bounded websocket subscription set",
+            ),
+            0,
+            None,
+            String::new(),
         ));
     }
     let websocket_config = WebSocketConfig::default()
@@ -2784,55 +2912,87 @@ async fn capture_websocket_session(
     )
     .await
     .map_err(|_| {
-        source_error(
-            "polymarket_resolution_websocket_connect_timeout",
-            "timed out connecting to the Polymarket resolution websocket",
+        resolution_session_failure(
+            source_error(
+                "polymarket_resolution_websocket_connect_timeout",
+                "timed out connecting to the Polymarket resolution websocket",
+            ),
+            0,
+            None,
+            String::new(),
         )
     })?
     .map_err(|error| {
-        source_error(
-            "polymarket_resolution_websocket_connect_failed",
-            format!("failed to connect to the Polymarket resolution websocket: {error}"),
+        resolution_session_failure(
+            source_error(
+                "polymarket_resolution_websocket_connect_failed",
+                format!("failed to connect to the Polymarket resolution websocket: {error}"),
+            ),
+            0,
+            None,
+            String::new(),
         )
     })?
     .0;
-    let (mut sink, mut stream) = websocket.split();
     let mut active_assets = identity_assets(&identities);
-    send_websocket_message(
-        &mut sink,
-        Message::Text(subscription_message(&active_assets).into()),
-        Duration::from_millis(config.connect_timeout_ms),
-    )
-    .await?;
+    let (frame_sender, mut frame_receiver) = mpsc::channel(RESOLUTION_FRAME_BUFFER);
+    let (outgoing_sender, outgoing_receiver) = mpsc::channel(RESOLUTION_CONTROL_BUFFER);
+    let (socket_terminal_sender, mut socket_terminal_receiver) = oneshot::channel();
+    let socket_shutdown = shutdown.child_token();
+    let socket_task_shutdown = socket_shutdown.clone();
+    let subscription = subscription_message(&active_assets);
+    let runtime = ResolutionSocketRuntime {
+        timing: ResolutionSocketTiming {
+            ping_interval: Duration::from_millis(config.ping_interval_ms),
+            pong_timeout: Duration::from_millis(config.pong_timeout_ms),
+            read_timeout: Duration::from_millis(config.read_timeout_ms),
+            write_timeout: Duration::from_millis(config.connect_timeout_ms),
+        },
+        connection_id,
+        connection_started_at,
+    };
+    tokio::spawn(async move {
+        let result = run_resolution_socket(
+            websocket,
+            subscription,
+            outgoing_receiver,
+            frame_sender,
+            socket_task_shutdown,
+            runtime,
+        )
+        .await;
+        crate::streaming::set_source_connection_ready(STRATEGY_KEY.as_str(), false);
+        let _ = socket_terminal_sender.send(result);
+    });
+    let _socket_guard = CancelResolutionSocket(socket_shutdown.clone());
+    crate::streaming::set_websocket_queue_depth(STRATEGY_KEY.as_str(), 0, RESOLUTION_FRAME_BUFFER);
 
     let refresh_interval = Duration::from_secs(config.discovery_refresh_seconds);
     let mut refresh = tokio::time::interval_at(Instant::now() + refresh_interval, refresh_interval);
     refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let ping_interval = Duration::from_millis(config.ping_interval_ms);
-    let mut ping = tokio::time::interval_at(Instant::now() + ping_interval, ping_interval);
-    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let read_timeout = Duration::from_millis(config.read_timeout_ms);
-    let mut read_deadline = Instant::now() + read_timeout;
-    let mut pong_deadline = None;
+    let mut last_data_frame_at = None;
 
     loop {
-        let disabled_deadline = Instant::now() + Duration::from_secs(86_400);
-        let pong_sleep = tokio::time::sleep_until(pong_deadline.unwrap_or(disabled_deadline));
-        tokio::pin!(pong_sleep);
         tokio::select! {
             biased;
-            _ = shutdown.cancelled() => return Ok(()),
-            _ = &mut pong_sleep, if pong_deadline.is_some() => {
-                return Err(source_error(
-                    "polymarket_resolution_websocket_pong_timeout",
-                    "Polymarket CLOB did not acknowledge the oldest text PING",
-                ));
-            }
-            _ = tokio::time::sleep_until(read_deadline) => {
-                return Err(source_error(
-                    "polymarket_resolution_websocket_read_timeout",
-                    "Polymarket resolution websocket produced no frames before its read-idle deadline",
-                ));
+            _ = shutdown.cancelled() => {
+                socket_shutdown.cancel();
+                return Ok(());
+            },
+            terminal = &mut socket_terminal_receiver => {
+                socket_shutdown.cancel();
+                return match terminal {
+                    Ok(result) => result,
+                    Err(_) => Err(resolution_session_failure(
+                        source_error(
+                            "polymarket_resolution_websocket_worker_stopped",
+                            "Polymarket resolution websocket worker stopped unexpectedly",
+                        ),
+                        frame_receiver.len(),
+                        None,
+                        String::new(),
+                    )),
+                };
             }
             _ = refresh.tick() => {
                 match discover_subscription_identities(client, config, Utc::now(), shutdown).await {
@@ -2847,11 +3007,17 @@ async fn capture_websocket_session(
                             .cloned()
                             .collect::<Vec<_>>();
                         if !added.is_empty() {
-                            send_websocket_message(
-                                &mut sink,
-                                Message::Text(subscription_operation(&added, true).into()),
-                                Duration::from_millis(config.connect_timeout_ms),
-                            ).await?;
+                            outgoing_sender.send(Message::Text(subscription_operation(&added, true).into()))
+                                .await
+                                .map_err(|_| resolution_session_failure(
+                                    source_error(
+                                        "polymarket_resolution_websocket_worker_stopped",
+                                        "Polymarket resolution websocket worker stopped before subscription update",
+                                    ),
+                                    frame_receiver.len(),
+                                    None,
+                                    String::new(),
+                                ))?;
                         }
                         for (condition_id, identity) in &desired {
                             identities.insert(condition_id.clone(), identity.clone());
@@ -2860,11 +3026,17 @@ async fn capture_websocket_session(
                             - chrono::Duration::seconds(INTERVAL_SECONDS.saturating_mul(3));
                         identities.retain(|_, identity| identity.window_start >= identity_cutoff);
                         if !removed.is_empty() {
-                            send_websocket_message(
-                                &mut sink,
-                                Message::Text(subscription_operation(&removed, false).into()),
-                                Duration::from_millis(config.connect_timeout_ms),
-                            ).await?;
+                            outgoing_sender.send(Message::Text(subscription_operation(&removed, false).into()))
+                                .await
+                                .map_err(|_| resolution_session_failure(
+                                    source_error(
+                                        "polymarket_resolution_websocket_worker_stopped",
+                                        "Polymarket resolution websocket worker stopped before unsubscription update",
+                                    ),
+                                    frame_receiver.len(),
+                                    None,
+                                    String::new(),
+                                ))?;
                         }
                         active_assets = desired_assets;
                     }
@@ -2885,91 +3057,484 @@ async fn capture_websocket_session(
                     }
                 }
             }
-            _ = ping.tick() => {
-                let sent_at = Instant::now();
-                send_websocket_message(
-                    &mut sink,
-                    Message::Text("PING".into()),
-                    Duration::from_millis(config.connect_timeout_ms),
-                ).await?;
-                pong_deadline.get_or_insert(
-                    sent_at + Duration::from_millis(config.pong_timeout_ms)
-                );
-            }
-            frame = stream.next() => {
-                read_deadline = Instant::now() + read_timeout;
-                let received_at = microsecond_timestamp(Utc::now());
-                let bytes = match frame {
-                    Some(Ok(Message::Text(text))) => {
-                        let text = text.as_str().trim();
-                        if acknowledge_text_pong(text, &mut pong_deadline) {
-                            continue;
-                        }
-                        if text.eq_ignore_ascii_case("PING") {
-                            send_websocket_message(
-                                &mut sink,
-                                Message::Text("PONG".into()),
-                                Duration::from_millis(config.connect_timeout_ms),
-                            ).await?;
-                            continue;
-                        }
-                        if text.is_empty() {
-                            continue;
-                        }
-                        text.as_bytes().to_vec()
-                    }
-                    Some(Ok(Message::Binary(bytes))) => bytes.to_vec(),
-                    Some(Ok(Message::Ping(payload))) => {
-                        send_websocket_message(
-                            &mut sink,
-                            Message::Pong(payload),
-                            Duration::from_millis(config.connect_timeout_ms),
-                        ).await?;
-                        continue;
-                    }
-                    Some(Ok(Message::Pong(_))) => continue,
-                    Some(Ok(Message::Close(frame))) => {
-                        return Err(source_error(
-                            "polymarket_resolution_websocket_closed",
-                            format!("Polymarket resolution websocket closed: {frame:?}"),
-                        ));
-                    }
-                    Some(Ok(_)) => continue,
-                    Some(Err(error)) => {
-                        return Err(source_error(
-                            "polymarket_resolution_websocket_read_failed",
-                            format!("failed reading the Polymarket resolution websocket: {error}"),
-                        ));
-                    }
-                    None => {
-                        return Err(source_error(
-                            "polymarket_resolution_websocket_eof",
-                            "Polymarket resolution websocket ended",
-                        ));
-                    }
+            frame = frame_receiver.recv() => {
+                let Some(QueuedResolutionFrame { message, queued_at, received_at }) = frame else {
+                    continue;
                 };
-                for wire in parse_websocket_resolution_frame(&bytes)? {
+                let dequeued_at = microsecond_timestamp(Utc::now());
+                progress
+                    .lock()
+                    .expect("resolution session progress lock")
+                    .last_frame_dequeued_at = Some(dequeued_at);
+                let interframe = last_data_frame_at
+                    .replace(queued_at)
+                    .map(|previous| queued_at.saturating_duration_since(previous));
+                crate::streaming::observe_websocket_queue_delay(
+                    STRATEGY_KEY.as_str(),
+                    queued_at.elapsed(),
+                );
+                crate::streaming::set_websocket_queue_depth(
+                    STRATEGY_KEY.as_str(),
+                    frame_receiver.len(),
+                    RESOLUTION_FRAME_BUFFER,
+                );
+                let bytes = match &message {
+                    Message::Text(text) => text.as_bytes(),
+                    Message::Binary(bytes) => bytes.as_ref(),
+                    _ => unreachable!("resolution frame queue contains only data frames"),
+                };
+                crate::streaming::observe_websocket_frame(
+                    STRATEGY_KEY.as_str(),
+                    bytes.len(),
+                    interframe,
+                );
+                crate::streaming::observe_source_event(STRATEGY_KEY.as_str(), received_at);
+                let wires = parse_websocket_resolution_frame(bytes).map_err(|error| {
+                    resolution_session_failure(
+                        error,
+                        frame_receiver.len(),
+                        None,
+                        String::new(),
+                    )
+                })?;
+                let mut facts = Vec::with_capacity(wires.len());
+                for wire in wires {
                     let identity = identities.get(&wire.condition_id).ok_or_else(|| {
-                        source_error(
-                            "polymarket_resolution_websocket_unknown_market",
-                            format!(
-                                "market_resolved named unsubscribed condition {}",
-                                wire.condition_id
+                        resolution_session_failure(
+                            source_error(
+                                "polymarket_resolution_websocket_unknown_market",
+                                format!(
+                                    "market_resolved named unsubscribed condition {}",
+                                    wire.condition_id
+                                ),
                             ),
+                            frame_receiver.len(),
+                            None,
+                            String::new(),
                         )
                     })?;
-                    let fact = wire.into_fact(identity, received_at)?;
-                    if sender
-                        .send(ProducerNotice::Fact(Box::new(fact)))
-                        .await
-                        .is_err()
-                    {
-                        return Ok(());
+                    facts.push(wire.into_fact(identity, received_at).map_err(|error| {
+                        resolution_session_failure(
+                            error,
+                            frame_receiver.len(),
+                            None,
+                            String::new(),
+                        )
+                    })?);
+                }
+                crate::streaming::observe_websocket_frame_processed(STRATEGY_KEY.as_str());
+                for fact in facts {
+                    let notice = ResolutionFactNotice {
+                        fact: Box::new(fact),
+                        progress: Arc::clone(&progress),
+                    };
+                    tokio::select! {
+                        biased;
+                        terminal = &mut socket_terminal_receiver => {
+                            socket_shutdown.cancel();
+                            return match terminal {
+                                Ok(result) => result,
+                                Err(_) => Err(resolution_session_failure(
+                                    source_error(
+                                        "polymarket_resolution_websocket_worker_stopped",
+                                        "Polymarket resolution websocket worker stopped unexpectedly",
+                                    ),
+                                    frame_receiver.len(),
+                                    None,
+                                    String::new(),
+                                )),
+                            };
+                        }
+                        _ = shutdown.cancelled() => {
+                            socket_shutdown.cancel();
+                            return Ok(());
+                        }
+                        result = fact_sender.send(notice) => {
+                            if result.is_err() {
+                                socket_shutdown.cancel();
+                                return Ok(());
+                            }
+                        }
                     }
                 }
             }
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct ResolutionSocketTiming {
+    ping_interval: Duration,
+    pong_timeout: Duration,
+    read_timeout: Duration,
+    write_timeout: Duration,
+}
+
+#[derive(Clone, Copy)]
+struct ResolutionSocketRuntime {
+    timing: ResolutionSocketTiming,
+    connection_id: Uuid,
+    connection_started_at: Instant,
+}
+
+fn enqueue_resolution_control(
+    sender: &mpsc::Sender<Message>,
+    message: Message,
+    queue_depth: usize,
+) -> Result<(), ResolutionSessionFailure> {
+    sender.try_send(message).map_err(|error| match error {
+        mpsc::error::TrySendError::Full(_) => resolution_session_failure(
+            source_error(
+                "polymarket_resolution_websocket_control_backpressure",
+                "bounded Polymarket resolution control write queue is full",
+            ),
+            queue_depth,
+            None,
+            String::new(),
+        ),
+        mpsc::error::TrySendError::Closed(_) => resolution_session_failure(
+            source_error(
+                "polymarket_resolution_websocket_write_failed",
+                "Polymarket resolution control writer stopped",
+            ),
+            queue_depth,
+            None,
+            String::new(),
+        ),
+    })
+}
+
+fn enqueue_resolution_frame(
+    sender: &mpsc::Sender<QueuedResolutionFrame>,
+    frame: QueuedResolutionFrame,
+    connection_id: Uuid,
+    connection_age: Duration,
+) -> Result<(), ResolutionSessionFailure> {
+    sender.try_send(frame).map_err(|error| match error {
+        mpsc::error::TrySendError::Closed(_) => {
+            resolution_session_failure(shutdown_error(), 0, None, String::new())
+        }
+        mpsc::error::TrySendError::Full(_) => {
+            crate::streaming::set_websocket_queue_depth(
+                STRATEGY_KEY.as_str(),
+                RESOLUTION_FRAME_BUFFER,
+                RESOLUTION_FRAME_BUFFER,
+            );
+            crate::streaming::observe_websocket_queue_overflow(STRATEGY_KEY.as_str());
+            warn!(
+                strategy = %STRATEGY_KEY,
+                error_code = "polymarket_resolution_consumer_backpressure",
+                queue_depth = RESOLUTION_FRAME_BUFFER,
+                queue_capacity = RESOLUTION_FRAME_BUFFER,
+                connection_id = %connection_id,
+                connection_age_ms = u64::try_from(connection_age.as_millis()).unwrap_or(u64::MAX),
+                "Polymarket resolution websocket frame queue full"
+            );
+            resolution_session_failure(
+                source_error(
+                    "polymarket_resolution_consumer_backpressure",
+                    "Polymarket resolution processing fell behind the bounded websocket buffer",
+                ),
+                RESOLUTION_FRAME_BUFFER,
+                None,
+                String::new(),
+            )
+        }
+    })
+}
+
+async fn run_resolution_socket<S>(
+    websocket: S,
+    subscription: String,
+    mut outgoing_receiver: mpsc::Receiver<Message>,
+    frame_sender: mpsc::Sender<QueuedResolutionFrame>,
+    shutdown: CancellationToken,
+    runtime: ResolutionSocketRuntime,
+) -> Result<(), ResolutionSessionFailure>
+where
+    S: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+        + Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
+        + Unpin,
+{
+    let ResolutionSocketRuntime {
+        timing,
+        connection_id,
+        connection_started_at,
+    } = runtime;
+    let (mut sink, mut stream) = websocket.split();
+    let (control_sender, mut control_receiver) = mpsc::channel(RESOLUTION_CONTROL_BUFFER);
+    let writer = async {
+        let mut command = Message::Text(subscription.into());
+        let mut initial_subscription = true;
+        loop {
+            let closes_session = matches!(command, Message::Close(_));
+            send_websocket_message(&mut sink, command, timing.write_timeout)
+                .await
+                .map_err(|error| resolution_session_failure(error, 0, None, String::new()))?;
+            if initial_subscription {
+                crate::streaming::set_source_connection_ready(STRATEGY_KEY.as_str(), true);
+                initial_subscription = false;
+            }
+            if closes_session {
+                return Ok::<(), ResolutionSessionFailure>(());
+            }
+            let Some(next) = control_receiver.recv().await else {
+                return Ok::<(), ResolutionSessionFailure>(());
+            };
+            command = next;
+        }
+    };
+    tokio::pin!(writer);
+    let mut ping =
+        tokio::time::interval_at(Instant::now() + timing.ping_interval, timing.ping_interval);
+    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let read_sleep = tokio::time::sleep(timing.read_timeout);
+    tokio::pin!(read_sleep);
+    let disabled_deadline = Instant::now() + Duration::from_secs(86_400);
+    let pong_sleep = tokio::time::sleep_until(disabled_deadline);
+    tokio::pin!(pong_sleep);
+    let mut pong_deadline = None;
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => {
+                crate::streaming::set_source_connection_ready(STRATEGY_KEY.as_str(), false);
+                let _ = enqueue_resolution_control(
+                    &control_sender,
+                    Message::Close(None),
+                    resolution_frame_queue_depth(&frame_sender),
+                );
+                let _ = writer.as_mut().await;
+                return Ok(());
+            }
+            frame = stream.next() => {
+                let frame = match frame {
+                    Some(Ok(Message::Text(text))) => {
+                        let value = text.as_str();
+                        if acknowledge_text_pong(value, &mut pong_deadline) {
+                            read_sleep.as_mut().reset(Instant::now() + timing.read_timeout);
+                            continue;
+                        }
+                        if value.trim().eq_ignore_ascii_case("PING") {
+                            enqueue_resolution_control(
+                                &control_sender,
+                                Message::Text("PONG".into()),
+                                resolution_frame_queue_depth(&frame_sender),
+                            )?;
+                            read_sleep.as_mut().reset(Instant::now() + timing.read_timeout);
+                            pong_deadline = None;
+                            continue;
+                        }
+                        if value.trim().is_empty() {
+                            read_sleep.as_mut().reset(Instant::now() + timing.read_timeout);
+                            continue;
+                        }
+                        QueuedResolutionFrame {
+                            message: Message::Text(text),
+                            queued_at: Instant::now(),
+                            received_at: microsecond_timestamp(Utc::now()),
+                        }
+                    }
+                    Some(Ok(Message::Binary(bytes))) => QueuedResolutionFrame {
+                        message: Message::Binary(bytes),
+                        queued_at: Instant::now(),
+                        received_at: microsecond_timestamp(Utc::now()),
+                    },
+                    Some(Ok(Message::Ping(payload))) => {
+                        enqueue_resolution_control(
+                            &control_sender,
+                            Message::Pong(payload),
+                            resolution_frame_queue_depth(&frame_sender),
+                        )?;
+                        read_sleep.as_mut().reset(Instant::now() + timing.read_timeout);
+                        pong_deadline = None;
+                        continue;
+                    }
+                    Some(Ok(Message::Pong(_))) => {
+                        read_sleep.as_mut().reset(Instant::now() + timing.read_timeout);
+                        pong_deadline = None;
+                        continue;
+                    }
+                    Some(Ok(Message::Close(frame))) => {
+                        let close_code = frame.as_ref().map(|frame| u16::from(frame.code));
+                        let close_reason = frame
+                            .as_ref()
+                            .map(|frame| frame.reason.to_string())
+                            .unwrap_or_default();
+                        return Err(ResolutionSessionFailure {
+                            error: source_error(
+                                "polymarket_resolution_websocket_closed",
+                                format!("Polymarket resolution websocket closed: {frame:?}"),
+                            ),
+                            disconnect_reason: resolution_remote_close_reason(
+                                close_code,
+                                &close_reason,
+                            ),
+                            close_code,
+                            close_reason,
+                            queue_depth: RESOLUTION_FRAME_BUFFER.saturating_sub(frame_sender.capacity()),
+                        });
+                    }
+                    Some(Ok(_)) => continue,
+                    Some(Err(error)) => return Err(resolution_session_failure(
+                        source_error(
+                            "polymarket_resolution_websocket_read_failed",
+                            format!("failed reading the Polymarket resolution websocket: {error}"),
+                        ),
+                        RESOLUTION_FRAME_BUFFER.saturating_sub(frame_sender.capacity()),
+                        None,
+                        String::new(),
+                    )),
+                    None => return Err(resolution_session_failure(
+                        source_error(
+                            "polymarket_resolution_websocket_eof",
+                            "Polymarket resolution websocket ended",
+                        ),
+                        RESOLUTION_FRAME_BUFFER.saturating_sub(frame_sender.capacity()),
+                        None,
+                        String::new(),
+                    )),
+                };
+                let queued_at = frame.queued_at;
+                enqueue_resolution_frame(
+                    &frame_sender,
+                    frame,
+                    connection_id,
+                    connection_started_at.elapsed(),
+                )?;
+                read_sleep.as_mut().reset(queued_at + timing.read_timeout);
+                pong_deadline = None;
+            }
+            result = &mut writer => return result.map_err(|mut failure| {
+                failure.queue_depth = resolution_frame_queue_depth(&frame_sender);
+                failure
+            }),
+            _ = &mut pong_sleep, if pong_deadline.is_some() => {
+                return Err(resolution_session_failure(
+                    source_error(
+                        "polymarket_resolution_websocket_pong_timeout",
+                        "Polymarket CLOB did not acknowledge the oldest text PING",
+                    ),
+                    RESOLUTION_FRAME_BUFFER.saturating_sub(frame_sender.capacity()),
+                    None,
+                    String::new(),
+                ));
+            }
+            _ = &mut read_sleep => {
+                return Err(resolution_session_failure(
+                    source_error(
+                        "polymarket_resolution_websocket_read_timeout",
+                        "Polymarket resolution websocket produced no frames before its read-idle deadline",
+                    ),
+                    RESOLUTION_FRAME_BUFFER.saturating_sub(frame_sender.capacity()),
+                    None,
+                    String::new(),
+                ));
+            }
+            _ = ping.tick() => {
+                let sent_at = Instant::now();
+                enqueue_resolution_control(
+                    &control_sender,
+                    Message::Text("PING".into()),
+                    resolution_frame_queue_depth(&frame_sender),
+                )?;
+                if pong_deadline.is_none() {
+                    let deadline = sent_at + timing.pong_timeout;
+                    pong_deadline = Some(deadline);
+                    pong_sleep.as_mut().reset(deadline);
+                }
+            }
+            command = outgoing_receiver.recv() => {
+                let Some(command) = command else { return Ok(()); };
+                enqueue_resolution_control(
+                    &control_sender,
+                    command,
+                    resolution_frame_queue_depth(&frame_sender),
+                )?;
+            }
+        }
+    }
+}
+
+fn resolution_frame_queue_depth(sender: &mpsc::Sender<QueuedResolutionFrame>) -> usize {
+    RESOLUTION_FRAME_BUFFER.saturating_sub(sender.capacity())
+}
+
+fn resolution_session_failure(
+    error: StrategyError,
+    queue_depth: usize,
+    close_code: Option<u16>,
+    close_reason: String,
+) -> ResolutionSessionFailure {
+    ResolutionSessionFailure {
+        disconnect_reason: resolution_disconnect_reason(error.code),
+        error,
+        close_code,
+        close_reason,
+        queue_depth,
+    }
+}
+
+fn resolution_disconnect_reason(error_code: &str) -> &'static str {
+    match error_code {
+        "polymarket_resolution_consumer_backpressure" => "consumer_backpressure",
+        "polymarket_resolution_websocket_connect_failed" => "connect_failed",
+        "polymarket_resolution_websocket_connect_timeout" => "connect_timeout",
+        "polymarket_resolution_websocket_read_failed" => "read_failed",
+        "polymarket_resolution_websocket_read_timeout" => "read_timeout",
+        "polymarket_resolution_websocket_pong_timeout" => "pong_timeout",
+        "polymarket_resolution_websocket_eof" => "eof",
+        "polymarket_resolution_websocket_write_failed" => "write_failed",
+        "polymarket_resolution_websocket_write_timeout" => "write_timeout",
+        "polymarket_resolution_websocket_control_backpressure" => "control_backpressure",
+        "polymarket_resolution_websocket_closed" => "remote_close_other",
+        "polymarket_resolution_no_subscriptions" => "connect_failed",
+        _ => "read_failed",
+    }
+}
+
+fn resolution_remote_close_reason(close_code: Option<u16>, close_reason: &str) -> &'static str {
+    if close_code == Some(1013)
+        && close_reason.eq_ignore_ascii_case("slow consumer: send buffer full")
+    {
+        "slow_consumer_send_buffer_full"
+    } else {
+        "remote_close_other"
+    }
+}
+
+fn observe_resolution_session_failure(
+    failure: &ResolutionSessionFailure,
+    connection_id: Uuid,
+    connection_age: Duration,
+    progress: &Arc<Mutex<ResolutionSessionProgress>>,
+) {
+    crate::streaming::observe_source_reconnect(STRATEGY_KEY.as_str(), failure.disconnect_reason);
+    log_resolution_session_failure(failure, connection_id, connection_age, progress);
+}
+
+fn log_resolution_session_failure(
+    failure: &ResolutionSessionFailure,
+    connection_id: Uuid,
+    connection_age: Duration,
+    progress: &Arc<Mutex<ResolutionSessionProgress>>,
+) {
+    let progress = progress.lock().expect("resolution session progress lock");
+    warn!(
+        strategy = %STRATEGY_KEY,
+        error_code = failure.error.code,
+        disconnect_reason = failure.disconnect_reason,
+        close_code = failure.close_code,
+        close_reason = failure.close_reason,
+        connection_id = %connection_id,
+        connection_age_ms = u64::try_from(connection_age.as_millis()).unwrap_or(u64::MAX),
+        queue_depth = failure.queue_depth,
+        queue_capacity = RESOLUTION_FRAME_BUFFER,
+        last_frame_dequeued_at = ?progress.last_frame_dequeued_at,
+        last_fact_persisted_at = ?progress.last_fact_persisted_at,
+        "Polymarket resolution websocket session terminated"
+    );
 }
 
 async fn discover_subscription_identities(
@@ -3740,6 +4305,97 @@ fn retry_delay_seconds(initial: u64, maximum: u64, repair_attempts: i32) -> u64 
 mod tests {
     use super::*;
 
+    #[derive(Default)]
+    struct ResolutionWriteGate {
+        blocked: std::sync::atomic::AtomicBool,
+        attempts: std::sync::atomic::AtomicUsize,
+        waker: futures_util::task::AtomicWaker,
+    }
+
+    impl ResolutionWriteGate {
+        fn open(&self) {
+            self.blocked
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            self.waker.wake();
+        }
+    }
+
+    struct GatedResolutionSocket {
+        io: tokio::io::DuplexStream,
+        gate: Arc<ResolutionWriteGate>,
+    }
+
+    impl tokio::io::AsyncRead for GatedResolutionSocket {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::pin::Pin::new(&mut self.io).poll_read(cx, buf)
+        }
+    }
+
+    impl tokio::io::AsyncWrite for GatedResolutionSocket {
+        fn poll_write(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            self.gate.waker.register(cx.waker());
+            self.gate
+                .attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.gate.blocked.load(std::sync::atomic::Ordering::SeqCst) {
+                return std::task::Poll::Pending;
+            }
+            std::pin::Pin::new(&mut self.io).poll_write(cx, buf)
+        }
+
+        fn poll_flush(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::pin::Pin::new(&mut self.io).poll_flush(cx)
+        }
+
+        fn poll_shutdown(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::pin::Pin::new(&mut self.io).poll_shutdown(cx)
+        }
+    }
+
+    async fn resolution_socket_pair() -> (
+        tokio_tungstenite::WebSocketStream<GatedResolutionSocket>,
+        tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>,
+        Arc<ResolutionWriteGate>,
+    ) {
+        use tokio_tungstenite::{tungstenite::protocol::Role, WebSocketStream};
+        let (client, server) = tokio::io::duplex(8_192);
+        let gate = Arc::new(ResolutionWriteGate::default());
+        let client = WebSocketStream::from_raw_socket(
+            GatedResolutionSocket {
+                io: client,
+                gate: Arc::clone(&gate),
+            },
+            Role::Client,
+            None,
+        )
+        .await;
+        let server = WebSocketStream::from_raw_socket(server, Role::Server, None).await;
+        (client, server, gate)
+    }
+
+    fn test_resolution_socket_timing() -> ResolutionSocketTiming {
+        ResolutionSocketTiming {
+            ping_interval: Duration::from_secs(60),
+            pong_timeout: Duration::from_secs(120),
+            read_timeout: Duration::from_secs(120),
+            write_timeout: Duration::from_secs(2),
+        }
+    }
+
     fn gamma_fixture() -> Value {
         serde_json::from_str(include_str!(
             "../../../tests/fixtures/polymarket/gamma_btc_five_minute_resolved_event.json"
@@ -3930,6 +4586,204 @@ mod tests {
     }
 
     #[test]
+    fn raw_resolution_frames_are_enqueued_before_parsing() {
+        let (sender, mut receiver) = mpsc::channel(1);
+        let message = Message::Text("not-json".into());
+        enqueue_resolution_frame(
+            &sender,
+            QueuedResolutionFrame {
+                message: message.clone(),
+                queued_at: Instant::now(),
+                received_at: received_at(),
+            },
+            Uuid::nil(),
+            Duration::ZERO,
+        )
+        .expect("raw frame enqueue does not parse JSON");
+        let queued = receiver.try_recv().expect("raw frame is available");
+        assert_eq!(queued.message, message);
+        let Message::Text(text) = queued.message else {
+            unreachable!();
+        };
+        assert!(parse_websocket_resolution_frame(text.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn full_resolution_frame_queue_fails_immediately() {
+        let (sender, _receiver) = mpsc::channel(1);
+        let frame = || QueuedResolutionFrame {
+            message: Message::Binary(vec![1_u8].into()),
+            queued_at: Instant::now(),
+            received_at: received_at(),
+        };
+        enqueue_resolution_frame(&sender, frame(), Uuid::nil(), Duration::ZERO).unwrap();
+        let error =
+            enqueue_resolution_frame(&sender, frame(), Uuid::nil(), Duration::ZERO).unwrap_err();
+        assert_eq!(
+            error.error.code,
+            "polymarket_resolution_consumer_backpressure"
+        );
+        assert_eq!(error.disconnect_reason, "consumer_backpressure");
+    }
+
+    #[tokio::test]
+    async fn stalled_resolution_control_write_does_not_block_frame_intake() {
+        let (client, mut server, gate) = resolution_socket_pair().await;
+        let (commands, command_receiver) = mpsc::channel(RESOLUTION_CONTROL_BUFFER);
+        let (frames, mut frame_receiver) = mpsc::channel(RESOLUTION_FRAME_BUFFER);
+        let shutdown = CancellationToken::new();
+        let task = tokio::spawn(run_resolution_socket(
+            client,
+            "subscribe".to_owned(),
+            command_receiver,
+            frames,
+            shutdown.clone(),
+            ResolutionSocketRuntime {
+                timing: test_resolution_socket_timing(),
+                connection_id: Uuid::nil(),
+                connection_started_at: Instant::now(),
+            },
+        ));
+        assert_eq!(
+            server.next().await.unwrap().unwrap(),
+            Message::Text("subscribe".into())
+        );
+        gate.blocked
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let previous = gate.attempts.load(std::sync::atomic::Ordering::SeqCst);
+        commands
+            .send(Message::Text("subscribe-next".into()))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while gate.attempts.load(std::sync::atomic::Ordering::SeqCst) == previous {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("control write reaches the blocked transport");
+        let frame = Message::Text("not-json-but-still-raw".into());
+        server.send(frame.clone()).await.unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), frame_receiver.recv())
+                .await
+                .expect("socket intake remains scheduled")
+                .expect("frame channel remains open")
+                .message,
+            frame
+        );
+        gate.open();
+        shutdown.cancel();
+        assert!(task.await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn terminal_notifications_are_selected_before_queued_frames() {
+        let (frame_sender, mut frame_receiver) = mpsc::channel(1);
+        frame_sender
+            .try_send(QueuedResolutionFrame {
+                message: Message::Text("queued".into()),
+                queued_at: Instant::now(),
+                received_at: received_at(),
+            })
+            .unwrap();
+        let (terminal_sender, mut terminal_receiver) =
+            oneshot::channel::<Result<(), ResolutionSessionFailure>>();
+        terminal_sender
+            .send(Err(resolution_session_failure(
+                source_error("polymarket_resolution_websocket_eof", "ended"),
+                1,
+                None,
+                String::new(),
+            )))
+            .unwrap();
+        let selected_terminal = tokio::select! {
+            biased;
+            terminal = &mut terminal_receiver => terminal.is_ok(),
+            _ = frame_receiver.recv() => false,
+        };
+        assert!(selected_terminal);
+    }
+
+    #[test]
+    fn resolution_close_reasons_are_bounded_and_exact() {
+        assert_eq!(
+            resolution_remote_close_reason(Some(1013), "slow consumer: send buffer full"),
+            "slow_consumer_send_buffer_full"
+        );
+        assert_eq!(
+            resolution_remote_close_reason(Some(1013), "another overload"),
+            "remote_close_other"
+        );
+        assert_eq!(
+            resolution_remote_close_reason(Some(1000), "slow consumer: send buffer full"),
+            "remote_close_other"
+        );
+        assert_eq!(
+            resolution_disconnect_reason("polymarket_resolution_consumer_backpressure"),
+            "consumer_backpressure"
+        );
+    }
+
+    #[test]
+    fn resolution_dashboard_queries_are_strategy_scoped() {
+        let dashboard: Value = serde_json::from_str(include_str!(
+            "../../../../../common/configs/grafana/dashboards/market-data-pipeline.json"
+        ))
+        .expect("Market Data Pipeline dashboard is valid JSON");
+        let panels = dashboard["panels"].as_array().unwrap();
+        let row = panels
+            .iter()
+            .position(|panel| panel["title"] == "Polymarket Resolution Websocket")
+            .expect("resolution websocket row is provisioned");
+        let resolution_panels = panels[row + 1..]
+            .iter()
+            .take_while(|panel| panel["type"] != "row")
+            .collect::<Vec<_>>();
+        assert_eq!(resolution_panels.len(), 10);
+        for panel in resolution_panels {
+            let targets = panel["targets"].as_array().unwrap();
+            assert!(!targets.is_empty());
+            for target in targets {
+                let selector = target["expr"].as_str().unwrap();
+                assert!(
+                    selector.contains("polymarket_btc_five_minute_resolutions"),
+                    "unscoped resolution dashboard selector: {selector}"
+                );
+                assert!(!selector.contains("polymarket_btc_five_minute_orderbooks"));
+                assert!(!selector.to_ascii_lowercase().contains("postgres"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn planned_resolution_socket_shutdown_is_not_a_failure() {
+        let (client, mut server, _) = resolution_socket_pair().await;
+        let (_commands, command_receiver) = mpsc::channel(RESOLUTION_CONTROL_BUFFER);
+        let (frames, _frame_receiver) = mpsc::channel(RESOLUTION_FRAME_BUFFER);
+        let shutdown = CancellationToken::new();
+        let task = tokio::spawn(run_resolution_socket(
+            client,
+            "subscribe".to_owned(),
+            command_receiver,
+            frames,
+            shutdown.clone(),
+            ResolutionSocketRuntime {
+                timing: test_resolution_socket_timing(),
+                connection_id: Uuid::nil(),
+                connection_started_at: Instant::now(),
+            },
+        ));
+        assert_eq!(
+            server.next().await.unwrap().unwrap(),
+            Message::Text("subscribe".into())
+        );
+        shutdown.cancel();
+        let _ = server.next().await;
+        assert!(task.await.unwrap().is_ok());
+    }
+
+    #[test]
     fn config_is_exact_schema_v1_with_no_credential_or_label_surface() {
         let value =
             serde_json::to_value(PolymarketBtcFiveMinuteResolutionsConfig::default()).unwrap();
@@ -4051,10 +4905,10 @@ mod tests {
         );
 
         let websocket_notice = source
-            .split("ProducerNotice::Fact(fact) =>")
+            .split("notice = facts.recv()")
             .nth(1)
             .unwrap()
-            .split("ProducerNotice::Error(error)")
+            .split("_ = ticker.tick()")
             .next()
             .unwrap();
         assert!(!websocket_notice.contains("streaming::publish"));
