@@ -43,12 +43,11 @@ spec:
             - {name: POSTGRES_DB, value: polymarket}
             - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
             - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_PASSWORD}}}
-            - {name: TS_TUNE_MEMORY, value: 2GB}
-            - {name: TS_TUNE_NUM_CPUS, value: "2"}
-            - {name: TS_TUNE_MAX_CONNS, value: "40"}
-            - {name: TS_TUNE_MAX_BG_WORKERS, value: "4"}
+            - {name: NO_TS_TUNE, value: "1"}
           args:
             - postgres
+            - -c
+            - shared_preload_libraries=timescaledb
             - -c
             - shared_buffers=512MB
             - -c
