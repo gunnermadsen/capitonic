@@ -63,6 +63,19 @@ spec:
             - {name: config, mountPath: /etc/pgbouncer/pgbouncer.ini, subPath: pgbouncer.ini, readOnly: true}
             - {name: config, mountPath: /usr/local/bin/capitonic-pgbouncer-entrypoint.sh, subPath: pgbouncer-entrypoint.sh, readOnly: true}
             - {name: tmp, mountPath: /tmp}
+        - name: pgbouncer-exporter
+          image: {{ .Values.metricsImage | quote }}
+          imagePullPolicy: Never
+          ports:
+            - {name: metrics, containerPort: 9127}
+          env:
+            - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_PASSWORD}}}
+            - {name: PGBOUNCER_EXPORTER_CONNECTION_STRING, value: "postgres://postgres:$(POSTGRES_PASSWORD)@127.0.0.1:6432/pgbouncer?sslmode=disable"}
+          readinessProbe:
+            httpGet: {path: /metrics, port: metrics}
+            periodSeconds: 10
+          resources:
+{{ toYaml .Values.metricsResources | indent 12 }}
       volumes:
         - name: config
           configMap: {name: pgbouncer-config, defaultMode: 0555}

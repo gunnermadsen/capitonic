@@ -8,6 +8,8 @@ The `timescaledb`, `db-migrate`, and `pgbouncer` charts are independent releases
 
 The main worktree's `.env.postgres` and `.env.postgres.roles` provide the five database passwords. The feature worktree symlinks these files. Create or update the `postgres-credentials` Kubernetes Secret from those files; chart templates contain only Secret references. The existing `.env.postgres.pgbouncer` role values must match `.env.postgres.roles` before deployment. Never commit a generated Secret manifest or a baked asset.
 
+The database and pool charts include one exporter sidecar each. The read-only `capitonic_grafana` identity supplies PostgreSQL metrics; the PgBouncer exporter reads its administrative console using the existing `postgres` credential. The current `.env.postgres` password contains only URL-safe characters, as required by the exporter's connection-string environment setting. The Kubernetes-only scrape jobs live in `common/configs/prometheus/kubernetes-database-scrapes.yml`; the bake adds them to the Prometheus chart asset without changing the Compose scrape configuration. Grafana's Kubernetes datasource configuration under `common/configs/` provisions the existing `postgres` UID through PgBouncer.
+
 TimescaleDB has one 20Gi `local-path` ReadWriteOnce claim. The StatefulSet retains its claim when deleted or scaled, but deleting the PVC causes the provisioner to delete its data. The local cluster is a single failure domain; this is an empty development database, not a backup of Compose. Do not delete or replace its claim as an automatic rollback. PostgreSQL settings are explicit in the StatefulSet, and the image's automatic tuner is disabled to avoid a second, implicit configuration writer. The settings follow the existing two-CPU production Compose profile, with a 3Gi pod memory limit and 40 PostgreSQL connection slots, leaving room for monitoring and later services on the eight-CPU, 8GiB VM.
 
 ## Deployment order
@@ -15,7 +17,7 @@ TimescaleDB has one 20Gi `local-path` ReadWriteOnce claim. The StatefulSet retai
 1. Verify `rancher-desktop` context, namespace `capitonic`, monitoring readiness, free disk, chart commit, and imported ARM64 image identities. The charts use `imagePullPolicy: Never` so k3s cannot silently substitute a registry image. Record the exact image IDs after deployment.
 2. Create `postgres-credentials` from the main-worktree `.env` sources, then install `timescaledb` with Helm. Verify the pod, readiness, PVC, client Service, and persistence after a controlled pod restart.
 3. Before installing `db-migrate`, verify the policy commit is in the deployment lineage and the approved pending list exactly matches the reviewed baseline plus seven newer migrations. Install the Job deliberately with `helm install db-migrate ... --wait --wait-for-jobs`; do not use an automatic Helm hook or `--atomic`, which would remove a failed Job's evidence. Preserve Job logs and verify the ledger and zero pending migrations.
-4. Install `pgbouncer` with Helm after the service roles exist. Verify every canonical route with its intended identity, the 30-backend pool ceiling, ready pods, and logs. Leave the Compose stack and database untouched.
+4. Install `pgbouncer` with Helm after the service roles exist. Verify every canonical route with its intended identity, the 30-backend pool ceiling, ready pods, and logs. Upgrade Prometheus and Grafana through their existing Helm charts to collect database metrics and provision the read-only SQL datasource. Confirm both exporters report healthy database connections and logs arrive in Loki. Leave the Compose stack and database untouched.
 
 For a first install from the feature worktree:
 
@@ -27,6 +29,8 @@ helm lint capitonic-helm-chart/charts/timescaledb capitonic-helm-chart/charts/db
 helm upgrade --install timescaledb capitonic-helm-chart/charts/timescaledb -n capitonic --atomic --wait --timeout 10m
 helm install db-migrate capitonic-helm-chart/charts/db-migrate -n capitonic --wait --wait-for-jobs --timeout 15m
 helm upgrade --install pgbouncer capitonic-helm-chart/charts/pgbouncer -n capitonic --atomic --wait --timeout 5m
+helm upgrade prometheus capitonic-helm-chart/charts/prometheus -n capitonic --wait --timeout 5m
+helm upgrade grafana capitonic-helm-chart/charts/grafana -n capitonic --wait --timeout 5m
 python3 scripts/helm/bake-assets.py --clean
 ```
 

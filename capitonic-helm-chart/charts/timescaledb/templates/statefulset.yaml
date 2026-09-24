@@ -84,6 +84,20 @@ spec:
 {{ toYaml .Values.resources | indent 12 }}
           volumeMounts:
             - {name: data, mountPath: /var/lib/postgresql/data}
+        - name: postgres-exporter
+          image: {{ .Values.metricsImage | quote }}
+          imagePullPolicy: Never
+          ports:
+            - {name: metrics, containerPort: 9187}
+          env:
+            - {name: DATA_SOURCE_URI, value: "127.0.0.1:5432/polymarket?sslmode=disable"}
+            - {name: DATA_SOURCE_USER, value: capitonic_grafana}
+            - {name: DATA_SOURCE_PASS, valueFrom: {secretKeyRef: {name: postgres-credentials, key: CAPITONIC_GRAFANA_POSTGRES_PASSWORD}}}
+          readinessProbe:
+            httpGet: {path: /metrics, port: metrics}
+            periodSeconds: 10
+          resources:
+{{ toYaml .Values.metricsResources | indent 12 }}
   volumeClaimTemplates:
     - metadata:
         name: data

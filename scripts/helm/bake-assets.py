@@ -57,6 +57,9 @@ def bake() -> None:
     selected = [part for part in jobs[1:] if part.startswith(("  - job_name: alloy\n", "  - job_name: loki\n"))]
     if len(selected) != 2:
         raise ValueError("Expected Alloy and Loki scrape jobs in the shared Prometheus configuration")
+    database_scrapes = (ROOT / "common/configs/prometheus/kubernetes-database-scrapes.yml").read_text()
+    if database_scrapes.count("  - job_name: ") != 2:
+        raise ValueError("Expected TimescaleDB and PgBouncer Kubernetes scrape jobs")
     config = (
         jobs[0]
         + "  - job_name: prometheus\n"
@@ -66,6 +69,7 @@ def bake() -> None:
         + "    static_configs:\n"
         + "      - targets: [127.0.0.1:9090]\n"
         + "".join(selected)
+        + database_scrapes
     )
     config = config.replace(
         "scrape_configs:\n",

@@ -47,6 +47,7 @@ spec:
             - {name: GF_SECURITY_ADMIN_PASSWORD, valueFrom: {secretKeyRef: {name: grafana-auth, key: admin-password}}}
             - {name: PROMETHEUS_BASIC_AUTH_USER, valueFrom: {secretKeyRef: {name: prometheus-auth, key: username}}}
             - {name: PROMETHEUS_BASIC_AUTH_PASSWORD, valueFrom: {secretKeyRef: {name: prometheus-auth, key: password}}}
+            - {name: GRAFANA_POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: postgres-credentials, key: CAPITONIC_GRAFANA_POSTGRES_PASSWORD}}}
           startupProbe:
             httpGet: {path: /api/health, port: http}
             failureThreshold: 30

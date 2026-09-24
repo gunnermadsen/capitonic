@@ -19,3 +19,21 @@ datasources:
     access: proxy
     url: http://loki:3100
     editable: false
+  - name: Postgres
+    type: postgres
+    uid: postgres
+    access: proxy
+    url: pgbouncer:6432
+    user: capitonic_grafana
+    editable: false
+    jsonData:
+      database: polymarket_observe_tx
+      sslmode: disable
+      postgresVersion: 1400
+      timescaledb: true
+      maxOpenConns: 2
+      maxIdleConns: 1
+      maxIdleConnsAuto: false
+      connMaxLifetime: 14400
+    secureJsonData:
+      password: ${GRAFANA_POSTGRES_PASSWORD}

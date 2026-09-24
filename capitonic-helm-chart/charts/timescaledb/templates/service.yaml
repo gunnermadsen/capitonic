@@ -17,6 +17,7 @@ spec:
     app.kubernetes.io/instance: {{ .Release.Name }}
   ports:
     - {name: postgres, port: 5432, targetPort: postgres}
+    - {name: metrics, port: 9187, targetPort: metrics}
 ---
 apiVersion: v1
 kind: Service
@@ -37,3 +38,4 @@ spec:
     app.kubernetes.io/instance: {{ .Release.Name }}
   ports:
     - {name: postgres, port: 5432, targetPort: postgres}
+    - {name: metrics, port: 9187, targetPort: metrics}

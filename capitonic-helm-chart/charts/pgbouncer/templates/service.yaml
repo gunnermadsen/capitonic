@@ -17,3 +17,4 @@ spec:
     app.kubernetes.io/instance: {{ .Release.Name }}
   ports:
     - {name: pgbouncer, port: 6432, targetPort: pgbouncer}
+    - {name: metrics, port: 9127, targetPort: metrics}
