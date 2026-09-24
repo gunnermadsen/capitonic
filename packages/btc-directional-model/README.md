@@ -34,6 +34,13 @@ development, so results on that interval are development evidence rather than an
 deployment holdout. The current training round is clamped to the exact half-open UTC interval
 `[2026-04-21, 2026-07-20)` and makes no deployment decision.
 
+## Artifact lifecycle
+
+All new training, backtest, and data-preparation runs follow
+[`docs/model-training-artifact-lifecycle.md`](../../docs/model-training-artifact-lifecycle.md). Generated
+data and artifacts stay under the canonical SSD training root; this package contains maintained
+source, configuration, tests, concise evidence, and explicitly admitted runtime bundles.
+
 ## Local environment
 
 Create a package-local virtual environment and install the exact validated environment:

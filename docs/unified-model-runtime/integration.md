@@ -6,6 +6,14 @@ New paper packages: Extended specialist official, Bridge-aware specialist, Offic
 
 The five existing processes are retained: Chainlink regime calibrated, payoff-aware Q5, Chainlink full combined, Chainlink stratified payoff, specialist distilled fair value. Preserve their process IDs, enabled intent, model checksums, execution mode, run identity and history. Never complete or replace them as an implicit migration step.
 
+## Adapter boundary
+
+Follow the training and artifact lifecycle in [`../model-training-artifact-lifecycle.md`](../model-training-artifact-lifecycle.md) before integrating a new model.
+
+An adapter is a narrow compatibility layer. It may validate and load an immutable runtime bundle, bind canonical UMR features to model inputs, and translate model outputs into the existing prediction and admission contracts. It must reuse the shared feature, RTDS, persistence, process-identity, admission, observability and recovery systems.
+
+Do not add model-owned caches, candle builders, feature repositories, persistence paths, risk or admission policy, trading decisions, execution, accounting, settlement, recovery loops or observability. Extend the adapter interface only when a genuinely new mathematical capability cannot be represented by a supported adapter, and preserve existing models and process identities.
+
 ## Reproducible export
 
 Use `btc_directional_model.unified_runtime_export` with explicit `--source-root`, `--output` and `--panel`. The source root contains the frozen collection manifest and its referenced artifacts. The panel is offline Parquet, preferably on the external SSD. The exporter verifies source checksums, exports existing students/admission estimators, copies frozen policies and produces the existing immutable manifest/model/golden-vector files. It does not train, select thresholds or confer live qualification.

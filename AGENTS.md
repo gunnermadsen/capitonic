@@ -197,13 +197,14 @@ for env_file in "$main_worktree"/.env "$main_worktree"/.env.*; do
 done
 ```
 
-## Worktree Data Artifact Storage
+## Model Training and Artifact Storage
 
-- Before starting training, backtesting, or a data experiment in a worktree, create its run directory under `/Volumes/docker-data/polymarket-bot/artifacts/<activity>/<domain>/<workflow>/<run-id>/`, where `<activity>` is `training`, `backtests`, or `data-tests`, names use lowercase kebab-case, and `<run-id>` is a UTC `YYYYMMDDTHHMMSSZ` timestamp.
-- Store generated data and run artifacts on the external SSD, not in the repository or worktree. This includes Parquet, CSV, Arrow, JSONL, database extracts, model binaries, predictions, trade ledgers, checkpoints, plots, logs, and other bulky generated outputs. Source code, configuration, tests, and lightweight provenance or result summaries remain in Git.
-- Organize each run by purpose using only the directories it needs: `inputs/`, `datasets/`, `models/`, `predictions/`, `trades/`, `metrics/`, `diagnostics/`, `manifests/`, and `logs/`. Add more specific subdirectories beneath these when a run compares multiple models or purposes.
-- Every run directory must contain a `README.md` or manifest recording the activity, domain, workflow, run ID, source branch and commit, purpose, model or strategy identity, command or entrypoint, source-data identity, and the meaning of each artifact directory. Keep a lightweight pointer to that record with the related code or report in Git.
-- Do not commit generated Parquet, CSV, or other run-data artifacts. If the external SSD is unavailable, stop before generating them rather than silently writing them into a worktree; use another location only when the user explicitly approves it.
+- Run model training, backtesting, and data preparation from the assigned `training/...` worktree, with all generated data and artifacts stored under the canonical SSD training root defined in `docs/model-training-artifact-lifecycle.md`.
+- Never commit Parquet files, generated datasets, checkpoints, predictions, raw backtest outputs, logs, or large model artifacts. Archive completed and superseded training artifacts on the SSD.
+- Keep only maintained source code, configuration, tests, concise results, and provenance pointers in Git. Promote reusable Python modules into `packages/btc-directional-model` before merging the training branch.
+- Admit a selected immutable model artifact into `packages/btc-directional-model` only for an explicitly authorized UMR deployment. Record its source run, SHA-256, manifest, and qualification evidence.
+- UMR adapters may translate canonical inputs and model outputs only. They must reuse existing feature, inference, persistence, admission, observability, identity, and recovery contracts without duplicating their logic.
+- Follow `docs/model-training-artifact-lifecycle.md` for directory layout, manifests, archival, source promotion, and deployment admission. Stop before training if the canonical SSD root is unavailable.
 
 ## Worktree Lifecycle
 
