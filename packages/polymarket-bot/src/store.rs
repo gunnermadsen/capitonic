@@ -2078,7 +2078,7 @@ impl Store {
                   OR ($10 = 0 AND market.official_winning_token_id <> $3)
                 )
                 AND market.official_outcome IN ('up', 'down')
-                AND market.resolution_source_timestamp <= $5
+                AND COALESCE(market.resolution_source_timestamp, market.window_end) <= $5
               GROUP BY
                 orders.process_id, orders.order_id, orders.market_id, orders.token_id,
                 market.official_outcome, market.official_winning_token_id,

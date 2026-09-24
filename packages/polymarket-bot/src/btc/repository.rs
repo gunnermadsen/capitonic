@@ -317,6 +317,22 @@ pub struct BtcSettlementRecord {
 }
 
 #[derive(Debug, Clone, FromRow)]
+pub struct BtcSettlementTelemetrySnapshot {
+    pub scope: String,
+    pub member_id: Option<String>,
+    pub wins: i64,
+    pub losses: i64,
+    pub pushes: i64,
+    pub entry_notional: Decimal,
+    pub fees: Decimal,
+    pub realized_pnl: Decimal,
+    pub gross_profit: Decimal,
+    pub gross_loss: Decimal,
+    pub equity_high: Decimal,
+    pub max_drawdown: Decimal,
+}
+
+#[derive(Debug, Clone, FromRow)]
 struct ProcessResolutionRecoveryRow {
     market_id: String,
     winning_token_id: String,
@@ -892,6 +908,92 @@ WHERE ledger.process_id = $1
   AND ledger.credit_status = 'pending'
 ORDER BY ledger.official_resolution_received_at, ledger.order_id, ledger.settlement_id
 LIMIT 256
+"#;
+
+const LOAD_LIVE_SETTLEMENT_TELEMETRY_SQL: &str = r#"
+WITH settlements AS (
+  SELECT
+    ledger.settlement_id,
+    ledger.official_resolution_received_at,
+    NULLIF(order_record.raw_payload #>> '{request,metadata,router,member_id}', '') AS member_id,
+    ledger.entry_notional,
+    ledger.entry_fees,
+    ledger.net_pnl
+  FROM polymarket.btc_paper_settlement_ledger ledger
+  LEFT JOIN polymarket.orders order_record
+    ON order_record.process_id = ledger.process_id
+   AND order_record.order_id = ledger.order_id
+  WHERE ledger.process_id = $1
+    AND ledger.execution_mode = 'live'
+), equity AS (
+  SELECT
+    settlements.*,
+    SUM(net_pnl) OVER (
+      ORDER BY official_resolution_received_at, settlement_id
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS process_equity,
+    SUM(net_pnl) OVER (
+      PARTITION BY member_id
+      ORDER BY official_resolution_received_at, settlement_id
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS member_equity
+  FROM settlements
+), drawdown AS (
+  SELECT
+    equity.*,
+    GREATEST(
+      0,
+      MAX(process_equity) OVER (
+        ORDER BY official_resolution_received_at, settlement_id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      )
+    ) - process_equity AS process_drawdown,
+    GREATEST(
+      0,
+      MAX(member_equity) OVER (
+        PARTITION BY member_id
+        ORDER BY official_resolution_received_at, settlement_id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      )
+    ) - member_equity AS member_drawdown
+  FROM equity
+), process_snapshot AS (
+  SELECT
+    'process'::text AS scope,
+    NULL::text AS member_id,
+    COUNT(*) FILTER (WHERE net_pnl > 0)::bigint AS wins,
+    COUNT(*) FILTER (WHERE net_pnl < 0)::bigint AS losses,
+    COUNT(*) FILTER (WHERE net_pnl = 0)::bigint AS pushes,
+    COALESCE(SUM(entry_notional), 0)::numeric AS entry_notional,
+    COALESCE(SUM(entry_fees), 0)::numeric AS fees,
+    COALESCE(SUM(net_pnl), 0)::numeric AS realized_pnl,
+    COALESCE(SUM(net_pnl) FILTER (WHERE net_pnl >= 0), 0)::numeric AS gross_profit,
+    COALESCE(SUM(ABS(net_pnl)) FILTER (WHERE net_pnl < 0), 0)::numeric AS gross_loss,
+    COALESCE(GREATEST(0, MAX(process_equity)), 0)::numeric AS equity_high,
+    COALESCE(MAX(process_drawdown), 0)::numeric AS max_drawdown
+  FROM drawdown
+), member_snapshots AS (
+  SELECT
+    'member'::text AS scope,
+    member_id,
+    COUNT(*) FILTER (WHERE net_pnl > 0)::bigint AS wins,
+    COUNT(*) FILTER (WHERE net_pnl < 0)::bigint AS losses,
+    COUNT(*) FILTER (WHERE net_pnl = 0)::bigint AS pushes,
+    COALESCE(SUM(entry_notional), 0)::numeric AS entry_notional,
+    COALESCE(SUM(entry_fees), 0)::numeric AS fees,
+    COALESCE(SUM(net_pnl), 0)::numeric AS realized_pnl,
+    COALESCE(SUM(net_pnl) FILTER (WHERE net_pnl >= 0), 0)::numeric AS gross_profit,
+    COALESCE(SUM(ABS(net_pnl)) FILTER (WHERE net_pnl < 0), 0)::numeric AS gross_loss,
+    COALESCE(GREATEST(0, MAX(member_equity)), 0)::numeric AS equity_high,
+    COALESCE(MAX(member_drawdown), 0)::numeric AS max_drawdown
+  FROM drawdown
+  WHERE member_id IS NOT NULL
+  GROUP BY member_id
+)
+SELECT * FROM process_snapshot
+UNION ALL
+SELECT * FROM member_snapshots
+ORDER BY scope, member_id NULLS FIRST
 "#;
 
 const LOAD_SETTLEMENT_HEALTH_SQL: &str = r#"
@@ -3097,6 +3199,17 @@ impl BtcRepository {
         Ok(records)
     }
 
+    pub async fn live_settlement_telemetry(
+        &self,
+        process_id: Uuid,
+    ) -> Result<Vec<BtcSettlementTelemetrySnapshot>> {
+        sqlx::query_as::<_, BtcSettlementTelemetrySnapshot>(LOAD_LIVE_SETTLEMENT_TELEMETRY_SQL)
+            .bind(process_id)
+            .fetch_all(&self.pool)
+            .await
+            .context("failed to load durable live settlement telemetry")
+    }
+
     /// Compatibility wrapper for the existing paper lifecycle.
     pub async fn discover_pending_paper_settlements(
         &self,
@@ -4362,6 +4475,14 @@ mod tests {
         assert!(!pending.contains("ledger.run_id = $2"));
         assert!(pending.contains("limit 256"));
         assert!(!pending.contains("experiment_id"));
+
+        let telemetry = LOAD_LIVE_SETTLEMENT_TELEMETRY_SQL.to_ascii_lowercase();
+        assert!(telemetry.contains("where ledger.process_id = $1"));
+        assert!(telemetry.contains("ledger.execution_mode = 'live'"));
+        assert!(telemetry.contains("partition by member_id"));
+        assert!(telemetry.contains("'process'::text as scope"));
+        assert!(telemetry.contains("'member'::text as scope"));
+        assert!(!telemetry.contains("credit_status = 'credited'"));
 
         let recovery = LOAD_PROCESS_RESOLUTION_RECOVERY_SQL.to_ascii_lowercase();
         assert!(recovery.contains("market_data.polymarket_btc_five_minute_resolutions"));
