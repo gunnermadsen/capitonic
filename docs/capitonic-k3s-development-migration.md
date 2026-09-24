@@ -442,29 +442,7 @@ No trading process is created during this rollout. Market-data route resolution,
 
 ### Ingester and workers rollout
 
-Deploy:
-
-- ingester-master;
-- fixed number of ingester-worker replicas.
-
-Tasks:
-
-1. Deploy the master.
-2. Verify master readiness.
-3. Deploy workers with the same immutable ingester image.
-4. Verify worker registration.
-5. Verify worker capability and contract versions.
-6. Verify realtime profile assignment.
-7. Verify allocation limits.
-8. Verify worker metrics.
-9. Verify backfill API basics.
-10. Schedule a bounded development backfill.
-11. Confirm the master assigns the job correctly.
-12. Confirm the worker reports progress and completion.
-13. Restart one worker and verify lease recovery.
-14. Confirm healthy workers continue operating.
-15. Confirm no worker can exceed capacity.
-16. Confirm Prometheus and Grafana show the expected worker state.
+Deploy one `ingester-master` and one `ingester-worker` from the same immutable image. Verify existing lightweight live and ready endpoints, database connectivity, worker registration and heartbeat, immutable image identity, and Prometheus targets. Before starting the worker, set the seeded development profiles to stopped through the master's authenticated lifecycle API and confirm zero desired-running profiles and zero active jobs. This rollout verifies startup health only; realtime ingestion, backfills, trading process creation, and integrated soak require separate activation. See `docs/capitonic-k3s-ingester-standards.md`.
 
 Explicitly excluded from this phase:
 
@@ -587,7 +565,7 @@ This plan preserves the existing Compose configuration as the current deployment
 
 ## Repository review notes (remaining for later services)
 
-- `AGENTS.md` currently requires ingester workers to be created and scaled only through the Compose `ingester-worker` service. A Kubernetes worker Deployment requires an explicit, narrowly scoped repository-policy amendment before rollout.
+- `AGENTS.md` permits local Kubernetes ingester workers only through the Helm-managed `ingester-worker` Deployment in `capitonic`. Compose workers remain Compose-managed.
 - The Kubernetes `db-migrate` Job policy is in the deployment lineage. The Job established the baseline migration ledger in the new empty development database; later schema changes still require committed, approved TypeORM migrations.
 - Existing shared configuration contains Docker-specific discovery and hostnames. In particular, Alloy reads `/var/run/docker.sock`, Prometheus has static Compose targets, and PgBouncer points to `timescaledb-0`. The Helm path needs additive Kubernetes-specific rendering or overlays while leaving the Compose source configuration intact.
 - The plan provisions a new development database but does not specify whether existing data should be copied. Treat the database as empty until the intended data scope and a separate safe data-migration procedure are defined.

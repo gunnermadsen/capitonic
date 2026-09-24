@@ -47,7 +47,7 @@ Use `statefulset/prometheus`, `statefulset/loki`, or `daemonset/alloy` for those
 
 - All four workloads have their intended ready pod count, no restart loop, and the expected immutable image where a digest is specified.
 - Loki, Prometheus, and Grafana PVCs are Bound on `local-path`.
-- Prometheus self, Loki, Alloy, database, pool, and deployed bot targets are up; unavailable ingester services are not configured as development targets yet.
+- Prometheus self, Loki, Alloy, database, pool, bot, and deployed ingester targets are up. The ingester scrape jobs come from the shared Prometheus configuration through the bake.
 - Alloy delivers current `capitonic` pod logs to Loki without persistent delivery errors.
 - Grafana reports a healthy API, provisions its shared dashboards and the Prometheus, Loki, and PostgreSQL datasources, and can query each deployed dependency.
 - Monitoring configuration is provisioned only through the charts. After successful observability deployment, record the repository-required `provisioned/observability/dev/<timestamp>` tag on the exact deployed commit.

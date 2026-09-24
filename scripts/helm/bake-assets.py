@@ -60,13 +60,15 @@ def bake() -> None:
         if part.startswith(
             (
                 "  - job_name: polymarket-bot\n",
+                "  - job_name: ingester-master\n",
+                "  - job_name: ingester-worker\n",
                 "  - job_name: alloy\n",
                 "  - job_name: loki\n",
             )
         )
     ]
-    if len(selected) != 3:
-        raise ValueError("Expected bot, Alloy, and Loki scrape jobs in the shared Prometheus configuration")
+    if len(selected) != 5:
+        raise ValueError("Expected bot, ingester, Alloy, and Loki scrape jobs in the shared Prometheus configuration")
     database_scrapes = (ROOT / "common/configs/prometheus/kubernetes-database-scrapes.yml").read_text()
     if database_scrapes.count("  - job_name: ") != 2:
         raise ValueError("Expected TimescaleDB and PgBouncer Kubernetes scrape jobs")
