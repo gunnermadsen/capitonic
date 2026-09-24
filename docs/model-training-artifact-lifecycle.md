@@ -114,6 +114,10 @@ Archive completed and superseded runs under the same canonical root without chan
 
 The first bulk migration added 14 canonical runs covering conservative selective training, VWAP capacity, loss-aware selection, paper exports, and the historical aggregate, time-bucket, amalgamated-bucket, and micro-bucket tournament lineages. Each run contains `manifests/source-migration.json`, `manifests/run-status.md`, and a verified `manifests/canonical-inventory.sha256`.
 
+The remaining BTC archive migration added 41 primary training runs, five worktree-only runs, and three partial multivenue runs. The canonical root now contains 64 BTC run directories. Matching copies from the early-entry archive, shared source-data caches, risk-model checkpoints, and the frozen champion selection record were reconciled into their owning runs. Every run has `manifests/run-status.md`, `manifests/source-migration.json`, and `manifests/canonical-inventory.sha256`; the earlier micro-edge run retains its detailed migration records in `legacy-location-migration.json` and `upstream-input-migration.json`.
+
+The legacy source-data and archive copies remain in place because historical configuration and result files still refer to those paths, and some inputs are shared across lineages. Their canonical copies and SHA-256 identities are recorded in each run's `source-migration.json`. No model qualification, deployment authorization, runtime bundle, or Git model tag changed during this archive migration. The NYC temperature model is outside this BTC archive.
+
 ## Deployment admission
 
 Ordinary training integration does not move model artifacts into the repository. When the user explicitly authorizes a model for paper or live deployment:
