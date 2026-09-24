@@ -18,7 +18,7 @@ use chrono::{DateTime, Duration, Utc};
 use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
 use tokio::{
-    sync::{watch, RwLock},
+    sync::{watch, Mutex as AsyncMutex, RwLock},
     task::JoinHandle,
     time::{interval, sleep, MissedTickBehavior},
 };
@@ -301,10 +301,10 @@ async fn run_directional_open_interest_hydration_recovery(
     }
 }
 
-fn merge_binance_one_second_history(
-    window: &mut BinanceOneSecondWindow,
+fn build_binance_one_second_history(
+    window: &BinanceOneSecondWindow,
     mut hydrated: Vec<BinanceOneSecondKline>,
-) -> Result<()> {
+) -> Result<BinanceOneSecondWindow> {
     hydrated.extend(window.completed().iter().cloned());
     hydrated.sort_unstable_by_key(|candle| candle.open_timestamp);
     let mut canonical: Vec<BinanceOneSecondKline> = Vec::with_capacity(hydrated.len());
@@ -328,8 +328,36 @@ fn merge_binance_one_second_history(
     if canonical.len() > BINANCE_ONE_SECOND_BOOTSTRAP_CAPACITY {
         canonical.drain(..canonical.len() - BINANCE_ONE_SECOND_BOOTSTRAP_CAPACITY);
     }
-    *window = BinanceOneSecondWindow::from_completed(canonical)?;
+    BinanceOneSecondWindow::from_completed(canonical)
+}
+
+fn merge_binance_one_second_history(
+    window: &mut BinanceOneSecondWindow,
+    hydrated: Vec<BinanceOneSecondKline>,
+) -> Result<()> {
+    *window = build_binance_one_second_history(window, hydrated)?;
     Ok(())
+}
+
+pub(crate) fn build_binance_one_second_recovery(
+    window: &BinanceOneSecondWindow,
+    mut hydrated: Vec<BinanceOneSecondKline>,
+    required: BinanceOneSecondKline,
+) -> Result<BinanceOneSecondWindow> {
+    hydrated.push(required.clone());
+    let candidate = build_binance_one_second_history(window, hydrated)?;
+    ensure!(
+        candidate.completed_five_minute_summaries().len() >= BINANCE_PREWINDOW_SUMMARY_CAPACITY,
+        "Binance one-second recovery history is incomplete"
+    );
+    ensure!(
+        candidate
+            .completed()
+            .iter()
+            .any(|candle| candle == &required),
+        "Binance one-second recovery omitted the triggering live candle"
+    );
+    Ok(candidate)
 }
 
 async fn apply_binance_one_second_history(
@@ -350,6 +378,8 @@ async fn apply_binance_one_second_history(
 async fn run_binance_one_second_hydration_recovery(
     repository: BtcRepository,
     state: Arc<RwLock<RealtimeState>>,
+    hydration_guard: Arc<AsyncMutex<()>>,
+    stream_metrics: Arc<StreamMetrics>,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut retry_delay = StdDuration::from_secs(1);
@@ -362,9 +392,9 @@ async fn run_binance_one_second_hydration_recovery(
             }
             _ = sleep(retry_delay) => {}
         }
+        let hydration = hydration_guard.lock().await;
         let bootstrap_end = Utc::now();
-        let bootstrap_start = bootstrap_end
-            - chrono::Duration::minutes(BINANCE_ONE_SECOND_BOOTSTRAP_LOOKBACK_MINUTES);
+        let bootstrap_start = binance_one_second_bootstrap_start(bootstrap_end);
         match repository
             .load_binance_one_second_history(bootstrap_start, bootstrap_end)
             .await
@@ -373,34 +403,49 @@ async fn run_binance_one_second_hydration_recovery(
                 Ok((candle_count, summary_count))
                     if summary_count >= BINANCE_PREWINDOW_SUMMARY_CAPACITY =>
                 {
+                    stream_metrics.set_binance_one_second_window_ready(true);
                     tracing::info!(
                         candle_count,
                         summary_count,
                         "Binance one-second runtime bootstrap recovered"
                     );
+                    drop(hydration);
                     let _ = shutdown.changed().await;
                     return;
                 }
-                Ok((candle_count, summary_count)) => tracing::warn!(
-                    candle_count,
-                    summary_count,
-                    retry_delay_ms = retry_delay.as_millis(),
-                    "Binance one-second runtime bootstrap remains incomplete"
-                ),
-                Err(error) => tracing::warn!(
+                Ok((candle_count, summary_count)) => {
+                    stream_metrics.set_binance_one_second_window_ready(false);
+                    tracing::warn!(
+                        candle_count,
+                        summary_count,
+                        retry_delay_ms = retry_delay.as_millis(),
+                        "Binance one-second runtime bootstrap remains incomplete"
+                    )
+                }
+                Err(error) => {
+                    stream_metrics.set_binance_one_second_window_ready(false);
+                    tracing::warn!(
+                        error = %error,
+                        retry_delay_ms = retry_delay.as_millis(),
+                        "Binance one-second runtime bootstrap merge failed"
+                    )
+                }
+            },
+            Err(error) => {
+                stream_metrics.set_binance_one_second_window_ready(false);
+                tracing::warn!(
                     error = %error,
                     retry_delay_ms = retry_delay.as_millis(),
-                    "Binance one-second runtime bootstrap merge failed"
-                ),
-            },
-            Err(error) => tracing::warn!(
-                error = %error,
-                retry_delay_ms = retry_delay.as_millis(),
-                "Binance one-second runtime bootstrap retry failed"
-            ),
+                    "Binance one-second runtime bootstrap retry failed"
+                )
+            }
         }
         retry_delay = (retry_delay * 2).min(DIRECTIONAL_CHAINLINK_HYDRATION_RETRY_MAX_DELAY);
     }
+}
+
+pub(crate) fn binance_one_second_bootstrap_start(end: DateTime<Utc>) -> DateTime<Utc> {
+    end - chrono::Duration::minutes(BINANCE_ONE_SECOND_BOOTSTRAP_LOOKBACK_MINUTES)
 }
 
 impl BtcRuntime {
@@ -443,8 +488,7 @@ impl BtcRuntime {
             .any(|source| source.key == PRODUCT_BINANCE_1S)
         {
             let bootstrap_end = Utc::now();
-            let bootstrap_start = bootstrap_end
-                - chrono::Duration::minutes(BINANCE_ONE_SECOND_BOOTSTRAP_LOOKBACK_MINUTES);
+            let bootstrap_start = binance_one_second_bootstrap_start(bootstrap_end);
             match self
                 .repository
                 .load_binance_one_second_history(bootstrap_start, bootstrap_end)
@@ -556,6 +600,15 @@ impl BtcRuntime {
         let stream_shutdown = CancellationToken::new();
         let stream_shutdown_task = stream_shutdown.clone();
         let stream_metrics = Arc::new(StreamMetrics::default());
+        stream_metrics.set_binance_one_second_window_ready(
+            state
+                .read()
+                .await
+                .binance_one_second_window
+                .completed_five_minute_summaries()
+                .len()
+                >= BINANCE_PREWINDOW_SUMMARY_CAPACITY,
+        );
         crate::market_data_stream::install_metrics(stream_metrics.clone());
         let master_url = std::env::var("INGESTER_MASTER_URL")
             .context("INGESTER_MASTER_URL is required for BTC market data")?;
@@ -569,8 +622,10 @@ impl BtcRuntime {
             self.repository.clone(),
             state.clone(),
             books.clone(),
-            stream_metrics,
+            stream_metrics.clone(),
         )?;
+        let binance_one_second_hydration_guard =
+            stream_runtime.binance_one_second_hydration_guard();
         let watch_shutdown = stream_shutdown.clone();
         let mut stream_shutdown_rx = shutdown_rx.clone();
         tokio::spawn(async move {
@@ -589,6 +644,8 @@ impl BtcRuntime {
                 run_binance_one_second_hydration_recovery(
                     self.repository.clone(),
                     state.clone(),
+                    binance_one_second_hydration_guard.clone(),
+                    stream_metrics.clone(),
                     shutdown_rx.clone(),
                 ),
                 running.clone(),
@@ -635,6 +692,8 @@ impl BtcRuntime {
             dynamic_open_interest_hydration_task: StdMutex::new(None),
             binance_one_second_hydration_started,
             dynamic_binance_one_second_hydration_task: StdMutex::new(None),
+            binance_one_second_hydration_guard,
+            stream_metrics,
         })
     }
 }
@@ -728,6 +787,8 @@ pub struct BtcRuntimeHandle {
     dynamic_open_interest_hydration_task: StdMutex<Option<JoinHandle<()>>>,
     binance_one_second_hydration_started: Arc<AtomicBool>,
     dynamic_binance_one_second_hydration_task: StdMutex<Option<JoinHandle<()>>>,
+    binance_one_second_hydration_guard: Arc<AsyncMutex<()>>,
+    stream_metrics: Arc<StreamMetrics>,
 }
 
 impl BtcRuntimeHandle {
@@ -788,6 +849,8 @@ impl BtcRuntimeHandle {
                 run_binance_one_second_hydration_recovery(
                     self.repository.clone(),
                     self.state.clone(),
+                    self.binance_one_second_hydration_guard.clone(),
+                    self.stream_metrics.clone(),
                     self.shutdown.subscribe(),
                 ),
                 self.running.clone(),
@@ -1493,6 +1556,102 @@ mod tests {
             window.completed().front().unwrap().open_timestamp,
             start + chrono::Duration::seconds(3)
         );
+    }
+
+    #[test]
+    fn binance_one_second_recovery_bridges_persisted_gap_and_keeps_triggering_live_candle() {
+        let start = DateTime::from_timestamp(1_788_436_800, 0).unwrap();
+        let hydrated = (0..BINANCE_ONE_SECOND_BOOTSTRAP_CAPACITY)
+            .map(|index| one_second_candle(start + chrono::Duration::seconds(index as i64)))
+            .collect::<Vec<_>>();
+        let required = one_second_candle(
+            start + chrono::Duration::seconds(BINANCE_ONE_SECOND_BOOTSTRAP_CAPACITY as i64),
+        );
+
+        let recovered = build_binance_one_second_recovery(
+            &BinanceOneSecondWindow::default(),
+            hydrated,
+            required.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(recovered.completed().back(), Some(&required));
+        assert_eq!(
+            recovered.completed_five_minute_summaries().len(),
+            BINANCE_PREWINDOW_SUMMARY_CAPACITY
+        );
+    }
+
+    #[test]
+    fn binance_one_second_recovery_merges_live_progress_that_arrived_during_hydration() {
+        let start = DateTime::from_timestamp(1_788_436_800, 0).unwrap();
+        let hydrated = (0..BINANCE_ONE_SECOND_BOOTSTRAP_CAPACITY)
+            .map(|index| one_second_candle(start + chrono::Duration::seconds(index as i64)))
+            .collect::<Vec<_>>();
+        let required_open =
+            start + chrono::Duration::seconds(BINANCE_ONE_SECOND_BOOTSTRAP_CAPACITY as i64);
+        let required = one_second_candle(required_open);
+        let later_live = one_second_candle(required_open + chrono::Duration::seconds(1));
+        let live_window =
+            BinanceOneSecondWindow::from_completed(vec![required.clone(), later_live.clone()])
+                .unwrap();
+
+        let recovered =
+            build_binance_one_second_recovery(&live_window, hydrated, required).unwrap();
+
+        assert_eq!(recovered.completed().back(), Some(&later_live));
+        assert_eq!(
+            recovered.completed_five_minute_summaries().len(),
+            BINANCE_PREWINDOW_SUMMARY_CAPACITY
+        );
+    }
+
+    #[test]
+    fn binance_one_second_recovery_rejects_incomplete_history_without_mutating_window() {
+        let start = DateTime::from_timestamp(1_788_436_800, 0).unwrap();
+        let original = BinanceOneSecondWindow::from_completed(vec![
+            one_second_candle(start),
+            one_second_candle(start + chrono::Duration::seconds(1)),
+        ])
+        .unwrap();
+        let before = original.clone();
+
+        let result = build_binance_one_second_recovery(
+            &original,
+            vec![one_second_candle(start + chrono::Duration::seconds(3))],
+            one_second_candle(start + chrono::Duration::seconds(4)),
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("recovery history is incomplete"));
+        assert_eq!(original, before);
+    }
+
+    #[test]
+    fn binance_one_second_recovery_rejects_conflicting_durable_and_live_candles() {
+        let start = DateTime::from_timestamp(1_788_436_800, 0).unwrap();
+        let mut hydrated = (0..BINANCE_ONE_SECOND_BOOTSTRAP_CAPACITY)
+            .map(|index| one_second_candle(start + chrono::Duration::seconds(index as i64)))
+            .collect::<Vec<_>>();
+        let required_open =
+            start + chrono::Duration::seconds(BINANCE_ONE_SECOND_BOOTSTRAP_CAPACITY as i64);
+        let required = one_second_candle(required_open);
+        let mut conflicting = required.clone();
+        conflicting.close_price = dec!(101);
+        hydrated.push(conflicting);
+
+        let error = build_binance_one_second_recovery(
+            &BinanceOneSecondWindow::default(),
+            hydrated,
+            required,
+        )
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("conflicts with live runtime candle"));
     }
 
     #[test]

@@ -1,4 +1,11 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
@@ -233,6 +240,7 @@ impl BtcExecutionLifecycle for PaperExecutionLifecycle {
 pub struct LiveExecutionLifecycle {
     venue: Arc<dyn ExecutionVenue>,
     reconcile_interval: Duration,
+    settlement_telemetry_refresh_required: AtomicBool,
 }
 
 impl LiveExecutionLifecycle {
@@ -243,6 +251,7 @@ impl LiveExecutionLifecycle {
         Ok(Self {
             venue,
             reconcile_interval,
+            settlement_telemetry_refresh_required: AtomicBool::new(false),
         })
     }
 }
@@ -271,6 +280,8 @@ impl BtcExecutionLifecycle for LiveExecutionLifecycle {
             .recover_process_official_resolution_watches(process_id, BtcExecutionMode::Live)
             .await?;
         hydrate_live_settlement_telemetry(repository, process_id).await?;
+        self.settlement_telemetry_refresh_required
+            .store(false, Ordering::Release);
         // The runner performs one mandatory reconciliation after resume hydration and admission
         // initialization. Durable settlement economics are restored above; live capital remains
         // venue-owned and is reconciled by that mandatory pass.
@@ -309,6 +320,13 @@ impl BtcExecutionLifecycle for LiveExecutionLifecycle {
                         )
                         .await?;
                     if recognized {
+                        self.settlement_telemetry_refresh_required
+                            .store(true, Ordering::Release);
+                        super::unified_model_runtime::telemetry::gauge(
+                            process_id,
+                            "settlement_telemetry_synced",
+                            0.0,
+                        );
                         use rust_decimal::prelude::ToPrimitive;
                         super::unified_model_runtime::telemetry::settlement(
                             process_id,
@@ -333,11 +351,45 @@ impl BtcExecutionLifecycle for LiveExecutionLifecycle {
                     }
                 } else {
                     pending_redemption_count = pending_redemption_count.saturating_add(1);
+                    self.settlement_telemetry_refresh_required
+                        .store(true, Ordering::Release);
+                    super::unified_model_runtime::telemetry::gauge(
+                        process_id,
+                        "settlement_telemetry_synced",
+                        0.0,
+                    );
                 }
             }
             // Zero-payout settlement evidence is durable before wallet reconciliation so the
             // same cycle observes the credited ledger instead of waiting for the next poll.
-            let reconciliation = self.venue.reconcile().await?;
+            let reconciliation = self.venue.reconcile().await;
+            if self
+                .settlement_telemetry_refresh_required
+                .load(Ordering::Acquire)
+            {
+                match hydrate_live_settlement_telemetry(repository, process_id).await {
+                    Ok(()) => {
+                        self.settlement_telemetry_refresh_required
+                            .store(false, Ordering::Release);
+                        info!(
+                            event = "btc_live_settlement_telemetry_refreshed",
+                            process_id = %process_id,
+                            run_id = %run_id,
+                            pending_redemption_count,
+                            "UMR settlement telemetry refreshed from the durable live ledger"
+                        );
+                    }
+                    Err(error) => warn!(
+                        event = "btc_live_settlement_telemetry_refresh_failed",
+                        process_id = %process_id,
+                        run_id = %run_id,
+                        pending_redemption_count,
+                        error = %error,
+                        "UMR settlement telemetry refresh failed; durable accounting remains authoritative and refresh will retry"
+                    ),
+                }
+            }
+            let reconciliation = reconciliation?;
             observe_settlement_health(
                 process_id,
                 &repository
