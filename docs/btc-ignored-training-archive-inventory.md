@@ -1,6 +1,6 @@
 # BTC ignored training archive inventory
 
-This is a read-only inventory of `/Volumes/docker-data/archives/polymarket-bot/ml-training/btc-directional-model-ignored-training-20260825-fa05ed3.tar.zst`. The archive remains the source artifact. Inspection used a temporary extracted directory, which was removed after this report was written and verified.
+This inventory covers `/Volumes/docker-data/archives/polymarket-bot/ml-training/btc-directional-model-ignored-training-20260825-fa05ed3.tar.zst`. The archive remains the source artifact. Inspection used a temporary extracted directory, which was removed after the inventory was verified. Its four model artifact groups were subsequently moved to the canonical SSD root as described below.
 
 ## Identity and verification
 
@@ -113,4 +113,15 @@ There are 48 named run lineages and 110 timestamped run directories, including t
 - `data/btc-early-price-value-20260414-20260802/core-source/2026-07-31.parquet.partial` is an incomplete source artifact. Preserve its partial status if this lineage is migrated.
 - Three absolute symlinks under `data/btc-early-price-value-20260414-20260802/external/` point to old repository paths for Chainlink reference prices, L2, and candles. The links do not contain their targets; resolve source identities before migration.
 - The archive includes model binaries and manifests, but their presence does not establish qualification, deployment authorization, or eligibility for a new `model/...` tag.
-- No files were added to the canonical SSD model root, and the compressed archive and its checksum sidecar were left unchanged.
+- The compressed archive and its checksum sidecar remain unchanged.
+
+## Model artifact bundle transfer
+
+On 2026-09-24, the four directories under the archive's `packages/btc-directional-model/artifacts/` were extracted and placed directly under `/Volumes/docker-data/capitonic-btc-directional-model/`:
+
+- `asymmetric-value-20260805/`
+- `btc-chainlink-oi-paper-candidates/`
+- `btc-core-20260421-20260620/`
+- `btc-core-20260421-20260720/`
+
+The 48 model artifact files total 69,402,045 bytes. Every destination file was verified against its source SHA-256. The archive's `.DS_Store` file was excluded. `artifact-bundle-migration-20260825-fa05ed3.json` and `artifact-bundle-inventory-20260825-fa05ed3.sha256` in the canonical root record the source paths, archive identity, destination paths, sizes, and per-file checksums. The temporary extraction was removed. This transfer did not qualify or authorize any model for deployment.
