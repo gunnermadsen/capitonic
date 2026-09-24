@@ -87,6 +87,16 @@ Before starting a new run, inspect every writable path in its configuration and 
 
 Paths to existing models, metrics, predictions, or source datasets are inputs. Verify those against their immutable canonical SSD location and recorded checksum when reusing them; do not redirect them into the new run merely because a historical config contains a legacy path. Preserve historical configs as run provenance, and create or adapt the configuration for each subsequent run.
 
+## Tournament trade-activity timeline
+
+At the completion of each model-training tournament, include a chronological trade-activity chart for the top `ceil(0.30 × N)` distinct evaluated model candidates, with at least one chart when `N > 0`. Thus three candidates yield one chart and ten yield three. Count fitted model identities, not folds, seeds, time buckets, or admission-policy variants of the same model. Rank candidates using the tournament's declared primary economic ordering and its existing tie breakers; record the ordered candidate list, metric, and selected identities so the choice is reproducible. A candidate does not need to pass deployment qualification to appear. If no candidate has a comparable trade ledger, report that limitation rather than fabricating a timeline.
+
+For each selected candidate, plot the full evaluated calendar range at a consistent UTC cadence, with trade count and net PnL over time. Show stressed PnL when it is part of the tournament's economic ranking. Distinguish days with no admitted trades from missing source coverage, untested intervals, and policy-disabled intervals. Mark evaluation fold and holdout boundaries, and keep backtest, paper, and live evidence in separate labeled series when more than one exists; never add their PnL together.
+
+Identify contiguous activity bursts by grouping admitted trades whose successive entry timestamps are no more than 30 minutes apart. For each burst, report its start and end, trade count, preceding no-trade interval, and net and stressed PnL when available; do not count coverage gaps as verified quiet. Annotate every burst with at least $10 positive PnL on the tournament's primary economic measure for USD-denominated five-share BTC tournaments, including larger bursts; show material losing bursts as well so the chart does not select only winners. For tournaments using other position sizes or PnL units, state an analogous meaningful-burst threshold before examining outcomes. Include a compact chronological burst list beside the chart so short bursts remain visible when the full-range axis compresses them.
+
+Store generated charts and supporting tabular evidence in the run's SSD `diagnostics/` and `metrics/` directories. Link them from the tournament's concise report and record the candidate ranking, chart paths, coverage, and any missing ledgers in its manifest. Do not commit generated plots or ledgers to Git.
+
 ## Preparing a training branch for integration
 
 Before requesting integration:
