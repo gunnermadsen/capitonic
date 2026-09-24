@@ -880,6 +880,7 @@ pub fn hydrate_settlements(
     member_snapshots: &BTreeMap<String, SettlementTelemetrySnapshot>,
 ) {
     update(id, |p| {
+        p.gauges.insert("settlement_telemetry_synced", 1.0);
         for (outcome, value) in [
             ("win", process_snapshot.wins),
             ("loss", process_snapshot.losses),
@@ -1332,6 +1333,73 @@ mod router_tests {
         assert!(scoped.contains("member_id=\"primary\",outcome=\"win\"} 2"));
         assert!(scoped.contains("polymarket_umr_model_member_settled_entry_notional_usd"));
         assert!(!scoped.contains("} 99"));
+    }
+
+    #[test]
+    fn durable_settlement_refresh_applies_post_startup_credit_exactly() {
+        let id = Uuid::new_v4();
+        let identity = RuntimeModelSelection {
+            model_key: "settlement-refresh".into(),
+            artifact_sha256: "a".repeat(64),
+            feature_schema_sha256: "b".repeat(64),
+        };
+        register(id, Uuid::new_v4(), "config", "live", Some(&identity));
+        register_member(id, "primary", &identity, 60, 89);
+
+        let startup = SettlementTelemetrySnapshot {
+            wins: 2,
+            losses: 2,
+            entry_notional_usd: 9.75000031,
+            fees_usd: 0.3499300108,
+            realized_pnl_usd: 0.0961486792,
+            gross_profit_usd: 5.4461486792,
+            gross_loss_usd: 5.35,
+            equity_high_usd: 0.0961486792,
+            max_drawdown_usd: 5.35,
+            ..Default::default()
+        };
+        hydrate_settlements(
+            id,
+            &startup,
+            &BTreeMap::from([("primary".into(), startup.clone())]),
+        );
+
+        let after_credit = SettlementTelemetrySnapshot {
+            wins: 3,
+            losses: 2,
+            entry_notional_usd: 12.40000031,
+            fees_usd: 0.4371150108,
+            realized_pnl_usd: 2.3589636792,
+            gross_profit_usd: 7.7089636792,
+            gross_loss_usd: 5.35,
+            equity_high_usd: 2.3589636792,
+            max_drawdown_usd: 5.35,
+            ..Default::default()
+        };
+        hydrate_settlements(
+            id,
+            &after_credit,
+            &BTreeMap::from([("primary".into(), after_credit.clone())]),
+        );
+
+        let metrics = prometheus_metrics();
+        let scoped = metrics
+            .lines()
+            .filter(|line| line.contains(&id.to_string()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(scoped.contains("reason=\"win\"} 3"));
+        assert!(scoped.contains("reason=\"loss\"} 2"));
+        assert!(scoped.contains("polymarket_umr_realized_pnl_usd"));
+        assert!(scoped.contains("} 2.3589636792"));
+        assert!(scoped.contains("member_id=\"primary\",outcome=\"win\"} 3"));
+        assert!(scoped.contains("polymarket_umr_model_member_settled_entry_notional_usd"));
+        assert!(scoped.contains("} 12.40000031"));
+        assert!(scoped.contains("polymarket_umr_model_member_settlement_fees_usd"));
+        assert!(scoped.contains("} 0.4371150108"));
+        assert!(scoped.lines().any(|line| {
+            line.starts_with("polymarket_umr_settlement_telemetry_synced{") && line.ends_with("} 1")
+        }));
     }
 
     #[test]

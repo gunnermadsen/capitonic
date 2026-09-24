@@ -1,27 +1,28 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
-        atomic::{AtomicI64, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
         Arc, Mutex, OnceLock,
     },
     time::Duration,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, watch, RwLock};
+use tokio::sync::{mpsc, watch, Mutex as AsyncMutex, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tonic::{metadata::MetadataValue, transport::Channel, Request};
 use uuid::Uuid;
 
+use crate::btc::runtime::{binance_one_second_bootstrap_start, build_binance_one_second_recovery};
 use crate::btc::{
     BinanceOneSecondKline, BinanceOpenInterestPoint, BookRegistry, BtcIntervalMarket, BtcOutcome,
     BtcRepository, ChainlinkTwap60Point, PolygonOraclePoint, RealtimeState, ReferencePriceSource,
-    ReferencePriceTick,
+    ReferencePriceTick, BINANCE_PREWINDOW_SUMMARY_CAPACITY,
 };
 
 pub mod proto {
@@ -216,6 +217,10 @@ pub struct StreamMetrics {
     unresolved_products: Mutex<BTreeMap<String, i64>>,
     route_failures: Mutex<BTreeMap<String, u64>>,
     retained_books: AtomicU64,
+    binance_one_second_recovery_requests: AtomicU64,
+    binance_one_second_recovery_successes: AtomicU64,
+    binance_one_second_recovery_failures: AtomicU64,
+    binance_one_second_window_ready: AtomicBool,
 }
 
 #[derive(Default)]
@@ -255,7 +260,9 @@ fn route_failure_reason(error: &anyhow::Error) -> &'static str {
         }
     }
     let message = error.to_string();
-    if message.contains(" is stale") || message.contains("not contiguous") {
+    if message.contains("Binance one-second recovery") {
+        "binance_one_second_recovery"
+    } else if message.contains(" is stale") || message.contains("not contiguous") {
         "required_product_stale"
     } else if message.contains("sequence gap") {
         "sequence_integrity"
@@ -273,7 +280,10 @@ fn route_failure_reason(error: &anyhow::Error) -> &'static str {
 }
 
 fn route_retry_delay(previous: Duration, connected_for: Duration, reason: &str) -> Duration {
-    if matches!(reason, "client_queue_full" | "broadcast_lag") {
+    if matches!(
+        reason,
+        "client_queue_full" | "broadcast_lag" | "binance_one_second_recovery"
+    ) {
         // A typed server overload report proves the route was reachable. Do
         // not turn a recoverable data gap into a fifteen-second retry pause.
         Duration::from_millis(500)
@@ -329,6 +339,7 @@ pub struct MarketDataStreamRuntime {
     market_contracts: Arc<Mutex<BTreeMap<DateTime<Utc>, BtcIntervalMarket>>>,
     sequence: Arc<Mutex<BTreeMap<String, (String, u64)>>>,
     metrics: Arc<StreamMetrics>,
+    binance_one_second_hydration_guard: Arc<AsyncMutex<()>>,
 }
 
 impl MarketDataStreamRuntime {
@@ -356,7 +367,12 @@ impl MarketDataStreamRuntime {
             market_contracts: Arc::new(Mutex::new(BTreeMap::new())),
             sequence: Arc::new(Mutex::new(BTreeMap::new())),
             metrics,
+            binance_one_second_hydration_guard: Arc::new(AsyncMutex::new(())),
         })
+    }
+
+    pub(crate) fn binance_one_second_hydration_guard(&self) -> Arc<AsyncMutex<()>> {
+        self.binance_one_second_hydration_guard.clone()
     }
 
     pub async fn run(
@@ -836,22 +852,8 @@ impl MarketDataStreamRuntime {
                 let payload: KlinePayload = serde_json::from_value(raw_payload.clone())?;
                 let reference = payload.reference_tick(event, raw_payload)?;
                 let kline = payload.into_kline();
-                let mut state = self.state.write().await;
-                // The one-second close replaces the retired aggregate-trade
-                // socket as the canonical direct Binance reference while the
-                // existing model adapter continues to consume its unchanged
-                // ReferencePriceTick contract.
-                state.update_reference_price(reference);
-                if let Err(error) = state
-                    .binance_one_second_window
-                    .observe_completed(kline.clone())
-                {
-                    if !is_connection_baseline {
-                        return Err(error);
-                    }
-                    state.binance_one_second_window.clear();
-                    state.binance_one_second_window.observe_completed(kline)?;
-                }
+                self.apply_binance_one_second(reference, kline, is_connection_baseline)
+                    .await?;
             }
             PRODUCT_POLYGON_ORACLE => {
                 let payload: PolygonOraclePayload = serde_json::from_slice(&event.payload_json)?;
@@ -918,6 +920,115 @@ impl MarketDataStreamRuntime {
         Ok(())
     }
 
+    async fn apply_binance_one_second(
+        &self,
+        reference: ReferencePriceTick,
+        kline: BinanceOneSecondKline,
+        is_connection_baseline: bool,
+    ) -> Result<()> {
+        let append_error = {
+            let mut state = self.state.write().await;
+            // The one-second close replaces the retired aggregate-trade
+            // socket as the canonical direct Binance reference while the
+            // existing model adapter continues to consume its unchanged
+            // ReferencePriceTick contract.
+            state.update_reference_price(reference);
+            match apply_binance_one_second_kline(
+                &mut state.binance_one_second_window,
+                kline.clone(),
+            ) {
+                Ok(false) => {
+                    self.metrics.set_binance_one_second_window_ready(
+                        state
+                            .binance_one_second_window
+                            .completed_five_minute_summaries()
+                            .len()
+                            >= BINANCE_PREWINDOW_SUMMARY_CAPACITY,
+                    );
+                    return Ok(());
+                }
+                Ok(true) => anyhow::anyhow!("Binance one-second kline stream is not contiguous"),
+                Err(error) => {
+                    return Err(error);
+                }
+            }
+        };
+
+        self.metrics.observe_binance_one_second_recovery_request();
+        tracing::warn!(
+            is_connection_baseline,
+            open_timestamp = %kline.open_timestamp,
+            error = %append_error,
+            "Binance one-second runtime discontinuity requested canonical history recovery"
+        );
+
+        let result = self
+            .recover_binance_one_second_window(kline, is_connection_baseline)
+            .await;
+        match result {
+            Ok(()) => {
+                self.metrics.observe_binance_one_second_recovery_success();
+                Ok(())
+            }
+            Err(error) => {
+                self.metrics.observe_binance_one_second_recovery_failure();
+                Err(error)
+            }
+        }
+    }
+
+    async fn recover_binance_one_second_window(
+        &self,
+        required: BinanceOneSecondKline,
+        is_connection_baseline: bool,
+    ) -> Result<()> {
+        let _hydration = self.binance_one_second_hydration_guard.lock().await;
+        {
+            let state = self.state.read().await;
+            if let Some(existing) = state
+                .binance_one_second_window
+                .completed()
+                .iter()
+                .find(|candle| candle.open_timestamp == required.open_timestamp)
+            {
+                ensure!(
+                    existing == &required,
+                    "Binance one-second recovery conflicts with an applied live candle"
+                );
+                return Ok(());
+            }
+        }
+
+        let hydration_end = Utc::now();
+        let hydrated = self
+            .repository
+            .load_binance_one_second_history(
+                binance_one_second_bootstrap_start(hydration_end),
+                hydration_end,
+            )
+            .await
+            .context("load canonical Binance one-second recovery history")?;
+        let hydrated_count = hydrated.len();
+        let mut state = self.state.write().await;
+        let candidate = build_binance_one_second_recovery(
+            &state.binance_one_second_window,
+            hydrated,
+            required.clone(),
+        )?;
+        let candle_count = candidate.completed().len();
+        let summary_count = candidate.completed_five_minute_summaries().len();
+        state.binance_one_second_window = candidate;
+        tracing::info!(
+            is_connection_baseline,
+            required_open_timestamp = %required.open_timestamp,
+            hydrated_count,
+            candle_count,
+            summary_count,
+            "Binance one-second runtime recovered from canonical history"
+        );
+        Ok(())
+    }
+
     async fn reconcile_market_window(&self, now: DateTime<Utc>, prune_books: bool) -> Result<()> {
         let (selection, retained) = {
             let mut contracts = self
@@ -943,6 +1054,32 @@ impl MarketDataStreamRuntime {
             apply_market_window_selection(&mut *self.state.write().await, selection);
         }
         Ok(())
+    }
+}
+
+fn apply_binance_one_second_kline(
+    window: &mut crate::btc::BinanceOneSecondWindow,
+    kline: BinanceOneSecondKline,
+) -> Result<bool> {
+    if let Some(existing) = window
+        .completed()
+        .iter()
+        .find(|existing| existing.open_timestamp == kline.open_timestamp)
+    {
+        ensure!(
+            existing == &kline,
+            "Binance one-second stream conflicts with hydrated runtime candle"
+        );
+        return Ok(false);
+    }
+    let is_forward_discontinuity = window
+        .completed()
+        .back()
+        .is_some_and(|previous| kline.open_timestamp > previous.close_timestamp);
+    match window.observe_completed(kline) {
+        Ok(()) => Ok(false),
+        Err(_) if is_forward_discontinuity => Ok(true),
+        Err(error) => Err(error),
     }
 }
 
@@ -1201,6 +1338,29 @@ impl StreamMetrics {
             .insert(product.to_owned(), ready);
     }
 
+    pub(crate) fn set_binance_one_second_window_ready(&self, ready: bool) {
+        self.binance_one_second_window_ready
+            .store(ready, Ordering::Relaxed);
+    }
+
+    fn observe_binance_one_second_recovery_request(&self) {
+        self.binance_one_second_recovery_requests
+            .fetch_add(1, Ordering::Relaxed);
+        self.set_binance_one_second_window_ready(false);
+    }
+
+    fn observe_binance_one_second_recovery_success(&self) {
+        self.binance_one_second_recovery_successes
+            .fetch_add(1, Ordering::Relaxed);
+        self.set_binance_one_second_window_ready(true);
+    }
+
+    fn observe_binance_one_second_recovery_failure(&self) {
+        self.binance_one_second_recovery_failures
+            .fetch_add(1, Ordering::Relaxed);
+        self.set_binance_one_second_window_ready(false);
+    }
+
     fn observe_route_failure(&self, reason: &str) {
         let mut failures = self
             .route_failures
@@ -1226,6 +1386,22 @@ impl StreamMetrics {
             self.last_event_micros.load(Ordering::Relaxed) as f64 / 1_000_000.0)
         ;
         output.push_str(&format!("# HELP polymarket_market_data_retained_books Books retained after market-contract reconciliation.\n# TYPE polymarket_market_data_retained_books gauge\npolymarket_market_data_retained_books {}\n", self.retained_books.load(Ordering::Relaxed)));
+        output.push_str(&format!(
+            "# HELP polymarket_binance_one_second_runtime_recovery_requests_total Binance one-second runtime discontinuities that requested canonical history recovery.\n# TYPE polymarket_binance_one_second_runtime_recovery_requests_total counter\npolymarket_binance_one_second_runtime_recovery_requests_total {}\n\
+# HELP polymarket_binance_one_second_runtime_recovery_successes_total Binance one-second runtime recoveries atomically installed after contiguous-history validation.\n# TYPE polymarket_binance_one_second_runtime_recovery_successes_total counter\npolymarket_binance_one_second_runtime_recovery_successes_total {}\n\
+# HELP polymarket_binance_one_second_runtime_recovery_failures_total Binance one-second runtime recoveries that retained the prior window because loading or validation failed.\n# TYPE polymarket_binance_one_second_runtime_recovery_failures_total counter\npolymarket_binance_one_second_runtime_recovery_failures_total {}\n\
+# HELP polymarket_binance_one_second_runtime_window_ready Whether the shared Binance one-second runtime window contains the complete contiguous pre-window history required by UMR.\n# TYPE polymarket_binance_one_second_runtime_window_ready gauge\npolymarket_binance_one_second_runtime_window_ready {}\n",
+            self.binance_one_second_recovery_requests
+                .load(Ordering::Relaxed),
+            self.binance_one_second_recovery_successes
+                .load(Ordering::Relaxed),
+            self.binance_one_second_recovery_failures
+                .load(Ordering::Relaxed),
+            u8::from(
+                self.binance_one_second_window_ready
+                    .load(Ordering::Relaxed)
+            ),
+        ));
         let required_keys = self
             .required_product_keys
             .lock()
@@ -1783,6 +1959,63 @@ mod tests {
         assert_eq!(reference.raw_payload, raw);
     }
 
+    fn stream_candle(open_timestamp: DateTime<Utc>) -> BinanceOneSecondKline {
+        BinanceOneSecondKline {
+            open_timestamp,
+            close_timestamp: open_timestamp + chrono::Duration::seconds(1),
+            open_price: Decimal::new(100, 0),
+            high_price: Decimal::new(101, 0),
+            low_price: Decimal::new(99, 0),
+            close_price: Decimal::new(100, 0),
+            base_volume: Decimal::ONE,
+            quote_volume: Decimal::new(100, 0),
+            trade_count: 1,
+            taker_buy_base_volume: Decimal::new(5, 1),
+            taker_buy_quote_volume: Decimal::new(50, 0),
+            first_aggregate_trade_id: 0,
+            last_aggregate_trade_id: 0,
+            first_source_timestamp: open_timestamp,
+            last_source_timestamp: open_timestamp + chrono::Duration::milliseconds(999),
+            max_received_at: open_timestamp + chrono::Duration::milliseconds(1200),
+            source_complete: true,
+            synthetic: false,
+        }
+    }
+
+    #[test]
+    fn forward_discontinuity_requests_recovery_without_clearing_valid_window() {
+        let start = Utc.with_ymd_and_hms(2026, 9, 23, 17, 29, 58).unwrap();
+        let mut window = crate::btc::BinanceOneSecondWindow::from_completed(vec![
+            stream_candle(start),
+            stream_candle(start + chrono::Duration::seconds(1)),
+        ])
+        .unwrap();
+        let before = window.clone();
+
+        assert!(apply_binance_one_second_kline(
+            &mut window,
+            stream_candle(start + chrono::Duration::seconds(3)),
+        )
+        .unwrap());
+        assert_eq!(window, before);
+    }
+
+    #[test]
+    fn hydrated_stream_replay_deduplicates_without_regressing_window() {
+        let start = Utc.with_ymd_and_hms(2026, 9, 23, 17, 29, 58).unwrap();
+        let replay = stream_candle(start + chrono::Duration::seconds(1));
+        let latest = stream_candle(start + chrono::Duration::seconds(2));
+        let mut window = crate::btc::BinanceOneSecondWindow::from_completed(vec![
+            stream_candle(start),
+            replay.clone(),
+            latest.clone(),
+        ])
+        .unwrap();
+
+        assert!(!apply_binance_one_second_kline(&mut window, replay).unwrap());
+        assert_eq!(window.completed().back(), Some(&latest));
+    }
+
     #[test]
     fn route_topology_signature_is_stable_across_response_ordering() {
         let first = vec![
@@ -1842,6 +2075,19 @@ mod tests {
                 "worker_stream_closed"
             ),
             Duration::from_millis(250)
+        );
+        let recovery_error = anyhow::anyhow!("Binance one-second recovery history is incomplete");
+        assert_eq!(
+            route_failure_reason(&recovery_error),
+            "binance_one_second_recovery"
+        );
+        assert_eq!(
+            route_retry_delay(
+                Duration::from_secs(15),
+                Duration::from_secs(3),
+                "binance_one_second_recovery"
+            ),
+            Duration::from_millis(500)
         );
     }
 
@@ -1944,6 +2190,10 @@ mod tests {
         metrics.desired_connections.store(4, Ordering::Relaxed);
         metrics.set_product_ready(PRODUCT_BINANCE_1S, false);
         metrics.observe_route_failure("required_product_stale");
+        metrics.observe_binance_one_second_recovery_request();
+        metrics.observe_binance_one_second_recovery_failure();
+        metrics.observe_binance_one_second_recovery_request();
+        metrics.observe_binance_one_second_recovery_success();
         metrics.set_resolution_snapshot(
             &BTreeSet::from([PRODUCT_BINANCE_1S, PRODUCT_BOOKS]),
             &RouteResponse {
@@ -1978,6 +2228,16 @@ mod tests {
         assert!(rendered.contains("polymarket_market_data_ready_products 0"));
         assert!(rendered
             .contains("polymarket_market_data_unresolved_products{reason=\"no_current_owner\"} 1"));
+        assert!(
+            rendered.contains("polymarket_binance_one_second_runtime_recovery_requests_total 2")
+        );
+        assert!(
+            rendered.contains("polymarket_binance_one_second_runtime_recovery_successes_total 1")
+        );
+        assert!(
+            rendered.contains("polymarket_binance_one_second_runtime_recovery_failures_total 1")
+        );
+        assert!(rendered.contains("polymarket_binance_one_second_runtime_window_ready 1"));
     }
 
     #[test]
