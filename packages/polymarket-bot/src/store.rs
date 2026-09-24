@@ -567,6 +567,7 @@ pub struct AccountPositionSnapshot {
 #[derive(Debug, Clone)]
 pub struct LiveAccountPositionEvidence {
     pub size: Decimal,
+    pub credited_zero_payout_size: Decimal,
     pub oldest_fill_at: DateTime<Utc>,
     pub market_window_end: DateTime<Utc>,
 }
@@ -2077,7 +2078,7 @@ impl Store {
                   OR ($10 = 0 AND market.official_winning_token_id <> $3)
                 )
                 AND market.official_outcome IN ('up', 'down')
-                AND market.resolution_source_timestamp <= $5
+                AND COALESCE(market.resolution_source_timestamp, market.window_end) <= $5
               GROUP BY
                 orders.process_id, orders.order_id, orders.market_id, orders.token_id,
                 market.official_outcome, market.official_winning_token_id,
@@ -2432,6 +2433,7 @@ impl Store {
         struct PositionSizeRow {
             token_id: String,
             size: Decimal,
+            credited_zero_payout_size: Decimal,
             oldest_fill_at: DateTime<Utc>,
             market_window_end: DateTime<Utc>,
         }
@@ -2465,7 +2467,11 @@ impl Store {
               GROUP BY fill.token_id
             ), redeemed AS (
               SELECT settlement.token_id,
-                SUM(settlement.filled_size)::numeric AS size
+                SUM(settlement.filled_size)::numeric AS size,
+                COALESCE(
+                  SUM(settlement.filled_size) FILTER (WHERE settlement.payout = 0),
+                  0
+                )::numeric AS credited_zero_payout_size
               FROM polymarket.btc_paper_settlement_ledger settlement
               JOIN account_processes process
                 ON process.process_id = settlement.process_id
@@ -2491,6 +2497,8 @@ impl Store {
             SELECT tokens.token_id,
               (COALESCE(filled.size, 0) - COALESCE(redeemed.size, 0)
                 - COALESCE(exited.size, 0))::numeric AS size,
+              COALESCE(redeemed.credited_zero_payout_size, 0)::numeric
+                AS credited_zero_payout_size,
               filled.oldest_fill_at,
               filled.market_window_end
             FROM tokens
@@ -2499,6 +2507,7 @@ impl Store {
             LEFT JOIN exited USING (token_id)
             WHERE COALESCE(filled.size, 0) - COALESCE(redeemed.size, 0)
               - COALESCE(exited.size, 0) <> 0
+              OR COALESCE(redeemed.credited_zero_payout_size, 0) > 0
             ORDER BY tokens.token_id
             LIMIT 4001
             "#,
@@ -2516,11 +2525,16 @@ impl Store {
 
         let mut positions = HashMap::with_capacity(rows.len());
         for row in rows {
-            if row.token_id.trim().is_empty() || row.size <= Decimal::ZERO {
+            if row.token_id.trim().is_empty()
+                || row.size < Decimal::ZERO
+                || row.credited_zero_payout_size < Decimal::ZERO
+                || (row.size == Decimal::ZERO && row.credited_zero_payout_size == Decimal::ZERO)
+            {
                 bail!("live account position evidence contains an invalid net position");
             }
             let evidence = LiveAccountPositionEvidence {
                 size: row.size,
+                credited_zero_payout_size: row.credited_zero_payout_size,
                 oldest_fill_at: row.oldest_fill_at,
                 market_window_end: row.market_window_end,
             };

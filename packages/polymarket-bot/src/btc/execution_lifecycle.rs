@@ -1,8 +1,8 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
-use rust_decimal::Decimal;
+use rust_decimal::{prelude::ToPrimitive, Decimal};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -270,8 +270,10 @@ impl BtcExecutionLifecycle for LiveExecutionLifecycle {
         repository
             .recover_process_official_resolution_watches(process_id, BtcExecutionMode::Live)
             .await?;
+        hydrate_live_settlement_telemetry(repository, process_id).await?;
         // The runner performs one mandatory reconciliation after resume hydration and admission
-        // initialization. Live execution has no in-memory capital state to hydrate here.
+        // initialization. Durable settlement economics are restored above; live capital remains
+        // venue-owned and is reconciled by that mandatory pass.
         Ok(())
     }
 
@@ -348,6 +350,28 @@ impl BtcExecutionLifecycle for LiveExecutionLifecycle {
 
         match attempt {
             Ok((reconciliation, pending_redemption_count)) => {
+                let missing_order_results = repository
+                    .approved_live_decisions_without_order_result(
+                        process_id,
+                        chrono::Utc::now()
+                            - chrono::Duration::from_std(self.reconcile_interval)
+                                .unwrap_or_else(|_| chrono::Duration::seconds(30)),
+                    )
+                    .await?;
+                super::unified_model_runtime::telemetry::gauge(
+                    process_id,
+                    "approved_live_decisions_without_order_result",
+                    missing_order_results as f64,
+                );
+                if missing_order_results > 0 {
+                    warn!(
+                        event = "approved_live_decision_without_order_result",
+                        process_id = %process_id,
+                        run_id = %run_id,
+                        missing_order_results,
+                        "approved live decisions exceeded the execution deadline without a durable order result"
+                    );
+                }
                 let reason =
                     live_reconciliation_gate_reason(&reconciliation, pending_redemption_count)
                         .map(str::to_string);
@@ -404,6 +428,71 @@ impl BtcExecutionLifecycle for LiveExecutionLifecycle {
         }
         Ok(())
     }
+}
+
+async fn hydrate_live_settlement_telemetry(
+    repository: &BtcRepository,
+    process_id: Uuid,
+) -> Result<()> {
+    use super::unified_model_runtime::telemetry::{self, SettlementTelemetrySnapshot};
+
+    let rows = repository.live_settlement_telemetry(process_id).await?;
+    let mut process_snapshot = None;
+    let mut member_snapshots = BTreeMap::new();
+    for row in rows {
+        let snapshot = SettlementTelemetrySnapshot {
+            wins: row
+                .wins
+                .try_into()
+                .context("negative live settlement win count")?,
+            losses: row
+                .losses
+                .try_into()
+                .context("negative live settlement loss count")?,
+            pushes: row
+                .pushes
+                .try_into()
+                .context("negative live settlement push count")?,
+            entry_notional_usd: row
+                .entry_notional
+                .to_f64()
+                .context("live settlement entry notional exceeds telemetry range")?,
+            fees_usd: row
+                .fees
+                .to_f64()
+                .context("live settlement fees exceed telemetry range")?,
+            realized_pnl_usd: row
+                .realized_pnl
+                .to_f64()
+                .context("live settlement PnL exceeds telemetry range")?,
+            gross_profit_usd: row
+                .gross_profit
+                .to_f64()
+                .context("live settlement gross profit exceeds telemetry range")?,
+            gross_loss_usd: row
+                .gross_loss
+                .to_f64()
+                .context("live settlement gross loss exceeds telemetry range")?,
+            equity_high_usd: row
+                .equity_high
+                .to_f64()
+                .context("live settlement equity high exceeds telemetry range")?,
+            max_drawdown_usd: row
+                .max_drawdown
+                .to_f64()
+                .context("live settlement drawdown exceeds telemetry range")?,
+        };
+        match (row.scope.as_str(), row.member_id) {
+            ("process", None) if process_snapshot.is_none() => process_snapshot = Some(snapshot),
+            ("member", Some(member_id)) => {
+                member_snapshots.insert(member_id, snapshot);
+            }
+            _ => bail!("invalid durable live settlement telemetry scope"),
+        }
+    }
+    let process_snapshot = process_snapshot.context("missing process live settlement telemetry")?;
+    telemetry::hydrate_settlements(process_id, &process_snapshot, &member_snapshots);
+    Ok(())
 }
 
 async fn recover_settlement_state(

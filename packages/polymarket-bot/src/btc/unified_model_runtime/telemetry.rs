@@ -99,6 +99,20 @@ struct MemberPerformance {
     equity_high_usd: f64,
     max_drawdown_usd: f64,
 }
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SettlementTelemetrySnapshot {
+    pub wins: u64,
+    pub losses: u64,
+    pub pushes: u64,
+    pub entry_notional_usd: f64,
+    pub fees_usd: f64,
+    pub realized_pnl_usd: f64,
+    pub gross_profit_usd: f64,
+    pub gross_loss_usd: f64,
+    pub equity_high_usd: f64,
+    pub max_drawdown_usd: f64,
+}
 #[derive(Clone, Default)]
 struct Process {
     members: BTreeMap<String, RouterMember>,
@@ -859,6 +873,48 @@ pub fn settlement(id: Uuid, pnl: f64, fees: f64) {
             .or_default() += pnl.abs();
     });
 }
+
+pub fn hydrate_settlements(
+    id: Uuid,
+    process_snapshot: &SettlementTelemetrySnapshot,
+    member_snapshots: &BTreeMap<String, SettlementTelemetrySnapshot>,
+) {
+    update(id, |p| {
+        for (outcome, value) in [
+            ("win", process_snapshot.wins),
+            ("loss", process_snapshot.losses),
+            ("push", process_snapshot.pushes),
+        ] {
+            p.counters.insert(("trade_outcomes", outcome.into()), value);
+        }
+        for (name, value) in [
+            ("fees_usd", process_snapshot.fees_usd),
+            ("realized_pnl_usd", process_snapshot.realized_pnl_usd),
+            ("gross_profit_usd", process_snapshot.gross_profit_usd),
+            ("gross_loss_usd", process_snapshot.gross_loss_usd),
+            ("equity_high_usd", process_snapshot.equity_high_usd),
+            ("max_drawdown_usd", process_snapshot.max_drawdown_usd),
+        ] {
+            p.gauges.insert(name, value);
+        }
+        for (member_id, member) in &mut p.members {
+            let snapshot = member_snapshots.get(member_id).cloned().unwrap_or_default();
+            member.performance.trade_outcomes = [
+                ("win", snapshot.wins),
+                ("loss", snapshot.losses),
+                ("push", snapshot.pushes),
+            ]
+            .into();
+            member.performance.settled_entry_notional_usd = snapshot.entry_notional_usd;
+            member.performance.settlement_fees_usd = snapshot.fees_usd;
+            member.performance.realized_pnl_usd = snapshot.realized_pnl_usd;
+            member.performance.gross_profit_usd = snapshot.gross_profit_usd;
+            member.performance.gross_loss_usd = snapshot.gross_loss_usd;
+            member.performance.equity_high_usd = snapshot.equity_high_usd;
+            member.performance.max_drawdown_usd = snapshot.max_drawdown_usd;
+        }
+    });
+}
 pub struct ObservationGuard {
     id: Uuid,
     start: Instant,
@@ -1231,6 +1287,51 @@ mod router_tests {
         assert!(scoped.contains("outcome=\"win\"} 1"));
         assert!(scoped.contains("polymarket_umr_model_member_realized_pnl_usd"));
         assert!(scoped.contains("polymarket_umr_model_member_entry_second_count"));
+    }
+
+    #[test]
+    fn durable_settlement_hydration_replaces_session_totals_idempotently() {
+        let id = Uuid::new_v4();
+        let identity = RuntimeModelSelection {
+            model_key: "settlement-hydration".into(),
+            artifact_sha256: "a".repeat(64),
+            feature_schema_sha256: "b".repeat(64),
+        };
+        register(id, Uuid::new_v4(), "config", "live", Some(&identity));
+        register_member(id, "primary", &identity, 60, 89);
+        settlement(id, 99.0, 10.0);
+        member_settlement(id, Some("primary"), 50.0, 99.0, 10.0);
+
+        let process = SettlementTelemetrySnapshot {
+            wins: 2,
+            losses: 2,
+            entry_notional_usd: 9.75,
+            fees_usd: 0.35,
+            realized_pnl_usd: 0.096,
+            gross_profit_usd: 5.446,
+            gross_loss_usd: 5.35,
+            equity_high_usd: 0.096,
+            max_drawdown_usd: 5.35,
+            ..Default::default()
+        };
+        let members = BTreeMap::from([("primary".into(), process.clone())]);
+        hydrate_settlements(id, &process, &members);
+        hydrate_settlements(id, &process, &members);
+
+        let metrics = prometheus_metrics();
+        let scoped = metrics
+            .lines()
+            .filter(|line| line.contains(&id.to_string()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(scoped.contains("polymarket_umr_trade_outcomes_total{process_id=\""));
+        assert!(scoped.contains("reason=\"win\"} 2"));
+        assert!(scoped.contains("reason=\"loss\"} 2"));
+        assert!(scoped.contains("polymarket_umr_realized_pnl_usd"));
+        assert!(scoped.contains("} 0.096"));
+        assert!(scoped.contains("member_id=\"primary\",outcome=\"win\"} 2"));
+        assert!(scoped.contains("polymarket_umr_model_member_settled_entry_notional_usd"));
+        assert!(!scoped.contains("} 99"));
     }
 
     #[test]

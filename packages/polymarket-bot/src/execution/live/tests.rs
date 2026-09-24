@@ -6,6 +6,7 @@ mod tests {
 
     use crate::config::LiveExecutionConfig;
 
+    use super::super::venue::submit_unknown_candidate_ids;
     use super::*;
 
     #[test]
@@ -63,6 +64,7 @@ mod tests {
             user_ws_stale: std::time::Duration::from_secs(20),
             reconcile_interval: std::time::Duration::from_secs(30),
             stale_reconcile: std::time::Duration::from_secs(60),
+            clob_operation_timeout: std::time::Duration::from_secs(5),
             clob_api_key: Some("00000000-0000-0000-0000-000000000001".to_string()),
             clob_secret: Some("secret".to_string()),
             clob_passphrase: Some("pass".to_string()),
@@ -115,6 +117,142 @@ mod tests {
             max_daily_loss_usd: Some(dec!(10)),
             require_exit_book: Some(true),
         }
+    }
+
+    #[tokio::test]
+    async fn reconcile_releases_readiness_before_waiting_for_transport() {
+        let venue = Arc::new(
+            LiveVenue::new_for_test(live_config())
+                .unwrap()
+                .bind_process(Uuid::new_v4(), &live_execution())
+                .unwrap(),
+        );
+        let transport = venue.transport_state.lock().await;
+        let reconcile = {
+            let venue = venue.clone();
+            tokio::spawn(async move { venue.reconcile().await })
+        };
+        tokio::task::yield_now().await;
+        let _readiness_snapshot = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            venue.readiness_state.lock(),
+        )
+        .await
+        .expect("reconcile must not retain readiness while transport is unavailable");
+        drop(_readiness_snapshot);
+        let status = {
+            let venue = venue.clone();
+            tokio::spawn(async move { venue.live_status().await })
+        };
+        drop(transport);
+        tokio::time::timeout(std::time::Duration::from_secs(1), reconcile)
+            .await
+            .expect("reconcile completed")
+            .unwrap()
+            .expect_err("test venue has no store");
+        tokio::time::timeout(std::time::Duration::from_secs(1), status)
+            .await
+            .expect("status completed")
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn live_status_releases_transport_before_waiting_for_readiness() {
+        let venue = Arc::new(
+            LiveVenue::new_for_test(live_config())
+                .unwrap()
+                .bind_process(Uuid::new_v4(), &live_execution())
+                .unwrap(),
+        );
+        let readiness = venue.readiness_state.lock().await;
+        let status = {
+            let venue = venue.clone();
+            tokio::spawn(async move { venue.live_status().await })
+        };
+        tokio::task::yield_now().await;
+        let _transport_snapshot = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            venue.transport_state.lock(),
+        )
+        .await
+        .expect("live_status must not retain transport while readiness is unavailable");
+        drop(_transport_snapshot);
+        let reconcile = {
+            let venue = venue.clone();
+            tokio::spawn(async move { venue.reconcile().await })
+        };
+        drop(readiness);
+        tokio::time::timeout(std::time::Duration::from_secs(1), status)
+            .await
+            .expect("status completed")
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), reconcile)
+            .await
+            .expect("reconcile completed")
+            .unwrap()
+            .expect_err("test venue has no store");
+    }
+
+    #[tokio::test]
+    async fn clob_deadline_releases_guard_for_later_operations() {
+        let mut config = live_config();
+        config.clob_operation_timeout = std::time::Duration::from_millis(20);
+        let venue = Arc::new(LiveVenue::new_for_test(config).unwrap());
+        let first = {
+            let venue = venue.clone();
+            tokio::spawn(async move {
+                let _guard = venue.submit_guard.lock().await;
+                venue
+                    .clob_operation::<(), _>("test_stall", std::future::pending())
+                    .await
+            })
+        };
+        let error = first.await.unwrap().unwrap_err();
+        assert!(is_clob_operation_timeout(&error));
+        let _next_guard = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            venue.submit_guard.lock(),
+        )
+        .await
+        .expect("deadline must release guarded operation ownership");
+    }
+
+    #[tokio::test]
+    async fn clob_deadline_never_retries_an_ambiguous_post() {
+        let mut config = live_config();
+        config.clob_operation_timeout = std::time::Duration::from_millis(20);
+        let venue = LiveVenue::new_for_test(config).unwrap();
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let post = {
+            let attempts = attempts.clone();
+            async move {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                std::future::pending::<Result<()>>().await
+            }
+        };
+
+        let error = venue.clob_operation("venue_post", post).await.unwrap_err();
+
+        assert!(is_clob_operation_timeout(&error));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn pre_post_deadline_does_not_invoke_post() {
+        let mut config = live_config();
+        config.clob_operation_timeout = std::time::Duration::from_millis(20);
+        let venue = LiveVenue::new_for_test(config).unwrap();
+        let post_attempts = std::sync::atomic::AtomicUsize::new(0);
+
+        let error = venue
+            .clob_operation::<(), _>("order_metadata", std::future::pending())
+            .await
+            .unwrap_err();
+
+        assert!(is_clob_operation_timeout(&error));
+        assert_eq!(post_attempts.load(Ordering::SeqCst), 0);
     }
 
     fn assert_live_gate_rejection(order: &OrderRecord, reason: LiveExecutionGateReason) {
@@ -191,6 +329,84 @@ mod tests {
             .transaction_hash(polymarket_client_sdk_v2::types::B256::ZERO)
             .trader_side(polymarket_client_sdk_v2::clob::types::TraderSide::Taker)
             .build()
+    }
+
+    #[test]
+    fn unknown_submission_matches_one_complete_price_improved_fok_trade_set() {
+        let process_id = Uuid::new_v4();
+        let created_at = Utc::now() - chrono::Duration::minutes(2);
+        let mut unknown = rest_backfill_order(
+            process_id,
+            "live-pending-test",
+            OrderSide::Buy,
+            dec!(0.50),
+            dec!(2),
+            created_at,
+        );
+        unknown.state = OrderState::Unknown;
+        let trades = vec![
+            taker_trade(
+                "trade-1",
+                "venue-order-1",
+                dec!(0.49),
+                dec!(1),
+                dec!(25),
+                created_at + chrono::Duration::seconds(1),
+            ),
+            taker_trade(
+                "trade-2",
+                "venue-order-1",
+                dec!(0.48),
+                dec!(1),
+                dec!(25),
+                created_at + chrono::Duration::seconds(1),
+            ),
+        ];
+
+        assert_eq!(
+            submit_unknown_candidate_ids(&unknown, &[], &trades).unwrap(),
+            HashSet::from(["venue-order-1".to_string()])
+        );
+    }
+
+    #[test]
+    fn unknown_submission_remains_unresolved_when_complete_candidates_are_ambiguous() {
+        let process_id = Uuid::new_v4();
+        let created_at = Utc::now() - chrono::Duration::minutes(2);
+        let mut unknown = rest_backfill_order(
+            process_id,
+            "live-pending-test",
+            OrderSide::Buy,
+            dec!(0.50),
+            dec!(1),
+            created_at,
+        );
+        unknown.state = OrderState::Unknown;
+        let trades = vec![
+            taker_trade(
+                "trade-1",
+                "venue-order-1",
+                dec!(0.49),
+                dec!(1),
+                dec!(25),
+                created_at + chrono::Duration::seconds(1),
+            ),
+            taker_trade(
+                "trade-2",
+                "venue-order-2",
+                dec!(0.48),
+                dec!(1),
+                dec!(25),
+                created_at + chrono::Duration::seconds(2),
+            ),
+        ];
+
+        assert_eq!(
+            submit_unknown_candidate_ids(&unknown, &[], &trades)
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]
@@ -873,6 +1089,13 @@ mod tests {
         let order = submit_with_test_guard(&venue, request).await.unwrap();
 
         assert_live_gate_rejection(&order, LiveExecutionGateReason::PerOrderNotionalLimit);
+        let metrics = prometheus_metrics();
+        assert!(metrics.contains(&format!(
+            "polymarket_live_order_path_terminal_outcomes_total{{process_id=\"{process_id}\",outcome=\"rejected\",reason=\"per_order_notional_limit\"}} 1"
+        )));
+        assert!(metrics.contains(&format!(
+            "polymarket_live_order_path_in_flight{{process_id=\"{process_id}\"}} 0"
+        )));
     }
 
     #[tokio::test]
@@ -1250,6 +1473,7 @@ mod tests {
             order.request.metadata["live_pre_submit_error"],
             json!({
                 "stage": "order_build",
+                "last_completed_stage": "risk_and_metadata",
                 "error_chain": "tick-size request timed out",
                 "post_attempted": false,
                 "retryable": true,

@@ -332,10 +332,19 @@ pub(super) fn live_pre_submit_transient_gate_order(
     stage: &'static str,
     error: &anyhow::Error,
 ) -> Result<OrderRecord> {
-    let error_chain = format!("{error:#}");
+    let mut error_chain = format!("{error:#}");
+    error_chain.truncate(512);
+    let last_completed_stage = match stage {
+        "authentication" => "entry_gate",
+        "order_metadata" => "authentication",
+        "order_build" => "risk_and_metadata",
+        _ => "pre_submit_validation",
+    };
     warn!(
         client_order_id = %request.client_order_id,
         process_id = ?request.process_id,
+        decision_id = ?request.metadata.get("decision_id"),
+        plan_id = ?request.metadata.get("plan_id"),
         stage,
         error = %error_chain,
         "transient live pre-submit failure skipped without a venue POST; preserving trading process liveness"
@@ -351,12 +360,21 @@ pub(super) fn live_pre_submit_transient_gate_order(
         "live_pre_submit_error".to_string(),
         json!({
             "stage": stage,
+            "last_completed_stage": last_completed_stage,
             "error_chain": error_chain,
             "post_attempted": false,
             "retryable": true,
         }),
     );
     Ok(order)
+}
+
+pub(super) fn is_clob_operation_timeout(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::TimedOut)
+    })
 }
 
 pub(super) fn live_event_order_id_candidates(payload: &Value) -> Vec<String> {

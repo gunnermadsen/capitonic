@@ -1,6 +1,79 @@
 use super::*;
 
+pub(super) fn submit_unknown_candidate_ids(
+    order: &OrderRecord,
+    open_orders: &[OrderRecord],
+    trades: &[TradeResponse],
+) -> Result<HashSet<String>> {
+    let token_id = U256::from_str(&order.request.token_id)
+        .context("failed to parse unresolved CLOB token_id")?;
+    let side = sdk_side(order.request.side);
+    let mut candidates = open_orders
+        .iter()
+        .filter(|candidate| {
+            candidate.request.token_id == token_id.to_string()
+                && sdk_side(candidate.request.side) == side
+                && candidate.request.price == order.request.price
+                && candidate.request.size == order.request.size
+                && candidate.created_at >= order.created_at - LIVE_FILL_RECONCILIATION_SKEW
+        })
+        .map(|candidate| candidate.order_id.clone())
+        .collect::<HashSet<_>>();
+    let mut matched_trade_sizes = HashMap::<String, Decimal>::new();
+    for candidate in trades.iter().filter(|candidate| {
+        candidate.asset_id == token_id
+            && candidate.side == side
+            && match order.request.side {
+                OrderSide::Buy => candidate.price <= order.request.price,
+                OrderSide::Sell => candidate.price >= order.request.price,
+            }
+            && candidate.match_time >= order.created_at - LIVE_FILL_RECONCILIATION_SKEW
+    }) {
+        let filled = matched_trade_sizes
+            .entry(candidate.taker_order_id.clone())
+            .or_default();
+        *filled = filled.saturating_add(candidate.size);
+    }
+    candidates.extend(
+        matched_trade_sizes
+            .into_iter()
+            .filter_map(|(order_id, filled)| (filled == order.request.size).then_some(order_id)),
+    );
+    Ok(candidates)
+}
+
 impl LiveVenue {
+    pub(super) async fn clob_operation<T, F>(&self, stage: &'static str, operation: F) -> Result<T>
+    where
+        F: Future<Output = Result<T>>,
+    {
+        let started = std::time::Instant::now();
+        match tokio::time::timeout(self.config.clob_operation_timeout, operation).await {
+            Ok(result) => {
+                if let Some(metrics) = &self.reconciliation_metrics {
+                    metrics.record_clob_operation(stage, started.elapsed(), false);
+                }
+                result
+            }
+            Err(_) => {
+                if let Some(metrics) = &self.reconciliation_metrics {
+                    metrics.record_clob_operation(stage, started.elapsed(), true);
+                }
+                warn!(
+                    process_id = ?self.bound_process_id,
+                    stage,
+                    timeout_ms = self.config.clob_operation_timeout.as_millis(),
+                    "Polymarket CLOB operation deadline expired"
+                );
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("Polymarket CLOB {stage} operation timed out"),
+                )
+                .into())
+            }
+        }
+    }
+
     pub fn new(
         config: LiveExecutionConfig,
         clob_base_url: String,
@@ -482,8 +555,9 @@ impl LiveVenue {
             .context("failed to build Polymarket CLOB trades request")?;
         *request.headers_mut() = self.authenticated_read_headers(&request)?;
         let response = self
-            .http_client
-            .execute(request)
+            .clob_operation("trades", async {
+                self.http_client.execute(request).await.map_err(Into::into)
+            })
             .await
             .context("Polymarket CLOB trades fetch failed")?;
         if !response.status().is_success() {
@@ -516,8 +590,13 @@ impl LiveVenue {
         let mut seen_cursors = HashSet::new();
         let mut orders = Vec::new();
         for _ in 0..MAX_CLOB_RECONCILIATION_PAGES {
-            let page = client
-                .orders(&request, cursor.clone())
+            let page = self
+                .clob_operation("open_orders", async {
+                    client
+                        .orders(&request, cursor.clone())
+                        .await
+                        .map_err(Into::into)
+                })
                 .await
                 .context("Polymarket CLOB open orders fetch failed")?;
             validate_clob_page_metadata("open orders", page.data.len(), page.count, page.limit)?;
@@ -1004,6 +1083,81 @@ impl LiveVenue {
             );
         }
         Ok(orders)
+    }
+
+    pub(super) async fn resolve_mature_submit_unknown_orders(
+        &self,
+        store: &Store,
+        orders: &[OrderRecord],
+        open_orders: &[OrderRecord],
+        trades: &[TradeResponse],
+        checked_at: DateTime<Utc>,
+    ) -> Result<usize> {
+        let mut resolved = 0usize;
+        for order in orders.iter().filter(|order| {
+            order.state == OrderState::Unknown
+                && checked_at
+                    .signed_duration_since(order.created_at)
+                    .to_std()
+                    .is_ok_and(|age| age >= self.config.stale_reconcile)
+        }) {
+            let candidates = submit_unknown_candidate_ids(order, open_orders, trades)?;
+            match candidates.len() {
+                0 => {
+                    store
+                        .mark_order_submit_failed(
+                            order.request.client_order_id,
+                            "reconciled_not_posted",
+                            json!({
+                                "post_attempted": true,
+                                "resolution": "not_found_after_complete_clob_reconciliation",
+                                "checked_at": checked_at,
+                            }),
+                        )
+                        .await?;
+                    tracing::info!(
+                        event = "submit_unknown_resolved",
+                        process_id = ?order.request.process_id,
+                        client_order_id = %order.request.client_order_id,
+                        resolution = "definitively_not_posted",
+                        "mature unknown submission was absent from complete CLOB order and trade evidence"
+                    );
+                    resolved = resolved.saturating_add(1);
+                }
+                1 => {
+                    let venue_order_id = candidates.into_iter().next().expect("one candidate");
+                    store
+                        .mark_order_submitted(
+                            order.request.client_order_id,
+                            &venue_order_id,
+                            json!({
+                                "post_attempted": true,
+                                "resolution": "matched_complete_clob_reconciliation",
+                                "checked_at": checked_at,
+                            }),
+                        )
+                        .await?;
+                    tracing::info!(
+                        event = "submit_unknown_resolved",
+                        process_id = ?order.request.process_id,
+                        client_order_id = %order.request.client_order_id,
+                        venue_order_id,
+                        resolution = "venue_order_matched",
+                        "mature unknown submission matched unique CLOB evidence"
+                    );
+                    resolved = resolved.saturating_add(1);
+                }
+                _ => {
+                    warn!(
+                        process_id = ?order.request.process_id,
+                        client_order_id = %order.request.client_order_id,
+                        candidate_count = candidates.len(),
+                        "unknown live submission remains unresolved because CLOB evidence is ambiguous"
+                    );
+                }
+            }
+        }
+        Ok(resolved)
     }
 
     pub(super) async fn enforce_submission_risk(

@@ -94,6 +94,19 @@ pub(super) fn record_process_execution_outcome(process_id: Uuid, outcome: &'stat
     }
 }
 
+pub(crate) fn record_transport_runtime_termination(process_id: Uuid) {
+    let mut registry = REGISTRY
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    registry.retain(|entry| entry.strong_count() > 0);
+    for metrics in registry.iter().filter_map(Weak::upgrade) {
+        if metrics.process_id == process_id {
+            metrics.record_transport_runtime_outcome("terminated");
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 struct DurationHistogram {
     buckets: [u64; 8],
@@ -339,7 +352,18 @@ struct MetricsState {
     last_recovery_duration_seconds: f64,
     execution_latencies: BTreeMap<&'static str, DurationHistogram>,
     execution_outcomes: BTreeMap<&'static str, u64>,
+    order_path_events: BTreeMap<(&'static str, &'static str, &'static str), u64>,
+    order_path_durations: BTreeMap<&'static str, DurationHistogram>,
+    order_path_terminal_outcomes: BTreeMap<(&'static str, &'static str), u64>,
+    order_path_in_flight: u64,
+    order_path_last_activity_timestamp: i64,
     entry_eligibility_changes: BTreeMap<&'static str, u64>,
+    clob_operation_durations: BTreeMap<&'static str, DurationHistogram>,
+    clob_operation_timeouts: BTreeMap<&'static str, u64>,
+    submit_guard_wait: DurationHistogram,
+    transport_runtime_outcomes: BTreeMap<&'static str, u64>,
+    unresolved_submit_unknown: usize,
+    oldest_submit_unknown_age_seconds: f64,
 }
 
 pub(super) struct LiveReconciliationMetrics {
@@ -471,6 +495,100 @@ impl LiveReconciliationMetrics {
         state.reconciliation_entry_safe = entry_safe;
     }
 
+    pub(super) fn record_clob_operation(
+        &self,
+        stage: &'static str,
+        elapsed: std::time::Duration,
+        timed_out: bool,
+    ) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state
+            .clob_operation_durations
+            .entry(stage)
+            .or_default()
+            .observe(elapsed.as_secs_f64());
+        if timed_out {
+            *state.clob_operation_timeouts.entry(stage).or_default() += 1;
+        }
+    }
+
+    pub(super) fn record_submit_guard_wait(&self, elapsed: std::time::Duration) {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .submit_guard_wait
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub(super) fn record_transport_runtime_outcome(&self, outcome: &'static str) {
+        *self
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .transport_runtime_outcomes
+            .entry(outcome)
+            .or_default() += 1;
+    }
+
+    pub(super) fn record_submit_unknown_state(
+        &self,
+        count: usize,
+        oldest_age_seconds: f64,
+    ) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let resolved = count < state.unresolved_submit_unknown;
+        state.unresolved_submit_unknown = count;
+        state.oldest_submit_unknown_age_seconds = oldest_age_seconds;
+        resolved
+    }
+
+    fn record_order_path_started(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.order_path_in_flight = state.order_path_in_flight.saturating_add(1);
+        state.order_path_last_activity_timestamp = chrono::Utc::now().timestamp();
+        *state
+            .order_path_events
+            .entry(("submission", "started", "qualified_handoff"))
+            .or_default() += 1;
+    }
+
+    fn record_order_path_event(
+        &self,
+        stage: &'static str,
+        outcome: &'static str,
+        reason: &'static str,
+    ) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.order_path_last_activity_timestamp = chrono::Utc::now().timestamp();
+        *state
+            .order_path_events
+            .entry((stage, outcome, reason))
+            .or_default() += 1;
+    }
+
+    fn record_order_path_duration(&self, stage: &'static str, seconds: f64) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state
+            .order_path_durations
+            .entry(stage)
+            .or_default()
+            .observe(seconds);
+    }
+
+    fn record_order_path_terminal(&self, outcome: &'static str, reason: &'static str) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.order_path_in_flight = state.order_path_in_flight.saturating_sub(1);
+        state.order_path_last_activity_timestamp = chrono::Utc::now().timestamp();
+        *state
+            .order_path_events
+            .entry(("terminal", outcome, reason))
+            .or_default() += 1;
+        *state
+            .order_path_terminal_outcomes
+            .entry((outcome, reason))
+            .or_default() += 1;
+    }
+
     fn write(&self, output: &mut String) {
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         let labels = format!("process_id=\"{}\"", self.process_id);
@@ -520,6 +638,72 @@ impl LiveReconciliationMetrics {
         for (outcome, count) in &state.execution_outcomes {
             let _ = writeln!(output, "polymarket_live_execution_outcomes_total{{{labels},outcome=\"{outcome}\"}} {count}");
         }
+        for ((stage, outcome, reason), count) in &state.order_path_events {
+            let _ = writeln!(output, "polymarket_live_order_path_events_total{{{labels},stage=\"{stage}\",outcome=\"{outcome}\",reason=\"{reason}\"}} {count}");
+        }
+        for (stage, histogram) in &state.order_path_durations {
+            for (index, bound) in DURATION_BUCKETS.iter().enumerate() {
+                let _ = writeln!(output, "polymarket_live_order_path_stage_duration_seconds_bucket{{{labels},stage=\"{stage}\",le=\"{bound}\"}} {}", histogram.buckets[index]);
+            }
+            let _ = writeln!(output, "polymarket_live_order_path_stage_duration_seconds_bucket{{{labels},stage=\"{stage}\",le=\"+Inf\"}} {}", histogram.count);
+            let _ = writeln!(output, "polymarket_live_order_path_stage_duration_seconds_sum{{{labels},stage=\"{stage}\"}} {}", histogram.sum);
+            let _ = writeln!(output, "polymarket_live_order_path_stage_duration_seconds_count{{{labels},stage=\"{stage}\"}} {}", histogram.count);
+        }
+        for ((outcome, reason), count) in &state.order_path_terminal_outcomes {
+            let _ = writeln!(output, "polymarket_live_order_path_terminal_outcomes_total{{{labels},outcome=\"{outcome}\",reason=\"{reason}\"}} {count}");
+        }
+        for (stage, histogram) in &state.clob_operation_durations {
+            for (index, bound) in DURATION_BUCKETS.iter().enumerate() {
+                let _ = writeln!(output, "polymarket_live_clob_operation_duration_seconds_bucket{{{labels},stage=\"{stage}\",le=\"{bound}\"}} {}", histogram.buckets[index]);
+            }
+            let _ = writeln!(output, "polymarket_live_clob_operation_duration_seconds_bucket{{{labels},stage=\"{stage}\",le=\"+Inf\"}} {}", histogram.count);
+            let _ = writeln!(output, "polymarket_live_clob_operation_duration_seconds_sum{{{labels},stage=\"{stage}\"}} {}", histogram.sum);
+            let _ = writeln!(output, "polymarket_live_clob_operation_duration_seconds_count{{{labels},stage=\"{stage}\"}} {}", histogram.count);
+        }
+        for (stage, count) in &state.clob_operation_timeouts {
+            let _ = writeln!(output, "polymarket_live_clob_operation_timeouts_total{{{labels},stage=\"{stage}\"}} {count}");
+        }
+        for (index, bound) in DURATION_BUCKETS.iter().enumerate() {
+            let _ = writeln!(output, "polymarket_live_submission_guard_wait_seconds_bucket{{{labels},le=\"{bound}\"}} {}", state.submit_guard_wait.buckets[index]);
+        }
+        let _ = writeln!(
+            output,
+            "polymarket_live_submission_guard_wait_seconds_bucket{{{labels},le=\"+Inf\"}} {}",
+            state.submit_guard_wait.count
+        );
+        let _ = writeln!(
+            output,
+            "polymarket_live_submission_guard_wait_seconds_sum{{{labels}}} {}",
+            state.submit_guard_wait.sum
+        );
+        let _ = writeln!(
+            output,
+            "polymarket_live_submission_guard_wait_seconds_count{{{labels}}} {}",
+            state.submit_guard_wait.count
+        );
+        for (outcome, count) in &state.transport_runtime_outcomes {
+            let _ = writeln!(output, "polymarket_live_transport_runtime_outcomes_total{{{labels},outcome=\"{outcome}\"}} {count}");
+        }
+        let _ = writeln!(
+            output,
+            "polymarket_live_submit_unknown_orders{{{labels}}} {}",
+            state.unresolved_submit_unknown
+        );
+        let _ = writeln!(
+            output,
+            "polymarket_live_submit_unknown_oldest_age_seconds{{{labels}}} {}",
+            state.oldest_submit_unknown_age_seconds
+        );
+        let _ = writeln!(
+            output,
+            "polymarket_live_order_path_in_flight{{{labels}}} {}",
+            state.order_path_in_flight
+        );
+        let _ = writeln!(
+            output,
+            "polymarket_live_order_path_last_activity_timestamp_seconds{{{labels}}} {}",
+            state.order_path_last_activity_timestamp
+        );
         for (eligibility, count) in &state.entry_eligibility_changes {
             let _ = writeln!(output, "polymarket_live_reconciliation_entry_eligibility_changes_total{{{labels},eligibility=\"{eligibility}\"}} {count}");
         }
@@ -601,6 +785,17 @@ pub fn prometheus_metrics() -> String {
     output.push_str("# HELP polymarket_live_user_ws_events_total Authenticated user websocket events processed after bounded dequeue.\n# TYPE polymarket_live_user_ws_events_total counter\n");
     output.push_str("# HELP polymarket_live_execution_latency_seconds Live acknowledgement-to-fill latency by bounded stage.\n# TYPE polymarket_live_execution_latency_seconds histogram\n");
     output.push_str("# HELP polymarket_live_execution_outcomes_total Terminal live execution outcomes established by venue evidence.\n# TYPE polymarket_live_execution_outcomes_total counter\n");
+    output.push_str("# HELP polymarket_live_order_path_events_total Bounded transitions within the process-scoped live order path.\n# TYPE polymarket_live_order_path_events_total counter\n");
+    output.push_str("# HELP polymarket_live_order_path_stage_duration_seconds Internal live order path latency by bounded stage.\n# TYPE polymarket_live_order_path_stage_duration_seconds histogram\n");
+    output.push_str("# HELP polymarket_live_order_path_terminal_outcomes_total Exactly one terminal classification for each live order path invocation.\n# TYPE polymarket_live_order_path_terminal_outcomes_total counter\n");
+    output.push_str("# HELP polymarket_live_order_path_in_flight Live order path invocations that have not reached a terminal classification.\n# TYPE polymarket_live_order_path_in_flight gauge\n");
+    output.push_str("# HELP polymarket_live_order_path_last_activity_timestamp_seconds Unix timestamp of the latest live order path transition.\n# TYPE polymarket_live_order_path_last_activity_timestamp_seconds gauge\n");
+    output.push_str("# HELP polymarket_live_clob_operation_duration_seconds Guarded CLOB operation duration by bounded stage.\n# TYPE polymarket_live_clob_operation_duration_seconds histogram\n");
+    output.push_str("# HELP polymarket_live_clob_operation_timeouts_total Guarded CLOB operation deadline expirations by bounded stage.\n# TYPE polymarket_live_clob_operation_timeouts_total counter\n");
+    output.push_str("# HELP polymarket_live_submission_guard_wait_seconds Time spent waiting for process-safe live submission ownership.\n# TYPE polymarket_live_submission_guard_wait_seconds histogram\n");
+    output.push_str("# HELP polymarket_live_transport_runtime_outcomes_total Runtime disposition after a live transport-class submission failure.\n# TYPE polymarket_live_transport_runtime_outcomes_total counter\n");
+    output.push_str("# HELP polymarket_live_submit_unknown_orders Durable unresolved submissions whose POST outcome remains unknown.\n# TYPE polymarket_live_submit_unknown_orders gauge\n");
+    output.push_str("# HELP polymarket_live_submit_unknown_oldest_age_seconds Age of the oldest durable unresolved submission.\n# TYPE polymarket_live_submit_unknown_oldest_age_seconds gauge\n");
     let _ = writeln!(
         output,
         "polymarket_live_user_ws_events_total {}",
@@ -642,6 +837,101 @@ pub fn prometheus_metrics() -> String {
         USER_WS_LAST_PONG.load(Relaxed)
     );
     output
+}
+
+pub(super) struct LiveOrderPathAttempt {
+    metrics: Option<Arc<LiveReconciliationMetrics>>,
+    process_id: Uuid,
+    client_order_id: Uuid,
+    market_id: String,
+    started_at: Instant,
+    terminal: bool,
+}
+
+impl LiveOrderPathAttempt {
+    pub(super) fn new(
+        metrics: Option<Arc<LiveReconciliationMetrics>>,
+        process_id: Uuid,
+        client_order_id: Uuid,
+        market_id: &str,
+    ) -> Self {
+        if let Some(metrics) = &metrics {
+            metrics.record_order_path_started();
+        }
+        Self {
+            metrics,
+            process_id,
+            client_order_id,
+            market_id: market_id.to_string(),
+            started_at: Instant::now(),
+            terminal: false,
+        }
+    }
+
+    pub(super) fn stage(
+        &self,
+        stage: &'static str,
+        outcome: &'static str,
+        reason: &'static str,
+        elapsed: std::time::Duration,
+    ) {
+        if let Some(metrics) = &self.metrics {
+            metrics.record_order_path_event(stage, outcome, reason);
+            metrics.record_order_path_duration(stage, elapsed.as_secs_f64());
+        }
+    }
+
+    pub(super) fn event(&self, stage: &'static str, outcome: &'static str, reason: &'static str) {
+        if let Some(metrics) = &self.metrics {
+            metrics.record_order_path_event(stage, outcome, reason);
+        }
+    }
+
+    pub(super) fn finish(mut self, outcome: &'static str, reason: &'static str) {
+        if let Some(metrics) = &self.metrics {
+            metrics.record_order_path_duration(
+                "submission_total",
+                self.started_at.elapsed().as_secs_f64(),
+            );
+            metrics.record_order_path_terminal(outcome, reason);
+        }
+        tracing::info!(
+            event = "live_order_path_terminal",
+            process_id = %self.process_id,
+            client_order_id = %self.client_order_id,
+            market_id = %self.market_id,
+            outcome,
+            reason,
+            elapsed_seconds = self.started_at.elapsed().as_secs_f64(),
+            "live order path reached a terminal outcome"
+        );
+        self.terminal = true;
+    }
+}
+
+impl Drop for LiveOrderPathAttempt {
+    fn drop(&mut self) {
+        if self.terminal {
+            return;
+        }
+        if let Some(metrics) = &self.metrics {
+            metrics.record_order_path_duration(
+                "submission_total",
+                self.started_at.elapsed().as_secs_f64(),
+            );
+            metrics.record_order_path_terminal("error", "unclassified_exit");
+        }
+        tracing::warn!(
+            event = "live_order_path_terminal",
+            process_id = %self.process_id,
+            client_order_id = %self.client_order_id,
+            market_id = %self.market_id,
+            outcome = "error",
+            reason = "unclassified_exit",
+            elapsed_seconds = self.started_at.elapsed().as_secs_f64(),
+            "live order path exited without an explicit terminal classification"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -769,6 +1059,60 @@ mod tests {
         )));
         assert!(rendered.contains(&format!(
             "polymarket_live_reconciliation_entry_safe{{process_id=\"{process_id}\"}} 0"
+        )));
+    }
+
+    #[test]
+    fn live_order_path_exports_bounded_stages_and_one_terminal_outcome() {
+        let process_id = Uuid::new_v4();
+        let metrics = LiveReconciliationMetrics::new(process_id);
+        let attempt = LiveOrderPathAttempt::new(
+            Some(metrics.clone()),
+            process_id,
+            Uuid::new_v4(),
+            "market-1",
+        );
+        attempt.stage(
+            "risk_and_metadata",
+            "allowed",
+            "allowed",
+            std::time::Duration::from_millis(12),
+        );
+        attempt.finish("acknowledged", "venue_acknowledged");
+
+        let rendered = prometheus_metrics();
+        assert!(rendered.contains(&format!(
+            "polymarket_live_order_path_events_total{{process_id=\"{process_id}\",stage=\"risk_and_metadata\",outcome=\"allowed\",reason=\"allowed\"}} 1"
+        )));
+        assert!(rendered.contains(&format!(
+            "polymarket_live_order_path_terminal_outcomes_total{{process_id=\"{process_id}\",outcome=\"acknowledged\",reason=\"venue_acknowledged\"}} 1"
+        )));
+        assert!(rendered.contains(&format!(
+            "polymarket_live_order_path_in_flight{{process_id=\"{process_id}\"}} 0"
+        )));
+        assert!(!rendered.contains("client_order_id="));
+        assert!(!rendered.contains("market_id="));
+    }
+
+    #[test]
+    fn dropped_live_order_path_is_visible_as_unclassified() {
+        let process_id = Uuid::new_v4();
+        let metrics = LiveReconciliationMetrics::new(process_id);
+        {
+            let _attempt = LiveOrderPathAttempt::new(
+                Some(metrics.clone()),
+                process_id,
+                Uuid::new_v4(),
+                "market-2",
+            );
+        }
+
+        let rendered = prometheus_metrics();
+        assert!(rendered.contains(&format!(
+            "polymarket_live_order_path_terminal_outcomes_total{{process_id=\"{process_id}\",outcome=\"error\",reason=\"unclassified_exit\"}} 1"
+        )));
+        assert!(rendered.contains(&format!(
+            "polymarket_live_order_path_in_flight{{process_id=\"{process_id}\"}} 0"
         )));
     }
 }

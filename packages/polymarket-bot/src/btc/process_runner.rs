@@ -1770,6 +1770,7 @@ impl BtcProcessRunner {
             self.config.run_id,
             fee_rate,
         )?;
+        order_metadata["plan_id"] = serde_json::json!(plan_id);
         let decision_book = if intent.outcome == BtcOutcome::Up {
             &snapshot.up_book
         } else {
@@ -1865,7 +1866,6 @@ impl BtcProcessRunner {
                 decision.evaluated_at,
             )
             .await?;
-        complete_directional_model_candidate(&mut directional_candidate, true)?;
         let execution_started = Instant::now();
         let report = execute_order_plan(
             self.execution_venue.as_ref(),
@@ -2041,6 +2041,18 @@ impl BtcProcessRunner {
                 execution_metadata,
             )
             .await?;
+        let seal_opportunity =
+            execution_outcome_seals_opportunity(primary_state, !report.fills.is_empty());
+        complete_directional_model_candidate(&mut directional_candidate, seal_opportunity)?;
+        umr_telemetry::event(
+            self.config.process_id,
+            "execution_opportunity",
+            if seal_opportunity {
+                "sealed_after_execution"
+            } else {
+                "released_after_definitive_non_fill"
+            },
+        );
         if let Some(permit) = preview_permit {
             let task = spawn_stress_preview_batch(
                 permit,
@@ -2093,6 +2105,14 @@ fn decision_execution_status(state: OrderState) -> &'static str {
         | OrderState::CancelRequested
         | OrderState::Unknown => "submitted",
     }
+}
+
+fn execution_outcome_seals_opportunity(state: OrderState, has_fills: bool) -> bool {
+    has_fills
+        || !matches!(
+            state,
+            OrderState::Rejected | OrderState::Cancelled | OrderState::Expired
+        )
 }
 
 struct StressPreviewDecisionIdentity {
@@ -2799,6 +2819,10 @@ fn build_directional_model_feature_snapshot(
 
 #[async_trait]
 impl BtcStrategyRunner for BtcProcessRunner {
+    fn process_id(&self) -> Option<Uuid> {
+        Some(self.config.process_id)
+    }
+
     fn observe_schedule(&self, lag: std::time::Duration, interval: std::time::Duration) {
         umr_telemetry::duration(
             self.config.process_id,
@@ -3636,6 +3660,51 @@ mod tests {
         ] {
             assert_eq!(decision_execution_status(state), "rejected");
         }
+    }
+
+    #[test]
+    fn definitive_non_fills_release_the_next_fresh_model_candidate() {
+        for state in [
+            OrderState::Rejected,
+            OrderState::Cancelled,
+            OrderState::Expired,
+        ] {
+            assert!(!execution_outcome_seals_opportunity(state, false));
+            assert!(execution_outcome_seals_opportunity(state, true));
+        }
+        for state in [
+            OrderState::Created,
+            OrderState::Submitted,
+            OrderState::Acknowledged,
+            OrderState::PartiallyFilled,
+            OrderState::CancelRequested,
+            OrderState::Filled,
+            OrderState::Unknown,
+        ] {
+            assert!(execution_outcome_seals_opportunity(state, false));
+        }
+
+        let first = Utc.with_ymd_and_hms(2026, 9, 23, 12, 1, 0).unwrap();
+        let next = first + chrono::Duration::seconds(5);
+        let mut runtime = DirectionalModelProcessRuntime::default();
+
+        assert_eq!(runtime.claim("market-a", first), Some((first, true)));
+        assert!(runtime.complete(
+            "market-a",
+            first,
+            execution_outcome_seals_opportunity(OrderState::Rejected, false),
+        ));
+        assert_eq!(runtime.claim("market-a", first), None);
+        assert_eq!(runtime.claim("market-a", next), Some((next, false)));
+        assert!(runtime.complete(
+            "market-a",
+            next,
+            execution_outcome_seals_opportunity(OrderState::Filled, true),
+        ));
+        assert_eq!(
+            runtime.claim("market-a", next + chrono::Duration::seconds(5)),
+            None
+        );
     }
 
     #[test]

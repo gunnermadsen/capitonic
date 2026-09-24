@@ -136,6 +136,10 @@ pub struct StrategyObservation {
 
 #[async_trait]
 pub trait BtcStrategyRunner: Send + Sync {
+    fn process_id(&self) -> Option<uuid::Uuid> {
+        None
+    }
+
     fn observe_schedule(&self, _lag: StdDuration, _interval: StdDuration) {}
 
     async fn reconcile_if_due(&self) -> Result<()> {
@@ -1083,6 +1087,17 @@ async fn run_strategy_loop(
                         continue;
                     }
                     let error_chain = format!("{error:#}");
+                    if is_transport_class_error(&error) {
+                        if let Some(process_id) = strategy.process_id() {
+                            crate::execution::live::record_transport_runtime_termination(process_id);
+                            tracing::error!(
+                                event = "unexpected_runtime_termination_after_transport_failure",
+                                process_id = %process_id,
+                                error = %error_chain,
+                                "transport-class error escaped live execution and terminated the trading process"
+                            );
+                        }
+                    }
                     tracing::error!(error = %error_chain, "BTC strategy callback failed; terminating the trading process");
                     let mut runtime_metrics = metrics.write().await;
                     runtime_metrics.strategy_errors = runtime_metrics.strategy_errors.saturating_add(1);
@@ -1124,6 +1139,33 @@ fn is_retryable_strategy_database_error(error: &anyhow::Error) -> bool {
         sqlx::Error::Io(_) | sqlx::Error::Tls(_) | sqlx::Error::PoolTimedOut => true,
         _ => false,
     }
+}
+
+fn is_transport_class_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(|error| error.is_timeout() || error.is_connect())
+            || cause
+                .downcast_ref::<polymarket_client_sdk_v2::error::Error>()
+                .is_some_and(|error| {
+                    matches!(
+                        error.kind(),
+                        polymarket_client_sdk_v2::error::Kind::Synchronization
+                    )
+                })
+            || cause.downcast_ref::<std::io::Error>().is_some_and(|error| {
+                matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::NotConnected
+                        | std::io::ErrorKind::BrokenPipe
+                        | std::io::ErrorKind::UnexpectedEof
+                )
+            })
+    })
 }
 
 fn primary_runtime_failure(metrics: &BtcRuntimeMetrics) -> Option<String> {
