@@ -70,6 +70,8 @@ Every run must have a manifest or `README.md` under `manifests/` recording:
 - selected deployment artifact when applicable; and
 - active, completed, archived, rejected, or deployed status.
 
+Every run also has `manifests/run-status.md`, including incomplete runs. Classify it as `completed`, `partial`, or `exploratory`; record training, evaluation, qualification, and deployment authorization separately. Use `unknown` when source evidence does not establish a fact. A completed run may have failed qualification, and migration does not grant qualification or deployment approval.
+
 A concise report committed to Git must point to this manifest and identify the run without embedding machine-specific copies of generated data.
 
 ## Training workflow
@@ -109,6 +111,8 @@ Archive completed and superseded runs under the same canonical root without chan
 | Original repository path | Canonical SSD run |
 | --- | --- |
 | `training-results/btc-5m-micro-edge-tournament-20260607-20260914/20260915T030000Z` | `/Volumes/docker-data/capitonic-btc-directional-model/btc-5m-micro-edge-tournament-20260607-20260914-20260915T030000Z` |
+
+The first bulk migration added 14 canonical runs covering conservative selective training, VWAP capacity, loss-aware selection, paper exports, and the historical aggregate, time-bucket, amalgamated-bucket, and micro-bucket tournament lineages. Each run contains `manifests/source-migration.json`, `manifests/run-status.md`, and a verified `manifests/canonical-inventory.sha256`.
 
 ## Deployment admission
 
