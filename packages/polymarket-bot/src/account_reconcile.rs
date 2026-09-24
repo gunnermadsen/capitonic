@@ -504,10 +504,17 @@ fn process_accounting_proof(
         let process_size = expected_evidence
             .map(|evidence| evidence.size)
             .unwrap_or(Decimal::ZERO);
-        let account_size = account_sizes
+        let raw_account_size = account_sizes
             .get(&token_id)
             .copied()
             .unwrap_or(Decimal::ZERO);
+        let credited_zero_payout_size = expected_evidence
+            .map(|evidence| evidence.credited_zero_payout_size)
+            .unwrap_or(Decimal::ZERO);
+        let account_size = raw_account_size
+            .checked_sub(credited_zero_payout_size)
+            .unwrap_or(Decimal::ZERO)
+            .max(Decimal::ZERO);
         if decimal_difference(process_size, account_size) <= data_api_position_size_tolerance() {
             continue;
         }
@@ -1521,6 +1528,7 @@ mod tests {
                     token_id.clone(),
                     LiveAccountPositionEvidence {
                         size: *size,
+                        credited_zero_payout_size: Decimal::ZERO,
                         oldest_fill_at: checked_at - chrono::Duration::minutes(2),
                         market_window_end: checked_at + chrono::Duration::minutes(3),
                     },
@@ -1592,6 +1600,7 @@ mod tests {
             "token-1".to_string(),
             LiveAccountPositionEvidence {
                 size: dec!(5.182922),
+                credited_zero_payout_size: Decimal::ZERO,
                 oldest_fill_at: checked_at - chrono::Duration::seconds(30),
                 market_window_end: checked_at + chrono::Duration::minutes(4),
             },
@@ -1615,6 +1624,7 @@ mod tests {
             "token-1".to_string(),
             LiveAccountPositionEvidence {
                 size: dec!(5),
+                credited_zero_payout_size: Decimal::ZERO,
                 oldest_fill_at: checked_at - chrono::Duration::seconds(61),
                 market_window_end: checked_at + chrono::Duration::minutes(3),
             },
@@ -1635,6 +1645,7 @@ mod tests {
             "token-1".to_string(),
             LiveAccountPositionEvidence {
                 size: dec!(5),
+                credited_zero_payout_size: Decimal::ZERO,
                 oldest_fill_at: checked_at
                     + LIVE_EXTERNAL_EVENT_CLOCK_SKEW
                     + chrono::Duration::microseconds(1),
@@ -1657,6 +1668,7 @@ mod tests {
             "token-1".to_string(),
             LiveAccountPositionEvidence {
                 size: dec!(5),
+                credited_zero_payout_size: Decimal::ZERO,
                 oldest_fill_at: checked_at - chrono::Duration::minutes(8),
                 market_window_end: checked_at - chrono::Duration::seconds(1),
             },
@@ -1678,6 +1690,7 @@ mod tests {
             "token-1".to_string(),
             LiveAccountPositionEvidence {
                 size: dec!(5),
+                credited_zero_payout_size: Decimal::ZERO,
                 oldest_fill_at: checked_at - chrono::Duration::seconds(10),
                 market_window_end: checked_at + chrono::Duration::minutes(4),
             },
@@ -1706,6 +1719,56 @@ mod tests {
 
         assert_eq!(proof.status, "proven");
         assert!(mismatches.is_empty());
+    }
+
+    #[test]
+    fn credited_zero_payout_residual_with_venue_dust_is_not_foreign() {
+        let checked_at = Utc::now();
+        let expected = HashMap::from([(
+            "losing-token".to_string(),
+            LiveAccountPositionEvidence {
+                size: Decimal::ZERO,
+                credited_zero_payout_size: dec!(5),
+                oldest_fill_at: checked_at - chrono::Duration::minutes(10),
+                market_window_end: checked_at - chrono::Duration::minutes(5),
+            },
+        )]);
+        let mut losing_position = account_position("losing-token", dec!(5));
+        losing_position.current_value = Some(dec!(0.0025));
+        losing_position.raw_payload = serde_json::json!({
+            "size": "5",
+            "currentValue": "0.0025",
+            "redeemable": true
+        });
+
+        let (proof, mismatches, transitions) =
+            process_accounting_proof(&expected, &[losing_position], 0, &[], checked_at).unwrap();
+
+        assert_eq!(proof.status, "proven");
+        assert!(mismatches.is_empty());
+        assert!(transitions.is_empty());
+    }
+
+    #[test]
+    fn balance_above_credited_zero_payout_residual_remains_foreign() {
+        let checked_at = Utc::now();
+        let expected = HashMap::from([(
+            "losing-token".to_string(),
+            LiveAccountPositionEvidence {
+                size: Decimal::ZERO,
+                credited_zero_payout_size: dec!(5),
+                oldest_fill_at: checked_at - chrono::Duration::minutes(10),
+                market_window_end: checked_at - chrono::Duration::minutes(5),
+            },
+        )]);
+        let position = account_position("losing-token", dec!(6));
+
+        let (proof, mismatches, _) =
+            process_accounting_proof(&expected, &[position], 0, &[], checked_at).unwrap();
+
+        assert_eq!(proof.status, "unproven");
+        assert_eq!(mismatches[0].mismatch_type, "foreign_account_position");
+        assert_eq!(mismatches[0].account_size, dec!(1));
     }
 
     #[test]
