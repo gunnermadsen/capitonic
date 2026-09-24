@@ -54,9 +54,19 @@ def bake() -> None:
 
     source = (ROOT / "common/configs/prometheus/prometheus.yml").read_text()
     jobs = re.split(r"(?=^  - job_name: )", source, flags=re.MULTILINE)
-    selected = [part for part in jobs[1:] if part.startswith(("  - job_name: alloy\n", "  - job_name: loki\n"))]
-    if len(selected) != 2:
-        raise ValueError("Expected Alloy and Loki scrape jobs in the shared Prometheus configuration")
+    selected = [
+        part
+        for part in jobs[1:]
+        if part.startswith(
+            (
+                "  - job_name: polymarket-bot\n",
+                "  - job_name: alloy\n",
+                "  - job_name: loki\n",
+            )
+        )
+    ]
+    if len(selected) != 3:
+        raise ValueError("Expected bot, Alloy, and Loki scrape jobs in the shared Prometheus configuration")
     database_scrapes = (ROOT / "common/configs/prometheus/kubernetes-database-scrapes.yml").read_text()
     if database_scrapes.count("  - job_name: ") != 2:
         raise ValueError("Expected TimescaleDB and PgBouncer Kubernetes scrape jobs")
@@ -89,6 +99,7 @@ def bake() -> None:
     for relative in (
         "provisioning/dashboards/dashboards.yml",
         "provisioning/alerting/rules-prometheus.yml",
+        "provisioning/alerting/rules-polymarket-bot.yml",
     ):
         write_asset("grafana", relative, (grafana_source / relative).read_text())
     write_asset(

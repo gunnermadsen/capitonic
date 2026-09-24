@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: polymarket-bot
+  labels:
+    app.kubernetes.io/name: polymarket-bot
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: trading
+    app.kubernetes.io/part-of: capitonic-platform
+    app.kubernetes.io/managed-by: Helm
+    capitonic.io/environment: dev
+    capitonic.io/rollout-domain: trading
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: polymarket-bot
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - {name: http, port: 8097, targetPort: http}

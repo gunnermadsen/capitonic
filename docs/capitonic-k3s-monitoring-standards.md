@@ -21,7 +21,7 @@ The monitoring rollout does not include node-exporter or cAdvisor. They are rese
 
 The bake reads the shared source files, copies them to ignored `assets/` directories inside each chart, and filters the Docker-specific Prometheus target list to currently deployed Kubernetes services. It does not edit the shared sources or generated chart assets by hand. It does not invoke Helm or kubectl, manage Secrets, or clean up automatically. Run `--clean` after the Helm operation to remove only the generated assets. Running the bake is required before linting, rendering, packaging, or upgrading the charts from their directories; the chart templates fail if required assets are missing. No generated manifest or secret is committed.
 
-Kubernetes Secrets `prometheus-auth` and `grafana-auth` are managed separately from baking and Helm using the runtime environment files. They already exist in the development namespace and must be present before installing these charts on a new cluster. Helm templates contain only secret references. Prometheus authentication remains enabled. Grafana provisions Prometheus and Loki datasources, shared dashboards, and the Prometheus connectivity alert. The Postgres datasource and database scrape jobs require the database charts and `postgres-credentials` Secret; trading datasources and alerts wait for their services.
+Kubernetes Secrets `prometheus-auth` and `grafana-auth` are managed separately from baking and Helm using the runtime environment files. They already exist in the development namespace and must be present before installing these charts on a new cluster. Helm templates contain only secret references. Prometheus authentication remains enabled. Grafana provisions Prometheus and Loki datasources, shared dashboards, and the Prometheus connectivity alert. The Postgres datasource and database scrape jobs require the database charts and `postgres-credentials` Secret. The bot scrape and availability alert are provisioned with the bot; process-dependent trading alerts wait for their data inputs.
 
 ## Commands
 
@@ -47,7 +47,7 @@ Use `statefulset/prometheus`, `statefulset/loki`, or `daemonset/alloy` for those
 
 - All four workloads have their intended ready pod count, no restart loop, and the expected immutable image where a digest is specified.
 - Loki, Prometheus, and Grafana PVCs are Bound on `local-path`.
-- Prometheus self, Loki, and Alloy targets are up; unavailable future trading services are not configured as development targets yet.
+- Prometheus self, Loki, Alloy, database, pool, and deployed bot targets are up; unavailable ingester services are not configured as development targets yet.
 - Alloy delivers current `capitonic` pod logs to Loki without persistent delivery errors.
 - Grafana reports a healthy API, provisions its shared dashboards and the Prometheus, Loki, and PostgreSQL datasources, and can query each deployed dependency.
 - Monitoring configuration is provisioned only through the charts. After successful observability deployment, record the repository-required `provisioned/observability/dev/<timestamp>` tag on the exact deployed commit.

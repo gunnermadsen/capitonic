@@ -1,6 +1,6 @@
 # Capitonic k3s development migration plan
 
-Status: monitoring stack implementation in progress on feature/capitonic-monitoring-k3s. Database, migration runner, ingester, and bot rollout remain future work. Existing Compose and microservice code are unchanged.
+Status: monitoring, database, and migration runner are deployed on `feature/capitonic-monitoring-k3s`. The bot service is the next isolated rollout; ingester master, workers, and trading-process acceptance follow it. Docker Compose remains unchanged.
 
 ## Recommended architecture
 
@@ -247,17 +247,13 @@ Those are later additions after the static Kubernetes deployment is proven.
 
 The `polymarket-bot` chart should contain:
 
-- Deployment;
-- Service;
-- Secrets;
-- ConfigMaps;
-- readiness/liveness probes;
-- graceful shutdown;
-- process-scoped health metrics;
-- database and ingester dependencies;
-- development-only access configuration.
+- one Deployment with `Recreate` strategy and one internal Service;
+- references to separately managed Kubernetes Secrets sourced from the main worktree `.env` files;
+- startup and liveness probes independent of database availability, plus database-backed readiness;
+- the existing graceful shutdown and process-scoped health metrics;
+- the PgBouncer route and an ingester master URL reserved for later process activation.
 
-The chart must preserve durable trading-process intent and existing process-scoped recovery behavior.
+The chart must preserve durable trading-process intent and existing process-scoped recovery behavior. See `docs/capitonic-k3s-bot-standards.md` for the local bot deployment contract.
 
 ## Health and observability standard
 
@@ -427,6 +423,23 @@ connection exhaustion, restarts, and storage errors before deploying
 application services. The extended soak belongs to the integrated system once
 the code-driven services are producing data.
 
+### Polymarket bot rollout
+
+Deploy:
+
+- polymarket-bot.
+
+Tasks:
+
+1. Confirm the isolated Kubernetes database has no trading processes and the database and monitoring services are healthy.
+2. Build only the bot image from committed source with its Git revision embedded, and import it into k3s without changing the Compose image.
+3. Create the admin-token Secret from the main worktree `.env`; reuse the existing trading database credential Secret.
+4. Deploy the single bot replica with Helm and verify the PgBouncer route, startup, lightweight liveness, database readiness, and authenticated admin API.
+5. Provision its Prometheus scrape and Grafana availability alert from `common/configs/` through the existing bake and Helm commands.
+6. Confirm bot metrics and logs arrive, restart the pod once, and verify automatic reconnection without a restart loop or change to Compose.
+
+No trading process is created during this rollout. Market-data route resolution, process-scoped readiness, trading safety, and the integrated soak require the ingester and its data inputs.
+
 ### Ingester and workers rollout
 
 Deploy:
@@ -459,25 +472,6 @@ Explicitly excluded from this phase:
 - no Kubernetes API credentials;
 - no master-driven replica changes;
 - no automated image rollout controller.
-
-### Polymarket bot rollout
-
-Deploy:
-
-- polymarket-bot.
-
-Tasks:
-
-1. Verify the bot resolves the ingester master Service.
-2. Verify database connectivity through PgBouncer.
-3. Verify startup and readiness behavior.
-4. Verify process-scoped health metrics.
-5. Confirm configured trading-process intent is preserved.
-6. Confirm runtime readiness remains process-scoped.
-7. Confirm trading safety checks remain intact.
-8. Confirm no unexpected process disablement occurs due to Kubernetes restarts.
-9. Verify dashboards and alerts for trading-path health.
-10. Keep live capital disabled until the development rollout has completed its soak and all acceptance evidence is recorded.
 
 ## Future scaling architecture
 

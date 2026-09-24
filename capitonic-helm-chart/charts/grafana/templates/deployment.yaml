@@ -65,6 +65,7 @@ spec:
             - {name: provisioning, mountPath: /etc/grafana/provisioning/dashboards/dashboards.yml, subPath: dashboards.yml, readOnly: true}
             - {name: provisioning, mountPath: /etc/grafana/provisioning/datasources/datasources.yml, subPath: datasources.yml, readOnly: true}
             - {name: provisioning, mountPath: /etc/grafana/provisioning/alerting/rules-prometheus.yml, subPath: rules-prometheus.yml, readOnly: true}
+            - {name: provisioning, mountPath: /etc/grafana/provisioning/alerting/rules-polymarket-bot.yml, subPath: rules-polymarket-bot.yml, readOnly: true}
 {{- range $path, $_ := .Files.Glob "assets/dashboards/*.json" }}
             - {name: dashboard-{{ base $path | trimSuffix ".json" }}, mountPath: /etc/grafana/dashboards/polymarket-bot/{{ base $path }}, subPath: {{ base $path }}, readOnly: true}
 {{- end }}
