@@ -56,28 +56,28 @@ Think of Capitonic as a vision to generate income through systems with automatio
 
 - Commit changes in coherent domain groups. Feature, defect, training, and documentation branches merge only into integration.
 - Outside the golden image workflow, each merge requires explicit authorization naming the branch or commit.
-- A branch qualifies for the golden image workflow when it belongs to the active integration cycle, is clean and committed, is not abandoned, and passes its required checks. Report and exclude branches that do not qualify.
-- Before merging, report its lineage, abandoned status, worktree and test state, commits, and diff against integration. Explicit authorization remains sufficient despite disclosed findings; stop only for an ambiguous target, potential loss of uncommitted work, or unauthorized destructive history rewriting.
+- Assess only branches selected for this checkpoint. If none are named, consider active-cycle branches with an existing worktree and commits outside integration. A branch qualifies when it is clean, committed, not abandoned, and passes its required checks. Report exclusions.
+- Before merging, give one compact summary of each selected branch's lineage, worktree state, checks, commits, and diff against integration. Stop only for an ambiguous target, potential loss of uncommitted work, or unauthorized destructive history rewriting.
 - Use `--ff-only` when integration has not diverged from the branch merge base; otherwise use `--no-ff`. Do not rewrite or discard lineage to obtain a fast-forward.
 - Advance `development` only through the golden image workflow or an explicitly authorized configuration-only promotion.
 
 ## Golden Image Workflow
 
-`Perform the golden image workflow` authorizes eligible branch merges, candidate builds and local deployment, promotion, golden tagging, pushing to origin, cleanup, and integration-cycle rollover.
+`Perform the golden image workflow` authorizes selected branch merges, local image build and deployment, checkpoint verification, promotion, and pushing Git refs to origin. Registry publication, CI completion, and worktree cleanup do not gate the local checkpoint.
 
-1. Inspect and merge every qualifying active-cycle branch into integration under Branch Integration.
-2. Compare each image-producing component with its latest golden revision. Run required checks and build immutable candidates with the required embedded Git revisions only for components whose code or shared inputs changed.
-3. Record the candidate and rollback tuples, create `image/<image_name>/sha256-<docker-sha256-hash>` provenance tags, and deploy the exact candidates under Safe Image Deployment.
-4. On an attributable failure, restore the rollback tuple, create `rejected/release/git-<full-git-commit-id>`, and leave `development` and golden tags unchanged.
-5. On success, fast-forward `development` with `--ff-only` to the verified integration commit. For each affected image, create an annotated `golden/<image_name>/sha256-<docker-sha256-hash>` tag recording its candidate tuple and accepted limitations. Golden images may be minted only from the current `development` commit.
-6. Push `development`, provenance tags, golden tags, and exact verified image manifests. Verify the expected GitHub Actions results; an independently rebuilt CI image does not inherit golden status.
-7. Remove merged worktrees under Worktree Lifecycle. Retain the current-date integration branch when it matches `development`; otherwise create it from `development`.
+1. Inspect and merge the selected qualifying branches into integration under Branch Integration.
+2. Compare runtime and image inputs with the selected existing images. Run the affected packages' required tests once. Build only changed components with the full embedded Git revision. Reuse an immutable image when its inputs are unchanged, including after documentation-only commits.
+3. Record the running image IDs and revisions, material configuration, migration state, enabled trading processes, desired realtime profiles, active backfills, and worker capacity. Create an `image/...` provenance tag for each new image.
+4. Deploy the exact selected images under Safe Image Deployment and run Development Checkpoint Verification. On an attributable failure, restore the rollback images and configuration, record the rejected snapshot, and leave `development` unchanged.
+5. On success, fast-forward `development` with `--ff-only`. Create an annotated `checkpoint/development/git-<full-git-commit-id>` tag recording the selected images, configuration, model identity, checks, rollback images, and limitations. Create a `golden/...` tag only when an image is first accepted; do not move an existing tag when that image is reused.
+6. Push `development` and the new Git tags to origin. GitHub Actions may finish asynchronously and independently rebuilt CI images do not inherit golden status. Publish the exact locally verified images to a registry only when separately requested.
+7. Keep the current-date integration branch aligned with `development`. Handle completed worktree cleanup under Worktree Lifecycle after the checkpoint; it is not a verification gate.
 
 Migration creation and initial feature or defect validation follow Database Changes and Migrations. The golden image workflow authorizes rebuilding and deploying `db-migrate` when its pending migrations exactly match the committed, approved, and previously validated set. Stop for any new, altered, unvalidated, or unexpected migration.
 
 ## Image and Golden Identity
 
-- An `image/...` tag records build provenance. A `golden/...` tag accepts an exact immutable image whose source is the current `development` commit; branch position, tests, deployment, and image tags alone do not confer golden status.
+- An `image/...` tag records build provenance. A `golden/...` tag records an image's first accepted development checkpoint. A `checkpoint/development/...` tag records the complete rollback tuple for that `development` commit. An accepted image may be reused by a later checkpoint when its runtime inputs are unchanged; its embedded source revision and existing provenance tags do not move.
 - The candidate tuple records the Git revision, immutable image identities, embedded revisions, migration state, material runtime configuration, applicable model identity, checks, and limitations. The rollback tuple records the predeployment images and revisions, service set, worker capacity, active realtime and backfill allocations, migration state, and material runtime configuration.
 - Golden status and change detection are component-specific. Shared code or build-input changes affect every image that consumes them.
 - Reuse a selected immutable image when it exists. Do not replace a selected digest with a rebuild without explicit authorization.
@@ -97,15 +97,24 @@ Migration creation and initial feature or defect validation follow Database Chan
 
 ## Safe Image Deployment
 
-- Before deploying any newly built image, inspect active realtime strategies, active backfill jobs, worker allocation units, replica count, and current service health. Preserve enough worker capacity for every enabled realtime strategy plus active backfill allocations; do not assume the existing replica count is sufficient.
+- Before deploying any selected image, inspect active realtime strategies, active backfill jobs, worker allocation units, replica count, and current service health. Preserve enough worker capacity for every enabled realtime strategy plus active backfill allocations; do not assume the existing replica count is sufficient.
+- Before replacing containers, record the rollback tuple and keep it until deployment verification is complete.
 - Add any required worker capacity before replacing existing workers. Verify new workers are registered and healthy before proceeding with the remaining deployment.
 - Deploy the exact prebuilt image without rebuilding it or changing unrelated services. Preserve configured process intent and worker scale unless the verified allocation demand requires additional capacity.
-- Run Post-Deployment Verification before declaring the deployment healthy. A failed check requires investigation, but triggers rollback only when the failure is attributable to the deployed image.
+- Run Development Checkpoint Verification for a local golden checkpoint. Run Full Post-Deployment Verification for production or when explicitly requested. A failed check requires investigation, but triggers rollback only when the failure is attributable to the deployed image.
 - Record the candidate tuple, worker-capacity calculation, verification results, and unresolved alerts in the deployment result.
 
-### Post-Deployment Verification
+### Development Checkpoint Verification
 
-- Before replacing containers, record the rollback tuple defined by the golden image workflow and keep it until deployment verification is complete.
+- Use one bounded verification pass to confirm:
+  1. Affected services run the exact selected image IDs and embedded revisions without restart loops; migration state matches the approved set and no unexpected migration is pending.
+  2. Worker capacity covers desired realtime profiles and active backfills; every desired profile has a current healthy owner and required bot routes resolve.
+  3. Every process enabled before deployment remains enabled, resumes automatically, and has a fresh heartbeat. Existing capital, identity, accounting, order, and market-safety controls remain active. Do not force a trade to prove readiness.
+  4. Timestamps advance for feeds required by those processes, and there is no new sustained critical alert or affected-path error attributable to the deployment.
+- Recheck only a failed or transient condition. Record results and limitations in the checkpoint tag. A container health endpoint alone does not prove that trading can resume.
+
+### Full Post-Deployment Verification
+
 - After deployment, verify in this order:
   1. Every expected container is running without a restart loop and uses the intended immutable image ID and embedded Git revision.
   2. Database, migration runner, ingester master, every ingester worker, bot, Prometheus, Grafana, Loki, and Alloy report their expected health or successful completion state; migrations complete with none pending.
@@ -124,7 +133,7 @@ Migration creation and initial feature or defect validation follow Database Chan
 - If adding capacity or restarting a narrowly affected disposable worker safely restores an attributable failure without changing code, images, durable intent, or data, perform that recovery before rollback and repeat the affected verification checks.
 - If the attributable failure remains, restore each affected service to the exact immutable image that was running immediately before deployment, together with its recorded material runtime configuration and required worker capacity. Do not rebuild an old commit, use mutable tags as rollback identity, reset Git branches, or change unrelated services.
 - Before rolling back across a database change, verify that the previous image is compatible with the current database state. Never reverse or mutate database state outside a separately authorized migration. If compatibility is not proven, leave the database intact, restore only compatible services, and report the rollback as blocked or partial.
-- Recreate only the affected containers, then repeat Post-Deployment Verification against the rollback tuple. A rollback is complete when the affected paths and required functional data flow recover; disclose unrelated checks that remain unhealthy.
+- Recreate only the affected containers, then repeat the applicable deployment verification against the rollback tuple. A rollback is complete when the affected paths and required functional data flow recover; disclose unrelated checks that remain unhealthy.
 
 ### Failure RCA and Repair Instructions
 
