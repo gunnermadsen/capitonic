@@ -13,7 +13,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-CHARTS = ROOT / "capitonic-helm-chart"
+CHARTS = ROOT / "capitonic-helm-chart" / "charts"
 NAMESPACE = "capitonic"
 CONTEXT = "rancher-desktop"
 RELEASES = ("loki", "prometheus", "alloy", "grafana")

@@ -1,6 +1,6 @@
 # Capitonic local Kubernetes monitoring
 
-The `capitonic` namespace on the Rancher Desktop k3s cluster holds Capitonic services. The monitoring charts live directly under `capitonic-helm-chart/`; each service has its own Helm release named after the service. The platform label is `capitonic-platform` and the environment label is `dev`.
+The `capitonic` namespace on the Rancher Desktop k3s cluster holds Capitonic services. The monitoring charts live under `capitonic-helm-chart/charts/`; each service has its own Helm release named after the service. The platform label is `capitonic-platform` and the environment label is `dev`.
 
 ## Workload and storage ownership
 

@@ -4,25 +4,26 @@ Status: monitoring stack implementation in progress on feature/capitonic-monitor
 
 ## Recommended architecture
 
-Use independently deployable Helm charts under `capitonic-helm-chart/`, organized by microservice:
+Use independently deployable Helm charts under `capitonic-helm-chart/charts/`, organized by microservice:
 
 ```text
 capitonic-helm-chart/
-  prometheus/
-  grafana/
-  loki/
-  alloy/
-  timescaledb/
-  pgbouncer/
-  db-migrate/
-  ingester/
-  polymarket-bot/
+  charts/
+    prometheus/
+    grafana/
+    loki/
+    alloy/
+    timescaledb/
+    pgbouncer/
+    db-migrate/
+    ingester/
+    polymarket-bot/
 ```
 
 Each service directory is a complete Helm chart:
 
 ```text
-capitonic-helm-chart/ingester/
+capitonic-helm-chart/charts/ingester/
   Chart.yaml
   values.yaml
   values-dev.yaml
@@ -480,7 +481,7 @@ Jobs should generally be pinned to a logical deployment or capability pool, not 
 Development is the only initial environment, but the chart structure should leave room for later values:
 
 ```text
-capitonic-helm-chart/ingester/
+capitonic-helm-chart/charts/ingester/
   values.yaml
   values-dev.yaml
   values-prod.yaml
