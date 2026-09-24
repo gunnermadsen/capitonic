@@ -53,17 +53,17 @@ groups:
           - refId: A
             datasourceUid: prometheus
             relativeTimeRange: {from: 900, to: 0}
-            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "histogram_quantile(0.95, sum by (process_id, le) (rate(polymarket_live_reconciliation_duration_seconds_bucket[10m])))", instant: true, refId: A}
+            model: {datasource: {type: prometheus, uid: prometheus}, editorMode: code, expr: "sum by (process_id) (rate(polymarket_live_reconciliation_duration_seconds_sum{source!=\"startup\"}[10m])) / sum by (process_id) (rate(polymarket_live_reconciliation_duration_seconds_count{source!=\"startup\"}[10m]))", instant: true, refId: A}
           - refId: B
             datasourceUid: __expr__
             model: {datasource: {type: __expr__, uid: __expr__}, expression: A, reducer: last, type: reduce, refId: B}
           - refId: C
             datasourceUid: __expr__
-            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [5], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
+            model: {datasource: {type: __expr__, uid: __expr__}, expression: B, type: threshold, conditions: [{evaluator: {params: [30], type: gt}, operator: {type: and}, query: {params: [C]}, reducer: {params: [], type: last}}], refId: C}
         noDataState: OK
         execErrState: Error
         for: 5m
-        annotations: {summary: "Reconciliation p95 latency exceeds five seconds", description: "Reconciliation is sustained above its operational latency budget. Inference remains independently scheduled."}
+        annotations: {summary: "Reconciliation mean latency exceeds thirty seconds", description: "The ten-minute rolling mean reconciliation duration is sustained above the configured periodic reconciliation cadence. Inference remains independently scheduled."}
         labels: {service: polymarket-bot, family: reconciliation, severity: warning, environment: $GRAFANA_ALERT_ENVIRONMENT}
         isPaused: false
       - uid: reconciliation_unresolved_orders
