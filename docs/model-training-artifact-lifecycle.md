@@ -83,6 +83,10 @@ A concise report committed to Git must point to this manifest and identify the r
 5. Update the manifest as artifacts are produced and verify checksums before qualification.
 6. Keep related candidate variations under the same training objective and worktree. Use separate timestamped run directories rather than additional worktrees.
 
+Before starting a new run, inspect every writable path in its configuration and command arguments. Set run results, checkpoints or freezes, extracted source data, feature data, caches, predictions, backtests, metrics, diagnostics, and logs under that run's canonical SSD directory, using the corresponding directories above. In particular, do not reuse relative output values such as `runs/...`, `artifacts/...`, `training-results/...`, or writable `data/...` from historical configs: many training entry points resolve them inside `packages/btc-directional-model`. Resolve the configured paths before execution and confirm that every generated file will land under the new timestamped run, with no output in the repository or worktree.
+
+Paths to existing models, metrics, predictions, or source datasets are inputs. Verify those against their immutable canonical SSD location and recorded checksum when reusing them; do not redirect them into the new run merely because a historical config contains a legacy path. Preserve historical configs as run provenance, and create or adapt the configuration for each subsequent run.
+
 ## Preparing a training branch for integration
 
 Before requesting integration:
