@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bake repository-owned monitoring configuration into ignored chart assets."""
+"""Bake repository-owned configuration and scripts into ignored chart assets."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CHARTS = ROOT / "capitonic-helm-chart" / "charts"
-RELEASES = ("loki", "prometheus", "alloy", "grafana")
+RELEASES = ("loki", "prometheus", "alloy", "grafana", "pgbouncer")
 
 
 def env_values(path: Path, required: tuple[str, ...]) -> dict[str, str]:
@@ -93,6 +93,16 @@ def bake() -> None:
         (grafana_source / "provisioning/datasources/kubernetes.yml").read_text(),
     )
 
+    pgbouncer = (ROOT / "common/configs/pgbouncer/pgbouncer.ini").read_text()
+    if pgbouncer.count("host=timescaledb-0") != 8:
+        raise ValueError("Expected eight database routes in the shared PgBouncer configuration")
+    write_asset("pgbouncer", "pgbouncer.ini", pgbouncer.replace("host=timescaledb-0", "host=timescaledb"))
+    write_asset(
+        "pgbouncer",
+        "pgbouncer-entrypoint.sh",
+        (ROOT / "common/scripts/pgbouncer-entrypoint.sh").read_text(),
+    )
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -100,7 +110,7 @@ def main() -> None:
     args = parser.parse_args()
     if args.clean:
         clean()
-        print("Removed generated monitoring chart assets")
+        print("Removed generated chart assets")
     else:
         clean()
         try:
@@ -108,7 +118,7 @@ def main() -> None:
         except Exception:
             clean()
             raise
-        print(f"Baked monitoring assets under {CHARTS}")
+        print(f"Baked chart assets under {CHARTS}")
 
 
 if __name__ == "__main__":

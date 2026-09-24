@@ -11,13 +11,13 @@ metadata:
     capitonic.io/rollout-domain: monitoring
 data:
   dashboards.yml: |-
-{{ required "run scripts/helm/bake-monitoring.py before Helm: missing Grafana dashboard provisioning" (.Files.Get "assets/provisioning/dashboards/dashboards.yml") | nindent 4 }}
+{{ required "run scripts/helm/bake-assets.py before Helm: missing Grafana dashboard provisioning" (.Files.Get "assets/provisioning/dashboards/dashboards.yml") | nindent 4 }}
   datasources.yml: |-
-{{ required "run scripts/helm/bake-monitoring.py before Helm: missing Grafana datasources" (.Files.Get "assets/provisioning/datasources/datasources.yml") | nindent 4 }}
+{{ required "run scripts/helm/bake-assets.py before Helm: missing Grafana datasources" (.Files.Get "assets/provisioning/datasources/datasources.yml") | nindent 4 }}
   rules-prometheus.yml: |-
-{{ required "run scripts/helm/bake-monitoring.py before Helm: missing Grafana alert rules" (.Files.Get "assets/provisioning/alerting/rules-prometheus.yml") | nindent 4 }}
+{{ required "run scripts/helm/bake-assets.py before Helm: missing Grafana alert rules" (.Files.Get "assets/provisioning/alerting/rules-prometheus.yml") | nindent 4 }}
 {{- if eq (len (.Files.Glob "assets/dashboards/*.json")) 0 }}
-{{- fail "run scripts/helm/bake-monitoring.py before Helm: missing Grafana dashboards" }}
+{{- fail "run scripts/helm/bake-assets.py before Helm: missing Grafana dashboards" }}
 {{- end }}
 {{- range $path, $_ := .Files.Glob "assets/dashboards/*.json" }}
 ---

@@ -1,0 +1,49 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migrate
+  labels:
+    app.kubernetes.io/name: db-migrate
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: migration
+    app.kubernetes.io/part-of: capitonic-platform
+    app.kubernetes.io/managed-by: Helm
+    capitonic.io/environment: dev
+    capitonic.io/rollout-domain: database
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: db-migrate
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: migration
+        app.kubernetes.io/part-of: capitonic-platform
+        capitonic.io/environment: dev
+        capitonic.io/rollout-domain: database
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: db-migrate
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: Never
+          env:
+            - {name: POSTGRES_HOST, value: timescaledb}
+            - {name: POSTGRES_PORT, value: "5432"}
+            - {name: POSTGRES_USER, value: postgres}
+            - {name: POSTGRES_DB, value: polymarket}
+            - {name: POSTGRES_SSL_MODE, value: disable}
+            - {name: NODE_ENV, value: production}
+            - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_PASSWORD}}}
+            - {name: CAPITONIC_TRADING_POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: postgres-credentials, key: CAPITONIC_TRADING_POSTGRES_PASSWORD}}}
+            - {name: CAPITONIC_INGESTER_MASTER_POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: postgres-credentials, key: CAPITONIC_INGESTER_MASTER_POSTGRES_PASSWORD}}}
+            - {name: CAPITONIC_INGESTER_WORKER_POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: postgres-credentials, key: CAPITONIC_INGESTER_WORKER_POSTGRES_PASSWORD}}}
+            - {name: CAPITONIC_GRAFANA_POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: postgres-credentials, key: CAPITONIC_GRAFANA_POSTGRES_PASSWORD}}}
+          resources:
+{{ toYaml .Values.resources | indent 12 }}

@@ -17,7 +17,7 @@ The monitoring rollout does not include node-exporter or cAdvisor. They are rese
 
 ## Asset and secret ownership
 
-`common/configs/` is the only checked-in source for service configuration, dashboards, and alert rules. Its additive `alloy/kubernetes.alloy` and `grafana/provisioning/datasources/kubernetes.yml` files hold the Kubernetes-specific configuration. `common/scripts/` is the source for microservice startup scripts. Root `scripts/` holds project utilities, including the maintained `scripts/helm/bake-monitoring.py` asset bake. Runtime `.env.prometheus` and `.env.grafana` in the main worktree remain the only source for monitoring credentials; the feature worktree symlinks them. The monitoring charts do not need a startup script.
+`common/configs/` is the only checked-in source for service configuration, dashboards, and alert rules. Its additive `alloy/kubernetes.alloy` and `grafana/provisioning/datasources/kubernetes.yml` files hold the Kubernetes-specific configuration. `common/scripts/` is the source for microservice startup scripts. Root `scripts/` holds project utilities, including the maintained `scripts/helm/bake-assets.py` asset bake. Runtime `.env.prometheus` and `.env.grafana` in the main worktree remain the only source for monitoring credentials; the feature worktree symlinks them. The monitoring charts do not need a startup script.
 
 The bake reads the shared source files, copies them to ignored `assets/` directories inside each chart, and filters the Docker-specific Prometheus target list to currently deployed Kubernetes services. It does not edit the shared sources or generated chart assets by hand. It does not invoke Helm or kubectl, manage Secrets, or clean up automatically. Run `--clean` after the Helm operation to remove only the generated assets. Running the bake is required before linting, rendering, packaging, or upgrading the charts from their directories; the chart templates fail if required assets are missing. No generated manifest or secret is committed.
 
@@ -28,10 +28,10 @@ Kubernetes Secrets `prometheus-auth` and `grafana-auth` are managed separately f
 Run from the assigned feature worktree with Kubernetes context `rancher-desktop`. For a chart or configuration change, bake first, then use ordinary Helm commands. For example, to upgrade Grafana:
 
 ```bash
-python3 scripts/helm/bake-monitoring.py
+python3 scripts/helm/bake-assets.py
 helm lint capitonic-helm-chart/charts/grafana
 helm upgrade --install grafana capitonic-helm-chart/charts/grafana -n capitonic --atomic --wait --timeout 5m
-python3 scripts/helm/bake-monitoring.py --clean
+python3 scripts/helm/bake-assets.py --clean
 ```
 
 For an initial install, create the `capitonic` namespace and required Secrets first, then install the separate Helm releases in this order: Loki, Prometheus, Alloy, Grafana. Use the same `helm upgrade --install <service> capitonic-helm-chart/charts/<service> -n capitonic --atomic --wait --timeout 5m` form for each. Chart and ConfigMap changes go through Helm; their checksum annotations trigger the needed pod rollouts. A restart with no chart change needs no bake or Helm upgrade:

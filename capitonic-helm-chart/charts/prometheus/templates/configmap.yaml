@@ -11,4 +11,4 @@ metadata:
     capitonic.io/rollout-domain: monitoring
 data:
   prometheus.yml: |-
-{{ required "run scripts/helm/bake-monitoring.py before Helm: missing Prometheus config" (.Files.Get "assets/prometheus.yml") | nindent 4 }}
+{{ required "run scripts/helm/bake-assets.py before Helm: missing Prometheus config" (.Files.Get "assets/prometheus.yml") | nindent 4 }}

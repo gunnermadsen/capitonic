@@ -1,4 +1,1 @@
-/charts/prometheus/assets/
-/charts/loki/assets/
-/charts/alloy/assets/
-/charts/grafana/assets/
+/charts/*/assets/

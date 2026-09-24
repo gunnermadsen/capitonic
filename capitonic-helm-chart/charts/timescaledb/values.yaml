@@ -1,0 +1,7 @@
+image: timescale/timescaledb:2.14.2-pg14
+storage:
+  className: local-path
+  size: 20Gi
+resources:
+  requests: {cpu: 1000m, memory: 2Gi}
+  limits: {cpu: 2000m, memory: 3Gi}

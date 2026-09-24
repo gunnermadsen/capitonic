@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: timescaledb
+  labels:
+    app.kubernetes.io/name: timescaledb
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: capitonic-platform
+    app.kubernetes.io/managed-by: Helm
+    capitonic.io/environment: dev
+    capitonic.io/rollout-domain: database
+spec:
+  serviceName: timescaledb-headless
+  replicas: 1
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: timescaledb
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: timescaledb
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: database
+        app.kubernetes.io/part-of: capitonic-platform
+        capitonic.io/environment: dev
+        capitonic.io/rollout-domain: database
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: timescaledb
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: Never
+          ports:
+            - {name: postgres, containerPort: 5432}
+          env:
+            - {name: POSTGRES_USER, value: postgres}
+            - {name: POSTGRES_DB, value: polymarket}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+            - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_PASSWORD}}}
+            - {name: TS_TUNE_MEMORY, value: 2GB}
+            - {name: TS_TUNE_NUM_CPUS, value: "2"}
+            - {name: TS_TUNE_MAX_CONNS, value: "40"}
+            - {name: TS_TUNE_MAX_BG_WORKERS, value: "4"}
+          args:
+            - postgres
+            - -c
+            - shared_buffers=512MB
+            - -c
+            - effective_cache_size=1536MB
+            - -c
+            - maintenance_work_mem=256MB
+            - -c
+            - autovacuum_work_mem=64MB
+            - -c
+            - work_mem=10485kB
+            - -c
+            - max_connections=40
+            - -c
+            - max_locks_per_transaction=128
+            - -c
+            - max_parallel_workers=1
+            - -c
+            - max_parallel_workers_per_gather=0
+            - -c
+            - max_worker_processes=8
+            - -c
+            - timescaledb.max_background_workers=4
+          startupProbe:
+            exec: {command: [pg_isready, -U, postgres, -d, polymarket]}
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            exec: {command: [pg_isready, -U, postgres, -d, polymarket]}
+            periodSeconds: 10
+          livenessProbe:
+            exec: {command: [pg_isready, -U, postgres, -d, polymarket]}
+            periodSeconds: 30
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ .Values.storage.className | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.size | quote }}
