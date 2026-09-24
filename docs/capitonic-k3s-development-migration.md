@@ -1,6 +1,6 @@
 # Capitonic k3s development migration plan
 
-Status: monitoring, database, and migration runner are deployed on `feature/capitonic-monitoring-k3s`. The bot service is the next isolated rollout; ingester master, workers, and trading-process acceptance follow it. Docker Compose remains unchanged.
+Status: monitoring, database, migration runner, and bot service are deployed on `feature/capitonic-monitoring-k3s`. Ingester master, workers, and trading-process acceptance follow them. Docker Compose remains unchanged.
 
 ## Recommended architecture
 

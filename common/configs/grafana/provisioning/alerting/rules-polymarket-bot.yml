@@ -16,7 +16,7 @@ groups:
             model:
               datasource: {type: prometheus, uid: prometheus}
               editorMode: code
-              expr: 'up{job="polymarket-bot"} == 0 or absent(up{job="polymarket-bot"})'
+              expr: 'up{job="polymarket-bot"} < bool 1 or absent(up{job="polymarket-bot"})'
               instant: true
               intervalMs: 1000
               maxDataPoints: 43200
