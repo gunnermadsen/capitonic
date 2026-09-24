@@ -300,8 +300,8 @@ docker compose up -d --force-recreate --no-deps db-migrate
 ## Ingester Worker Scaling
 
 - In Docker Compose, create and manage ingester workers only by scaling the existing `ingester-worker` service in the repository’s Compose project.
-- In the local Rancher Desktop k3s development cluster, create and manage ingester workers in the `capitonic` namespace only through the `ingester-worker` Deployment owned by the `ingester` Helm chart. Set its replica count through Helm values. This exception does not change Compose worker ownership.
+- In the local Rancher Desktop k3s development cluster, create and manage ingester workers in the `capitonic` namespace only through the `ingester-worker` Deployment owned by the `ingester` Helm chart. With worker scaling disabled, set its replica count through Helm values. With worker scaling enabled, Helm omits the replica field and the ingester master alone updates that Deployment's `/scale` subresource through its namespace-scoped service account. This exception does not change Compose worker ownership.
 - Never create ingester workers with `docker run`, `docker compose run`, manual container or pod creation, or a mechanism outside the owning Compose service or Helm chart.
 - Never create purpose-specific worker services, container names, deployment names, or worker variants. All ingester workers must use the standard `ingester-worker` service name and existing runtime contract.
-- Worker scaling is an operational action only. Do not modify source code, Dockerfiles, Compose files, or environment files to scale workers.
+- Operational worker scaling does not require source, Dockerfile, Compose, or environment-file edits. Changes to the Kubernetes worker scaler itself are feature work and must preserve Compose behavior.
 - Do not introduce a parallel worker standard or contract. If the owning `ingester-worker` service or Deployment cannot perform the requested work through ordinary scaling, stop and report the incompatibility instead of creating replacement infrastructure.

@@ -160,6 +160,13 @@ impl ProfileRepository {
             .collect()
     }
 
+    pub async fn desired_running_count(&self) -> Result<i64> {
+        sqlx::query_scalar("SELECT count(*) FROM ingester.profiles WHERE desired_state = 'running'")
+            .fetch_one(&self.pool)
+            .await
+            .context("count desired realtime profiles")
+    }
+
     pub async fn get(&self, key: IngesterStrategyKey) -> Result<Option<IngesterProfile>> {
         let query =
             format!("SELECT {PROFILE_COLUMNS} FROM ingester.profiles WHERE strategy_key = $1");

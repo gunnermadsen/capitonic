@@ -12,3 +12,7 @@ worker:
   resources:
     requests: {cpu: 100m, memory: 256Mi}
     limits: {cpu: 750m, memory: 1Gi}
+workerScaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 4
