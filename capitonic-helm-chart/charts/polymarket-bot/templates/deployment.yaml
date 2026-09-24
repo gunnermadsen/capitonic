@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: polymarket-bot
+  labels:
+    app.kubernetes.io/name: polymarket-bot
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: trading
+    app.kubernetes.io/part-of: capitonic-platform
+    app.kubernetes.io/managed-by: Helm
+    capitonic.io/environment: dev
+    capitonic.io/rollout-domain: trading
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: polymarket-bot
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: polymarket-bot
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: trading
+        app.kubernetes.io/part-of: capitonic-platform
+        capitonic.io/environment: dev
+        capitonic.io/rollout-domain: trading
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10002
+      containers:
+        - name: polymarket-bot
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: Never
+          ports:
+            - {name: http, containerPort: 8097}
+          env:
+            - {name: RUST_LOG, value: info}
+            - {name: TOKIO_WORKER_THREADS, value: "2"}
+            - {name: POSTGRES_HOST, value: pgbouncer}
+            - {name: POSTGRES_PORT, value: "6432"}
+            - {name: POSTGRES_USER, value: capitonic_trading}
+            - {name: POSTGRES_DB, value: polymarket_trading}
+            - {name: POSTGRES_SSL_MODE, value: disable}
+            - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: postgres-credentials, key: CAPITONIC_TRADING_POSTGRES_PASSWORD}}}
+            - {name: INGESTER_MASTER_URL, value: "http://ingester-master:8098"}
+            - {name: POLYMARKET_HTTP_ENABLED, value: "true"}
+            - {name: POLYMARKET_HTTP_BIND, value: "0.0.0.0:8097"}
+            - {name: POLYMARKET_HTTP_ADMIN_TOKEN, valueFrom: {secretKeyRef: {name: polymarket-bot-auth, key: admin-token}}}
+          startupProbe:
+            httpGet: {path: /health/live, port: http}
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet: {path: /health/ready, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: {path: /health/live, port: http}
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false

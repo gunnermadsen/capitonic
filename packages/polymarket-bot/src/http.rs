@@ -291,10 +291,16 @@ pub fn router(control: SharedControlApi, admin_bearer_token: impl Into<String>) 
 
     Router::new()
         .route("/health", get(health))
+        .route("/health/live", get(liveness))
+        .route("/health/ready", get(health))
         .route("/metrics", get(metrics))
         .route("/prometheus/metrics", get(prometheus_metrics))
         .nest("/admin", admin_routes)
         .with_state(state)
+}
+
+async fn liveness() -> StatusCode {
+    StatusCode::OK
 }
 
 async fn health(State(state): State<HttpState>) -> Result<Json<HealthResponse>, HttpError> {

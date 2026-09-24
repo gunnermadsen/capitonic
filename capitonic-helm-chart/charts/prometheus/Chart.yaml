@@ -1,0 +1,6 @@
+apiVersion: v2
+name: prometheus
+description: Capitonic Prometheus for local Kubernetes
+type: application
+version: 0.1.0
+appVersion: "3.13.2"

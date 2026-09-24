@@ -298,8 +298,9 @@ docker compose up -d --force-recreate --no-deps db-migrate
 
 ## Ingester Worker Scaling
 
-- Create and manage ingester workers only by scaling the existing `ingester-worker` service in the repository’s Docker Compose project.
-- Never create ingester workers with `docker run`, `docker compose run`, manual container creation, or any mechanism outside the Compose project.
+- In Docker Compose, create and manage ingester workers only by scaling the existing `ingester-worker` service in the repository’s Compose project.
+- In the local Rancher Desktop k3s development cluster, create and manage ingester workers in the `capitonic` namespace only through the `ingester-worker` Deployment owned by the `ingester` Helm chart. Set its replica count through Helm values. This exception does not change Compose worker ownership.
+- Never create ingester workers with `docker run`, `docker compose run`, manual container or pod creation, or a mechanism outside the owning Compose service or Helm chart.
 - Never create purpose-specific worker services, container names, deployment names, or worker variants. All ingester workers must use the standard `ingester-worker` service name and existing runtime contract.
-- Worker scaling is an operational action only. Do not modify source code, Dockerfiles, Compose files, environment files, or configuration to scale workers.
-- Do not introduce a parallel worker standard or contract. If the existing `ingester-worker` service cannot perform the requested work through ordinary Compose scaling, stop and report the incompatibility instead of creating or modifying infrastructure.
+- Worker scaling is an operational action only. Do not modify source code, Dockerfiles, Compose files, or environment files to scale workers.
+- Do not introduce a parallel worker standard or contract. If the owning `ingester-worker` service or Deployment cannot perform the requested work through ordinary scaling, stop and report the incompatibility instead of creating replacement infrastructure.

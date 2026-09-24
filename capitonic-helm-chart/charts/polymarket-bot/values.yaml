@@ -1,0 +1,4 @@
+image: capitonic/polymarket-bot:k3s-1052bc9b92913c94d5828b4471b5d8ae09bde871
+resources:
+  requests: {cpu: 100m, memory: 256Mi}
+  limits: {cpu: 2000m, memory: 512Mi}

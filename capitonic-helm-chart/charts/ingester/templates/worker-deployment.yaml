@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingester-worker
+  labels:
+    app.kubernetes.io/name: ingester-worker
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/part-of: capitonic-platform
+    app.kubernetes.io/managed-by: Helm
+    capitonic.io/environment: dev
+    capitonic.io/rollout-domain: ingestion
+spec:
+  replicas: {{ .Values.worker.replicaCount }}
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ingester-worker
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ingester-worker
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: ingestion
+        app.kubernetes.io/part-of: capitonic-platform
+        capitonic.io/environment: dev
+        capitonic.io/rollout-domain: ingestion
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10003
+      containers:
+        - name: ingester-worker
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: Never
+          ports:
+            - {name: http, containerPort: 8099}
+            - {name: grpc, containerPort: 50051}
+          env:
+{{ include "ingester.commonEnv" . | indent 12 }}
+            - {name: POSTGRES_USER, value: capitonic_ingester_worker}
+            - {name: POSTGRES_DB, value: polymarket_ingester_worker_tx}
+            - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: postgres-credentials, key: CAPITONIC_INGESTER_WORKER_POSTGRES_PASSWORD}}}
+            - {name: INGESTER_MODE, value: worker}
+            - {name: INGESTER_INSTANCE, valueFrom: {fieldRef: {fieldPath: metadata.name}}}
+            - {name: INGESTER_WORKER_ID, valueFrom: {fieldRef: {fieldPath: metadata.name}}}
+            - {name: INGESTER_ADVERTISE_HOST, valueFrom: {fieldRef: {fieldPath: status.podIP}}}
+            - {name: INGESTER_GRPC_BIND, value: "0.0.0.0:50051"}
+            - {name: INGESTER_WORKER_METRICS_BIND, value: "0.0.0.0:8099"}
+            - {name: INGESTER_MASTER_URL, value: "http://ingester-master:8098"}
+            - {name: INGESTER_DEPLOYMENT_ID, value: {{ .Values.deploymentId | quote }}}
+            - {name: INGESTER_WORKER_MAX_BACKFILLS, value: "2"}
+            - {name: INGESTER_WORKER_CAPACITY_UNITS, value: "4"}
+            - {name: INGESTER_WORKER_REALTIME_SLOT_LIMIT, value: "1"}
+            - {name: INGESTER_IMAGE_DIGEST, value: {{ .Values.imageDigest | quote }}}
+            - {name: INGESTER_GIT_REVISION, value: {{ .Values.gitRevision | quote }}}
+          startupProbe:
+            httpGet: {path: /health/live, port: http}
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet: {path: /health/ready, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: {path: /health/live, port: http}
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+{{ toYaml .Values.worker.resources | indent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false

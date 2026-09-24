@@ -1,0 +1,14 @@
+image: capitonic/ingester:k3s-c35aa91f43037fb626e2778da2384ea65fafba9c
+imageDigest: sha256:7a3b6b2d6f5d087a94b13f9b49ff036795504ab599e9768c69f47c7d2e64bb9b
+gitRevision: c35aa91f43037fb626e2778da2384ea65fafba9c
+deploymentId: capitonic-k3s-dev
+master:
+  replicaCount: 1
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+worker:
+  replicaCount: 1
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: 750m, memory: 1Gi}

@@ -1,0 +1,11 @@
+image: timescale/timescaledb:2.14.2-pg14
+metricsImage: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
+storage:
+  className: local-path
+  size: 20Gi
+resources:
+  requests: {cpu: 1000m, memory: 2Gi}
+  limits: {cpu: 2000m, memory: 3Gi}
+metricsResources:
+  requests: {cpu: 20m, memory: 32Mi}
+  limits: {cpu: 100m, memory: 128Mi}

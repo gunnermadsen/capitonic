@@ -1,28 +1,29 @@
 # Capitonic k3s development migration plan
 
-Status: proposed. This is the user-supplied plan, preserved for implementation planning. Repository-policy conflicts identified during review require resolution before the affected Kubernetes rollout steps. No application, Compose, or shared configuration changes are authorized by this document alone.
+Status: monitoring, database, migration runner, and bot service are deployed on `feature/capitonic-monitoring-k3s`. Ingester master, workers, and trading-process acceptance follow them. Docker Compose remains unchanged.
 
 ## Recommended architecture
 
-Use independently deployable Helm charts under `charts/`, organized by microservice:
+Use independently deployable Helm charts under `capitonic-helm-chart/charts/`, organized by microservice:
 
 ```text
-charts/
-  prometheus/
-  grafana/
-  loki/
-  alloy/
-  timescaledb/
-  pgbouncer/
-  db-migrate/
-  ingester/
-  polymarket-bot/
+capitonic-helm-chart/
+  charts/
+    prometheus/
+    grafana/
+    loki/
+    alloy/
+    timescaledb/
+    pgbouncer/
+    db-migrate/
+    ingester/
+    polymarket-bot/
 ```
 
 Each service directory is a complete Helm chart:
 
 ```text
-charts/ingester/
+capitonic-helm-chart/charts/ingester/
   Chart.yaml
   values.yaml
   values-dev.yaml
@@ -46,15 +47,11 @@ charts/ingester/
 
 The charts should remain standalone and deployable. We should not flatten manifests into one directory or package Docker Compose files inside Helm.
 
-A small orchestration layer can coordinate installation order without becoming another chart:
+A small asset bake utility prepares chart-local files without invoking Helm or Kubernetes:
 
 ```text
 scripts/helm/
-  bake-dev.sh
-  install-dev.sh
-  upgrade-dev.sh
-  verify-dev.sh
-  uninstall-dev.sh
+  bake-assets.py
 ```
 
 Later, a parent platform chart can be introduced if useful, but it should not be required for the initial migration.
@@ -77,16 +74,15 @@ common/
     pgbouncer-entrypoint.sh
 ```
 
-The Helm process should package or bake those files into Kubernetes ConfigMaps rather than duplicate them manually inside each chart.
+The Helm process should package or bake those files into Kubernetes ConfigMaps rather than duplicate them manually inside each chart. `common/scripts/` remains the source for microservice startup scripts; root `scripts/` holds project utilities, including Helm bake and deployment commands. No startup script is required by the monitoring chart.
 
 The standardized bake process should:
 
-1. Validate required local configuration and secrets.
-2. Clone the required startup scripts and configuration files into an ephemeral staging directory.
-3. Render or package them into ConfigMaps and Secrets.
-4. Run Helm deployment using the rendered values.
-5. Delete the staging directory.
-6. Never commit rendered secrets or generated manifests.
+1. Validate the source configuration needed to render chart assets.
+2. Copy or render the required configuration and startup files into ignored `assets/` directories inside the respective charts.
+3. Leave those assets in place for ordinary `helm lint`, `helm template`, and `helm upgrade` commands.
+4. Remove the generated assets with `bake-assets.py --clean` after the Helm operation.
+5. Never commit rendered secrets or generated manifests.
 
 The generated Kubernetes objects may contain Secret manifests during deployment, but the rendered output must remain ephemeral and must not be committed to Git.
 
@@ -103,7 +99,7 @@ Sensitive values remain in local environment files and are not committed:
 - Chainlink credentials;
 - Polygon or provider credentials.
 
-The deployment script should read the existing `.env` files, validate required keys, and create or update Kubernetes Secrets at deployment time.
+Kubernetes Secrets should be created or updated separately from baking and Helm chart rendering, using the existing `.env` files. The bake command does not read secret values or create Kubernetes resources.
 
 Non-sensitive configuration should live in Helm values or ConfigMaps:
 
@@ -124,8 +120,9 @@ The initial implementation should use native Kubernetes Secrets. External secret
 All charts should use a consistent namespace and metadata standard:
 
 ```text
-Namespace: capitonic-dev
-Release: capitonic
+Namespace: capitonic
+Releases: prometheus, grafana, loki, alloy (one per standalone chart)
+Platform: capitonic-platform
 Environment: dev
 ```
 
@@ -208,7 +205,9 @@ It should:
 - fail visibly when migration execution fails;
 - be independently verifiable before dependent services start.
 
-No schema changes are part of this migration plan.
+The Job runs only the repository's committed migration code. On a fresh database,
+that code establishes the existing schema baseline and then applies migrations
+not already recorded in its ledger; this rollout does not author new migrations.
 
 ### Ingester chart
 
@@ -248,17 +247,13 @@ Those are later additions after the static Kubernetes deployment is proven.
 
 The `polymarket-bot` chart should contain:
 
-- Deployment;
-- Service;
-- Secrets;
-- ConfigMaps;
-- readiness/liveness probes;
-- graceful shutdown;
-- process-scoped health metrics;
-- database and ingester dependencies;
-- development-only access configuration.
+- one Deployment with `Recreate` strategy and one internal Service;
+- references to separately managed Kubernetes Secrets sourced from the main worktree `.env` files;
+- startup and liveness probes independent of database availability, plus database-backed readiness;
+- the existing graceful shutdown and process-scoped health metrics;
+- the PgBouncer route and an ingester master URL reserved for later process activation.
 
-The chart must preserve durable trading-process intent and existing process-scoped recovery behavior.
+The chart must preserve durable trading-process intent and existing process-scoped recovery behavior. See `docs/capitonic-k3s-bot-standards.md` for the local bot deployment contract.
 
 ## Health and observability standard
 
@@ -298,7 +293,7 @@ Kubernetes probes must not become blunt trading kill switches. They should preve
 
 ## Rollout phases
 
-### Phase 1: Monitoring stack
+### Monitoring stack rollout
 
 Deploy:
 
@@ -306,12 +301,10 @@ Deploy:
 - Prometheus;
 - Alloy;
 - Grafana;
-- node-exporter or equivalent host metrics;
-- cAdvisor or equivalent container metrics where appropriate.
 
 Tasks:
 
-1. Create the development namespace.
+1. Create the `capitonic` namespace.
 2. Deploy persistent storage.
 3. Deploy Loki.
 4. Deploy Prometheus.
@@ -324,79 +317,113 @@ Tasks:
 11. Confirm Prometheus targets are healthy.
 12. Confirm Grafana dashboards render against the expected datasources.
 
-Soak period:
+Monitoring acceptance is a current health check, not a multi-hour soak. Verify
+ready pods, Bound storage, healthy scrape targets, fresh logs, and working
+Grafana datasources before adding dependent services. Run the extended system
+soak after the code-driven microservices are deployed and producing data.
 
-- several hours of continuous operation;
-- no sustained scrape failures;
-- no unexplained Alloy delivery errors;
-- no persistent pod restarts;
-- no storage or resource pressure;
-- dashboards accessible throughout the soak.
+### Database, PgBouncer, and migrations rollout
 
-### Phase 2: Database, PgBouncer, and migrations
+Monitoring entry gate, checked on 2026-09-24: Alloy, Grafana, Loki, and
+Prometheus each have one ready pod with zero restarts; all three monitoring
+PVCs are Bound. Prometheus reports its three configured targets healthy,
+Loki receives fresh namespace logs, and both provisioned Grafana datasource
+health checks pass. Recheck current health after any Rancher Desktop restart
+and before deploying the database; no monitoring-only soak is required.
 
-Deploy:
+Deployment boundary: create a **new, isolated, empty development database**.
+Do not copy the Compose database, switch existing applications to Kubernetes,
+or run migrations against the Compose database during this rollout. Preserve
+the Compose services and configuration as they are. A data copy would require
+a separate, explicit data-scope and recovery plan.
 
-- TimescaleDB;
-- PgBouncer;
-- db-migrate Job.
+Predeployment gates:
 
-Tasks:
+1. The Kubernetes Job exception is committed in `AGENTS.md` on
+   `docs/model-training-artifact-lifecycle`. Follow repository branch policy
+   to bring that commit into the deployment lineage before executing the Job.
+   The existing pending-migration approval and exact-list gates still apply.
+2. Size the Rancher Desktop node and database together. Rancher Desktop is
+   configured for eight CPUs and 8 GiB of memory; after restart, Kubernetes
+   reported eight allocatable CPUs and about 7.75 GiB allocatable memory.
+   The development Compose database
+   has a 6 GiB limit and tunes PostgreSQL for that capacity. Set database
+   requests, limits, and tuning within the actual node budget, reserving
+   capacity for monitoring and later services; do not copy Compose tuning
+   unchanged.
+3. Confirm free host disk, the selected database PVC capacity, and a recovery
+   method before creating data. The local-path StorageClass cannot expand a
+   claim in place and has a Delete reclaim policy. Pin immutable, locally
+   available arm64 image identities for TimescaleDB, PgBouncer, and db-migrate;
+   verify the migration image contains the intended committed migration set.
+4. Confirm the exact pending migration list and its effects against the empty
+   database before running the Job. Do not add new migration code as part of
+   this Helm rollout.
 
-1. Create development PVCs.
-2. Deploy TimescaleDB.
-3. Verify database readiness and persistent storage.
-4. Deploy PgBouncer.
-5. Verify each service identity and pool route.
-6. Run the committed migration set through the db-migrate Job.
-7. Verify migration completion and ledger state.
-8. Confirm Grafana can read the database through its intended route.
-9. Confirm PgBouncer pool behavior and bounded connection counts.
-10. Confirm database health metrics and logs appear in the monitoring stack.
+Implementation and order:
 
-Soak period:
+1. Add independent `charts/timescaledb`, `charts/db-migrate`, and
+   `charts/pgbouncer` releases to `capitonic-helm-chart`; keep all resources
+   in namespace `capitonic` with the existing names and labels. Use a
+   single-replica TimescaleDB StatefulSet with a retained data PVC, a headless
+   governing Service, a stable client Service, probes, bounded resources, and
+   graceful shutdown. Do not add database HA to this single-node environment.
+2. Model db-migrate as a separately invoked, one-shot Kubernetes Job after
+   the policy and migration-authorization gates are met. Connect directly to
+   the new TimescaleDB Service as `postgres`, using the existing image and
+   committed TypeORM runner. Do not put migration execution in database pod
+   startup or in a Helm hook that could rerun on an ordinary upgrade. Record
+   the exact image, Job result, migration ledger, and pending-count result.
+3. Use a PgBouncer Deployment and ClusterIP Service. Bake the canonical
+   `common/configs/pgbouncer/pgbouncer.ini` into ignored chart assets, changing
+   only the Kubernetes database hostname in the generated copy. Bake the
+   existing `common/scripts/pgbouncer-entrypoint.sh` unchanged. Keep all
+   session and transaction aliases, pool sizes, and the 30-backend global
+   ceiling. Source password values only from main-worktree `.env` files into
+   Kubernetes Secrets; do not commit, print, or bake secret values.
+4. Render, lint, and inspect the charts and generated assets. Deploy and
+   verify TimescaleDB first, including storage persistence across a pod
+   restart. Run and verify the migration Job next. Deploy PgBouncer only after
+   its service roles exist; check its readiness and every route with the
+   intended least-privilege identity.
+5. After the Job succeeds, add a PostgreSQL datasource to the canonical
+   Kubernetes Grafana provisioning file in `common/configs/`, with its
+   credentials from `.env` and its route through PgBouncer. Bake and upgrade
+   Grafana through Helm. Provision database and PgBouncer health metrics
+   through the existing observability stack, then verify a bounded read-only
+   query, metrics, and fresh logs without disrupting the four monitoring
+   releases. Record the required observability provisioning tag for the exact
+   deployed commit.
 
-- sustained database health;
-- no migration retries;
-- no PgBouncer connection exhaustion;
-- no unexpected restarts;
-- no storage errors;
-- no monitoring regressions.
+Expected effects of the existing migration runner on this **empty** database:
+the fresh-install baseline creates the TimescaleDB and pgcrypto extensions,
+the `ingester`, `market_data`, and `polymarket` schemas, 47 application tables,
+their functions, indexes, and hypertables, and 113 historical migration-ledger
+entries. The seven later committed migrations create four PostgreSQL service
+roles and grants; seed 11 ingester profiles (eight have desired state
+`running`, though no ingester is deployed in this rollout); change the Binance
+one-second profile's websocket URL; add drain job events and a trigger;
+extend and secure verified-drain functions. No existing operational rows are
+copied. The baseline and profile seed are irreversible migrations. On this
+empty database, schema locks are local to the new database; creating
+TimescaleDB objects and indexes may use CPU and disk, and the migration Job
+must complete before any dependent service starts. A failed or partial Job is
+investigated from its logs and ledger; never reset or reverse database state
+with an ad hoc command. Preserve the PVC for recovery and use an approved
+TypeORM migration for any later correction.
 
-### Phase 3: Ingester and workers
+Acceptance: the database and PgBouncer remain ready without restart loops;
+the PVC is Bound and survives a database pod restart; the Job completes once
+with the expected ledger and zero pending migrations; role permissions and
+session/transaction routes match the existing contract; backend connections
+remain below the configured limit; Grafana's provisioned database datasource
+passes a read-only query; database and PgBouncer metrics and fresh logs appear;
+and all four monitoring services remain healthy. Check for migration retries,
+connection exhaustion, restarts, and storage errors before deploying
+application services. The extended soak belongs to the integrated system once
+the code-driven services are producing data.
 
-Deploy:
-
-- ingester-master;
-- fixed number of ingester-worker replicas.
-
-Tasks:
-
-1. Deploy the master.
-2. Verify master readiness.
-3. Deploy workers with the same immutable ingester image.
-4. Verify worker registration.
-5. Verify worker capability and contract versions.
-6. Verify realtime profile assignment.
-7. Verify allocation limits.
-8. Verify worker metrics.
-9. Verify backfill API basics.
-10. Schedule a bounded development backfill.
-11. Confirm the master assigns the job correctly.
-12. Confirm the worker reports progress and completion.
-13. Restart one worker and verify lease recovery.
-14. Confirm healthy workers continue operating.
-15. Confirm no worker can exceed capacity.
-16. Confirm Prometheus and Grafana show the expected worker state.
-
-Explicitly excluded from this phase:
-
-- no automatic worker scaling;
-- no Kubernetes API credentials;
-- no master-driven replica changes;
-- no automated image rollout controller.
-
-### Phase 4: Polymarket bot
+### Polymarket bot rollout
 
 Deploy:
 
@@ -404,16 +431,25 @@ Deploy:
 
 Tasks:
 
-1. Verify the bot resolves the ingester master Service.
-2. Verify database connectivity through PgBouncer.
-3. Verify startup and readiness behavior.
-4. Verify process-scoped health metrics.
-5. Confirm configured trading-process intent is preserved.
-6. Confirm runtime readiness remains process-scoped.
-7. Confirm trading safety checks remain intact.
-8. Confirm no unexpected process disablement occurs due to Kubernetes restarts.
-9. Verify dashboards and alerts for trading-path health.
-10. Keep live capital disabled until the development rollout has completed its soak and all acceptance evidence is recorded.
+1. Confirm the isolated Kubernetes database has no trading processes and the database and monitoring services are healthy.
+2. Build only the bot image from committed source with its Git revision embedded, and import it into k3s without changing the Compose image.
+3. Create the admin-token Secret from the main worktree `.env`; reuse the existing trading database credential Secret.
+4. Deploy the single bot replica with Helm and verify the PgBouncer route, startup, lightweight liveness, database readiness, and authenticated admin API.
+5. Provision its Prometheus scrape and Grafana availability alert from `common/configs/` through the existing bake and Helm commands.
+6. Confirm bot metrics and logs arrive, restart the pod once, and verify automatic reconnection without a restart loop or change to Compose.
+
+No trading process is created during this rollout. Market-data route resolution, process-scoped readiness, trading safety, and the integrated soak require the ingester and its data inputs.
+
+### Ingester and workers rollout
+
+Deploy one `ingester-master` and one `ingester-worker` from the same immutable image. Verify existing lightweight live and ready endpoints, database connectivity, worker registration and heartbeat, immutable image identity, and Prometheus targets. Before starting the worker, set the seeded development profiles to stopped through the master's authenticated lifecycle API and confirm zero desired-running profiles and zero active jobs. This rollout verifies startup health only; realtime ingestion, backfills, trading process creation, and integrated soak require separate activation. See `docs/capitonic-k3s-ingester-standards.md`.
+
+Explicitly excluded from this phase:
+
+- no automatic worker scaling;
+- no Kubernetes API credentials;
+- no master-driven replica changes;
+- no automated image rollout controller.
 
 ## Future scaling architecture
 
@@ -485,7 +521,7 @@ Jobs should generally be pinned to a logical deployment or capability pool, not 
 Development is the only initial environment, but the chart structure should leave room for later values:
 
 ```text
-charts/ingester/
+capitonic-helm-chart/charts/ingester/
   values.yaml
   values-dev.yaml
   values-prod.yaml
@@ -527,10 +563,18 @@ The rollout should stop at the first failed phase gate. Do not proceed to depend
 
 This plan preserves the existing Compose configuration as the current deployment source while establishing Kubernetes as a parallel, deliberate development deployment path. No Compose files, Dockerfiles, database migrations, or runtime contracts need to be changed as part of the planning step.
 
-## Repository review notes (pending resolution)
+## Repository review notes (remaining for later services)
 
-- Standalone charts need distinct Helm release names. Keep `capitonic` as the shared application identity and namespace naming convention, but do not use it as one release name for all independently installed charts.
-- `AGENTS.md` currently requires ingester workers to be created and scaled only through the Compose `ingester-worker` service. A Kubernetes worker Deployment requires an explicit, narrowly scoped repository-policy amendment before rollout.
-- `AGENTS.md` currently permits applying migrations only by recreating the Compose `db-migrate` container. Running the same committed migrations in a Kubernetes Job requires an explicit repository-policy amendment before execution. A new empty development database may still need its baseline migration ledger established.
+- `AGENTS.md` permits local Kubernetes ingester workers only through the Helm-managed `ingester-worker` Deployment in `capitonic`. Compose workers remain Compose-managed.
+- The Kubernetes `db-migrate` Job policy is in the deployment lineage. The Job established the baseline migration ledger in the new empty development database; later schema changes still require committed, approved TypeORM migrations.
 - Existing shared configuration contains Docker-specific discovery and hostnames. In particular, Alloy reads `/var/run/docker.sock`, Prometheus has static Compose targets, and PgBouncer points to `timescaledb-0`. The Helm path needs additive Kubernetes-specific rendering or overlays while leaving the Compose source configuration intact.
 - The plan provisions a new development database but does not specify whether existing data should be copied. Treat the database as empty until the intended data scope and a separate safe data-migration procedure are defined.
+
+## Monitoring rollout decisions
+
+- Development monitoring deploys Loki and Prometheus as single-replica StatefulSets with independent `local-path` PVCs, Grafana as a single-replica `Recreate` Deployment with its own PVC, and Alloy as a namespace-scoped DaemonSet.
+- Development does not deploy node-exporter or cAdvisor. Existing Compose files remain unchanged; their later removal is outside this task.
+- `common/configs/` remains authoritative for checked-in service configuration, and `common/scripts/` remains authoritative for microservice startup scripts. Root `scripts/` owns project utilities, including the maintained `scripts/helm/bake-assets.py` command. Runtime `.env` files remain authoritative for secrets. The bake copies configuration into ignored chart assets for standard Helm commands; `--clean` removes them afterward. Generated assets are never edited in the chart or committed.
+- Only the Grafana Prometheus alert and available dashboards are provisioned in the monitoring rollout. Database and trading alerts/datasources are installed with their owning services after those dependencies exist.
+- See `docs/capitonic-k3s-monitoring-standards.md` for the bake command, chart layout, storage, access, and verification standards.
+- See `docs/capitonic-k3s-database-standards.md` for database chart ownership, the separate migration Job, storage, secrets, and deployment commands.
