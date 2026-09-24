@@ -12,7 +12,7 @@ node_modules/
 dist/
 .DS_Store
 *.log
-data/
+/data/
 tmp/
 scripts/sync-aws-secret.mjs
 .env.aws.secrets
