@@ -129,11 +129,36 @@ impl DrainRepository {
             .await?)
     }
     pub async fn retry(&self, id: Uuid) -> Result<Option<DrainJobRecord>> {
+        let mut transaction = self.pool.begin().await?;
+        let strategy_key: Option<String> = sqlx::query_scalar(
+            "SELECT strategy_key FROM ingester.drain_jobs WHERE job_id=$1 AND status IN ('failed','cancelled') AND attempt<max_attempts",
+        )
+        .bind(id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let Some(strategy_key) = strategy_key else {
+            return Ok(None);
+        };
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(&strategy_key)
+            .execute(&mut *transaction)
+            .await?;
+        let active: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM ingester.drain_jobs WHERE strategy_key=$1 AND status IN ('queued','running'))",
+        )
+        .bind(&strategy_key)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if active {
+            return Ok(None);
+        }
         let q=format!("UPDATE ingester.drain_jobs SET status='queued',assigned_worker_id=NULL,lease_token=NULL,lease_expires_at=NULL,last_error_code=NULL,last_error_message=NULL,cancel_requested_at=NULL,updated_at=clock_timestamp() WHERE job_id=$1 AND status IN ('failed','cancelled') AND attempt<max_attempts RETURNING {COLUMNS}");
-        Ok(sqlx::query_as(&q)
+        let job = sqlx::query_as(&q)
             .bind(id)
-            .fetch_optional(&self.pool)
-            .await?)
+            .fetch_optional(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        Ok(job)
     }
     pub async fn claim(
         &self,
