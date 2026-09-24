@@ -7,18 +7,24 @@ use std::{
 
 #[derive(Clone, Copy)]
 pub enum FillEconomicsSite {
-    WebsocketBeforeInsert,
-    WebsocketAfterInsert,
-    WebsocketCancellation,
+    UserStreamBeforeInsert,
+    UserStreamAfterInsert,
+    UserStreamCancellation,
+    ReconciliationReplayBeforeInsert,
+    ReconciliationReplayAfterInsert,
+    ReconciliationReplayCancellation,
     RestBackfill,
 }
 
 impl FillEconomicsSite {
     const fn as_str(self) -> &'static str {
         match self {
-            Self::WebsocketBeforeInsert => "websocket_before_insert",
-            Self::WebsocketAfterInsert => "websocket_after_insert",
-            Self::WebsocketCancellation => "websocket_cancellation",
+            Self::UserStreamBeforeInsert => "user_stream_before_insert",
+            Self::UserStreamAfterInsert => "user_stream_after_insert",
+            Self::UserStreamCancellation => "user_stream_cancellation",
+            Self::ReconciliationReplayBeforeInsert => "reconciliation_replay_before_insert",
+            Self::ReconciliationReplayAfterInsert => "reconciliation_replay_after_insert",
+            Self::ReconciliationReplayCancellation => "reconciliation_replay_cancellation",
             Self::RestBackfill => "rest_backfill",
         }
     }
@@ -26,14 +32,16 @@ impl FillEconomicsSite {
 
 #[derive(Clone, Copy)]
 pub enum FillIdentitySite {
-    WebsocketLegacyTrade,
+    UserStreamLegacyTrade,
+    ReconciliationReplayLegacyTrade,
     RestBackfill,
 }
 
 impl FillIdentitySite {
     const fn as_str(self) -> &'static str {
         match self {
-            Self::WebsocketLegacyTrade => "websocket_legacy_trade",
+            Self::UserStreamLegacyTrade => "user_stream_legacy_trade",
+            Self::ReconciliationReplayLegacyTrade => "reconciliation_replay_legacy_trade",
             Self::RestBackfill => "rest_backfill",
         }
     }
@@ -143,7 +151,7 @@ mod tests {
     #[test]
     fn metrics_distinguish_query_errors_from_identity_misses() {
         observe_economics(
-            FillEconomicsSite::WebsocketBeforeInsert,
+            FillEconomicsSite::ReconciliationReplayBeforeInsert,
             true,
             Duration::from_millis(3),
         );
@@ -159,7 +167,7 @@ mod tests {
         );
         let metrics = prometheus_metrics();
         assert!(metrics.contains(
-            "operation=\"filled_economics\",site=\"websocket_before_insert\",result=\"success\""
+            "operation=\"filled_economics\",site=\"reconciliation_replay_before_insert\",result=\"success\""
         ));
         assert!(metrics
             .contains("operation=\"fill_identity\",site=\"rest_backfill\",result=\"missing\""));

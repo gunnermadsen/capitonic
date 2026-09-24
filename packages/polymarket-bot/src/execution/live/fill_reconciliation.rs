@@ -197,6 +197,7 @@ pub(super) async fn persist_rest_fill_backfill(
 pub(super) async fn live_fill_records_from_event(
     store: &Store,
     event: &LiveVenueEvent,
+    path: LiveEventPath,
 ) -> Result<Vec<(OrderRecord, FillRecord)>> {
     if event.event_type != "trade" || !is_fill_trade_status(event.event_status.as_deref()) {
         return Ok(Vec::new());
@@ -215,10 +216,7 @@ pub(super) async fn live_fill_records_from_event(
         format!("polymarket:trade:{trade_id}").as_bytes(),
     );
     let legacy_order_id = store
-        .find_fill_order_id(
-            legacy_fill_id,
-            crate::store::FillIdentitySite::WebsocketLegacyTrade,
-        )
+        .find_fill_order_id(legacy_fill_id, path.legacy_identity_site())
         .await?;
     let mut resolved_order_ids = HashSet::new();
     let mut resolved = Vec::new();

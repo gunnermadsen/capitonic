@@ -2974,21 +2974,49 @@ impl Store {
         Ok(inserted)
     }
 
-    pub async fn recent_live_trade_events(&self, limit: i64) -> Result<Vec<LiveVenueEvent>> {
-        self.recent_live_events_by_type("trade", limit).await
+    pub async fn unapplied_live_trade_events(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<(Uuid, LiveVenueEvent)>> {
+        self.recent_live_events_by_type("trade", true, limit).await
     }
 
     pub async fn recent_live_order_events(&self, limit: i64) -> Result<Vec<LiveVenueEvent>> {
-        self.recent_live_events_by_type("order", limit).await
+        Ok(self
+            .recent_live_events_by_type("order", false, limit)
+            .await?
+            .into_iter()
+            .map(|(_, event)| event)
+            .collect())
+    }
+
+    pub async fn mark_live_trade_event_applied(&self, event_id: Uuid) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE polymarket.live_venue_events
+            SET applied = true, apply_error = NULL
+            WHERE event_id = $1
+              AND source = 'user_ws'
+              AND event_type = 'trade'
+              AND applied = false
+            "#,
+        )
+        .bind(event_id)
+        .execute(&self.pool)
+        .await
+        .context("failed to mark durably applied live trade event")?;
+        Ok(())
     }
 
     async fn recent_live_events_by_type(
         &self,
         event_type: &str,
+        unapplied_only: bool,
         limit: i64,
-    ) -> Result<Vec<LiveVenueEvent>> {
+    ) -> Result<Vec<(Uuid, LiveVenueEvent)>> {
         #[derive(sqlx::FromRow)]
         struct Row {
+            event_id: Uuid,
             source: String,
             event_type: String,
             venue_event_id: Option<String>,
@@ -3000,31 +3028,38 @@ impl Store {
 
         let rows = sqlx::query_as::<_, Row>(
             r#"
-            SELECT source, event_type, venue_event_id, venue_order_id,
+            SELECT event_id, source, event_type, venue_event_id, venue_order_id,
                    venue_trade_id, event_status, raw_payload
             FROM polymarket.live_venue_events
             WHERE source = 'user_ws'
               AND event_type = $1
+              AND (NOT $3 OR applied = false)
             ORDER BY created_at DESC
             LIMIT $2
             "#,
         )
         .bind(event_type)
         .bind(limit.clamp(1, 1000))
+        .bind(unapplied_only)
         .fetch_all(&self.pool)
         .await
         .context("failed to list recent live venue events")?;
 
         Ok(rows
             .into_iter()
-            .map(|row| LiveVenueEvent {
-                source: row.source,
-                event_type: row.event_type,
-                venue_event_id: row.venue_event_id,
-                venue_order_id: row.venue_order_id,
-                venue_trade_id: row.venue_trade_id,
-                event_status: row.event_status,
-                raw_payload: row.raw_payload,
+            .map(|row| {
+                (
+                    row.event_id,
+                    LiveVenueEvent {
+                        source: row.source,
+                        event_type: row.event_type,
+                        venue_event_id: row.venue_event_id,
+                        venue_order_id: row.venue_order_id,
+                        venue_trade_id: row.venue_trade_id,
+                        event_status: row.event_status,
+                        raw_payload: row.raw_payload,
+                    },
+                )
             })
             .collect())
     }

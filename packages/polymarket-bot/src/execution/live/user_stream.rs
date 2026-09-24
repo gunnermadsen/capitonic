@@ -108,8 +108,12 @@ pub(super) async fn run_user_ws_once(
             };
             let event = LiveVenue::parse_user_event(payload);
             let inserted = store.insert_live_venue_event(&event).await?;
-            let bot_fill_persisted = match LiveVenue::persist_fill_from_live_event(store, &event)
-                .await
+            let bot_fill_persisted = match LiveVenue::persist_fill_from_live_event(
+                store,
+                &event,
+                LiveEventPath::UserStream,
+            )
+            .await
             {
                 Ok(persisted) => persisted > 0,
                 Err(error) => {
@@ -150,7 +154,12 @@ pub(super) async fn run_user_ws_once(
                     }
                 }
             }
-            if let Err(error) = LiveVenue::persist_order_update_from_live_event(store, &event).await
+            if let Err(error) = LiveVenue::persist_order_update_from_live_event(
+                store,
+                &event,
+                LiveEventPath::UserStream,
+            )
+            .await
             {
                 warn!(error = %error, "failed to persist Polymarket live user websocket order event");
             }
