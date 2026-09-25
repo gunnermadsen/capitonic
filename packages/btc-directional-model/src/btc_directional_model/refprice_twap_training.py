@@ -28,6 +28,7 @@ from sklearn.metrics import log_loss
 from . import continuous_edge_training as q5_lineage
 from . import fair_value_challenger_tournament as specialist_lineage
 from . import middle_market_ablation_tournament as middle_lineage
+from .capacity_training import _archived_capacity_rows
 from .chainlink_oi_features import (
     BINANCE_OI_FEATURES,
     CHAINLINK_REFPRICE_FEATURES,
@@ -48,7 +49,11 @@ from .core_features import (
     derive_core_point_in_time_features,
     derive_oracle_point_in_time_features,
 )
-from .drained_sources import removed_source_rows
+from .drained_sources import (
+    completed_backfill_providers,
+    completed_capture_ids,
+    removed_source_rows,
+)
 
 SCHEMA_VERSION = "btc-refprice-twap-lineage-training-v2"
 DATASET_SCHEMA_VERSION = "btc-refprice-twap-lineage-dataset-v2"
@@ -69,6 +74,7 @@ SQL_FILES = (
     "btc-refprice-twap-input-source.sql",
     "btc-refprice-twap-open-interest-source.sql",
     "btc-refprice-twap-label-source.sql",
+    "btc-refprice-twap-market-source.sql",
 )
 JOIN_KEYS = ("market_id", "window_start", "observed_at", "seconds_elapsed")
 PRICE_BUCKET_EDGES = (0.0, 0.65, 0.75, 0.85, 1.01)
@@ -419,6 +425,11 @@ def _build_daily_frame(
         {"batch_start": start, "batch_end": end},
         f"ref_twap_core_{start:%Y%m%d}",
     )
+    archived_core = _archived_core_rows(connection, config, start, end, core.columns)
+    if archived_core.height:
+        core = pl.concat((core, archived_core), how="vertical_relaxed").sort(
+            ["window_start", "market_id", "observed_at"]
+        )
     raw_core_rows = core.height
     if core.is_empty():
         return core, {"raw_core_rows": 0, "reason": "no_core_rows"}
@@ -455,7 +466,11 @@ def _build_daily_frame(
         )
     else:
         core = core.with_columns(
-            *[pl.lit(None, dtype=pl.Float64).alias(name) for name in ORACLE_FEATURES],
+            *[
+                pl.lit(None, dtype=pl.Float64).alias(name)
+                for name in ORACLE_FEATURES
+                if name != "early_oracle_eligible"
+            ],
             pl.lit(False).alias("early_oracle_eligible"),
         )
     core = core.filter(
@@ -477,8 +492,36 @@ def _build_daily_frame(
         {"batch_start": start, "batch_end": end},
         f"ref_twap_capacity_{start:%Y%m%d}",
     )
+    archived_capacity = pl.from_arrow(_archived_capacity_rows(connection, start, end))
+    if archived_capacity.height:
+        providers = completed_backfill_providers(
+            connection, archived_capacity["artifact_id"].unique().to_list()
+        )
+        provider_frame = pl.DataFrame(
+            {
+                "artifact_id": list(providers),
+                "provider": list(providers.values()),
+            }
+        )
+        archived_capacity = archived_capacity.join(
+            provider_frame, on="artifact_id", how="inner"
+        ).select(capacity.columns)
+        duplicates = (
+            archived_capacity.group_by("market_id", "observed_at").len().filter(pl.col("len") > 1)
+        )
+        if duplicates.height:
+            raise RuntimeError("RefPrice TWAP archived capacity has ambiguous snapshots")
+        capacity = pl.concat((capacity, archived_capacity), how="vertical_relaxed")
     raw_capacity_rows = capacity.height
     capacity = _strict_capacity_rows(capacity, config)
+    if capacity.is_empty():
+        return core.head(0), {
+            "raw_core_rows": raw_core_rows,
+            "complete_core_markets": complete.height,
+            "raw_capacity_rows": raw_capacity_rows,
+            "strict_capacity_rows": 0,
+            "reason": "no_strict_capacity_rows",
+        }
     frame = core.join(capacity, on=list(JOIN_KEYS), how="inner", validate="1:1")
     if frame.is_empty():
         return frame, {
@@ -659,6 +702,110 @@ def _build_daily_frame(
         "twap_labeled_markets": frame.drop_nulls(["twap_label_up"])["market_id"].n_unique(),
     }
     return frame, audit
+
+
+def _archived_core_rows(
+    connection: psycopg.Connection[Any],
+    config: FrozenTrainingConfig,
+    start: datetime,
+    end: datetime,
+    output_columns: list[str],
+) -> pl.DataFrame:
+    archived = removed_source_rows(
+        connection,
+        strategy_key="binance_spot_btcusdt_one_second_ohlcv",
+        relation="market_data.binance_spot_btcusdt_one_second_ohlcv",
+        time_column="open_timestamp",
+        root=Path(
+            os.environ.get(
+                "BINANCE_ONE_SECOND_OHLCV_DATA_ROOT",
+                "/Volumes/docker-data/polymarket-bot/binance-one-second-ohlcv",
+            )
+        ),
+        range_start=start - timedelta(seconds=1),
+        range_end=end,
+        columns=(
+            "symbol",
+            "open_timestamp",
+            "close_timestamp",
+            "received_at",
+            "open_price",
+            "high_price",
+            "low_price",
+            "close_price",
+            "base_volume",
+            "quote_volume",
+            "trade_count",
+            "taker_buy_base_volume",
+            "taker_buy_quote_volume",
+            "capture_artifact_id",
+        ),
+    )
+    if archived.is_empty():
+        return pl.DataFrame({column: [] for column in output_columns})
+    markets = _query_frame(
+        connection,
+        (config.package_root / "sql" / SQL_FILES[7]).read_text(),
+        {"batch_start": start, "batch_end": end},
+        f"ref_twap_markets_{start:%Y%m%d}",
+    )
+    if markets.is_empty():
+        return pl.DataFrame({column: [] for column in output_columns})
+    if markets["window_start"].n_unique() != markets.height:
+        raise RuntimeError("RefPrice TWAP archived core has ambiguous market windows")
+    completed = completed_capture_ids(
+        connection, archived["capture_artifact_id"].drop_nulls().unique().to_list()
+    )
+    archived = archived.filter(
+        (pl.col("symbol") == "BTCUSDT")
+        & (pl.col("open_timestamp") >= start - timedelta(seconds=1))
+        & (pl.col("open_timestamp") < end)
+    )
+    legacy = archived.filter(pl.col("capture_artifact_id").is_in(completed)).with_columns(
+        pl.lit(1).alias("source_priority")
+    )
+    canonical = archived.filter(
+        pl.col("received_at").is_not_null() & (pl.col("close_timestamp") <= pl.col("received_at"))
+    ).with_columns(pl.lit(2).alias("source_priority"))
+    archived = (
+        pl.concat((legacy, canonical), how="vertical_relaxed")
+        .sort(["open_timestamp", "source_priority"], descending=[False, True])
+        .unique(subset="open_timestamp", keep="first", maintain_order=True)
+        .with_columns((pl.col("open_timestamp") + pl.duration(seconds=1)).alias("observed_at"))
+        .sort("observed_at")
+        .join_asof(
+            markets.sort("window_start"),
+            left_on="observed_at",
+            right_on="window_start",
+            strategy="backward",
+        )
+        .filter(
+            pl.col("market_id").is_not_null()
+            & (pl.col("observed_at") < pl.col("window_end"))
+            & (pl.col("close_timestamp") < pl.col("observed_at"))
+        )
+        .with_columns(
+            (pl.col("observed_at") - pl.col("window_start"))
+            .dt.total_seconds()
+            .cast(pl.Int32)
+            .alias("seconds_elapsed"),
+            *(
+                pl.col(source).cast(pl.Float64).alias(target)
+                for source, target in (
+                    ("open_price", "btc_open"),
+                    ("high_price", "btc_high"),
+                    ("low_price", "btc_low"),
+                    ("close_price", "btc_close"),
+                    ("base_volume", "btc_base_volume"),
+                    ("quote_volume", "btc_quote_volume"),
+                    ("taker_buy_base_volume", "btc_taker_buy_base_volume"),
+                    ("taker_buy_quote_volume", "btc_taker_buy_quote_volume"),
+                )
+            ),
+        )
+        .select(output_columns)
+    )
+    return archived
 
 
 def _attach_twap_features(
