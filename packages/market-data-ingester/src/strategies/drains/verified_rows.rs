@@ -110,6 +110,8 @@ const HRRR_COLUMNS: &[&str] = &[
 
 const MARKET_COLUMNS: &[&str] = &["market_id", "raw_payload", "validation_errors"];
 const FACT_COLUMNS: &[&str] = &["fact_id", "evidence"];
+const CONTRACT_COLUMNS: &[&str] = &["market_id", "revision_sha256", "source_payload"];
+const RESOLUTION_COLUMNS: &[&str] = &["market_id", "source", "payload_sha256", "source_payload"];
 
 #[derive(Clone, Copy)]
 pub enum VerifiedRowKind {
@@ -117,6 +119,8 @@ pub enum VerifiedRowKind {
     Hrrr,
     MarketPayload,
     ReferenceEvidence,
+    ContractPayload,
+    ResolutionPayload,
 }
 
 impl VerifiedRowKind {
@@ -126,6 +130,8 @@ impl VerifiedRowKind {
             Self::Hrrr => "hrrr_environment_features",
             Self::MarketPayload => "polymarket_btc_interval_market_payload",
             Self::ReferenceEvidence => "polymarket_btc_market_reference_fact_evidence",
+            Self::ContractPayload => "polymarket_btc_five_minute_contract_payload",
+            Self::ResolutionPayload => "polymarket_btc_five_minute_resolution_payload",
         }
     }
 
@@ -135,6 +141,8 @@ impl VerifiedRowKind {
             Self::Hrrr => "weather.hrrr_environment_features",
             Self::MarketPayload => "polymarket.btc_interval_markets",
             Self::ReferenceEvidence => "polymarket.btc_market_reference_facts",
+            Self::ContractPayload => "market_data.polymarket_btc_five_minute_contracts",
+            Self::ResolutionPayload => "market_data.polymarket_btc_five_minute_resolutions",
         }
     }
 
@@ -142,6 +150,7 @@ impl VerifiedRowKind {
         match self {
             Self::Goes | Self::Hrrr => "weather",
             Self::MarketPayload | Self::ReferenceEvidence => "polymarket",
+            Self::ContractPayload | Self::ResolutionPayload => "market_data",
         }
     }
 
@@ -151,13 +160,15 @@ impl VerifiedRowKind {
             Self::Hrrr => HRRR_COLUMNS,
             Self::MarketPayload => MARKET_COLUMNS,
             Self::ReferenceEvidence => FACT_COLUMNS,
+            Self::ContractPayload => CONTRACT_COLUMNS,
+            Self::ResolutionPayload => RESOLUTION_COLUMNS,
         }
     }
 
     fn retention_days(self) -> i64 {
         match self {
             Self::Goes | Self::Hrrr => 0,
-            Self::MarketPayload => 5,
+            Self::MarketPayload | Self::ContractPayload | Self::ResolutionPayload => 5,
             Self::ReferenceEvidence => 3,
         }
     }
@@ -168,6 +179,8 @@ impl VerifiedRowKind {
             Self::Hrrr => "INGESTER_HRRR_ENVIRONMENT_FEATURES_LAKE_ROOT",
             Self::MarketPayload => "INGESTER_BTC_INTERVAL_MARKET_PAYLOAD_LAKE_ROOT",
             Self::ReferenceEvidence => "INGESTER_BTC_MARKET_REFERENCE_EVIDENCE_LAKE_ROOT",
+            Self::ContractPayload => "INGESTER_BTC_FIVE_MINUTE_CONTRACT_PAYLOAD_LAKE_ROOT",
+            Self::ResolutionPayload => "INGESTER_BTC_FIVE_MINUTE_RESOLUTION_PAYLOAD_LAKE_ROOT",
         }
     }
 
@@ -181,6 +194,12 @@ impl VerifiedRowKind {
             Self::ReferenceEvidence => {
                 "/var/lib/verified-drains/polymarket/btc-market-reference-evidence"
             }
+            Self::ContractPayload => {
+                "/var/lib/verified-drains/market-data/btc-five-minute-contract-payload"
+            }
+            Self::ResolutionPayload => {
+                "/var/lib/verified-drains/market-data/btc-five-minute-resolution-payload"
+            }
         }
     }
 
@@ -189,6 +208,8 @@ impl VerifiedRowKind {
             Self::Goes | Self::Hrrr => "to_jsonb(t)::text",
             Self::MarketPayload => "jsonb_build_object('market_id',t.market_id,'raw_payload',t.raw_payload,'validation_errors',t.validation_errors)::text",
             Self::ReferenceEvidence => "jsonb_build_object('fact_id',t.fact_id,'evidence',t.evidence)::text",
+            Self::ContractPayload => "jsonb_build_object('market_id',t.market_id,'revision_sha256',t.revision_sha256,'source_payload',t.source_payload)::text",
+            Self::ResolutionPayload => "jsonb_build_object('market_id',t.market_id,'source',t.source,'payload_sha256',t.payload_sha256,'source_payload',t.source_payload)::text",
         }
     }
 
@@ -197,6 +218,7 @@ impl VerifiedRowKind {
             Self::Goes | Self::Hrrr => "t.decision_time >= $1 AND t.decision_time < $2",
             Self::MarketPayload => "t.window_start >= $1 AND t.window_start < $2 AND t.official_outcome IS NOT NULL AND NOT EXISTS (SELECT 1 FROM polymarket.btc_official_resolution_watches watch WHERE watch.market_id=t.market_id AND watch.status IN ('pending','expired')) AND (t.raw_payload <> '{}'::jsonb OR t.validation_errors <> '[]'::jsonb)",
             Self::ReferenceEvidence => "t.source_effective_at >= $1 AND t.source_effective_at < $2 AND market.official_outcome IS NOT NULL AND t.evidence <> '{}'::jsonb",
+            Self::ContractPayload | Self::ResolutionPayload => "t.window_start >= $1 AND t.window_start < $2 AND t.source_payload IS NOT NULL AND EXISTS (SELECT 1 FROM polymarket.btc_interval_markets market WHERE market.market_id=t.market_id AND market.official_outcome IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM polymarket.btc_official_resolution_watches watch WHERE watch.market_id=t.market_id AND watch.status IN ('pending','expired'))",
         }
     }
 
@@ -212,7 +234,7 @@ impl VerifiedRowKind {
     fn time_column(self) -> &'static str {
         match self {
             Self::Goes | Self::Hrrr => "decision_time",
-            Self::MarketPayload => "window_start",
+            Self::MarketPayload | Self::ContractPayload | Self::ResolutionPayload => "window_start",
             Self::ReferenceEvidence => "source_effective_at",
         }
     }
@@ -651,12 +673,32 @@ mod tests {
             VerifiedRowKind::Hrrr,
             VerifiedRowKind::MarketPayload,
             VerifiedRowKind::ReferenceEvidence,
+            VerifiedRowKind::ContractPayload,
+            VerifiedRowKind::ResolutionPayload,
         ] {
             let drain = VerifiedRowsDrain::new(kind).unwrap();
             let schema = drain.schema();
             assert_eq!(schema.fields().len(), kind.columns().len() + 1);
             assert_eq!(schema.field(0).name(), "source_row_json");
             assert!(drain.row_query().contains("ORDER BY source_row_json"));
+        }
+    }
+
+    #[test]
+    fn five_minute_payloads_require_projected_outcomes_and_preserve_five_days() {
+        for kind in [
+            VerifiedRowKind::ContractPayload,
+            VerifiedRowKind::ResolutionPayload,
+        ] {
+            assert_eq!(kind.retention_days(), 5);
+            assert!(kind
+                .where_sql()
+                .contains("market.official_outcome IS NOT NULL"));
+            assert!(kind.where_sql().contains("t.source_payload IS NOT NULL"));
+            assert!(kind
+                .where_sql()
+                .contains("watch.status IN ('pending','expired')"));
+            assert_eq!(kind.time_column(), "window_start");
         }
     }
 

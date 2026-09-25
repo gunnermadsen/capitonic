@@ -321,6 +321,14 @@ pub fn registry() -> Result<StrategyRegistry, StrategyFactoryError> {
             drains::VerifiedRowsDrain::new(drains::VerifiedRowKind::ReferenceEvidence)
                 .map_err(|error| StrategyFactoryError::Construction(error.to_string()))?,
         ),
+        Arc::new(
+            drains::VerifiedRowsDrain::new(drains::VerifiedRowKind::ContractPayload)
+                .map_err(|error| StrategyFactoryError::Construction(error.to_string()))?,
+        ),
+        Arc::new(
+            drains::VerifiedRowsDrain::new(drains::VerifiedRowKind::ResolutionPayload)
+                .map_err(|error| StrategyFactoryError::Construction(error.to_string()))?,
+        ),
     ];
     StrategyRegistry::from_factories(factories)?
         .with_backfills(backfills)?
@@ -412,7 +420,9 @@ mod tests {
                 "polygon_chainlink_btcusd_oracle_rounds",
                 "polymarket_btc_capacity_execution_snapshots",
                 "polymarket_btc_feature_snapshots",
+                "polymarket_btc_five_minute_contract_payload",
                 "polymarket_btc_five_minute_orderbooks",
+                "polymarket_btc_five_minute_resolution_payload",
                 "polymarket_btc_interval_market_payload",
                 "polymarket_btc_market_reference_fact_evidence",
                 "polymarket_btc_orderbook_archive_events",
