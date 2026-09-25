@@ -3,7 +3,7 @@ WITH opening_facts AS MATERIALIZED (
     fact.market_id,
     fact.value::double precision AS opening_boundary
   FROM polymarket.btc_market_reference_facts fact
-  JOIN polymarket.backfill_artifacts artifact
+  JOIN ingester.backfill_artifacts artifact
     ON artifact.artifact_id = fact.artifact_id
    AND artifact.status = 'completed'
   WHERE fact.fact_type = 'opening_boundary'

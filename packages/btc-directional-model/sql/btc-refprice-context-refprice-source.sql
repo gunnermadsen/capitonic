@@ -26,7 +26,7 @@ WITH eligible AS (
       WHEN 'pmdata_chainlink_streams' THEN 1
     END AS source_priority
   FROM market_data.chainlink_btcusd_reference_prices report
-  LEFT JOIN polymarket.backfill_artifacts artifact
+  LEFT JOIN ingester.backfill_artifacts artifact
     ON artifact.artifact_id = report.backfill_artifact_id
   WHERE report.source IN (
       'pmdata_chainlink_streams',

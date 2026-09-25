@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import tomllib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -25,6 +26,7 @@ from .core_extract import (
     file_sha256,
     write_json_atomic,
 )
+from .drained_sources import removed_source_rows
 from .refprice_twap_training import _query_frame
 from .twap60_training_data import piecewise_average
 
@@ -368,6 +370,72 @@ def _extract_day(
         )
     else:
         frames["spot_l2"] = pl.DataFrame()
+    archived_interest = removed_source_rows(
+        connection,
+        strategy_key="binance_futures_btcusdt_open_interest",
+        relation="market_data.binance_futures_btcusdt_open_interest",
+        time_column="source_timestamp",
+        root=Path(
+            os.environ.get(
+                "INGESTER_BINANCE_FUTURES_OPEN_INTEREST_LAKE_ROOT",
+                str(
+                    Path(
+                        os.environ.get(
+                            "BINANCE_L2_DATA_ROOT", "/Volumes/docker-data/polymarket-bot/binance-l2"
+                        )
+                    )
+                    / "drains/futures-open-interest"
+                ),
+            )
+        ),
+        range_start=start - timedelta(minutes=65),
+        range_end=end,
+        columns=(
+            "source",
+            "symbol",
+            "source_timestamp",
+            "period_seconds",
+            "sum_open_interest",
+            "sum_open_interest_value",
+            "provider_available_at",
+            "received_at",
+            "capture_artifact_id",
+        ),
+    )
+    if archived_interest.height:
+        archived_interest = (
+            archived_interest.filter(
+                (pl.col("source") == "binance_usd_m_futures")
+                & (pl.col("symbol") == "BTCUSDT")
+                & (pl.col("period_seconds") == "300")
+            )
+            .with_columns(
+                *(
+                    pl.col(name).str.to_datetime(time_zone="UTC")
+                    for name in ("source_timestamp", "provider_available_at", "received_at")
+                ),
+                pl.col("period_seconds").cast(pl.Int32),
+                pl.col("sum_open_interest").cast(pl.Float64),
+                pl.col("sum_open_interest_value").cast(pl.Float64),
+                pl.lit("market_data.binance_futures_btcusdt_open_interest").alias(
+                    "source_relation"
+                ),
+                pl.col("capture_artifact_id").alias("source_artifact_id"),
+            )
+            .with_columns(
+                pl.max_horizontal("source_timestamp", "received_at", "provider_available_at").alias(
+                    "available_at"
+                )
+            )
+            .filter(
+                (pl.col("source_timestamp") >= start - timedelta(minutes=65))
+                & (pl.col("source_timestamp") < end)
+            )
+            .select(frames["open_interest"].columns)
+        )
+        frames["open_interest"] = pl.concat(
+            (frames["open_interest"], archived_interest), how="vertical_relaxed"
+        ).sort("source_timestamp")
     frames["labels"] = _attach_refprice_reconstructed_targets(
         frames["labels"],
         frames["refprice"],
