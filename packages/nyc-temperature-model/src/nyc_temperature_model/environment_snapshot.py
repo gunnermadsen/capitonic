@@ -3,9 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from datetime import UTC, date, datetime
+from collections.abc import Iterator
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -17,25 +20,176 @@ from .goes_ingestion import FEATURE_SCHEMA_VERSION as GOES_VERSION
 from .hrrr_environment_ingestion import FEATURE_SCHEMA_VERSION as HRRR_VERSION
 from .sources import file_sha256
 
+_WEATHER_DRAIN_ROOT = Path(
+    os.environ.get(
+        "WEATHER_DATA_ROOT", "/Volumes/docker-data/polymarket-bot/temperature-expectancy"
+    )
+) / "curated/drains"
+_WEATHER_DRAINS = {
+    "goes_abi_features": ("goes-abi-features", "weather.goes_abi_features"),
+    "hrrr_environment_features": ("hrrr-environment-features", "weather.hrrr_environment_features"),
+}
+_NYC = ZoneInfo("America/New_York")
 
-def _write_query_parquet(conn, query: str, parameters: tuple, destination: Path) -> int:
-    cursor = conn.cursor(name=f"snapshot_{destination.stem}")
-    cursor.execute(query, parameters)
+
+def _removed_weather_objects(
+    conn, strategy: str, start_at: datetime, end_at: datetime
+) -> list[dict]:
+    return list(conn.execute(
+        """
+        SELECT source_start, source_end, relative_path, sha256, byte_size, row_count,
+               source_rows_sha256
+        FROM ingester.drain_objects
+        WHERE strategy_key=%s AND status='removed'
+          AND source_end > %s AND source_start < %s
+        ORDER BY source_start, object_id
+        """,
+        (strategy, start_at, end_at),
+    ).fetchall())
+
+
+def _archive_rows(object_row: dict, strategy: str) -> Iterator[dict]:
+    directory, _ = _WEATHER_DRAINS[strategy]
+    root = (_WEATHER_DRAIN_ROOT / directory).resolve()
+    path = (root / object_row["relative_path"]).resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        raise RuntimeError(f"verified weather drain file is missing or outside its root: {path}")
+    digest, size = file_sha256(path)
+    if digest != object_row["sha256"].strip() or size != object_row["byte_size"]:
+        raise RuntimeError(f"verified weather drain file hash or size changed: {path}")
+    parquet = pq.ParquetFile(path)
+    if parquet.metadata.num_rows != object_row["row_count"]:
+        raise RuntimeError(f"verified weather drain row count changed: {path}")
+    expected_fields = set(parquet.schema_arrow.names) - {"source_row_json"}
+    if "source_row_json" not in parquet.schema_arrow.names:
+        raise RuntimeError(f"verified weather drain lacks source rows: {path}")
+    source_digest = hashlib.sha256()
+    count = 0
+    for batch in parquet.iter_batches(batch_size=10_000):
+        for encoded in batch.column(batch.schema.get_field_index("source_row_json")).to_pylist():
+            if count:
+                source_digest.update(b"\n")
+            source_digest.update(encoded.encode())
+            count += 1
+            row = json.loads(encoded)
+            if set(row) != expected_fields:
+                raise RuntimeError(f"verified weather drain source schema changed: {path}")
+            yield row
+    if (
+        count != object_row["row_count"]
+        or source_digest.hexdigest() != object_row["source_rows_sha256"]
+    ):
+        raise RuntimeError(f"verified weather drain source fingerprint changed: {path}")
+
+
+def _snapshot_value(value: Any) -> Any:
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return value
+
+
+def _snapshot_schema(description) -> pa.Schema:
+    types = {
+        16: pa.bool_(), 23: pa.int32(), 25: pa.string(), 701: pa.float64(),
+        1184: pa.timestamp("us", tz="UTC"), 1700: pa.decimal128(8, 3),
+        2950: pa.string(), 3802: pa.string(),
+    }
+    return pa.schema([pa.field(field.name, types[field.type_code]) for field in description])
+
+
+def _write_weather_snapshot(
+    conn, strategy: str, *, start_at: datetime, end_at: datetime,
+    version: str, destination: Path, order_fields: tuple[str, ...]
+) -> int:
+    _, relation = _WEATHER_DRAINS[strategy]
+    objects = _removed_weather_objects(conn, strategy, start_at, end_at)
+    objects_by_day = {row["source_start"].date(): row for row in objects}
+    if len(objects_by_day) != len(objects):
+        raise RuntimeError(f"weather drain has overlapping publications for {strategy}")
+    labels = {
+        row["event_date"]: row
+        for row in conn.execute(
+            """SELECT event_date, station_daily_max_f, station_rounded_max_f,
+                      winner_matches_station
+               FROM weather.label_reconciliation
+               WHERE process_id=%s AND event_date >= %s AND event_date <= %s""",
+            (PROCESS_ID, start_at.astimezone(_NYC).date(), end_at.astimezone(_NYC).date()),
+        ).fetchall()
+    }
+    query = f"""SELECT t.*, l.station_daily_max_f, l.station_rounded_max_f,
+                   l.winner_matches_station
+            FROM {relation} t
+            LEFT JOIN weather.label_reconciliation l
+              ON l.process_id=t.process_id
+             AND l.event_date=(t.decision_time AT TIME ZONE 'America/New_York')::date
+            WHERE t.process_id=%s AND t.station_id=%s
+              AND t.decision_time >= %s AND t.decision_time < %s
+              AND t.feature_schema_version=%s
+            ORDER BY {','.join('t.' + field for field in order_fields)}"""
     writer = None
     rows_written = 0
+    day = start_at.date()
     try:
-        while rows := cursor.fetchmany(10_000):
-            table = pa.Table.from_pylist([dict(row) for row in rows])
-            if writer is None:
-                writer = pq.ParquetWriter(destination, table.schema, compression="zstd")
-            writer.write_table(table)
-            rows_written += len(rows)
-        if writer is None:
-            raise ValueError(f"snapshot query produced no rows for {destination.name}")
+        while day < end_at.date():
+            day_start = datetime.combine(day, datetime.min.time(), UTC)
+            day_end = day_start + timedelta(days=1)
+            cursor = conn.cursor(name=f"snapshot_{destination.stem}_{day:%Y%m%d}")
+            retained: list[dict] = []
+            try:
+                cursor.execute(query, (PROCESS_ID, STATION_ID, day_start, day_end, version))
+                schema = _snapshot_schema(cursor.description)
+                while rows := cursor.fetchmany(10_000):
+                    retained.extend(
+                        {key: _snapshot_value(value) for key, value in row.items()}
+                        for row in rows
+                    )
+            finally:
+                cursor.close()
+            archived: list[dict] = []
+            if object_row := objects_by_day.get(day):
+                for row in _archive_rows(object_row, strategy):
+                    row = row.copy()
+                    decision_time = datetime.fromisoformat(row["decision_time"])
+                    if (start_at <= decision_time < end_at and row["process_id"] == str(PROCESS_ID)
+                            and row["station_id"] == STATION_ID
+                            and row["feature_schema_version"] == version):
+                        for field in (
+                            "decision_time", "created_at", "scan_end", "model_run", "valid_at"
+                        ):
+                            if field in row and row[field] is not None:
+                                row[field] = datetime.fromisoformat(row[field])
+                        label = labels.get(row["decision_time"].astimezone(_NYC).date(), {})
+                        row.update({
+                            name: label.get(name) for name in (
+                                "station_daily_max_f", "station_rounded_max_f",
+                                "winner_matches_station",
+                            )
+                        })
+                        archived.append({key: _snapshot_value(value) for key, value in row.items()})
+            primary_key = ("process_id", "station_id", *order_fields, "feature_schema_version")
+            seen = {tuple(str(row[field]) for field in primary_key) for row in retained}
+            for row in archived:
+                key = tuple(str(row[field]) for field in primary_key)
+                if key in seen:
+                    raise RuntimeError(
+                        f"weather drain and PostgreSQL overlap for {strategy}: {key}"
+                    )
+                seen.add(key)
+            result = retained + archived
+            if result:
+                result.sort(key=lambda row: tuple(row[field] for field in order_fields))
+                if writer is None:
+                    writer = pq.ParquetWriter(destination, schema, compression="zstd")
+                writer.write_table(pa.Table.from_pylist(result, schema=schema))
+                rows_written += len(result)
+            day += timedelta(days=1)
     finally:
         if writer is not None:
             writer.close()
-        cursor.close()
+    if not rows_written:
+        raise ValueError(f"snapshot query produced no rows for {destination.name}")
     return rows_written
 
 
@@ -105,37 +259,18 @@ def export_environment_snapshot(
     end_at = datetime.combine(end, datetime.min.time(), UTC)
     try:
         with connection(settings.database_url) as conn:
-            satellite_rows = _write_query_parquet(
-                conn,
-                """
-                SELECT g.*,l.station_daily_max_f,l.station_rounded_max_f,l.winner_matches_station
-                FROM weather.goes_abi_features g
-                LEFT JOIN weather.label_reconciliation l
-                  ON l.process_id=g.process_id
-                 AND l.event_date=(g.decision_time AT TIME ZONE 'America/New_York')::date
-                WHERE g.process_id=%s AND g.station_id=%s
-                  AND g.decision_time >= %s AND g.decision_time < %s
-                  AND g.feature_schema_version=%s
-                ORDER BY g.decision_time,g.requested_offset_minutes,g.spatial_radius_km,g.sector
-                """,
-                (PROCESS_ID, STATION_ID, start_at, end_at, GOES_VERSION),
-                partial / "satellite_training_matrix.parquet",
+            satellite_rows = _write_weather_snapshot(
+                conn, "goes_abi_features", start_at=start_at, end_at=end_at,
+                version=GOES_VERSION, destination=partial / "satellite_training_matrix.parquet",
+                order_fields=(
+                    "decision_time", "requested_offset_minutes", "spatial_radius_km", "sector"
+                ),
             )
-            hrrr_rows = _write_query_parquet(
-                conn,
-                """
-                SELECT h.*,l.station_daily_max_f,l.station_rounded_max_f,l.winner_matches_station
-                FROM weather.hrrr_environment_features h
-                LEFT JOIN weather.label_reconciliation l
-                  ON l.process_id=h.process_id
-                 AND l.event_date=(h.decision_time AT TIME ZONE 'America/New_York')::date
-                WHERE h.process_id=%s AND h.station_id=%s
-                  AND h.decision_time >= %s AND h.decision_time < %s
-                  AND h.feature_schema_version=%s
-                ORDER BY h.decision_time,h.valid_at,h.spatial_radius_km,h.sector
-                """,
-                (PROCESS_ID, STATION_ID, start_at, end_at, HRRR_VERSION),
-                partial / "hrrr_environment_training_matrix.parquet",
+            hrrr_rows = _write_weather_snapshot(
+                conn, "hrrr_environment_features", start_at=start_at, end_at=end_at,
+                version=HRRR_VERSION,
+                destination=partial / "hrrr_environment_training_matrix.parquet",
+                order_fields=("decision_time", "valid_at", "spatial_radius_km", "sector"),
             )
             manifest_rows = list(
                 conn.execute(
