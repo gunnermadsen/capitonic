@@ -582,6 +582,100 @@ def _extract_day(
             .unique(subset="source_timestamp", keep="first", maintain_order=True)
             .drop("_priority")
         )
+    archived_oracle = removed_source_rows(
+        connection,
+        strategy_key="polygon_chainlink_btcusd_oracle_rounds",
+        relation="market_data.polygon_chainlink_btcusd_oracle_rounds",
+        time_column="source_timestamp",
+        root=Path(
+            os.environ.get(
+                "POLYGON_CHAINLINK_ORACLE_ROUNDS_DATA_ROOT",
+                "/Volumes/docker-data/polymarket-bot/polygon-chainlink-oracle-rounds",
+            )
+        ),
+        range_start=start - timedelta(minutes=30),
+        range_end=end,
+        columns=(
+            "price",
+            "source_timestamp",
+            "block_timestamp",
+            "received_at",
+            "provider_available_at",
+            "phase_id",
+            "aggregator_round_id",
+            "block_number",
+            "log_index",
+            "capture_artifact_id",
+        ),
+    )
+    if archived_oracle.height:
+        archived_oracle = archived_oracle.with_columns(
+            *(
+                pl.col(name).str.to_datetime(time_zone="UTC")
+                for name in (
+                    "source_timestamp",
+                    "block_timestamp",
+                    "received_at",
+                    "provider_available_at",
+                )
+            ),
+            pl.col("price").cast(pl.Float64),
+            *(
+                pl.col(name).cast(pl.Int64)
+                for name in ("phase_id", "aggregator_round_id", "block_number", "log_index")
+            ),
+        ).filter(
+            (pl.col("source_timestamp") >= start - timedelta(minutes=30))
+            & (pl.col("source_timestamp") < end)
+        )
+        completed = completed_capture_ids(
+            connection, archived_oracle["capture_artifact_id"].drop_nulls().unique().to_list()
+        )
+        legacy = archived_oracle.filter(
+            pl.col("capture_artifact_id").is_in(completed)
+            & (pl.col("source_timestamp") <= pl.col("block_timestamp"))
+        ).with_columns(
+            pl.col("block_timestamp").alias("oracle_block_timestamp"),
+            pl.lit(1).alias("_priority"),
+        )
+        canonical = archived_oracle.with_columns(
+            pl.max_horizontal("block_timestamp", "received_at", "provider_available_at").alias(
+                "oracle_block_timestamp"
+            ),
+            pl.lit(2).alias("_priority"),
+        ).filter(
+            pl.col("oracle_block_timestamp").is_not_null()
+            & (pl.col("source_timestamp") <= pl.col("oracle_block_timestamp"))
+        )
+        archived_oracle = (
+            pl.concat((legacy, canonical), how="vertical_relaxed")
+            .sort(
+                ["phase_id", "aggregator_round_id", "block_number", "log_index", "_priority"],
+                descending=[False, False, False, False, True],
+            )
+            .unique(
+                subset=["phase_id", "aggregator_round_id", "block_number", "log_index"],
+                keep="first",
+                maintain_order=True,
+            )
+            .with_columns(
+                pl.col("price").alias("oracle_price"),
+                pl.col("source_timestamp").alias("oracle_source_timestamp"),
+                pl.col("block_timestamp").alias("oracle_chain_block_timestamp"),
+                pl.col("phase_id").alias("oracle_phase_id"),
+                pl.col("aggregator_round_id").alias("oracle_round_id"),
+                pl.col("block_number").alias("oracle_block_number"),
+                pl.col("log_index").alias("oracle_log_index"),
+                pl.lit("market_data.polygon_chainlink_btcusd_oracle_rounds").alias(
+                    "source_relation"
+                ),
+                pl.col("capture_artifact_id").alias("source_artifact_id"),
+            )
+            .select(frames["oracle"].columns)
+        )
+        frames["oracle"] = pl.concat(
+            (frames["oracle"], archived_oracle), how="vertical_relaxed"
+        ).sort("oracle_source_timestamp")
     archived_interest = removed_source_rows(
         connection,
         strategy_key="binance_futures_btcusdt_open_interest",
