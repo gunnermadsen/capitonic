@@ -220,7 +220,10 @@ impl MarketContract {
             && self.accepting_orders == stored.accepting_orders
             && self.fees_enabled == stored.fees_enabled
             && self.fee_schedule == stored.fee_schedule
-            && self.source_payload == stored.source_payload
+            && match &stored.source_payload {
+                Some(source_payload) => self.source_payload == *source_payload,
+                None => stored.payload_drain_verified,
+            }
             && self.revision_sha256 == stored.revision_sha256
             && self.payload_sha256 == stored.payload_sha256
     }
@@ -245,7 +248,8 @@ struct StoredContract {
     accepting_orders: bool,
     fees_enabled: bool,
     fee_schedule: Value,
-    source_payload: Value,
+    source_payload: Option<Value>,
+    payload_drain_verified: bool,
     revision_sha256: String,
     payload_sha256: String,
 }
@@ -1387,10 +1391,20 @@ impl PolymarketBtcFiveMinuteMarketContractsStrategy {
                    window_start, window_end, up_token_id, down_token_id,
                    tick_size, minimum_order_size, resolution_source,
                    active, closed, accepting_orders, fees_enabled, fee_schedule,
-                   source_payload,
+                   t.source_payload,
+                   CASE WHEN t.source_payload IS NULL THEN EXISTS (
+                     SELECT 1 FROM ingester.drain_objects drained
+                     WHERE drained.strategy_key = 'polymarket_btc_five_minute_contract_payload'
+                       AND drained.source_relation = 'market_data.polymarket_btc_five_minute_contracts'
+                       AND drained.status = 'removed'
+                       AND drained.source_rows_sha256 IS NOT NULL
+                       AND drained.row_count > 0
+                       AND drained.source_start <= t.window_start
+                       AND drained.source_end > t.window_start
+                   ) ELSE false END AS payload_drain_verified,
                    revision_sha256::text AS revision_sha256,
                    payload_sha256::text AS payload_sha256
-            FROM market_data.polymarket_btc_five_minute_contracts
+            FROM market_data.polymarket_btc_five_minute_contracts t
             WHERE market_id = ANY($1::text[])
                OR event_id = ANY($2::text[])
                OR event_slug = ANY($3::text[])
@@ -2572,6 +2586,66 @@ mod tests {
 
     fn fixture_window() -> DateTime<Utc> {
         Utc.timestamp_opt(1_783_902_600, 0).single().unwrap()
+    }
+
+    fn stored_contract(
+        contract: &MarketContract,
+        source_payload: Option<Value>,
+        payload_drain_verified: bool,
+    ) -> StoredContract {
+        StoredContract {
+            event_id: contract.event_id.clone(),
+            event_slug: contract.event_slug.clone(),
+            series_slug: contract.series_slug.clone(),
+            market_id: contract.market_id.clone(),
+            condition_id: contract.condition_id.clone(),
+            window_start: contract.window_start,
+            window_end: contract.window_end,
+            up_token_id: contract.up_token_id.clone(),
+            down_token_id: contract.down_token_id.clone(),
+            tick_size: contract.tick_size,
+            minimum_order_size: contract.minimum_order_size,
+            resolution_source: contract.resolution_source.clone(),
+            active: contract.active,
+            closed: contract.closed,
+            accepting_orders: contract.accepting_orders,
+            fees_enabled: contract.fees_enabled,
+            fee_schedule: contract.fee_schedule.clone(),
+            source_payload,
+            payload_drain_verified,
+            revision_sha256: contract.revision_sha256.clone(),
+            payload_sha256: contract.payload_sha256.clone(),
+        }
+    }
+
+    #[test]
+    fn verified_payload_drain_preserves_contract_replay_comparison() {
+        let contract = parse_gamma_contract(&fixture(), fixture_window(), Utc::now()).unwrap();
+        let drained = stored_contract(&contract, None, true);
+        assert!(contract.factual_eq(&drained));
+
+        let missing_receipt = stored_contract(&contract, None, false);
+        assert!(!contract.factual_eq(&missing_receipt));
+
+        let mut changed_hash = stored_contract(&contract, None, true);
+        changed_hash.payload_sha256 = "0".repeat(64);
+        assert!(!contract.factual_eq(&changed_hash));
+
+        let mut changed_scalar = stored_contract(&contract, None, true);
+        changed_scalar.fees_enabled = !changed_scalar.fees_enabled;
+        assert!(!contract.factual_eq(&changed_scalar));
+    }
+
+    #[test]
+    fn undrained_contract_replay_still_compares_full_payload() {
+        let contract = parse_gamma_contract(&fixture(), fixture_window(), Utc::now()).unwrap();
+        let original = stored_contract(&contract, Some(contract.source_payload.clone()), false);
+        assert!(contract.factual_eq(&original));
+
+        let mut changed_payload = contract.source_payload.clone();
+        changed_payload["active"] = json!(!contract.active);
+        let stored = stored_contract(&contract, Some(changed_payload), true);
+        assert!(!contract.factual_eq(&stored));
     }
 
     #[test]
