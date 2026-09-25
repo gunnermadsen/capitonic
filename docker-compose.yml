@@ -262,6 +262,7 @@ services:
       INGESTER_POLYMARKET_ORDERBOOK_LAKE_ROOT: "/var/lib/polymarket-orderbooks"
       INGESTER_BINANCE_ONE_SECOND_OHLCV_LAKE_ROOT: "/var/lib/binance-one-second-ohlcv"
       INGESTER_PMDATA_CHAINLINK_REFERENCE_PRICE_LAKE_ROOT: "/var/lib/pmdata-chainlink-reference-prices"
+      INGESTER_CHAINLINK_REFERENCE_PRICE_LAKE_ROOT: "/var/lib/chainlink-reference-prices"
       INGESTER_PMDATA_CHAINLINK_TWAP_LAKE_ROOT: "/var/lib/pmdata-chainlink-twap"
       INGESTER_POLYMARKET_CHAINLINK_TWAP_LAKE_ROOT: "/var/lib/polymarket-chainlink-twap"
       INGESTER_REFERENCE_PRICE_TICKS_LAKE_ROOT: "/var/lib/reference-price-ticks"
@@ -300,6 +301,7 @@ services:
       - ${POLYMARKET_ORDERBOOK_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/orderbook-drain}:/var/lib/polymarket-orderbooks
       - ${BINANCE_ONE_SECOND_OHLCV_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/binance-one-second-ohlcv}:/var/lib/binance-one-second-ohlcv
       - ${PMDATA_CHAINLINK_REFERENCE_PRICE_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/pmdata-chainlink-reference-prices}:/var/lib/pmdata-chainlink-reference-prices
+      - ${CHAINLINK_REFERENCE_PRICE_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/chainlink-reference-prices}:/var/lib/chainlink-reference-prices
       - ${PMDATA_CHAINLINK_TWAP_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/pmdata-chainlink-twap}:/var/lib/pmdata-chainlink-twap
       - ${POLYMARKET_CHAINLINK_TWAP_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/polymarket-chainlink-twap}:/var/lib/polymarket-chainlink-twap
       - ${REFERENCE_PRICE_TICKS_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/reference-price-ticks}:/var/lib/reference-price-ticks

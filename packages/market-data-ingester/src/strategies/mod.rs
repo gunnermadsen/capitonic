@@ -246,6 +246,10 @@ pub fn registry() -> Result<StrategyRegistry, StrategyFactoryError> {
                 .map_err(|error| StrategyFactoryError::Construction(error.to_string()))?,
         ),
         Arc::new(
+            drains::PolymarketOrderbookArchiveEventsDrain::from_environment()
+                .map_err(|error| StrategyFactoryError::Construction(error.to_string()))?,
+        ),
+        Arc::new(
             drains::BinanceOneSecondOhlcvDrain::from_environment()
                 .map_err(|error| StrategyFactoryError::Construction(error.to_string()))?,
         ),
@@ -263,6 +267,10 @@ pub fn registry() -> Result<StrategyRegistry, StrategyFactoryError> {
         ),
         Arc::new(
             drains::PmdataChainlinkReferencePricesDrain::from_environment()
+                .map_err(|error| StrategyFactoryError::Construction(error.to_string()))?,
+        ),
+        Arc::new(
+            drains::ChainlinkReferencePricesDrain::from_environment()
                 .map_err(|error| StrategyFactoryError::Construction(error.to_string()))?,
         ),
         Arc::new(
@@ -396,6 +404,7 @@ mod tests {
                 "binance_spot_btcusdt_l2_snapshots",
                 "binance_spot_btcusdt_one_second_ohlcv",
                 "chainlink_btcusd_one_minute_candles",
+                "chainlink_btcusd_reference_price",
                 "goes_abi_features",
                 "hrrr_environment_features",
                 "pmdata_chainlink_btcusd_reference_price",
@@ -406,6 +415,7 @@ mod tests {
                 "polymarket_btc_five_minute_orderbooks",
                 "polymarket_btc_interval_market_payload",
                 "polymarket_btc_market_reference_fact_evidence",
+                "polymarket_btc_orderbook_archive_events",
                 "polymarket_chainlink_btcusd_twap",
                 "polymarket_reference_price_ticks",
             ]

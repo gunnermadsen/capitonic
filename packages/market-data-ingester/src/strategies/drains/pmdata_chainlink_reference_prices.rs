@@ -33,25 +33,43 @@ const SPEC: RetainedDrainSpec = RetainedDrainSpec {
     time_column: "source_timestamp",
     retention_days: Some(0),
 };
+pub(super) const DIRECT_SPEC: RetainedDrainSpec = RetainedDrainSpec {
+    key: "chainlink_btcusd_reference_price",
+    relation: "market_data.chainlink_btcusd_reference_prices",
+    schema: "market_data",
+    table: "chainlink_btcusd_reference_prices",
+    time_column: "source_timestamp",
+    retention_days: Some(0),
+};
 const BATCH_ROWS: usize = 10_000;
-pub struct PmdataChainlinkReferencePricesDrain {
+pub struct ReferencePricesDrain<const DIRECT: bool> {
     descriptor: DrainDescriptor,
     root: PathBuf,
 }
-impl PmdataChainlinkReferencePricesDrain {
+pub type PmdataChainlinkReferencePricesDrain = ReferencePricesDrain<false>;
+
+impl<const DIRECT: bool> ReferencePricesDrain<DIRECT> {
     pub fn from_environment() -> Result<Self, DrainExecutionError> {
-        let root = PathBuf::from(
-            std::env::var("INGESTER_PMDATA_CHAINLINK_REFERENCE_PRICE_LAKE_ROOT")
-                .unwrap_or_else(|_| "/var/lib/pmdata-chainlink-reference-prices".into()),
-        );
+        let (root_env, default_root) = if DIRECT {
+            (
+                "INGESTER_CHAINLINK_REFERENCE_PRICE_LAKE_ROOT",
+                "/var/lib/chainlink-reference-prices",
+            )
+        } else {
+            (
+                "INGESTER_PMDATA_CHAINLINK_REFERENCE_PRICE_LAKE_ROOT",
+                "/var/lib/pmdata-chainlink-reference-prices",
+            )
+        };
+        let root = PathBuf::from(std::env::var(root_env).unwrap_or_else(|_| default_root.into()));
         if !root.is_absolute() {
             return Err(invalid(
                 "drain_root_invalid",
-                "PMData Chainlink reference-price lake root must be absolute",
+                "Chainlink reference-price lake root must be absolute",
             ));
         }
         Ok(Self {
-            descriptor: retained::descriptor(&SPEC),
+            descriptor: retained::descriptor(if DIRECT { &DIRECT_SPEC } else { &SPEC }),
             root,
         })
     }
@@ -226,9 +244,13 @@ fn batch(rows: Vec<Row>) -> Result<RecordBatch, DrainExecutionError> {
     RecordBatch::try_new(schema(), arrays).map_err(|e| io_error(e.to_string()))
 }
 #[async_trait]
-impl RetainedDrainAdapter for PmdataChainlinkReferencePricesDrain {
+impl<const DIRECT: bool> RetainedDrainAdapter for ReferencePricesDrain<DIRECT> {
     fn spec(&self) -> &RetainedDrainSpec {
-        &SPEC
+        if DIRECT {
+            &DIRECT_SPEC
+        } else {
+            &SPEC
+        }
     }
     fn root(&self) -> &Path {
         &self.root
@@ -238,11 +260,19 @@ impl RetainedDrainAdapter for PmdataChainlinkReferencePricesDrain {
         c: &DrainContext,
         ch: &Chunk,
     ) -> Result<Publication, DrainExecutionError> {
-        let id = create_object(c, SPEC.key, SPEC.relation, ch).await?;
+        let id = create_object(c, self.spec().key, self.spec().relation, ch).await?;
         let staging = self.root.join(".staging").join(format!("{id}.parquet.tmp"));
         let _ = fs::remove_file(&staging).await;
         let (sender, mut writer) = start_writer(staging.clone(), schema());
-        let mut stream=sqlx::query_as::<_,Row>("SELECT source,feed_id,source_timestamp,valid_from_timestamp,provider_available_at,received_at,price,bid,ask,report_sha256::text,payload_sha256::text,strategy_key,capture_artifact_id,ingested_at,expires_at,report_version,source_date,archive_row_number,backfill_artifact_id,report_hash_kind FROM market_data.pmdata_chainlink_btcusd_reference_prices WHERE source_timestamp >= $1 AND source_timestamp < $2 ORDER BY source_timestamp,source,feed_id,report_sha256").bind(ch.range_start).bind(ch.range_end).fetch(&c.pool);
+        let sql = if DIRECT {
+            "SELECT source,feed_id,source_timestamp,valid_from_timestamp,provider_available_at,received_at,price,bid,ask,report_sha256::text,payload_sha256::text,strategy_key,capture_artifact_id,ingested_at,expires_at,report_version,source_date,archive_row_number,backfill_artifact_id,report_hash_kind FROM market_data.chainlink_btcusd_reference_prices WHERE source_timestamp >= $1 AND source_timestamp < $2 ORDER BY source_timestamp,source,feed_id,report_sha256"
+        } else {
+            "SELECT source,feed_id,source_timestamp,valid_from_timestamp,provider_available_at,received_at,price,bid,ask,report_sha256::text,payload_sha256::text,strategy_key,capture_artifact_id,ingested_at,expires_at,report_version,source_date,archive_row_number,backfill_artifact_id,report_hash_kind FROM market_data.pmdata_chainlink_btcusd_reference_prices WHERE source_timestamp >= $1 AND source_timestamp < $2 ORDER BY source_timestamp,source,feed_id,report_sha256"
+        };
+        let mut stream = sqlx::query_as::<_, Row>(sql)
+            .bind(ch.range_start)
+            .bind(ch.range_end)
+            .fetch(&c.pool);
         let mut rows = Vec::with_capacity(BATCH_ROWS);
         let mut count = 0i64;
         while let Some(row) = stream.try_next().await.map_err(db_error)? {
@@ -277,7 +307,7 @@ async fn publish(
     sqlx::query_as("UPDATE ingester.drain_objects SET row_count=$2,relative_path=$3,sha256=$4,byte_size=$5,status='published',published_at=clock_timestamp(),updated_at=clock_timestamp() WHERE object_id=$1 AND status='staging' RETURNING object_id,row_count,relative_path,sha256::text,byte_size,status").bind(id).bind(count).bind(rel).bind(sha).bind(size).fetch_one(&c.pool).await.map_err(db_error)
 }
 #[async_trait]
-impl DrainWorkerStrategy for PmdataChainlinkReferencePricesDrain {
+impl<const DIRECT: bool> DrainWorkerStrategy for ReferencePricesDrain<DIRECT> {
     fn descriptor(&self) -> &DrainDescriptor {
         &self.descriptor
     }
