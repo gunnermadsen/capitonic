@@ -1,4 +1,22 @@
-WITH eligible AS (
+WITH reports AS (
+  SELECT source, feed_id, source_timestamp, provider_available_at, received_at,
+         valid_from_timestamp, expires_at, price, bid, ask, report_sha256,
+         backfill_artifact_id, capture_artifact_id,
+         'market_data.chainlink_btcusd_reference_prices'::text AS source_relation
+  FROM market_data.chainlink_btcusd_reference_prices
+  WHERE source = 'chainlink_data_streams'
+    AND source_timestamp >= %(range_start)s - interval '125 seconds'
+    AND source_timestamp < %(range_end)s
+  UNION ALL
+  SELECT source, feed_id, source_timestamp, provider_available_at, received_at,
+         valid_from_timestamp, expires_at, price, bid, ask, report_sha256,
+         backfill_artifact_id, capture_artifact_id,
+         'market_data.pmdata_chainlink_btcusd_reference_prices'::text AS source_relation
+  FROM market_data.pmdata_chainlink_btcusd_reference_prices
+  WHERE source = 'pmdata_chainlink_streams'
+    AND source_timestamp >= %(range_start)s - interval '125 seconds'
+    AND source_timestamp < %(range_end)s
+), eligible AS (
   SELECT
     report.source,
     report.feed_id,
@@ -17,6 +35,7 @@ WITH eligible AS (
     report.bid,
     report.ask,
     report.report_sha256,
+    report.source_relation,
     COALESCE(
       report.backfill_artifact_id,
       report.capture_artifact_id
@@ -25,7 +44,7 @@ WITH eligible AS (
       WHEN 'chainlink_data_streams' THEN 2
       WHEN 'pmdata_chainlink_streams' THEN 1
     END AS source_priority
-  FROM market_data.chainlink_btcusd_reference_prices report
+  FROM reports report
   LEFT JOIN ingester.backfill_artifacts artifact
     ON artifact.artifact_id = report.backfill_artifact_id
   WHERE report.source IN (
@@ -56,8 +75,6 @@ SELECT DISTINCT ON (source_timestamp)
   ask::double precision AS ask,
   report_sha256,
   source_artifact_id::text AS source_artifact_id,
-  (
-    'market_data.chainlink_btcusd_reference_prices:' || source
-  )::text AS source_relation
+  (source_relation || ':' || source)::text AS source_relation
 FROM eligible
 ORDER BY source_timestamp, source_priority DESC, available_at, report_sha256;

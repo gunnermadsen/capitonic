@@ -26,7 +26,11 @@ from .core_extract import (
     file_sha256,
     write_json_atomic,
 )
-from .drained_sources import completed_capture_ids, removed_source_rows
+from .drained_sources import (
+    completed_backfill_providers,
+    completed_capture_ids,
+    removed_source_rows,
+)
 from .refprice_twap_training import _query_frame
 from .twap60_training_data import piecewise_average
 
@@ -49,7 +53,10 @@ SOURCE_RELATIONS = {
         "market_data.binance_spot_btcusdt_one_second_ohlcv",
         "market_data.binance_spot_btcusdt_one_second_ohlcv",
     ),
-    "refprice": ("market_data.chainlink_btcusd_reference_prices",),
+    "refprice": (
+        "market_data.chainlink_btcusd_reference_prices",
+        "market_data.pmdata_chainlink_btcusd_reference_prices",
+    ),
     "oracle": (
         "market_data.polygon_chainlink_btcusd_oracle_rounds",
         "market_data.polygon_chainlink_btcusd_oracle_rounds",
@@ -59,9 +66,7 @@ SOURCE_RELATIONS = {
         "market_data.chainlink_btcusd_one_minute_candles",
     ),
     "open_interest": ("market_data.binance_futures_btcusdt_open_interest",),
-    "aggregate_trades": (
-        "market_data.binance_spot_btcusdt_aggregate_trades",
-    ),
+    "aggregate_trades": ("market_data.binance_spot_btcusdt_aggregate_trades",),
     "spot_l2": ("polymarket.binance_spot_btcusdt_l2_training_features",),
 }
 TIMESTAMP_COLUMNS = {
@@ -370,6 +375,85 @@ def _extract_day(
         )
     else:
         frames["spot_l2"] = pl.DataFrame()
+    archived_refprice = removed_source_rows(
+        connection,
+        strategy_key="pmdata_chainlink_btcusd_reference_price",
+        relation="market_data.pmdata_chainlink_btcusd_reference_prices",
+        time_column="source_timestamp",
+        root=Path(
+            os.environ.get(
+                "PMDATA_CHAINLINK_REFERENCE_PRICE_DATA_ROOT",
+                "/Volumes/docker-data/polymarket-bot/pmdata-chainlink-reference-prices",
+            )
+        ),
+        range_start=start - timedelta(seconds=125),
+        range_end=end,
+        columns=(
+            "source",
+            "feed_id",
+            "source_timestamp",
+            "provider_available_at",
+            "received_at",
+            "valid_from_timestamp",
+            "expires_at",
+            "price",
+            "bid",
+            "ask",
+            "report_sha256",
+            "backfill_artifact_id",
+            "capture_artifact_id",
+        ),
+    )
+    if archived_refprice.height:
+        completed = completed_backfill_providers(
+            connection,
+            archived_refprice["backfill_artifact_id"].drop_nulls().unique().to_list(),
+        )
+        archived_refprice = (
+            archived_refprice.filter(
+                (pl.col("source") == "pmdata_chainlink_streams")
+                & (pl.col("source_timestamp") >= start - timedelta(seconds=125))
+                & (pl.col("source_timestamp") < end)
+                & pl.col("valid_from_timestamp").is_not_null()
+                & pl.col("received_at").is_not_null()
+                & (pl.col("price") > 0)
+                & (
+                    pl.col("backfill_artifact_id").is_null()
+                    | pl.col("backfill_artifact_id").is_in(list(completed))
+                )
+            )
+            .with_columns(
+                pl.max_horizontal(
+                    "source_timestamp",
+                    "valid_from_timestamp",
+                    "provider_available_at",
+                    "received_at",
+                ).alias("available_at"),
+                *(pl.col(name).cast(pl.Float64) for name in ("price", "bid", "ask")),
+                pl.coalesce("backfill_artifact_id", "capture_artifact_id").alias(
+                    "source_artifact_id"
+                ),
+                pl.lit(
+                    "market_data.pmdata_chainlink_btcusd_reference_prices:pmdata_chainlink_streams"
+                ).alias("source_relation"),
+            )
+            .select(frames["refprice"].columns)
+        )
+        frames["refprice"] = (
+            pl.concat((frames["refprice"], archived_refprice), how="vertical_relaxed")
+            .with_columns(
+                pl.when(pl.col("source") == "chainlink_data_streams")
+                .then(pl.lit(2))
+                .otherwise(pl.lit(1))
+                .alias("_priority")
+            )
+            .sort(
+                ["source_timestamp", "_priority", "available_at", "report_sha256"],
+                descending=[False, True, False, False],
+            )
+            .unique(subset="source_timestamp", keep="first", maintain_order=True)
+            .drop("_priority")
+        )
     archived_interest = removed_source_rows(
         connection,
         strategy_key="binance_futures_btcusdt_open_interest",
