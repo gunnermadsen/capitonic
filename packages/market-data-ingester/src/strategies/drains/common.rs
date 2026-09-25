@@ -4,9 +4,9 @@ use std::{
     sync::Arc,
 };
 
-use arrow_array::{Array, RecordBatch};
+use arrow_array::{Array, RecordBatch, TimestampMicrosecondArray};
 use arrow_cast::display::array_value_to_string;
-use arrow_schema::Schema;
+use arrow_schema::{DataType, Schema, TimeUnit};
 use chrono::{DateTime, Utc};
 use parquet::{
     arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter},
@@ -429,6 +429,19 @@ fn hash_batch_rows(digest: &mut Sha256, batch: &RecordBatch) -> Result<(), Strin
                 digest.update([0]);
             } else {
                 digest.update([1]);
+                if matches!(
+                    column.data_type(),
+                    DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)) if timezone.as_ref() == "UTC"
+                ) {
+                    let timestamps = column
+                        .as_any()
+                        .downcast_ref::<TimestampMicrosecondArray>()
+                        .ok_or_else(|| {
+                            "UTC timestamp column has an unexpected array type".to_owned()
+                        })?;
+                    hash_value(digest, &timestamps.value(row).to_le_bytes());
+                    continue;
+                }
                 let value = array_value_to_string(column.as_ref(), row)
                     .map_err(|error| error.to_string())?;
                 hash_value(digest, value.as_bytes());
@@ -498,6 +511,29 @@ mod verified_file_tests {
     use super::*;
     use arrow_array::StringArray;
     use arrow_schema::{DataType, Field};
+
+    #[tokio::test]
+    async fn utc_timestamp_rows_receive_a_verified_parquet_proof() {
+        let path = std::env::temp_dir().join(format!("utc-drain-row-{}.parquet", Uuid::new_v4()));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "observed_at",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(
+                TimestampMicrosecondArray::from(vec![1_790_304_000_000_000, 1_790_304_000_000_001])
+                    .with_timezone("UTC"),
+            )],
+        )
+        .unwrap();
+        let (sender, writer) = start_writer(path.clone(), schema);
+        sender.send(batch).await.unwrap();
+        finish_writer(sender, writer).await.unwrap();
+        verify_parquet(&path, 2).await.unwrap();
+        fs::remove_file(path).await.unwrap();
+    }
 
     #[tokio::test]
     async fn closed_writer_reports_its_original_error() {
