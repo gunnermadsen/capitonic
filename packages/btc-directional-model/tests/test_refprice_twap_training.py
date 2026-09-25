@@ -42,7 +42,7 @@ def test_sql_contract_is_pmdata_primary_causal_and_read_only() -> None:
         path.read_text() for path in sql_root.glob("btc-refprice-twap-*-source.sql")
     ).lower()
 
-    assert "market_data.chainlink_btcusd_reference_prices" in refprice
+    assert "market_data.pmdata_chainlink_btcusd_reference_prices" in refprice
     assert "pmdata_chainlink_streams" in refprice
     assert "received_at" in refprice
     assert "market_data.pmdata_chainlink_btcusd_twap" in label
