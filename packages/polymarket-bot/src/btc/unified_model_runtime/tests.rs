@@ -69,6 +69,71 @@ fn conservative_paper_export_matches_training_vectors() {
         );
     }
 }
+#[test]
+fn live_pilot_policy_failure_checks_match_frozen_vectors() {
+    let key = "btc-5m-conservative-selective-development-live-pilot-20260921-v1";
+    let dir = root().join("runtime-models").join(key);
+    let definition: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("model.json")).unwrap()).unwrap();
+    let vectors: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("golden-vectors.json")).unwrap()).unwrap();
+    let names = definition["features"]["names"].as_array().unwrap();
+    let cost_index = |name: &str| names.iter().position(|value| value == name).unwrap();
+    let policy = &definition["payoff_model"]["definition"]["policy"];
+    let penalty = definition["payoff_model"]["definition"]["calibration"]["reliability_penalty"]
+        .as_f64()
+        .unwrap();
+    let adapter = model(key);
+    let adapter = adapter.unified_adapter().unwrap();
+    let mut failed_counts = [0; 3];
+    let mut accepted = 0;
+    for row in vectors["vectors"].as_array().unwrap() {
+        let features = row["feature_values"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_f64().unwrap_or(f64::NAN))
+            .collect::<Vec<_>>();
+        let result = adapter
+            .evaluate(&features, row["seconds_elapsed"].as_i64().unwrap())
+            .unwrap();
+        let checks = result.failed_policy_checks.unwrap();
+        let confidence = (result.score.confidence - penalty).max(0.5);
+        let cost = features[cost_index(if result.score.probability_up >= 0.5 {
+            "up_ask_vwap_5"
+        } else {
+            "down_ask_vwap_5"
+        })];
+        let stressed_edge = confidence
+            - cost
+            - policy["execution_reserve_per_share"].as_f64().unwrap()
+            - policy["stress_slippage_per_share"].as_f64().unwrap();
+        assert_eq!(
+            checks.share_cost,
+            !cost.is_finite()
+                || cost <= 0.0
+                || cost > policy["maximum_share_cost"].as_f64().unwrap()
+        );
+        assert_eq!(
+            checks.confidence,
+            confidence < policy["minimum_confidence"].as_f64().unwrap()
+        );
+        assert_eq!(
+            checks.stressed_edge,
+            stressed_edge < policy["minimum_stressed_edge"].as_f64().unwrap()
+        );
+        assert_eq!(
+            result.score.accepted,
+            row["source"]["accepted"].as_bool().unwrap()
+        );
+        failed_counts[0] += usize::from(checks.share_cost);
+        failed_counts[1] += usize::from(checks.confidence);
+        failed_counts[2] += usize::from(checks.stressed_edge);
+        accepted += usize::from(result.score.accepted);
+    }
+    assert!(failed_counts.iter().all(|count| *count > 0));
+    assert!(accepted > 0);
+}
 fn book(at: DateTime<Utc>) -> OrderbookCheckpoint {
     OrderbookCheckpoint {
         checkpoint_id: Uuid::new_v4(),

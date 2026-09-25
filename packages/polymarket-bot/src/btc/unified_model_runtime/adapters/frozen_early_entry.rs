@@ -199,6 +199,7 @@ impl Adapter {
                 accepted: true,
             },
             reason: "accepted",
+            failed_policy_checks: None,
             admission_probability: None,
             predicted_stress_edge: None,
             predicted_loss: None,

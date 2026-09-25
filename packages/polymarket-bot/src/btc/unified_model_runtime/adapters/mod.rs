@@ -42,11 +42,19 @@ pub trait FeatureSession: Send {
 pub struct Evaluation {
     pub score: RuntimeModelScore,
     pub reason: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed_policy_checks: Option<FailedPolicyChecks>,
     pub admission_probability: Option<f64>,
     pub predicted_stress_edge: Option<f64>,
     pub predicted_loss: Option<f64>,
     pub temporal_std: Option<f64>,
     pub temporal_agreement: Option<f64>,
+}
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct FailedPolicyChecks {
+    pub share_cost: bool,
+    pub confidence: bool,
+    pub stressed_edge: bool,
 }
 /// Adapters own mathematics and declare input semantics. They cannot submit orders,
 /// create streams, change authorization or emit model-specific monitoring schemas.

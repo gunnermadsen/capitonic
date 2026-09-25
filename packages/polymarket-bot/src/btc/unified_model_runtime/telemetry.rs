@@ -130,6 +130,7 @@ struct Process {
     last_observation: f64,
     last_success: f64,
     counters: BTreeMap<(&'static str, String), u64>,
+    model_policy_failed_checks: BTreeMap<(String, &'static str), u64>,
     submission_risk_counters: BTreeMap<(&'static str, &'static str), u64>,
     gauges: BTreeMap<&'static str, f64>,
     histograms: BTreeMap<&'static str, Histogram>,
@@ -573,6 +574,23 @@ pub fn prediction(
                 "rejected"
             },
         );
+        if let Some(checks) = record
+            .admission
+            .as_ref()
+            .and_then(|value| value.get("failed_policy_checks"))
+        {
+            for (name, failed) in [
+                ("share_cost", checks.get("share_cost")),
+                ("confidence", checks.get("confidence")),
+                ("stressed_edge", checks.get("stressed_edge")),
+            ] {
+                if failed.and_then(serde_json::Value::as_bool) == Some(true) {
+                    *p.model_policy_failed_checks
+                        .entry((model.model_key.clone(), name))
+                        .or_default() += 1;
+                }
+            }
+        }
         p.histograms
             .entry("inference")
             .or_default()
@@ -1047,6 +1065,7 @@ pub fn prometheus_metrics() -> String {
                     last_observation: p.last_observation,
                     last_success: p.last_success,
                     counters: p.counters.clone(),
+                    model_policy_failed_checks: p.model_policy_failed_checks.clone(),
                     submission_risk_counters: p.submission_risk_counters.clone(),
                     gauges,
                     histograms: p.histograms.clone(),
@@ -1279,6 +1298,12 @@ pub fn prometheus_metrics() -> String {
                 escaped(&reason)
             );
         }
+        if declared.insert("model_policy_failed_checks_total".into()) {
+            out.push_str("# HELP polymarket_umr_model_policy_failed_checks_total Session-scoped model inferences failing each frozen policy check; one inference can fail multiple checks.\n# TYPE polymarket_umr_model_policy_failed_checks_total counter\n");
+        }
+        for ((model_key, check), value) in p.model_policy_failed_checks {
+            let _ = writeln!(out, "polymarket_umr_model_policy_failed_checks_total{{{labels},model_key=\"{}\",check=\"{check}\"}} {value}", escaped(&model_key));
+        }
         if declared.insert("live_submission_risk_checks_total".into()) {
             out.push_str("# HELP polymarket_umr_live_submission_risk_checks_total Process-scoped live pre-submit risk checks by bounded outcome and reason.\n# TYPE polymarket_umr_live_submission_risk_checks_total counter\n");
         }
@@ -1322,6 +1347,86 @@ pub fn prometheus_metrics() -> String {
 #[cfg(test)]
 mod router_tests {
     use super::*;
+    #[test]
+    fn model_policy_checks_count_once_per_inference_and_keep_models_separate() {
+        let id = Uuid::new_v4();
+        let first = RuntimeModelSelection {
+            model_key: "first-model".into(),
+            artifact_sha256: "a".repeat(64),
+            feature_schema_sha256: "b".repeat(64),
+        };
+        let second = RuntimeModelSelection {
+            model_key: "second-model".into(),
+            ..first.clone()
+        };
+        register(id, Uuid::new_v4(), "config", "live", Some(&first));
+        let score = RuntimeModelScore {
+            raw_logit: 0.0,
+            probability_up: 0.6,
+            confidence: 0.6,
+            action: crate::btc::directional_model::RuntimeModelAction::NoTrade,
+            accepted: false,
+        };
+        let at = Utc::now();
+        let failed = Some(serde_json::json!({
+            "reason": "conservative_paper_policy",
+            "failed_policy_checks": {
+                "share_cost": false,
+                "confidence": true,
+                "stressed_edge": true
+            }
+        }));
+        prediction(
+            id,
+            Uuid::new_v4(),
+            "market",
+            &first,
+            at,
+            "input",
+            score,
+            0.001,
+            failed.clone(),
+        );
+        prediction(
+            id,
+            Uuid::new_v4(),
+            "market",
+            &first,
+            at,
+            "input",
+            score,
+            0.001,
+            failed,
+        );
+        prediction(
+            id,
+            Uuid::new_v4(),
+            "market",
+            &second,
+            at + chrono::Duration::seconds(5),
+            "input-2",
+            score,
+            0.001,
+            Some(serde_json::json!({
+                "reason": "conservative_paper_policy",
+                "failed_policy_checks": {
+                    "share_cost": true,
+                    "confidence": false,
+                    "stressed_edge": false
+                }
+            })),
+        );
+        let metrics = prometheus_metrics();
+        let scoped = metrics
+            .lines()
+            .filter(|line| line.contains(&id.to_string()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(scoped.contains("model_key=\"first-model\",check=\"confidence\"} 1"));
+        assert!(scoped.contains("model_key=\"first-model\",check=\"stressed_edge\"} 1"));
+        assert!(scoped.contains("model_key=\"second-model\",check=\"share_cost\"} 1"));
+        assert!(!scoped.contains("model_key=\"second-model\",check=\"confidence\""));
+    }
     #[test]
     fn entry_fill_metrics_keep_fok_and_fak_separate() {
         let id = Uuid::new_v4();
