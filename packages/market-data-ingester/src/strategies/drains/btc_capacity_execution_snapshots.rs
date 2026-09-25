@@ -26,7 +26,7 @@ const SPEC: RetainedDrainSpec = RetainedDrainSpec {
     schema: "polymarket",
     table: "btc_market_capacity_execution_snapshots",
     time_column: "sampled_at",
-    retention_days: None,
+    retention_days: Some(0),
 };
 const BATCH_ROWS: usize = 2_000;
 const BACKFILL_KEY: &str = "polymarket_btc_five_minute_execution_snapshots_backfill";

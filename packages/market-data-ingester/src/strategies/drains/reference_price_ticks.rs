@@ -30,7 +30,7 @@ const SPEC: RetainedDrainSpec = RetainedDrainSpec {
     schema: "polymarket",
     table: "reference_price_ticks",
     time_column: "source_timestamp",
-    retention_days: Some(14),
+    retention_days: Some(5),
 };
 const BATCH_ROWS: usize = 5_000;
 pub struct ReferencePriceTicksDrain {

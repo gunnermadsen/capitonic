@@ -6,7 +6,10 @@ use prometheus_client::{
     registry::Registry,
 };
 
-use crate::{domain::IngesterProfile, persistence::WorkerAllocationRecord};
+use crate::{
+    domain::IngesterProfile,
+    persistence::{DrainMetricsSnapshot, WorkerAllocationRecord},
+};
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
 struct StrategyStateLabels {
@@ -26,9 +29,23 @@ struct WorkerLabels {
     worker_id: String,
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct DrainStateLabels {
+    strategy: String,
+    status: String,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct DrainWorkerLabels {
+    strategy: String,
+    worker_id: String,
+}
+
 pub fn render(
     profiles: &[IngesterProfile],
     allocations: &[WorkerAllocationRecord],
+    drain_strategies: &[String],
+    drains: &DrainMetricsSnapshot,
     ready: bool,
 ) -> Result<String> {
     let mut registry = Registry::with_prefix("market_data_ingester");
@@ -48,6 +65,17 @@ pub fn render(
     let worker_capacity_units_total = Gauge::<i64>::default();
     let worker_capacity_units_available = Gauge::<i64>::default();
     let backfill_capacity_units_active = Gauge::<i64>::default();
+    let drain_registered = Family::<StrategyLabels, Gauge<i64>>::default();
+    let drain_job_state = Family::<DrainStateLabels, Gauge<i64>>::default();
+    let drain_active_worker = Family::<DrainWorkerLabels, Gauge<i64>>::default();
+    let drain_active_objects_published = Family::<StrategyLabels, Gauge<i64>>::default();
+    let drain_active_objects_removed = Family::<StrategyLabels, Gauge<i64>>::default();
+    let drain_active_rows_published = Family::<StrategyLabels, Gauge<i64>>::default();
+    let drain_active_rows_removed = Family::<StrategyLabels, Gauge<i64>>::default();
+    let drain_active_bytes_published = Family::<StrategyLabels, Gauge<i64>>::default();
+    let drain_last_move_timestamp_seconds = Family::<StrategyLabels, Gauge<i64>>::default();
+    let drain_last_failure_timestamp_seconds = Family::<StrategyLabels, Gauge<i64>>::default();
+    let drain_last_move_rows_removed = Family::<StrategyLabels, Gauge<i64>>::default();
 
     registry.register(
         "liveness",
@@ -129,6 +157,53 @@ pub fn render(
         "Allocation capacity units currently leased by active backfills.",
         backfill_capacity_units_active.clone(),
     );
+    registry.register(
+        "drain_strategy_registered",
+        "Registered drain strategies.",
+        drain_registered.clone(),
+    );
+    registry.register(
+        "drain_job_state",
+        "Most recently requested drain job state by strategy.",
+        drain_job_state.clone(),
+    );
+    registry.register(
+        "drain_active_worker",
+        "Worker assigned to an active drain job.",
+        drain_active_worker.clone(),
+    );
+    registry.register(
+        "drain_active_objects_published",
+        "Published objects for the running drain job.",
+        drain_active_objects_published.clone(),
+    );
+    registry.register(
+        "drain_active_objects_removed",
+        "Objects removed from PostgreSQL for the running drain job.",
+        drain_active_objects_removed.clone(),
+    );
+    registry.register(
+        "drain_active_rows_published",
+        "Rows in published objects for the running drain job.",
+        drain_active_rows_published.clone(),
+    );
+    registry.register(
+        "drain_active_rows_removed",
+        "Rows removed from PostgreSQL for the running drain job.",
+        drain_active_rows_removed.clone(),
+    );
+    registry.register(
+        "drain_active_bytes_published",
+        "Parquet bytes published for the running drain job.",
+        drain_active_bytes_published.clone(),
+    );
+    registry.register("drain_last_move_timestamp_seconds", "Completion time of the latest successful non-dry-run move drain job in the recent ledger window.", drain_last_move_timestamp_seconds.clone());
+    registry.register(
+        "drain_last_failure_timestamp_seconds",
+        "Update time of the latest failed drain job in the recent ledger window.",
+        drain_last_failure_timestamp_seconds.clone(),
+    );
+    registry.register("drain_last_move_rows_removed", "Rows removed by the latest successful non-dry-run move drain job in the recent ledger window.", drain_last_move_rows_removed.clone());
 
     liveness.set(1);
     readiness.set(i64::from(ready));
@@ -233,6 +308,87 @@ pub fn render(
             .sum(),
     );
 
+    for strategy in drain_strategies {
+        let labels = StrategyLabels {
+            strategy: strategy.clone(),
+        };
+        drain_registered.get_or_create(&labels).set(1);
+        drain_active_objects_published.get_or_create(&labels).set(0);
+        drain_active_objects_removed.get_or_create(&labels).set(0);
+        drain_active_rows_published.get_or_create(&labels).set(0);
+        drain_active_rows_removed.get_or_create(&labels).set(0);
+        drain_active_bytes_published.get_or_create(&labels).set(0);
+        drain_last_move_timestamp_seconds
+            .get_or_create(&labels)
+            .set(0);
+        drain_last_failure_timestamp_seconds
+            .get_or_create(&labels)
+            .set(0);
+        drain_last_move_rows_removed.get_or_create(&labels).set(0);
+        let mut jobs = drains
+            .recent_jobs
+            .iter()
+            .filter(|job| job.strategy_key == *strategy)
+            .collect::<Vec<_>>();
+        jobs.sort_by_key(|job| (job.requested_at, job.job_id));
+        if let Some(latest) = jobs.last() {
+            drain_job_state
+                .get_or_create(&DrainStateLabels {
+                    strategy: strategy.clone(),
+                    status: latest.status.clone(),
+                })
+                .set(1);
+        }
+        if let Some(success) = jobs
+            .iter()
+            .rev()
+            .find(|job| job.status == "completed" && job.mode == "drain" && !job.dry_run)
+        {
+            drain_last_move_timestamp_seconds
+                .get_or_create(&labels)
+                .set(success.completed_at.map_or(0, |time| time.timestamp()));
+            drain_last_move_rows_removed
+                .get_or_create(&labels)
+                .set(success.rows_removed);
+        }
+        if let Some(failure) = jobs.iter().rev().find(|job| job.status == "failed") {
+            drain_last_failure_timestamp_seconds
+                .get_or_create(&labels)
+                .set(failure.updated_at.timestamp());
+        }
+        for active in jobs.iter().filter(|job| job.status == "running") {
+            if let Some(worker_id) = &active.assigned_worker_id {
+                drain_active_worker
+                    .get_or_create(&DrainWorkerLabels {
+                        strategy: strategy.clone(),
+                        worker_id: worker_id.clone(),
+                    })
+                    .set(1);
+            }
+            if let Some(progress) = drains
+                .active_objects
+                .iter()
+                .find(|progress| progress.job_id == active.job_id)
+            {
+                drain_active_objects_published
+                    .get_or_create(&labels)
+                    .set(progress.objects_published);
+                drain_active_objects_removed
+                    .get_or_create(&labels)
+                    .set(progress.objects_removed);
+                drain_active_rows_published
+                    .get_or_create(&labels)
+                    .set(progress.rows_published);
+                drain_active_rows_removed
+                    .get_or_create(&labels)
+                    .set(progress.rows_removed);
+                drain_active_bytes_published
+                    .get_or_create(&labels)
+                    .set(progress.bytes_published);
+            }
+        }
+    }
+
     let mut body = String::new();
     encode(&mut body, &registry)?;
     Ok(body)
@@ -243,9 +399,61 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use serde_json::json;
 
-    use crate::domain::{DesiredState, HealthStatus, IngesterStrategyKey, ObservedState};
+    use crate::{
+        domain::{DesiredState, HealthStatus, IngesterStrategyKey, ObservedState},
+        persistence::{ActiveDrainObjectStats, DrainMetricsJob},
+    };
 
     use super::*;
+
+    fn empty_drains() -> DrainMetricsSnapshot {
+        DrainMetricsSnapshot {
+            recent_jobs: Vec::new(),
+            active_objects: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn renders_durable_drain_progress_and_worker_without_job_id_labels() {
+        let now = Utc::now();
+        let job_id = uuid::Uuid::new_v4();
+        let strategy = "binance_futures_btcusdt_open_interest".to_owned();
+        let job = DrainMetricsJob {
+            job_id,
+            strategy_key: strategy.clone(),
+            dry_run: false,
+            mode: "drain".to_owned(),
+            status: "running".to_owned(),
+            assigned_worker_id: Some("worker-1".to_owned()),
+            rows_removed: 0,
+            requested_at: now,
+            completed_at: None,
+            updated_at: now,
+        };
+        let drains = DrainMetricsSnapshot {
+            recent_jobs: vec![job],
+            active_objects: vec![ActiveDrainObjectStats {
+                job_id,
+                objects_published: 2,
+                objects_removed: 1,
+                rows_published: 30,
+                rows_removed: 10,
+                bytes_published: 1024,
+            }],
+        };
+        let rendered = render(&[], &[], &[strategy.clone()], &drains, true).unwrap();
+        assert!(rendered.contains(&format!(
+            "market_data_ingester_drain_strategy_registered{{strategy=\"{strategy}\"}} 1"
+        )));
+        assert!(rendered.contains(&format!(
+            "market_data_ingester_drain_active_rows_published{{strategy=\"{strategy}\"}} 30"
+        )));
+        assert!(rendered.contains(&format!(
+            "market_data_ingester_drain_active_rows_removed{{strategy=\"{strategy}\"}} 10"
+        )));
+        assert!(rendered.contains("worker_id=\"worker-1\""));
+        assert!(!rendered.contains(&job_id.to_string()));
+    }
 
     #[test]
     fn renders_service_and_strategy_health_without_unbounded_labels() {
@@ -284,7 +492,7 @@ mod tests {
             updated_at: persisted_at,
         };
 
-        let rendered = render(&[profile], &[], true).expect("metrics render");
+        let rendered = render(&[profile], &[], &[], &empty_drains(), true).expect("metrics render");
 
         assert!(rendered.contains("market_data_ingester_liveness 1"));
         assert!(rendered.contains("market_data_ingester_readiness 1"));
@@ -340,7 +548,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let rendered = render(&profiles, &[], true).expect("metrics render");
+        let rendered = render(&profiles, &[], &[], &empty_drains(), true).expect("metrics render");
         assert_eq!(
             rendered
                 .matches("market_data_ingester_strategy_state{")
@@ -382,7 +590,8 @@ mod tests {
             },
         ];
 
-        let rendered = render(&[], &allocations, true).expect("metrics render");
+        let rendered =
+            render(&[], &allocations, &[], &empty_drains(), true).expect("metrics render");
 
         assert!(rendered.contains("market_data_ingester_realtime_profiles_desired 0"));
         assert!(rendered.contains("market_data_ingester_worker_realtime_slots_total 2"));

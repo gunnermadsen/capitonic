@@ -927,8 +927,24 @@ async fn prometheus_metrics(State(state): State<ApiState>) -> Result<Response, A
         .list_worker_allocations()
         .await
         .map_err(ApiError::internal)?;
-    let body = metrics::render(&profiles, &allocations, state.readiness.is_ready())
+    let drain_strategies = state
+        .registry
+        .drains()
+        .map(|strategy| strategy.descriptor().strategy_key.to_string())
+        .collect::<Vec<_>>();
+    let drains = state
+        .drains
+        .metrics_snapshot()
+        .await
         .map_err(ApiError::internal)?;
+    let body = metrics::render(
+        &profiles,
+        &allocations,
+        &drain_strategies,
+        &drains,
+        state.readiness.is_ready(),
+    )
+    .map_err(ApiError::internal)?;
     Ok((
         [(
             CONTENT_TYPE,

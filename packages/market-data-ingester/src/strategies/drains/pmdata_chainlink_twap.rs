@@ -32,7 +32,7 @@ const SPEC: RetainedDrainSpec = RetainedDrainSpec {
     schema: "market_data",
     table: "pmdata_chainlink_btcusd_twap",
     time_column: "source_timestamp",
-    retention_days: None,
+    retention_days: Some(0),
 };
 const BATCH_ROWS: usize = 10_000;
 pub struct PmdataChainlinkTwapDrain {

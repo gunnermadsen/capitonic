@@ -1,7 +1,7 @@
 use std::{path::Path, sync::Arc, time::Duration as StdDuration};
 
 use async_trait::async_trait;
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 use tokio::fs;
 
@@ -34,6 +34,12 @@ const CHUNK_REMOVAL_PACING: StdDuration = StdDuration::from_millis(100);
 pub trait RetainedDrainAdapter: Send + Sync {
     fn spec(&self) -> &RetainedDrainSpec;
     fn root(&self) -> &Path;
+    async fn required_source_timestamp(
+        &self,
+        _context: &DrainContext,
+    ) -> Result<Option<DateTime<Utc>>, DrainExecutionError> {
+        Ok(None)
+    }
     async fn source_count(
         &self,
         context: &DrainContext,
@@ -131,13 +137,24 @@ pub async fn execute(
         .filter(|chunk| chunk.range_end <= snapshot_at)
         .cloned()
         .collect();
+    let required_source_timestamp = if request.mode.removes_source_data() {
+        adapter.required_source_timestamp(&context).await?
+    } else {
+        None
+    };
     let eligible = copyable
         .iter()
-        .filter(|chunk| chunk.range_end <= request.cutoff)
+        .filter(|chunk| {
+            chunk.range_end <= request.cutoff
+                && !contains_required_source(chunk, required_source_timestamp)
+        })
         .count();
     let eligible_chunks = copyable
         .iter()
-        .filter(|chunk| chunk.range_end <= request.cutoff)
+        .filter(|chunk| {
+            chunk.range_end <= request.cutoff
+                && !contains_required_source(chunk, required_source_timestamp)
+        })
         .map(|chunk| {
             json!({
                 "schema": chunk.chunk_schema,
@@ -168,11 +185,17 @@ pub async fn execute(
                 "relation": spec.relation,
                 "retained_chunks": chunks.len() - removable,
                 "retention_days": spec.retention_days,
+                "required_source_timestamp": required_source_timestamp,
                 "snapshot_at": snapshot_at,
             }),
         });
     }
-    let work_chunks = chunks_to_process(copyable, request.mode, request.cutoff);
+    let work_chunks = chunks_to_process(
+        copyable,
+        request.mode,
+        request.cutoff,
+        required_source_timestamp,
+    );
     preflight_lake_root(
         adapter.root(),
         work_chunks
@@ -257,13 +280,14 @@ pub async fn execute(
     }
     outcome.summary = json!({
         "cutoff": request.cutoff,
-        "database_retained_from": chunks.iter().filter(|chunk| !request.mode.removes_source_data() || chunk.range_end > request.cutoff).map(|chunk| chunk.range_start).min(),
+        "database_retained_from": chunks.iter().filter(|chunk| !request.mode.removes_source_data() || chunk.range_end > request.cutoff || contains_required_source(chunk, required_source_timestamp)).map(|chunk| chunk.range_start).min(),
         "live_tail_from": chunks.iter().filter(|chunk| chunk.range_end > snapshot_at).map(|chunk| chunk.range_start).min(),
         "mode": request.mode,
         "objects_created": objects_created,
         "chunks_removed": chunks_removed,
         "relation": spec.relation,
         "retention_days": spec.retention_days,
+        "required_source_timestamp": required_source_timestamp,
         "snapshot_at": snapshot_at,
         "ssd_complete_from": archived.iter().map(|item| item.source_start).min().or_else(|| chunks.iter().filter(|chunk| chunk.range_end <= snapshot_at).map(|chunk| chunk.range_start).min()),
         "ssd_complete_through": chunks.iter().filter(|chunk| chunk.range_end <= snapshot_at).map(|chunk| chunk.range_end).max().or_else(|| archived.iter().map(|item| item.source_end).max()),
@@ -280,11 +304,20 @@ fn chunks_to_process(
     chunks: Vec<Chunk>,
     mode: DrainMode,
     cutoff: chrono::DateTime<Utc>,
+    required_source_timestamp: Option<DateTime<Utc>>,
 ) -> Vec<Chunk> {
     chunks
         .into_iter()
-        .filter(|chunk| !mode.removes_source_data() || chunk.range_end <= cutoff)
+        .filter(|chunk| {
+            !mode.removes_source_data()
+                || (chunk.range_end <= cutoff
+                    && !contains_required_source(chunk, required_source_timestamp))
+        })
         .collect()
+}
+
+fn contains_required_source(chunk: &Chunk, timestamp: Option<DateTime<Utc>>) -> bool {
+    timestamp.is_some_and(|value| chunk.range_start <= value && value < chunk.range_end)
 }
 
 #[cfg(test)]
@@ -314,11 +347,35 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let drain = chunks_to_process(chunks.clone(), DrainMode::Drain, cutoff);
+        let drain = chunks_to_process(chunks.clone(), DrainMode::Drain, cutoff, None);
         assert_eq!(drain.len(), 1);
         assert_eq!(drain[0].range_end, cutoff);
         assert_eq!(
-            chunks_to_process(chunks, DrainMode::Reconcile, cutoff).len(),
+            chunks_to_process(chunks, DrainMode::Reconcile, cutoff, None).len(),
+            3
+        );
+    }
+
+    #[test]
+    fn drain_preserves_chunk_containing_required_realtime_cursor() {
+        let cutoff = Utc.with_ymd_and_hms(2026, 9, 11, 0, 0, 0).unwrap();
+        let chunks = (0..3)
+            .map(|day| Chunk {
+                chunk_schema: "market_data".into(),
+                chunk_name: format!("oracle_{day}"),
+                range_start: cutoff - Duration::days(3 - day),
+                range_end: cutoff - Duration::days(2 - day),
+                size_bytes: 1,
+            })
+            .collect::<Vec<_>>();
+        let cursor = cutoff - Duration::hours(12);
+        let removable = chunks_to_process(chunks.clone(), DrainMode::Drain, cutoff, Some(cursor));
+        assert_eq!(removable.len(), 2);
+        assert!(!removable
+            .iter()
+            .any(|chunk| { chunk.range_start <= cursor && cursor < chunk.range_end }));
+        assert_eq!(
+            chunks_to_process(chunks, DrainMode::Reconcile, cutoff, Some(cursor)).len(),
             3
         );
     }

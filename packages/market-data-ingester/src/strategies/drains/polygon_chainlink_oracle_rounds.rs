@@ -12,6 +12,7 @@ use crate::domain::{
 use arrow_array::{ArrayRef, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use futures_util::TryStreamExt;
 use sqlx::{postgres::PgRow, Row};
 use std::{
@@ -26,7 +27,7 @@ const SPEC: RetainedDrainSpec = RetainedDrainSpec {
     schema: "market_data",
     table: "polygon_chainlink_btcusd_oracle_rounds",
     time_column: "source_timestamp",
-    retention_days: Some(30),
+    retention_days: Some(5),
 };
 const BATCH_ROWS: usize = 5_000;
 const COLUMNS: [&str; 22] = [
@@ -104,6 +105,18 @@ impl RetainedDrainAdapter for PolygonChainlinkOracleRoundsDrain {
     }
     fn root(&self) -> &Path {
         &self.root
+    }
+    async fn required_source_timestamp(
+        &self,
+        context: &DrainContext,
+    ) -> Result<Option<DateTime<Utc>>, DrainExecutionError> {
+        sqlx::query_scalar(
+            "SELECT source_timestamp FROM market_data.polygon_chainlink_btcusd_oracle_rounds \
+             WHERE chain_id=137 ORDER BY block_number DESC,source_timestamp DESC,log_index DESC LIMIT 1",
+        )
+        .fetch_optional(&context.pool)
+        .await
+        .map_err(db_error)
     }
     async fn export_chunk(
         &self,

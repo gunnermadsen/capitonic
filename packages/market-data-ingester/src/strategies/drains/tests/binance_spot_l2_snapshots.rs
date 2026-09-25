@@ -2,11 +2,11 @@ use super::BinanceSpotL2SnapshotsDrain;
 use crate::domain::{DrainRequest, DrainWorkerStrategy, ExecutionSelector};
 use chrono::{Duration, Utc};
 #[test]
-fn accepts_one_day_retention_and_rejects_active_tail() {
+fn accepts_zero_day_retention_and_rejects_future_cutoff() {
     let adapter = BinanceSpotL2SnapshotsDrain::from_environment().unwrap();
     let request = DrainRequest {
         strategy_key: adapter.descriptor().strategy_key.to_string(),
-        cutoff: Utc::now() - Duration::hours(23),
+        cutoff: Utc::now() + Duration::hours(1),
         dry_run: true,
         mode: Default::default(),
         execution: ExecutionSelector::default(),

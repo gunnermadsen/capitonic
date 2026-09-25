@@ -56,6 +56,36 @@ pub struct ClaimedDrainJob {
     pub lease_token: Uuid,
 }
 
+#[derive(Debug, Clone, FromRow)]
+pub struct ActiveDrainObjectStats {
+    pub job_id: Uuid,
+    pub objects_published: i64,
+    pub objects_removed: i64,
+    pub rows_published: i64,
+    pub rows_removed: i64,
+    pub bytes_published: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct DrainMetricsSnapshot {
+    pub recent_jobs: Vec<DrainMetricsJob>,
+    pub active_objects: Vec<ActiveDrainObjectStats>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct DrainMetricsJob {
+    pub job_id: Uuid,
+    pub strategy_key: String,
+    pub dry_run: bool,
+    pub mode: String,
+    pub status: String,
+    pub assigned_worker_id: Option<String>,
+    pub rows_removed: i64,
+    pub requested_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Clone)]
 pub struct DrainRepository {
     pool: PgPool,
@@ -124,6 +154,40 @@ impl DrainRepository {
             .bind(limit.clamp(1, 500))
             .fetch_all(&self.pool)
             .await?)
+    }
+    pub async fn metrics_snapshot(&self) -> Result<DrainMetricsSnapshot> {
+        const METRIC_COLUMNS: &str = "job_id,strategy_key,dry_run,mode,status,assigned_worker_id,rows_removed,requested_at,completed_at,updated_at";
+        let recent_query = format!("SELECT {METRIC_COLUMNS} FROM ingester.drain_jobs ORDER BY requested_at DESC,job_id DESC LIMIT 500");
+        let mut recent_jobs = sqlx::query_as::<_, DrainMetricsJob>(&recent_query)
+            .fetch_all(&self.pool)
+            .await?;
+        let active_query = format!(
+            "SELECT {METRIC_COLUMNS} FROM ingester.drain_jobs WHERE status IN ('queued','running')"
+        );
+        for active in sqlx::query_as::<_, DrainMetricsJob>(&active_query)
+            .fetch_all(&self.pool)
+            .await?
+        {
+            if !recent_jobs.iter().any(|job| job.job_id == active.job_id) {
+                recent_jobs.push(active);
+            }
+        }
+        let active_objects = sqlx::query_as::<_, ActiveDrainObjectStats>(
+            "SELECT object.job_id, \
+             count(*) FILTER (WHERE object.status IN ('published','removed'))::bigint AS objects_published, \
+             count(*) FILTER (WHERE object.status='removed')::bigint AS objects_removed, \
+             coalesce(sum(object.row_count) FILTER (WHERE object.status IN ('published','removed')),0)::bigint AS rows_published, \
+             coalesce(sum(object.row_count) FILTER (WHERE object.status='removed'),0)::bigint AS rows_removed, \
+             coalesce(sum(object.byte_size) FILTER (WHERE object.status IN ('published','removed')),0)::bigint AS bytes_published \
+             FROM ingester.drain_jobs job JOIN ingester.drain_objects object ON object.job_id=job.job_id \
+             WHERE job.status='running' GROUP BY object.job_id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(DrainMetricsSnapshot {
+            recent_jobs,
+            active_objects,
+        })
     }
     pub async fn events(&self, id: Uuid, limit: i64) -> Result<Vec<DrainJobEvent>> {
         Ok(sqlx::query_as(

@@ -20,7 +20,7 @@ use super::{
 
 pub const KEY: &str = "polymarket_btc_five_minute_orderbooks";
 pub const RELATION: &str = "polymarket.btc_five_minute_orderbook_snapshots";
-const RETENTION_DAYS: i64 = 1;
+const RETENTION_DAYS: i64 = 0;
 const BATCH_ROWS: usize = 2_000;
 const SPEC: RetainedDrainSpec = RetainedDrainSpec {
     key: KEY,
