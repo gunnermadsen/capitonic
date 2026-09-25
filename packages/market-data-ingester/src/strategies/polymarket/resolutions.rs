@@ -427,7 +427,8 @@ struct StoredResolution {
     winning_outcome: String,
     source_timestamp: Option<DateTime<Utc>>,
     provider_available_at: Option<DateTime<Utc>>,
-    source_payload: Value,
+    source_payload: Option<Value>,
+    payload_drained: bool,
     revision_sha256: String,
     payload_sha256: String,
 }
@@ -446,7 +447,10 @@ impl StoredResolution {
             && self.winning_outcome == fact.winning_outcome.as_str()
             && self.source_timestamp == fact.source_timestamp
             && self.provider_available_at == fact.provider_available_at
-            && self.source_payload == fact.source_payload
+            && match &self.source_payload {
+                Some(payload) => payload == &fact.source_payload,
+                None => self.payload_drained,
+            }
             && self.revision_sha256 == fact.revision_sha256
             && self.payload_sha256 == fact.payload_sha256
     }
@@ -1653,19 +1657,38 @@ impl PolymarketBtcFiveMinuteResolutionsStrategy {
     ) -> Result<Vec<StoredResolution>, StrategyError> {
         sqlx::query_as::<_, StoredResolution>(
             r#"
-            SELECT source, market_id, condition_id, event_slug,
-                   window_start, window_end, up_token_id, down_token_id,
-                   winning_token_id, winning_outcome,
-                   source_timestamp, provider_available_at, source_payload,
-                   revision_sha256::text AS revision_sha256,
-                   payload_sha256::text AS payload_sha256
-            FROM market_data.polymarket_btc_five_minute_resolutions
-            WHERE market_id = ANY($1::text[])
-               OR condition_id = ANY($2::text[])
-               OR event_slug = ANY($3::text[])
-               OR up_token_id = ANY($4::text[])
-               OR down_token_id = ANY($4::text[])
-            ORDER BY market_id, source, payload_sha256
+            SELECT resolution.source, resolution.market_id, resolution.condition_id,
+                   resolution.event_slug, resolution.window_start, resolution.window_end,
+                   resolution.up_token_id, resolution.down_token_id,
+                   resolution.winning_token_id, resolution.winning_outcome,
+                   resolution.source_timestamp, resolution.provider_available_at,
+                   resolution.source_payload,
+                   resolution.source_payload IS NULL
+                     AND market.official_outcome IS NOT NULL
+                     AND EXISTS (
+                       SELECT 1 FROM ingester.drain_objects object
+                       WHERE object.strategy_key = 'polymarket_btc_five_minute_resolution_payload'
+                         AND object.source_relation = 'market_data.polymarket_btc_five_minute_resolutions'
+                         AND object.status = 'removed'
+                         AND object.removed_at IS NOT NULL
+                         AND object.source_rows_sha256 IS NOT NULL
+                         AND object.sha256 IS NOT NULL
+                         AND object.relative_path IS NOT NULL
+                         AND object.source_start <= resolution.window_start
+                         AND object.source_end > resolution.window_start
+                         AND object.source_end = object.source_start + interval '1 day'
+                     ) AS payload_drained,
+                   resolution.revision_sha256::text AS revision_sha256,
+                   resolution.payload_sha256::text AS payload_sha256
+            FROM market_data.polymarket_btc_five_minute_resolutions resolution
+            LEFT JOIN polymarket.btc_interval_markets market
+              ON market.market_id = resolution.market_id
+            WHERE resolution.market_id = ANY($1::text[])
+               OR resolution.condition_id = ANY($2::text[])
+               OR resolution.event_slug = ANY($3::text[])
+               OR resolution.up_token_id = ANY($4::text[])
+               OR resolution.down_token_id = ANY($4::text[])
+            ORDER BY resolution.market_id, resolution.source, resolution.payload_sha256
             "#,
         )
         .bind(market_ids)
@@ -4459,6 +4482,46 @@ mod tests {
         assert_eq!(first.source_payload, second.source_payload);
         assert_eq!(first.payload_sha256, second.payload_sha256);
         assert_eq!(first.revision_sha256, second.revision_sha256);
+    }
+
+    #[test]
+    fn replay_accepts_cleared_payload_only_with_verified_removal() {
+        let fact = parse_clob_rest_resolution(&clob_fixture(), &identity(), received_at())
+            .unwrap()
+            .unwrap();
+        let mut stored = StoredResolution {
+            source: fact.source.as_str().to_owned(),
+            market_id: fact.identity.market_id.clone(),
+            condition_id: fact.identity.condition_id.clone(),
+            event_slug: fact.identity.event_slug.clone(),
+            window_start: fact.identity.window_start,
+            window_end: fact.identity.window_end,
+            up_token_id: fact.identity.up_token_id.clone(),
+            down_token_id: fact.identity.down_token_id.clone(),
+            winning_token_id: fact.winning_token_id.clone(),
+            winning_outcome: fact.winning_outcome.as_str().to_owned(),
+            source_timestamp: fact.source_timestamp,
+            provider_available_at: fact.provider_available_at,
+            source_payload: Some(fact.source_payload.clone()),
+            payload_drained: false,
+            revision_sha256: fact.revision_sha256.clone(),
+            payload_sha256: fact.payload_sha256.clone(),
+        };
+        assert!(stored.factual_eq(&fact));
+
+        stored.source_payload = Some(json!({"different": true}));
+        assert!(!stored.factual_eq(&fact));
+
+        stored.source_payload = None;
+        assert!(!stored.factual_eq(&fact));
+        stored.payload_drained = true;
+        assert!(stored.factual_eq(&fact));
+
+        stored.payload_sha256 = "0".repeat(64);
+        assert!(!stored.factual_eq(&fact));
+        stored.payload_sha256 = fact.payload_sha256.clone();
+        stored.winning_token_id = fact.identity.down_token_id.clone();
+        assert!(!stored.factual_eq(&fact));
     }
 
     #[test]
