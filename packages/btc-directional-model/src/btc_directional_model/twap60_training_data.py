@@ -25,6 +25,7 @@ import pyarrow as pa
 from .chainlink_oi_features import (
     _attach_candle_features,
 )
+from .capacity_training import _archived_capacity_rows
 from .continuous_edge_training import (
     BOOK_RAW_FEATURES,
     CAPACITY_SCHEMA,
@@ -48,7 +49,6 @@ from .drained_sources import (
     completed_backfill_providers,
     completed_capture_ids,
     removed_source_rows,
-    require_no_removed_chunks,
 )
 
 REFPRICE_RUNTIME_FEATURES = (
@@ -162,17 +162,6 @@ def extract_tournament_sources(
     if force:
         checkpoint_path.unlink(missing_ok=True)
 
-    with database_connection() as connection:
-        configure_read_only_connection(connection)
-        require_no_removed_chunks(
-            connection,
-            strategy_keys=(
-                "polymarket_btc_capacity_execution_snapshots",
-            ),
-            range_start=range_start - timedelta(minutes=121),
-            range_end=range_end,
-        )
-
     sql = {
         "labels": paths.label_sql.read_text(),
         "refprice": paths.refprice_sql.read_text(),
@@ -253,6 +242,9 @@ def extract_tournament_sources(
         )
         frames["core_current"] = _with_archived_core(
             frames["core_current"], frames["labels"], day, end, current_start
+        )
+        frames["execution"] = _with_archived_execution(
+            frames["execution"], day, end
         )
         frames["oracle"] = _with_archived_oracle(
             frames["oracle"], day, end
@@ -593,6 +585,22 @@ def _with_archived_core(
     )
     return pl.concat((live, archived), how="vertical_relaxed").sort(
         "window_start", "observed_at"
+    )
+
+
+def _with_archived_execution(
+    live: pl.DataFrame, start: datetime, end: datetime
+) -> pl.DataFrame:
+    connection = database_connection()
+    configure_read_only_connection(connection)
+    try:
+        archived = pl.from_arrow(_archived_capacity_rows(connection, start, end))
+    finally:
+        connection.close()
+    if archived.is_empty():
+        return live
+    return pl.concat((live, archived.select(live.columns)), how="vertical_relaxed").sort(
+        "market_id", "observed_at"
     )
 
 
