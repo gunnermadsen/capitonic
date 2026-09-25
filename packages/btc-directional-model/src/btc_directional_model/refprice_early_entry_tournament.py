@@ -28,6 +28,7 @@ from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostin
 
 from .core_execution import taker_fee_per_share
 from .core_extract import configure_read_only_connection, database_connection
+from .drained_sources import require_no_removed_chunks
 from .early_entry_settlement_consensus_tournament import economic_metrics
 from .refprice_context_data import (
     ENTRY_SECONDS,
@@ -987,6 +988,12 @@ def _load_execution(config: Config) -> tuple[dict[str, Any], pl.DataFrame]:
         connection = database_connection()
         configure_read_only_connection(connection)
         try:
+            require_no_removed_chunks(
+                connection,
+                strategy_keys=("polymarket_btc_capacity_execution_snapshots",),
+                range_start=config.official_start,
+                range_end=config.economic_end,
+            )
             day = config.official_start
             while day < config.economic_end:
                 end = min(day + timedelta(days=1), config.economic_end)

@@ -34,6 +34,7 @@ from .core_extract import (
     database_connection,
     file_sha256,
 )
+from .drained_sources import require_no_removed_chunks
 
 SCHEMA_VERSION = "btc-continuous-edge-payoff-training-v2"
 MODEL_SCHEMA_VERSION = "btc-continuous-edge-payoff-development-artifact-v2"
@@ -855,6 +856,12 @@ def extract_capacity_evidence(config: TrainingConfig) -> dict[str, Any]:
     configure_read_only_connection(connection)
     partitions: list[dict[str, Any]] = []
     try:
+        require_no_removed_chunks(
+            connection,
+            strategy_keys=("polymarket_btc_capacity_execution_snapshots",),
+            range_start=min(start for _, start, _ in intervals),
+            range_end=max(end for _, _, end in intervals),
+        )
         for name, start, end in intervals:
             _require_complete_hours(connection, start, end)
             path = destination / f"{name}.parquet"

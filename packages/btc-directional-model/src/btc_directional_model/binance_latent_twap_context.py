@@ -28,6 +28,7 @@ from .core_extract import (
     file_sha256,
     write_json_exclusive,
 )
+from .drained_sources import require_no_removed_chunks
 from .latent_twap_state_space import ProbabilityCalibrator
 from .spot_l2_chainlink_extract import (
     L2_SOURCE_SCHEMA,
@@ -148,6 +149,12 @@ def load_or_extract_context_sources(config: Any) -> tuple[ContextSourceCache, di
     try:
         oi_start = config.historical_start - timedelta(
             minutes=int(config.raw["binance"]["open_interest_history_minutes"])
+        )
+        require_no_removed_chunks(
+            connection,
+            strategy_keys=("binance_futures_btcusdt_open_interest",),
+            range_start=oi_start,
+            range_end=config.freeze_at,
         )
         oi_record = _load_or_extract_partition(
             connection,
