@@ -51,6 +51,7 @@ from .core_extract import (
     partition_summary,
     write_json_exclusive,
 )
+from .drained_sources import require_no_removed_chunks
 
 SOURCE_CACHE_SCHEMA_VERSION = "btc-spot-l2-chainlink-source-cache-v1"
 PARTITION_RECORD_SCHEMA_VERSION = "btc-source-partition-record-v1"
@@ -303,6 +304,15 @@ def load_or_extract_source_cache(
     try:
         connection = database_connection()
         configure_read_only_connection(connection)
+        require_no_removed_chunks(
+            connection,
+            strategy_keys=(
+                "binance_spot_btcusdt_one_second_ohlcv",
+                "chainlink_btcusd_one_minute_candles",
+            ),
+            range_start=SOURCE_RANGE_START - timedelta(minutes=CHAINLINK_HISTORY_MINUTES),
+            range_end=SOURCE_RANGE_END,
+        )
         l2_relation = _record_l2_relation_identity(connection, settings)
 
         core_records = _extract_core_partitions(connection, settings)
