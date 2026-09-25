@@ -24,7 +24,7 @@ ranked AS MATERIALIZED (
         snapshot.created_at DESC
     ) AS source_rank
   FROM polymarket.btc_market_capacity_execution_snapshots snapshot
-  JOIN polymarket.backfill_artifacts artifact
+  JOIN ingester.backfill_artifacts artifact
     ON artifact.artifact_id = snapshot.artifact_id
    AND artifact.status = 'completed'
   WHERE snapshot.sampled_at >= %(batch_start)s

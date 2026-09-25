@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import subprocess
 import tomllib
@@ -47,6 +48,7 @@ from .core_features import (
     derive_core_point_in_time_features,
     derive_oracle_point_in_time_features,
 )
+from .drained_sources import removed_source_rows
 
 SCHEMA_VERSION = "btc-refprice-twap-lineage-training-v2"
 DATASET_SCHEMA_VERSION = "btc-refprice-twap-lineage-dataset-v2"
@@ -546,6 +548,64 @@ def _build_daily_frame(
         {"range_start": start, "range_end": end},
         f"ref_twap_oi_{start:%Y%m%d}",
     )
+    archived_interest = removed_source_rows(
+        connection,
+        strategy_key="binance_futures_btcusdt_open_interest",
+        relation="market_data.binance_futures_btcusdt_open_interest",
+        time_column="source_timestamp",
+        root=Path(
+            os.environ.get(
+                "INGESTER_BINANCE_FUTURES_OPEN_INTEREST_LAKE_ROOT",
+                str(
+                    Path(
+                        os.environ.get(
+                            "BINANCE_L2_DATA_ROOT", "/Volumes/docker-data/polymarket-bot/binance-l2"
+                        )
+                    )
+                    / "drains/futures-open-interest"
+                ),
+            )
+        ),
+        range_start=start - timedelta(minutes=65),
+        range_end=end,
+        columns=(
+            "source",
+            "symbol",
+            "source_timestamp",
+            "period_seconds",
+            "sum_open_interest",
+            "sum_open_interest_value",
+            "provider_available_at",
+            "received_at",
+        ),
+    )
+    if archived_interest.height:
+        archived_interest = (
+            archived_interest.filter(
+                (pl.col("source") == "binance_usd_m_futures")
+                & (pl.col("symbol") == "BTCUSDT")
+                & (pl.col("period_seconds") == "300")
+            )
+            .with_columns(
+                *(
+                    pl.col(name).str.to_datetime(time_zone="UTC")
+                    for name in ("source_timestamp", "provider_available_at", "received_at")
+                ),
+                pl.col("period_seconds").cast(pl.Int32),
+                pl.col("sum_open_interest").cast(pl.Float64),
+                pl.col("sum_open_interest_value").cast(pl.Float64),
+            )
+            .filter(pl.col("source_timestamp") <= pl.col("received_at"))
+            .with_columns(pl.coalesce("received_at", "provider_available_at").alias("available_at"))
+            .filter(
+                (pl.col("source_timestamp") >= start - timedelta(minutes=65))
+                & (pl.col("source_timestamp") < end)
+            )
+            .select(interest.columns)
+        )
+        interest = pl.concat((interest, archived_interest), how="vertical_relaxed").sort(
+            "source_timestamp"
+        )
     oi_features = (
         _attach_open_interest_features(
             external_core,
