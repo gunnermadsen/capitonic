@@ -676,6 +676,88 @@ def _extract_day(
         frames["oracle"] = pl.concat(
             (frames["oracle"], archived_oracle), how="vertical_relaxed"
         ).sort("oracle_source_timestamp")
+    archived_trades = removed_source_rows(
+        connection,
+        strategy_key="binance_spot_btcusdt_aggregate_trades",
+        relation="market_data.binance_spot_btcusdt_aggregate_trades",
+        time_column="trade_timestamp",
+        root=Path(
+            os.environ.get(
+                "BINANCE_AGG_TRADE_DATA_ROOT",
+                "/Volumes/docker-data/polymarket-bot/binance-aggregate-trades",
+            )
+        ),
+        range_start=start - timedelta(seconds=65),
+        range_end=end,
+        columns=(
+            "source",
+            "symbol",
+            "aggregate_trade_id",
+            "trade_timestamp",
+            "provider_available_at",
+            "received_at",
+            "price",
+            "quantity",
+            "buyer_maker",
+            "capture_artifact_id",
+        ),
+    )
+    if archived_trades.height:
+        archived_trades = (
+            archived_trades.filter(
+                (pl.col("source") == "binance_spot")
+                & (pl.col("symbol") == "BTCUSDT")
+                & (pl.col("trade_timestamp") >= start - timedelta(seconds=65))
+                & (pl.col("trade_timestamp") < end)
+            )
+            .with_columns(
+                pl.max_horizontal("received_at", "provider_available_at").alias(
+                    "_source_available_at"
+                ),
+                pl.col("price").cast(pl.Float64).alias("_price"),
+                pl.col("quantity").cast(pl.Float64).alias("_quantity"),
+            )
+            .filter(
+                pl.col("_source_available_at").is_not_null()
+                & (pl.col("trade_timestamp") <= pl.col("_source_available_at"))
+            )
+            .with_columns(
+                (pl.col("_price") * pl.col("_quantity")).alias("_quote"),
+                pl.when(pl.col("buyer_maker"))
+                .then(-(pl.col("_price") * pl.col("_quantity")))
+                .otherwise(pl.col("_price") * pl.col("_quantity"))
+                .alias("_signed_quote"),
+            )
+            .group_by(pl.col("trade_timestamp").dt.truncate("1s").alias("second_start"))
+            .agg(
+                pl.col("_source_available_at").max().alias("_latest_available_at"),
+                pl.col("_quote").sum().alias("quote_volume"),
+                pl.col("_quantity").sum().alias("base_volume"),
+                pl.col("_signed_quote").sum().alias("signed_taker_quote_volume"),
+                pl.len().cast(pl.Int64).alias("trade_count"),
+                pl.col("aggregate_trade_id").min().alias("first_aggregate_trade_id"),
+                pl.col("aggregate_trade_id").max().alias("last_aggregate_trade_id"),
+                pl.col("capture_artifact_id")
+                .drop_nulls()
+                .n_unique()
+                .cast(pl.Int32)
+                .alias("source_artifact_count"),
+            )
+            .with_columns(
+                pl.max_horizontal(
+                    pl.col("second_start") + pl.duration(seconds=1),
+                    "_latest_available_at",
+                ).alias("available_at"),
+                (pl.col("quote_volume") / pl.col("base_volume")).alias("trade_vwap"),
+                pl.lit("market_data.binance_spot_btcusdt_aggregate_trades").alias(
+                    "source_relation"
+                ),
+            )
+            .select(frames["aggregate_trades"].columns)
+        )
+        frames["aggregate_trades"] = pl.concat(
+            (frames["aggregate_trades"], archived_trades), how="vertical_relaxed"
+        ).sort("second_start")
     archived_interest = removed_source_rows(
         connection,
         strategy_key="binance_futures_btcusdt_open_interest",
