@@ -6,7 +6,7 @@ use serde_json::json;
 use tokio::fs;
 
 use crate::domain::{
-    DrainContext, DrainDescriptor, DrainExecutionError, DrainOutcome, DrainRequest,
+    DrainContext, DrainDescriptor, DrainExecutionError, DrainMode, DrainOutcome, DrainRequest,
 };
 
 use super::common::{
@@ -155,9 +155,10 @@ pub async fn execute(
             }),
         });
     }
+    let work_chunks = chunks_to_process(copyable, request.mode, request.cutoff);
     preflight_lake_root(
         adapter.root(),
-        copyable
+        work_chunks
             .iter()
             .map(|chunk| chunk.size_bytes)
             .max()
@@ -178,7 +179,7 @@ pub async fn execute(
     let mut verified_existing_objects = 0usize;
     let mut objects_created = 0usize;
     let mut chunks_removed = 0usize;
-    for chunk in copyable {
+    for chunk in work_chunks {
         if context.shutdown.is_cancelled() {
             return Err(DrainExecutionError::new(
                 "drain_cancelled",
@@ -240,9 +241,21 @@ fn should_republish(source_count: Option<i64>, published_count: i64, file_valid:
     source_count.is_some_and(|count| count != published_count || !file_valid)
 }
 
+fn chunks_to_process(
+    chunks: Vec<Chunk>,
+    mode: DrainMode,
+    cutoff: chrono::DateTime<Utc>,
+) -> Vec<Chunk> {
+    chunks
+        .into_iter()
+        .filter(|chunk| !mode.removes_source_data() || chunk.range_end <= cutoff)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::should_republish;
+    use super::{chunks_to_process, should_republish, Chunk, DrainMode};
+    use chrono::{Duration, TimeZone, Utc};
 
     #[test]
     fn stale_or_missing_publication_must_be_exported_again() {
@@ -250,6 +263,28 @@ mod tests {
         assert!(should_republish(Some(100), 100, false));
         assert!(!should_republish(Some(100), 100, true));
         assert!(!should_republish(None, 100, true));
+    }
+
+    #[test]
+    fn drain_stops_at_cutoff_while_reconcile_keeps_closed_chunks() {
+        let cutoff = Utc.with_ymd_and_hms(2026, 9, 11, 0, 0, 0).unwrap();
+        let chunks = (0..3)
+            .map(|day| Chunk {
+                chunk_schema: "polymarket".into(),
+                chunk_name: format!("chunk_{day}"),
+                range_start: cutoff + Duration::days(day - 1),
+                range_end: cutoff + Duration::days(day),
+                size_bytes: 1,
+            })
+            .collect::<Vec<_>>();
+
+        let drain = chunks_to_process(chunks.clone(), DrainMode::Drain, cutoff);
+        assert_eq!(drain.len(), 1);
+        assert_eq!(drain[0].range_end, cutoff);
+        assert_eq!(
+            chunks_to_process(chunks, DrainMode::Reconcile, cutoff).len(),
+            3
+        );
     }
 }
 
@@ -298,23 +333,23 @@ async fn remove_verified_chunk_once(
     .bind(CHUNK_REMOVAL_STATEMENT_TIMEOUT)
     .execute(&mut *transaction)
     .await?;
-    let result =
+    let rows =
         sqlx::query_scalar::<_, i64>("SELECT ingester.remove_verified_drain_chunk($1,$2,$3)")
             .bind(publication.object_id)
             .bind(&publication.sha256)
             .bind(context.job_id)
             .fetch_one(&mut *transaction)
-            .await;
-    match result {
-        Ok(rows) => {
-            transaction.commit().await?;
-            Ok(rows)
-        }
-        Err(error) => {
-            transaction.rollback().await?;
-            Err(error)
-        }
-    }
+            .await?;
+    sqlx::query_scalar::<_, i64>(
+        "UPDATE ingester.drain_jobs SET rows_removed=rows_removed+$3,updated_at=clock_timestamp() WHERE job_id=$1 AND lease_token=$2 AND status='running' AND cancel_requested_at IS NULL RETURNING rows_removed",
+    )
+    .bind(context.job_id)
+    .bind(context.lease_token)
+    .bind(rows)
+    .fetch_one(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(rows)
 }
 
 fn is_lock_contention(error: &sqlx::Error) -> bool {

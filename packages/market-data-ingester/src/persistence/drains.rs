@@ -192,7 +192,7 @@ impl DrainRepository {
         Ok(sqlx::query("UPDATE ingester.drain_jobs SET lease_expires_at=clock_timestamp()+interval '45 seconds',updated_at=clock_timestamp() WHERE job_id=$1 AND lease_token=$2 AND status='running' AND cancel_requested_at IS NULL").bind(id).bind(lease).execute(&self.pool).await?.rows_affected()==1)
     }
     pub async fn complete(&self, id: Uuid, lease: Uuid, o: &DrainOutcome) -> Result<bool> {
-        Ok(sqlx::query("UPDATE ingester.drain_jobs SET status='completed',rows_exported=$3,rows_removed=$4,objects_published=$5,bytes_written=$6,summary=$7,completed_at=clock_timestamp(),lease_token=NULL,lease_expires_at=NULL,updated_at=clock_timestamp() WHERE job_id=$1 AND lease_token=$2 AND status='running' AND cancel_requested_at IS NULL").bind(id).bind(lease).bind(o.rows_exported).bind(o.rows_removed).bind(o.objects_published).bind(o.bytes_written).bind(&o.summary).execute(&self.pool).await?.rows_affected()==1)
+        Ok(sqlx::query("UPDATE ingester.drain_jobs SET status='completed',rows_exported=$3,rows_removed=GREATEST(rows_removed,$4),objects_published=$5,bytes_written=$6,summary=$7,completed_at=clock_timestamp(),lease_token=NULL,lease_expires_at=NULL,updated_at=clock_timestamp() WHERE job_id=$1 AND lease_token=$2 AND status='running' AND cancel_requested_at IS NULL").bind(id).bind(lease).bind(o.rows_exported).bind(o.rows_removed).bind(o.objects_published).bind(o.bytes_written).bind(&o.summary).execute(&self.pool).await?.rows_affected()==1)
     }
     pub async fn fail(
         &self,
