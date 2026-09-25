@@ -46,7 +46,12 @@ def prepare(catalog, template, model_key, process_key, name, preregistration_sha
     control['next_experiment_key'] = process_key + '-run'  # Existing run-key alias, not experiment ownership.
     metadata = result.setdefault('metadata', {})
     # Remove source-specific provenance from the previous template. The new package owns it.
-    for key in ('source_training_model_sha256', 'frozen_candidate', 'optional_canonical_candles'):
+    for key in (
+        'source_training_model_sha256',
+        'frozen_candidate',
+        'optional_canonical_candles',
+        'preregistration',
+    ):
         metadata.pop(key, None)
     metadata.update(model_key=model_key, model_artifact_sha256=model['selection']['artifact_sha256'],
                     model_feature_schema_version=model['feature_schema_version'],
