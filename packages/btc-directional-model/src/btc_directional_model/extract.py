@@ -12,6 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .config import TrainingConfig
+from .drained_sources import require_no_removed_chunks
 
 SOURCE_SCHEMA = pa.schema(
     [
@@ -112,6 +113,12 @@ def extract_source(config: TrainingConfig, *, force: bool = False) -> dict[str, 
                     connection = database_connection()
                     connection.execute("SET default_transaction_read_only = on")
                     connection.execute("SET statement_timeout = '10min'")
+                require_no_removed_chunks(
+                    connection,
+                    strategy_keys=("binance_spot_btcusdt_one_second_ohlcv",),
+                    range_start=batch_start - timedelta(seconds=1),
+                    range_end=batch_end,
+                )
                 rows = extract_partition(
                     connection,
                     query,

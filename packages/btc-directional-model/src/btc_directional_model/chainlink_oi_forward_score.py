@@ -44,6 +44,7 @@ from .core_features import (
     derive_oracle_point_in_time_features,
     prepare_causal_oracle_rounds,
 )
+from .drained_sources import require_no_removed_chunks
 from .runtime_export import score_runtime_model
 
 SCHEMA_VERSION = "btc-chainlink-oi-untouched-forward-score-v1"
@@ -88,6 +89,15 @@ def run_chainlink_oi_forward_score(
 
     with database_connection() as connection:
         configure_read_only_connection(connection)
+        require_no_removed_chunks(
+            connection,
+            strategy_keys=(
+                "binance_spot_btcusdt_one_second_ohlcv",
+                "polygon_chainlink_btcusd_oracle_rounds",
+            ),
+            range_start=range_start - timedelta(seconds=ORACLE_MAX_PUBLICATION_DELAY_SECONDS),
+            range_end=range_end,
+        )
         inventory = _query_forward_inventory(
             connection,
             config,
