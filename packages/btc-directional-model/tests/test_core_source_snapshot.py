@@ -18,6 +18,7 @@ from btc_directional_model.core_extract import (
     CORE_SOURCE_SCHEMA,
     CORE_SOURCE_SCHEMA_VERSION,
     IMMUTABLE_SOURCE_SNAPSHOT_KEY,
+    LEGACY_CORE_QUERY_SHA256,
     aggregate_partition_summaries,
     extract_core_source,
     file_sha256,
@@ -89,6 +90,9 @@ def expanded_source(tmp_path_factory: pytest.TempPathFactory) -> Path:
         "range_end": "2026-07-29T00:00:00+00:00",
         "strict_final_price_audit": False,
         "query_sha256": hashlib.sha256(query.encode()).hexdigest(),
+        "archive_market_query_sha256": file_sha256(
+            package_root / "sql" / "btc-core-market-source.sql"
+        ),
         "partitions": partitions,
         "totals": aggregate_partition_summaries(partitions),
     }
@@ -157,6 +161,27 @@ def test_snapshot_uses_exclusive_copy_when_hard_links_are_unavailable(
     snapshot_partition = destination / "2026-03-21.parquet"
     assert os.stat(source_partition).st_ino != os.stat(snapshot_partition).st_ino
     assert file_sha256(source_partition) == file_sha256(snapshot_partition)
+
+
+def test_snapshot_preserves_legacy_source_query_identity(
+    tmp_path: Path, expanded_source: Path
+) -> None:
+    legacy_source = tmp_path / "legacy-source"
+    legacy_source.mkdir()
+    for source_path in expanded_source.glob("*.parquet"):
+        os.link(source_path, legacy_source / source_path.name)
+    manifest = json.loads((expanded_source / "manifest-pre_holdout.json").read_text())
+    manifest["query_sha256"] = LEGACY_CORE_QUERY_SHA256
+    manifest.pop("archive_market_query_sha256")
+    (legacy_source / "manifest-pre_holdout.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    )
+
+    config = snapshot_config(tmp_path / "legacy-snapshot")
+    result = snapshot_residual_admission_source(config, legacy_source)
+
+    assert result["query_sha256"] == LEGACY_CORE_QUERY_SHA256
+    assert load_core_manifest(config, "pre_holdout")["query_sha256"] == LEGACY_CORE_QUERY_SHA256
 
 
 def test_snapshot_fails_before_destination_creation_on_checksum_mismatch(

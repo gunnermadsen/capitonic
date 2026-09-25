@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import psycopg
+import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -20,12 +21,13 @@ from .core_config import (
     CoreTrainingConfig,
     evaluation_holdout_range,
 )
-from .drained_sources import require_no_removed_chunks
+from .drained_sources import completed_capture_ids, removed_source_rows
 
 CoreScope = Literal["pre_holdout", "holdout"]
 CORE_SOURCE_SCHEMA_VERSION = "btc-core-source-v1"
 CORE_ORACLE_SOURCE_SCHEMA_VERSION = "btc-core-oracle-source-v1"
 CORE_ORACLE_ROUND_SCHEMA_VERSION = "polygon-chainlink-btcusd-rounds-v1"
+LEGACY_CORE_QUERY_SHA256 = "9b2c0842f37ab12c72c2e5ced1b0630b356cfe4a1783a77996447a8b165c254f"
 POLYGON_CHAINLINK_BTCUSD_PROXY = "0xc907e116054ad103354f2d350fd2514433d57f6f"
 ORACLE_MAX_PUBLICATION_DELAY_SECONDS = 300
 IMMUTABLE_SOURCE_SNAPSHOT_KEY = "immutable_source_snapshot"
@@ -192,7 +194,6 @@ def snapshot_residual_admission_source(
     if file_sha256(source_manifest_path) != source_manifest_sha256:
         raise RuntimeError("source snapshot manifest changed during transfer")
 
-    query = core_source_query_path(config).read_text()
     source_schema = core_source_schema(config.data.source_contract)
     manifest: dict[str, Any] = {
         "source_contract": config.data.source_contract,
@@ -204,7 +205,11 @@ def snapshot_residual_admission_source(
         "range_start": range_start.isoformat(),
         "range_end": range_end.isoformat(),
         "strict_final_price_audit": config.data.strict_final_price_audit,
-        "query_sha256": hashlib.sha256(query.encode()).hexdigest(),
+        "query_sha256": source_manifest["query_sha256"],
+        **(
+            {"archive_market_query_sha256": source_manifest["archive_market_query_sha256"]}
+            if "archive_market_query_sha256" in source_manifest else {}
+        ),
         "partitions": selected_records,
         "totals": aggregate_partition_summaries(selected_records),
         IMMUTABLE_SOURCE_SNAPSHOT_KEY: {
@@ -236,6 +241,7 @@ def extract_core_source(
     output_dir.mkdir(parents=True, exist_ok=True)
     query_path = core_source_query_path(config)
     query = query_path.read_text()
+    market_query = (config.package_root / "sql" / "btc-core-market-source.sql").read_text()
     source_schema = core_source_schema(config.data.source_contract)
     source_schema_version = core_source_schema_version(config.data.source_contract)
     oracle_query = (
@@ -253,6 +259,7 @@ def extract_core_source(
         "range_end": range_end.isoformat(),
         "strict_final_price_audit": config.data.strict_final_price_audit,
         "query_sha256": hashlib.sha256(query.encode()).hexdigest(),
+        "archive_market_query_sha256": hashlib.sha256(market_query.encode()).hexdigest(),
     }
     if config.data.source_contract == CORE_ORACLE_SOURCE_CONTRACT:
         contract.update(
@@ -317,11 +324,9 @@ def extract_core_source(
                 if connection is None:
                     connection = database_connection()
                     configure_read_only_connection(connection)
-                require_no_removed_chunks(
-                    connection,
-                    strategy_keys=("binance_spot_btcusdt_one_second_ohlcv",),
-                    range_start=batch_start - timedelta(seconds=1),
-                    range_end=batch_end,
+                archived = _archived_core_rows(
+                    connection, market_query, batch_start, batch_end,
+                    config.data.strict_final_price_audit,
                 )
                 rows = extract_partition(
                     connection,
@@ -331,6 +336,7 @@ def extract_core_source(
                     batch_end=batch_end,
                     strict_final_price_audit=config.data.strict_final_price_audit,
                     source_schema=source_schema,
+                    archived=archived,
                 )
                 summary = partition_summary(destination)
                 if rows != summary["rows"]:
@@ -381,12 +387,6 @@ def extract_core_source(
                     if connection is None:
                         connection = database_connection()
                         configure_read_only_connection(connection)
-                    require_no_removed_chunks(
-                        connection,
-                        strategy_keys=("polygon_chainlink_btcusd_oracle_rounds",),
-                        range_start=batch_start,
-                        range_end=batch_end,
-                    )
                     oracle_rows = extract_oracle_partition(
                         connection,
                         oracle_query,
@@ -490,6 +490,88 @@ def database_connection() -> psycopg.Connection[Any]:
     )
 
 
+def _archived_core_rows(
+    connection: psycopg.Connection[Any],
+    market_query: str,
+    start: datetime,
+    end: datetime,
+    strict_final_price_audit: bool,
+) -> pa.Table:
+    archived = removed_source_rows(
+        connection,
+        strategy_key="binance_spot_btcusdt_one_second_ohlcv",
+        relation="market_data.binance_spot_btcusdt_one_second_ohlcv",
+        time_column="open_timestamp",
+        root=Path(os.environ.get(
+            "BINANCE_ONE_SECOND_OHLCV_DATA_ROOT",
+            "/Volumes/docker-data/polymarket-bot/binance-one-second-ohlcv",
+        )),
+        range_start=start - timedelta(seconds=1),
+        range_end=end,
+        columns=(
+            "symbol", "open_timestamp", "close_timestamp", "open_price",
+            "high_price", "low_price", "close_price", "base_volume",
+            "quote_volume", "trade_count", "taker_buy_base_volume",
+            "taker_buy_quote_volume", "capture_artifact_id",
+        ),
+    )
+    if archived.is_empty():
+        return pa.Table.from_pylist([], schema=CORE_SOURCE_SCHEMA)
+    with connection.cursor() as cursor:
+        cursor.execute(market_query, {
+            "batch_start": start,
+            "batch_end": end,
+            "strict_final_price_audit": strict_final_price_audit,
+        })
+        markets = pl.DataFrame(
+            cursor.fetchall(),
+            schema=(
+                "market_id", "window_start", "window_end", "official_outcome",
+                "label_up", "opening_boundary", "final_price",
+            ),
+            orient="row",
+        )
+    if markets.is_empty():
+        return pa.Table.from_pylist([], schema=CORE_SOURCE_SCHEMA)
+    if markets["window_start"].n_unique() != markets.height:
+        raise RuntimeError("archived core source has ambiguous market windows")
+    completed = completed_capture_ids(
+        connection, archived["capture_artifact_id"].drop_nulls().unique().to_list()
+    )
+    archived = (
+        archived.filter(
+            (pl.col("symbol") == "BTCUSDT")
+            & (pl.col("open_timestamp") >= start - timedelta(seconds=1))
+            & (pl.col("open_timestamp") < end - timedelta(seconds=1))
+            & (pl.col("close_timestamp") < pl.col("open_timestamp") + pl.duration(seconds=1))
+            & pl.col("capture_artifact_id").is_in(completed)
+        )
+        .with_columns((pl.col("open_timestamp") + pl.duration(seconds=1)).alias("observed_at"))
+        .sort("observed_at")
+        .join_asof(
+            markets.sort("window_start"),
+            left_on="observed_at", right_on="window_start", strategy="backward",
+        )
+        .filter(
+            pl.col("market_id").is_not_null()
+            & (pl.col("open_timestamp") >= pl.col("window_start") - pl.duration(seconds=1))
+            & (pl.col("observed_at") < pl.col("window_end"))
+        )
+        .with_columns(
+            (pl.col("observed_at") - pl.col("window_start")).dt.total_seconds().cast(pl.Int32).alias("seconds_elapsed"),
+            *(pl.col(source).cast(pl.Float64).alias(target) for source, target in (
+                ("open_price", "btc_open"), ("high_price", "btc_high"),
+                ("low_price", "btc_low"), ("close_price", "btc_close"),
+                ("base_volume", "btc_base_volume"), ("quote_volume", "btc_quote_volume"),
+                ("taker_buy_base_volume", "btc_taker_buy_base_volume"),
+                ("taker_buy_quote_volume", "btc_taker_buy_quote_volume"),
+            )),
+        )
+        .select(CORE_SOURCE_SCHEMA.names)
+    )
+    return pa.Table.from_pylist(archived.to_dicts(), schema=CORE_SOURCE_SCHEMA)
+
+
 def extract_partition(
     connection: psycopg.Connection[Any],
     query: str,
@@ -499,6 +581,7 @@ def extract_partition(
     batch_end: datetime,
     strict_final_price_audit: bool,
     source_schema: pa.Schema = CORE_SOURCE_SCHEMA,
+    archived: pa.Table | None = None,
 ) -> int:
     temporary = destination.with_suffix(".parquet.partial")
     writer: pq.ParquetWriter | None = None
@@ -529,6 +612,15 @@ def extract_partition(
                     )
                 writer.write_table(table)
                 row_count += len(rows)
+        if archived is not None and archived.num_rows:
+            if not archived.schema.equals(source_schema):
+                raise RuntimeError("archived core rows differ from the source schema")
+            if writer is None:
+                writer = pq.ParquetWriter(
+                    temporary, source_schema, compression="zstd", write_statistics=True
+                )
+            writer.write_table(archived)
+            row_count += archived.num_rows
     finally:
         if writer is not None:
             writer.close()
@@ -540,6 +632,86 @@ def extract_partition(
         )
     temporary.replace(destination)
     return row_count
+
+
+def merge_archived_oracle_rounds(
+    connection: psycopg.Connection[Any],
+    live: pl.DataFrame,
+    start: datetime,
+    end: datetime,
+) -> pl.DataFrame:
+    archived = removed_source_rows(
+        connection,
+        strategy_key="polygon_chainlink_btcusd_oracle_rounds",
+        relation="market_data.polygon_chainlink_btcusd_oracle_rounds",
+        time_column="source_timestamp",
+        root=Path(os.environ.get(
+            "POLYGON_CHAINLINK_ORACLE_ROUNDS_DATA_ROOT",
+            "/Volumes/docker-data/polymarket-bot/polygon-chainlink-oracle-rounds",
+        )),
+        range_start=start - timedelta(seconds=ORACLE_MAX_PUBLICATION_DELAY_SECONDS),
+        range_end=end,
+        columns=(
+            "feed_proxy_address", "price", "source_timestamp", "block_timestamp",
+            "phase_id", "aggregator_round_id", "block_number", "log_index",
+            "capture_artifact_id",
+        ),
+    )
+    if archived.is_empty():
+        return live
+    completed = completed_capture_ids(
+        connection, archived["capture_artifact_id"].drop_nulls().unique().to_list()
+    )
+    archived = (
+        archived.with_columns(
+            *(pl.col(name).cast(pl.Utf8).str.to_datetime(time_zone="UTC") for name in (
+                "source_timestamp", "block_timestamp",
+            )),
+            *(pl.col(name).cast(pl.Int64) for name in (
+                "phase_id", "aggregator_round_id", "block_number", "log_index",
+            )),
+        )
+        .filter(
+            (pl.col("feed_proxy_address") == POLYGON_CHAINLINK_BTCUSD_PROXY)
+            & (pl.col("source_timestamp") >= start - timedelta(seconds=ORACLE_MAX_PUBLICATION_DELAY_SECONDS))
+            & (pl.col("source_timestamp") < end)
+            & (pl.col("source_timestamp") <= pl.col("block_timestamp"))
+            & pl.col("capture_artifact_id").is_in(completed)
+        )
+        .with_columns(
+            pl.col("price").cast(pl.Float64).alias("oracle_price"),
+            pl.col("source_timestamp").alias("oracle_source_timestamp"),
+            pl.col("block_timestamp").alias("oracle_block_timestamp"),
+            pl.col("phase_id").alias("oracle_phase_id"),
+            pl.col("aggregator_round_id").alias("oracle_round_id"),
+            pl.col("block_number").alias("oracle_block_number"),
+            pl.col("log_index").alias("oracle_log_index"),
+        )
+        .select(CORE_ORACLE_ROUND_SCHEMA.names)
+    )
+    prior = pl.concat(
+        (
+            live.filter(pl.col("oracle_block_timestamp") <= start),
+            archived.filter(pl.col("oracle_block_timestamp") <= start),
+        ),
+        how="vertical_relaxed",
+    ).sort(
+        ["oracle_block_timestamp", "oracle_source_timestamp", "oracle_block_number", "oracle_log_index"],
+        descending=True,
+    ).head(1)
+    return pl.concat(
+        (
+            prior,
+            live.filter(pl.col("oracle_block_timestamp") >= start),
+            archived.filter(
+                (pl.col("oracle_block_timestamp") >= start)
+                & (pl.col("oracle_block_timestamp") < end)
+            ),
+        ),
+        how="vertical_relaxed",
+    ).sort(
+        ["oracle_block_timestamp", "oracle_source_timestamp", "oracle_block_number", "oracle_log_index"]
+    )
 
 
 def extract_oracle_partition(
@@ -570,14 +742,16 @@ def extract_oracle_partition(
         dict(zip(CORE_ORACLE_ROUND_SCHEMA.names, row, strict=True))
         for row in rows
     ]
+    live = pl.from_arrow(pa.Table.from_pylist(records, schema=CORE_ORACLE_ROUND_SCHEMA))
+    combined = merge_archived_oracle_rounds(connection, live, batch_start, batch_end)
     pq.write_table(
-        pa.Table.from_pylist(records, schema=CORE_ORACLE_ROUND_SCHEMA),
+        pa.Table.from_pylist(combined.to_dicts(), schema=CORE_ORACLE_ROUND_SCHEMA),
         temporary,
         compression="zstd",
         write_statistics=True,
     )
     temporary.replace(destination)
-    return len(rows)
+    return combined.height
 
 
 def partition_summary(path: Path) -> dict[str, Any]:
@@ -750,8 +924,15 @@ def _validate_snapshot_source_contract(
         "source_schema_sha256": _core_source_schema_sha256(source_schema),
         "scope": "pre_holdout",
         "strict_final_price_audit": config.data.strict_final_price_audit,
-        "query_sha256": hashlib.sha256(query.encode()).hexdigest(),
+        "query_sha256": (
+            LEGACY_CORE_QUERY_SHA256
+            if manifest.get("query_sha256") == LEGACY_CORE_QUERY_SHA256
+            else hashlib.sha256(query.encode()).hexdigest()
+        ),
     }
+    if manifest.get("query_sha256") != LEGACY_CORE_QUERY_SHA256:
+        market_query = (config.package_root / "sql" / "btc-core-market-source.sql").read_text()
+        expected["archive_market_query_sha256"] = hashlib.sha256(market_query.encode()).hexdigest()
     mismatches = [
         key for key, expected_value in expected.items()
         if manifest.get(key) != expected_value
@@ -878,8 +1059,15 @@ def load_core_manifest(
         "range_start": expected_start.isoformat(),
         "range_end": expected_end.isoformat(),
         "strict_final_price_audit": config.data.strict_final_price_audit,
-        "query_sha256": hashlib.sha256(query.encode()).hexdigest(),
+        "query_sha256": (
+            LEGACY_CORE_QUERY_SHA256
+            if manifest.get("query_sha256") == LEGACY_CORE_QUERY_SHA256
+            else hashlib.sha256(query.encode()).hexdigest()
+        ),
     }
+    if manifest.get("query_sha256") != LEGACY_CORE_QUERY_SHA256:
+        market_query = (config.package_root / "sql" / "btc-core-market-source.sql").read_text()
+        expected["archive_market_query_sha256"] = hashlib.sha256(market_query.encode()).hexdigest()
     if config.data.source_contract == CORE_ORACLE_SOURCE_CONTRACT:
         oracle_query = oracle_source_query_path(config).read_text()
         expected.update(

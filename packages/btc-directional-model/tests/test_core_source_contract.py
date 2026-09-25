@@ -25,8 +25,9 @@ def test_core_sql_uses_only_canonical_backfill_inputs() -> None:
 
     assert "btc_interval_markets" in sql
     assert "btc_market_reference_facts" in sql
-    assert "binance_one_second_klines" in sql
-    assert "backfill_artifacts" in sql
+    assert "market_data.binance_spot_btcusdt_one_second_ohlcv" in sql
+    assert "ingester.backfill_artifacts" in sql
+    assert "ingester.capture_artifacts" in sql
     assert "btc_market_execution_snapshots" not in sql
     assert "btc_orderbook_archive_events" not in sql
     assert "binance_aggregate_trades" not in sql
@@ -56,7 +57,7 @@ def test_oracle_sql_uses_only_canonical_completed_oracle_rounds() -> None:
     sql = oracle_source_sql().lower()
 
     assert "market_data.polygon_chainlink_btcusd_oracle_rounds" in sql
-    assert "polymarket.backfill_artifacts" in sql
+    assert "ingester.capture_artifacts" in sql
     assert "artifact.status = 'completed'" in sql
     assert "round.feed_proxy_address = %(oracle_feed_proxy_address)s" in sql
     assert "btc_market_execution_snapshots" not in sql

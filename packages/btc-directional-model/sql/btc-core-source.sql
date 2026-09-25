@@ -6,7 +6,7 @@ WITH market_facts AS MATERIALIZED (
     count(*) FILTER (WHERE fact.fact_type = 'opening_boundary') AS opening_fact_count,
     count(*) FILTER (WHERE fact.fact_type = 'final_price') AS final_fact_count
   FROM polymarket.btc_market_reference_facts fact
-  JOIN polymarket.backfill_artifacts artifact
+  JOIN ingester.backfill_artifacts artifact
     ON artifact.artifact_id = fact.artifact_id
    AND artifact.status = 'completed'
   WHERE fact.source_effective_at >= %(batch_start)s
@@ -62,7 +62,7 @@ JOIN market_data.binance_spot_btcusdt_one_second_ohlcv kline
  AND kline.open_timestamp >= market.window_start - interval '1 second'
  AND kline.open_timestamp < market.window_end - interval '1 second'
  AND kline.close_timestamp < kline.open_timestamp + interval '1 second'
-JOIN polymarket.backfill_artifacts kline_artifact
+JOIN ingester.capture_artifacts kline_artifact
   ON kline_artifact.artifact_id = kline.capture_artifact_id
  AND kline_artifact.status = 'completed'
 ORDER BY market.window_start, kline.open_timestamp;
