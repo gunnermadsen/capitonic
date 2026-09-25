@@ -110,27 +110,8 @@ pub struct Publication {
 
 #[derive(Debug, Clone, FromRow)]
 pub struct ArchivedPublication {
-    pub object_id: Uuid,
-    pub row_count: i64,
-    pub relative_path: String,
-    pub sha256: String,
-    pub byte_size: i64,
-    pub status: String,
     pub source_start: DateTime<Utc>,
     pub source_end: DateTime<Utc>,
-}
-
-impl ArchivedPublication {
-    pub fn publication(&self) -> Publication {
-        Publication {
-            object_id: self.object_id,
-            row_count: self.row_count,
-            relative_path: self.relative_path.clone(),
-            sha256: self.sha256.clone(),
-            byte_size: self.byte_size,
-            status: self.status.clone(),
-        }
-    }
 }
 
 pub async fn archived_publications(
@@ -138,8 +119,7 @@ pub async fn archived_publications(
     strategy_key: &str,
 ) -> Result<Vec<ArchivedPublication>, DrainExecutionError> {
     sqlx::query_as(
-        "SELECT object_id,row_count,relative_path,sha256::text,byte_size,status,\
-         source_start,source_end FROM ingester.drain_objects WHERE strategy_key=$1 \
+        "SELECT source_start,source_end FROM ingester.drain_objects WHERE strategy_key=$1 \
          AND status IN ('published','removed') ORDER BY source_start,source_end,object_id",
     )
     .bind(strategy_key)
