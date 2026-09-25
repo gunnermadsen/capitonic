@@ -571,9 +571,49 @@ def _build_daily_frame(
     twap_inputs = _query_frame(
         connection,
         (sql_root / SQL_FILES[4]).read_text(),
-        {"range_start": start, "range_end": end},
+        {"range_start": start, "range_end": end + timedelta(minutes=5)},
         f"ref_twap_inputs_{start:%Y%m%d}",
     )
+    archived_twap = removed_source_rows(
+        connection,
+        strategy_key="pmdata_chainlink_btcusd_twap",
+        relation="market_data.pmdata_chainlink_btcusd_twap",
+        time_column="source_timestamp",
+        root=Path(
+            os.environ.get(
+                "PMDATA_CHAINLINK_TWAP_DATA_ROOT",
+                "/Volumes/docker-data/polymarket-bot/pmdata-chainlink-twap",
+            )
+        ),
+        range_start=start - timedelta(seconds=65),
+        range_end=end + timedelta(minutes=5),
+        columns=(
+            "source_timestamp",
+            "provider_received_at",
+            "valid_from_timestamp",
+            "expires_at",
+            "symbol",
+            "window_seconds",
+            "twap_price",
+        ),
+    )
+    if archived_twap.height:
+        archived_twap = (
+            archived_twap.filter(
+                (pl.col("symbol") == "BTCUSD")
+                & pl.col("window_seconds").is_in([30, 60])
+                & (pl.col("source_timestamp") >= start - timedelta(seconds=65))
+                & (pl.col("source_timestamp") < end + timedelta(minutes=5))
+                & (pl.col("valid_from_timestamp") <= pl.col("source_timestamp"))
+                & (pl.col("provider_received_at") >= pl.col("source_timestamp"))
+                & (pl.col("twap_price") > 0)
+            )
+            .with_columns(pl.col("twap_price").cast(pl.Float64))
+            .select(twap_inputs.columns)
+        )
+        twap_inputs = pl.concat((twap_inputs, archived_twap), how="vertical_relaxed")
+    twap_reports = twap_inputs
+    twap_inputs = twap_reports.filter(pl.col("source_timestamp") < end)
     twap_features = (
         _attach_twap_features(
             external_core,
@@ -666,6 +706,43 @@ def _build_daily_frame(
         {"range_start": start, "range_end": end},
         f"ref_twap_labels_{start:%Y%m%d}",
     )
+    sixty_second = twap_reports.filter(pl.col("window_seconds") == 60)
+    if sixty_second.height:
+        market_keys = frame.select("market_id", "window_start", "window_end").unique()
+        opening = sixty_second.select(
+            pl.col("source_timestamp").alias("window_start"),
+            pl.col("source_timestamp").alias("twap_start_source_timestamp"),
+            pl.col("provider_received_at").alias("twap_start_received_at"),
+            pl.col("valid_from_timestamp").alias("twap_start_valid_from"),
+            pl.col("expires_at").alias("twap_start_expires_at"),
+            pl.col("twap_price").alias("twap_start_price"),
+        )
+        closing = sixty_second.select(
+            pl.col("source_timestamp").alias("window_end"),
+            pl.col("source_timestamp").alias("twap_end_source_timestamp"),
+            pl.col("provider_received_at").alias("twap_end_received_at"),
+            pl.col("valid_from_timestamp").alias("twap_end_valid_from"),
+            pl.col("expires_at").alias("twap_end_expires_at"),
+            pl.col("twap_price").alias("twap_end_price"),
+        )
+        recovered_labels = (
+            market_keys.join(opening, on="window_start", how="inner")
+            .join(closing, on="window_end", how="inner")
+            .with_columns(
+                (pl.col("twap_end_price") > pl.col("twap_start_price"))
+                .cast(pl.Int32)
+                .alias("twap_label_up")
+            )
+            .select(labels.columns)
+        )
+        if labels.height:
+            recovered_labels = recovered_labels.join(
+                labels.select("market_id", "window_start"),
+                on=["market_id", "window_start"],
+                how="anti",
+            )
+        if recovered_labels.height:
+            labels = pl.concat((labels, recovered_labels), how="vertical_relaxed")
     if labels.height:
         frame = frame.join(labels, on=["market_id", "window_start"], how="left", validate="m:1")
     else:
