@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import polars as pl
 import psycopg
+
+from .drained_sources import completed_capture_ids, removed_source_rows
 
 POINT_KEY_COLUMNS = ("market_id", "window_start", "seconds_elapsed")
 EXTERNAL_CORE_REQUIRED_COLUMNS = (
@@ -120,6 +123,57 @@ def extract_external_source_frames(
         },
         cursor_name="btc_chainlink_candle_source",
     )
+    archived_candles = removed_source_rows(
+        connection,
+        strategy_key="chainlink_btcusd_one_minute_candles",
+        relation="market_data.chainlink_btcusd_one_minute_candles",
+        time_column="open_timestamp",
+        root=Path(
+            os.environ.get(
+                "CHAINLINK_ONE_MINUTE_CANDLES_DATA_ROOT",
+                "/Volumes/docker-data/polymarket-bot/chainlink-one-minute-candles",
+            )
+        ),
+        range_start=range_start - timedelta(minutes=candle_history_minutes + 1),
+        range_end=range_end,
+        columns=(
+            "symbol",
+            "open_timestamp",
+            "close_timestamp",
+            "open_price",
+            "high_price",
+            "low_price",
+            "close_price",
+            "capture_artifact_id",
+        ),
+    )
+    if archived_candles.height:
+        completed = completed_capture_ids(
+            connection, archived_candles["capture_artifact_id"].unique().to_list()
+        )
+        archived_candles = (
+            archived_candles.filter(
+                (pl.col("symbol") == candle_symbol)
+                & pl.col("capture_artifact_id").is_in(completed)
+                & (pl.col("close_timestamp") == pl.col("open_timestamp") + pl.duration(minutes=1))
+                & (
+                    pl.col("close_timestamp")
+                    >= range_start - timedelta(minutes=candle_history_minutes)
+                )
+                & (pl.col("close_timestamp") < range_end)
+            )
+            .with_columns(
+                pl.col("close_timestamp").alias("available_at"),
+                *(
+                    pl.col(name).cast(pl.Float64)
+                    for name in ("open_price", "high_price", "low_price", "close_price")
+                ),
+            )
+            .select(candles.columns)
+        )
+        candles = pl.concat((candles, archived_candles), how="vertical_relaxed").sort(
+            "close_timestamp"
+        )
     open_interest = _query_frame(
         connection,
         (sql_root / OPEN_INTEREST_SQL).read_text(),
@@ -131,6 +185,61 @@ def extract_external_source_frames(
         },
         cursor_name="btc_binance_oi_source",
     )
+    interest_root = Path(
+        os.environ.get(
+            "INGESTER_BINANCE_FUTURES_OPEN_INTEREST_LAKE_ROOT",
+            str(
+                Path(
+                    os.environ.get(
+                        "BINANCE_L2_DATA_ROOT", "/Volumes/docker-data/polymarket-bot/binance-l2"
+                    )
+                )
+                / "drains/futures-open-interest"
+            ),
+        )
+    )
+    archived_interest = removed_source_rows(
+        connection,
+        strategy_key="binance_futures_btcusdt_open_interest",
+        relation="market_data.binance_futures_btcusdt_open_interest",
+        time_column="source_timestamp",
+        root=interest_root,
+        range_start=range_start - timedelta(minutes=open_interest_history_minutes),
+        range_end=range_end,
+        columns=(
+            "source",
+            "symbol",
+            "source_timestamp",
+            "period_seconds",
+            "sum_open_interest",
+            "sum_open_interest_value",
+        ),
+    )
+    if archived_interest.height:
+        archived_interest = (
+            archived_interest.filter(
+                (pl.col("source") == "binance_usd_m_futures")
+                & (pl.col("symbol") == open_interest_symbol)
+                & (pl.col("period_seconds") == "300")
+            )
+            .with_columns(
+                pl.col("source_timestamp").str.to_datetime(time_zone="UTC"),
+                pl.col("period_seconds").cast(pl.Int32),
+                pl.col("sum_open_interest").cast(pl.Float64),
+                pl.col("sum_open_interest_value").cast(pl.Float64),
+            )
+            .filter(
+                (
+                    pl.col("source_timestamp")
+                    >= range_start - timedelta(minutes=open_interest_history_minutes)
+                )
+                & (pl.col("source_timestamp") < range_end)
+            )
+            .select(open_interest.columns)
+        )
+        open_interest = pl.concat((open_interest, archived_interest), how="vertical_relaxed").sort(
+            "source_timestamp"
+        )
     return ExternalSourceFrames(
         refprice=refprice,
         candles=candles,

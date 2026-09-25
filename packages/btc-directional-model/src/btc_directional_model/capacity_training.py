@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -27,6 +28,7 @@ from .core_extract import (
     file_sha256,
     write_json_atomic,
 )
+from .drained_sources import completed_backfill_providers, removed_source_rows
 from .runtime_export import score_runtime_model
 
 SCHEMA_VERSION = "btc-vwap-capacity-training-v2"
@@ -272,6 +274,11 @@ def _extract_partition(
                 writer = writer or pq.ParquetWriter(temporary, EVIDENCE_SCHEMA, compression="zstd")
                 writer.write_table(table)
                 count += len(rows)
+        archived = _archived_capacity_rows(connection, batch_start, batch_end)
+        if archived.num_rows:
+            writer = writer or pq.ParquetWriter(temporary, EVIDENCE_SCHEMA, compression="zstd")
+            writer.write_table(archived)
+            count += archived.num_rows
     finally:
         if writer:
             writer.close()
@@ -279,6 +286,127 @@ def _extract_partition(
         pq.write_table(pa.Table.from_pylist([], schema=EVIDENCE_SCHEMA), temporary)
     temporary.replace(destination)
     return count
+
+
+def _archived_capacity_rows(connection: Any, start: datetime, end: datetime) -> pa.Table:
+    root = Path(
+        os.environ.get(
+            "BTC_CAPACITY_EXECUTION_SNAPSHOTS_DATA_ROOT",
+            "/Volumes/docker-data/polymarket-bot/btc-capacity-execution-snapshots",
+        )
+    )
+    snapshot_columns = (
+        "market_id",
+        "sampled_at",
+        "artifact_id",
+        "schema_version",
+        "up_provider_received_at",
+        "up_best_ask",
+        "up_ask_depth",
+        *(f"up_ask_vwap_{quantity}" for quantity in MATERIALIZED_VWAP_QUANTITIES),
+        "down_provider_received_at",
+        "down_best_ask",
+        "down_ask_depth",
+        *(f"down_ask_vwap_{quantity}" for quantity in MATERIALIZED_VWAP_QUANTITIES),
+        "quality_flags",
+    )
+    archived = removed_source_rows(
+        connection,
+        strategy_key="polymarket_btc_capacity_execution_snapshots",
+        relation="polymarket.btc_market_capacity_execution_snapshots",
+        time_column="sampled_at",
+        root=root,
+        range_start=start,
+        range_end=end,
+        columns=snapshot_columns,
+    )
+    if not archived.height:
+        return pa.Table.from_pylist([], schema=EVIDENCE_SCHEMA)
+    providers = completed_backfill_providers(connection, archived["artifact_id"].unique().to_list())
+    eligible_ids = [
+        identifier
+        for identifier, provider in providers.items()
+        if provider
+        in (
+            "pmxt_v2_capacity_execution_snapshots_v2",
+            "polymarket_local_orderbook_capacity_execution_snapshots_v1",
+        )
+    ]
+    archived = archived.filter(
+        pl.col("artifact_id").is_in(eligible_ids)
+        & (
+            (
+                (pl.col("schema_version") == "btc5m-capacity-book-1-240s-v2")
+                & pl.col("artifact_id").is_in(
+                    [
+                        identifier
+                        for identifier, provider in providers.items()
+                        if provider == "pmxt_v2_capacity_execution_snapshots_v2"
+                    ]
+                )
+            )
+            | (
+                (pl.col("schema_version") == "btc5m-capacity-local-orderbook-1-240s-v1")
+                & pl.col("artifact_id").is_in(
+                    [
+                        identifier
+                        for identifier, provider in providers.items()
+                        if provider == "polymarket_local_orderbook_capacity_execution_snapshots_v1"
+                    ]
+                )
+            )
+        )
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT market_id,window_start,window_end,official_outcome,
+                   coalesce(fee_rate,0)::double precision AS fee_rate
+            FROM polymarket.btc_interval_markets
+            WHERE window_start >= %s AND window_start < %s
+              AND validation_status='valid' AND official_outcome IN ('up','down')
+            """,
+            (start, end),
+        )
+        markets = pl.DataFrame(
+            cursor.fetchall(),
+            schema=("market_id", "window_start", "window_end", "official_outcome", "fee_rate"),
+            orient="row",
+        )
+    if not markets.height or not archived.height:
+        return pa.Table.from_pylist([], schema=EVIDENCE_SCHEMA)
+    archived = archived.with_columns(
+        pl.col("sampled_at").str.to_datetime(time_zone="UTC"),
+        *(
+            pl.col(name).str.to_datetime(time_zone="UTC")
+            for name in ("up_provider_received_at", "down_provider_received_at")
+        ),
+        *(
+            pl.col(name).cast(pl.Float64)
+            for name in EVIDENCE_SCHEMA.names
+            if name in archived.columns
+            and name
+            not in (
+                "market_id",
+                "sampled_at",
+                "artifact_id",
+                "schema_version",
+                "up_provider_received_at",
+                "down_provider_received_at",
+                "quality_flags",
+            )
+        ),
+        pl.col("quality_flags").cast(pl.Int32),
+    ).join(markets, on="market_id", how="inner")
+    archived = archived.filter((pl.col("sampled_at") >= start) & (pl.col("sampled_at") < end))
+    archived = archived.with_columns(
+        pl.col("sampled_at").alias("observed_at"),
+        ((pl.col("sampled_at") - pl.col("window_start")).dt.total_seconds())
+        .cast(pl.Int32)
+        .alias("seconds_elapsed"),
+        (pl.col("official_outcome") == "up").cast(pl.Int8).alias("label_up"),
+    ).select(EVIDENCE_SCHEMA.names)
+    return pa.Table.from_pylist(archived.to_dicts(), schema=EVIDENCE_SCHEMA)
 
 
 def _load_evidence(config: CapacityTrainingConfig, manifest: dict[str, Any]) -> pl.DataFrame:
