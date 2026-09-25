@@ -210,6 +210,36 @@ fn coverage_targets(registry: &StrategyRegistry) -> Result<Vec<CoverageTarget>, 
             }
         }
     }
+    for strategy in registry.drains() {
+        let descriptor = strategy.descriptor();
+        let strategy_key = descriptor.strategy_key.to_string();
+        let relation = descriptor.relation.to_string();
+        if targets.values().any(|target| {
+            target.relation.as_deref() == Some(relation.as_str())
+                && target.drain_strategy_key.as_deref() == Some(strategy_key.as_str())
+        }) {
+            continue;
+        }
+        let product_key = dataset_for_strategy(&strategy_key).map_or_else(
+            || strategy_key.clone(),
+            |dataset| dataset.as_str().to_owned(),
+        );
+        if targets.contains_key(&product_key) {
+            return Err(ApiError::internal(
+                "drain and backfill strategies declare incompatible coverage storage",
+            ));
+        }
+        targets.insert(
+            product_key.clone(),
+            CoverageTarget {
+                product_key,
+                relation: Some(relation),
+                backfill_strategy_keys: Vec::new(),
+                drain_strategy_key: Some(strategy_key.clone()),
+                gap_strategy_keys: vec![strategy_key],
+            },
+        );
+    }
     Ok(targets.into_values().collect())
 }
 
@@ -1184,7 +1214,7 @@ mod tests {
     }
 
     #[test]
-    fn coverage_targets_are_discovered_from_the_backfill_catalog() {
+    fn coverage_targets_include_every_backfill_and_drain() {
         let registry = crate::strategies::registry().expect("strategy registry");
         let targets = coverage_targets(&registry).expect("coverage targets");
         let products = targets
@@ -1224,6 +1254,23 @@ mod tests {
                 .collect::<BTreeSet<_>>()
                 .len(),
             registry.backfills().count()
+        );
+        let drain_keys = targets
+            .iter()
+            .filter_map(|target| target.drain_strategy_key.as_deref())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(drain_keys.len(), registry.drains().count());
+        for strategy in registry.drains() {
+            assert!(drain_keys.contains(strategy.descriptor().strategy_key.as_ref()));
+        }
+        let l2_snapshots = targets
+            .iter()
+            .find(|target| target.product_key == "binance_spot_btcusdt_l2_snapshots")
+            .expect("drain-only L2 snapshots target");
+        assert!(l2_snapshots.backfill_strategy_keys.is_empty());
+        assert_eq!(
+            l2_snapshots.drain_strategy_key.as_deref(),
+            Some("binance_spot_btcusdt_l2_snapshots")
         );
 
         let open_interest = targets

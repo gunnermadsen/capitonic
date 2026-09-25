@@ -39,6 +39,8 @@ pub struct DatabaseCoverage {
     pub through: Option<DateTime<Utc>>,
     pub closed_chunks: usize,
     pub open_chunks: usize,
+    pub total_bytes: i64,
+    pub closed_bytes: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -46,6 +48,7 @@ pub struct SsdCoverage {
     pub from: Option<DateTime<Utc>>,
     pub through: Option<DateTime<Utc>>,
     pub verified_objects: usize,
+    pub verification_scope: &'static str,
     pub rows: i64,
     pub bytes: i64,
 }
@@ -78,6 +81,7 @@ struct ChunkRow {
     range_start: DateTime<Utc>,
     range_end: DateTime<Utc>,
     replicated: bool,
+    size_bytes: i64,
 }
 
 #[derive(Debug, FromRow)]
@@ -166,6 +170,7 @@ pub async fn detect(
         "WITH targets AS (SELECT * FROM unnest($1::text[],$2::text[],$3::text[],$4::text[]) \
          AS target(product_key,schema_name,table_name,drain_strategy_key)) \
          SELECT target.product_key,chunk.range_start,chunk.range_end, \
+         pg_total_relation_size(format('%I.%I',chunk.chunk_schema,chunk.chunk_name)::regclass)::bigint AS size_bytes, \
          EXISTS (SELECT 1 FROM ingester.drain_objects object \
          WHERE object.strategy_key=NULLIF(target.drain_strategy_key,'') \
          AND object.source_chunk_schema=chunk.chunk_schema \
@@ -355,6 +360,8 @@ pub async fn detect(
                 through: database_intervals.iter().map(|interval| interval.end).max(),
                 closed_chunks: closed_chunks.len(),
                 open_chunks: product_chunks.len() - closed_chunks.len(),
+                total_bytes: product_chunks.iter().map(|row| row.size_bytes).sum(),
+                closed_bytes: closed_chunks.iter().map(|row| row.size_bytes).sum(),
             },
             ssd: SsdCoverage {
                 from: ssd_intervals.iter().map(|interval| interval.start).min(),
@@ -364,6 +371,7 @@ pub async fn detect(
                         .iter()
                         .map(|row| usize::try_from(row.object_count).unwrap_or(usize::MAX))
                         .fold(0usize, usize::saturating_add),
+                verification_scope: "publication_ledger_only",
                 rows: product_objects.iter().map(|row| row.row_count).sum::<i64>()
                     + product_artifacts
                         .iter()
@@ -452,11 +460,14 @@ mod tests {
                 through: None,
                 closed_chunks: 0,
                 open_chunks: 0,
+                total_bytes: 0,
+                closed_bytes: 0,
             },
             ssd: SsdCoverage {
                 from: None,
                 through: None,
                 verified_objects: 0,
+                verification_scope: "publication_ledger_only",
                 rows: 0,
                 bytes: 0,
             },
@@ -473,6 +484,11 @@ mod tests {
         assert_eq!(
             encoded["drain_strategy_key"],
             json!("binance_spot_btcusdt_aggregate_trades")
+        );
+        assert_eq!(encoded["database"]["total_bytes"], json!(0));
+        assert_eq!(
+            encoded["ssd"]["verification_scope"],
+            json!("publication_ledger_only")
         );
     }
 
