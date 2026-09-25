@@ -404,6 +404,37 @@ pub struct CryptoHftHourlySpec {
     pub archive_path: PathBuf,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveFormat {
+    #[default]
+    ZstdParquet,
+    RawParquet,
+}
+
+impl CryptoHftHourlySpec {
+    fn for_format(&self, format: ArchiveFormat) -> Self {
+        let mut spec = self.clone();
+        if format == ArchiveFormat::RawParquet {
+            spec.relative_path = spec.relative_path.with_extension("");
+            spec.archive_path = spec.archive_path.with_extension("");
+        }
+        spec
+    }
+
+    fn archive_format(&self) -> ArchiveFormat {
+        if self
+            .archive_path
+            .extension()
+            .is_some_and(|value| value == "zst")
+        {
+            ArchiveFormat::ZstdParquet
+        } else {
+            ArchiveFormat::RawParquet
+        }
+    }
+}
+
 impl CryptoHftHourlySpec {
     pub fn new(config: &CryptoHftBinanceL2Config, date: NaiveDate, hour: u8) -> Result<Self> {
         Self::new_for_market(config, CryptoHftBinanceMarket::Futures, date, hour)
@@ -468,6 +499,8 @@ pub struct HourlyArchiveManifest {
     pub logical_key: String,
     pub remote_file: String,
     pub archive_path: PathBuf,
+    #[serde(default)]
+    pub archive_format: ArchiveFormat,
     pub sha256: String,
     pub compressed_bytes: u64,
     pub raw_rows: u64,
@@ -488,6 +521,7 @@ impl HourlyArchiveManifest {
     pub fn lineage_metadata(&self) -> serde_json::Value {
         serde_json::json!({
             "provider": self.provider,
+            "archive_format": self.archive_format,
             "remote_file": self.remote_file,
             "archive_path": self.archive_path,
             "sha256": self.sha256,
@@ -689,12 +723,19 @@ pub async fn download_hour(
     validate_spec_paths(config, spec)?;
     let market = spec.market()?;
 
-    if fs::try_exists(&spec.archive_path).await? {
-        match reuse_hour(config, spec, cancellation).await? {
+    let raw_spec = spec.for_format(ArchiveFormat::RawParquet);
+    let compressed_exists = fs::try_exists(&spec.archive_path).await?;
+    let raw_exists = fs::try_exists(&raw_spec.archive_path).await?;
+    if compressed_exists && raw_exists {
+        bail!("CryptoHFT cache contains conflicting archive formats for one hour");
+    }
+    if compressed_exists || raw_exists {
+        let cached_spec = if raw_exists { &raw_spec } else { spec };
+        match reuse_hour(config, cached_spec, cancellation).await? {
             CachedHourReuse::Reused(manifest) => return Ok(manifest),
             CachedHourReuse::ProvenCorruption(error) => {
                 check_cancelled(cancellation)?;
-                quarantine_cached_hour(spec, &error)
+                quarantine_cached_hour(cached_spec, &error)
                     .await
                     .with_context(|| {
                         format!("failed to quarantine invalid CryptoHFT cache entry: {error:#}")
@@ -746,7 +787,9 @@ pub async fn download_hour(
             "CryptoHFT archive request failed: status={status}, content_type={content_type}, body={preview}"
         );
     }
-    validate_archive_content_type(&content_type)?;
+    let archive_format = validate_archive_content_type(&content_type)?;
+    validate_anchor_archive_format(market, spec, archive_format)?;
+    let stored_spec = spec.for_format(archive_format);
     let expected_content_length = response.content_length();
     if expected_content_length.is_some_and(|bytes| bytes > config.maximum_compressed_bytes) {
         bail!("CryptoHFT archive exceeded the compressed size limit");
@@ -754,7 +797,8 @@ pub async fn download_hour(
 
     let partial_path = parent.join(format!(
         ".{}.{}.part",
-        spec.archive_path
+        stored_spec
+            .archive_path
             .file_name()
             .and_then(|name| name.to_str())
             .context("CryptoHFT archive filename was not UTF-8")?,
@@ -792,14 +836,19 @@ pub async fn download_hour(
     if compressed_bytes == 0 {
         bail!("CryptoHFT returned an empty archive");
     }
-    if leading_bytes != [0x28, 0xb5, 0x2f, 0xfd] {
-        bail!("CryptoHFT response did not have a Zstandard frame header");
-    }
+    validate_archive_prefix(archive_format, &leading_bytes)?;
     validate_downloaded_content_length(expected_content_length, compressed_bytes)?;
     output.sync_all().await?;
     drop(output);
     check_cancelled(cancellation)?;
-    let payload = validate_archive_payload(config, spec, &partial_path, cancellation).await?;
+    let payload = validate_archive_payload(
+        config,
+        &stored_spec,
+        &partial_path,
+        archive_format,
+        cancellation,
+    )
+    .await?;
 
     let sha256 = format!("{:x}", hasher.finalize());
     if spec.remote_file == market.audited_anchor_remote_file()
@@ -807,14 +856,14 @@ pub async fn download_hour(
     {
         bail!("CryptoHFT audited anchor archive checksum did not match the pinned source object");
     }
-    let installed = match fs::hard_link(&partial_path, &spec.archive_path).await {
+    let installed = match fs::hard_link(&partial_path, &stored_spec.archive_path).await {
         Ok(()) => true,
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => false,
         Err(error) => return Err(error).context("failed to atomically finalize CryptoHFT archive"),
     };
     if !installed {
         let winner = hash_file_bounded(
-            &spec.archive_path,
+            &stored_spec.archive_path,
             config.maximum_compressed_bytes,
             cancellation,
         )
@@ -823,7 +872,7 @@ pub async fn download_hour(
             bail!("concurrent CryptoHFT archive finalization produced a different object");
         }
     }
-    make_read_only(&spec.archive_path).await?;
+    make_read_only(&stored_spec.archive_path).await?;
     sync_parent_directory(parent)?;
 
     let manifest = HourlyArchiveManifest {
@@ -831,7 +880,8 @@ pub async fn download_hour(
         source_uri: spec.source_uri.clone(),
         logical_key: spec.logical_key.clone(),
         remote_file: spec.remote_file.clone(),
-        archive_path: spec.archive_path.clone(),
+        archive_path: stored_spec.archive_path.clone(),
+        archive_format,
         sha256,
         compressed_bytes,
         raw_rows: payload.raw_rows,
@@ -847,11 +897,11 @@ pub async fn download_hour(
         vendor_checksum: None,
         integrity_basis: "locally_computed_sha256_no_vendor_checksum".to_owned(),
     };
-    persist_manifest(spec, &manifest).await?;
+    persist_manifest(&stored_spec, &manifest).await?;
     Ok(manifest)
 }
 
-fn validate_archive_content_type(content_type: &str) -> Result<()> {
+fn validate_archive_content_type(content_type: &str) -> Result<ArchiveFormat> {
     let media_type = content_type.split(';').next().unwrap_or_default().trim();
     if matches!(
         media_type,
@@ -860,9 +910,36 @@ fn validate_archive_content_type(content_type: &str) -> Result<()> {
             | "application/octet-stream"
             | "binary/octet-stream"
     ) {
-        return Ok(());
+        return Ok(ArchiveFormat::ZstdParquet);
+    }
+    if media_type == "application/vnd.apache.parquet" {
+        return Ok(ArchiveFormat::RawParquet);
     }
     bail!("CryptoHFT returned non-archive content type {content_type}")
+}
+
+fn validate_archive_prefix(format: ArchiveFormat, leading_bytes: &[u8]) -> Result<()> {
+    match format {
+        ArchiveFormat::ZstdParquet if leading_bytes == [0x28, 0xb5, 0x2f, 0xfd] => Ok(()),
+        ArchiveFormat::RawParquet if leading_bytes == b"PAR1" => Ok(()),
+        ArchiveFormat::ZstdParquet => {
+            bail!("CryptoHFT response did not have a Zstandard frame header")
+        }
+        ArchiveFormat::RawParquet => bail!("CryptoHFT response did not have a Parquet header"),
+    }
+}
+
+fn validate_anchor_archive_format(
+    market: CryptoHftBinanceMarket,
+    spec: &CryptoHftHourlySpec,
+    format: ArchiveFormat,
+) -> Result<()> {
+    if spec.remote_file == market.audited_anchor_remote_file()
+        && format != ArchiveFormat::ZstdParquet
+    {
+        bail!("CryptoHFT audited anchor must retain its pinned Zstandard source object");
+    }
+    Ok(())
 }
 
 fn bounded_response_preview(body: &[u8]) -> String {
@@ -950,6 +1027,9 @@ async fn reuse_hour(
             "CryptoHFT cached archive had an invalid file type or compressed size"
         )));
     }
+    if let Err(error) = validate_archive_file_magic(&spec.archive_path, spec.archive_format()) {
+        return Ok(CachedHourReuse::ProvenCorruption(error));
+    }
     let digest = hash_file_bounded(
         &spec.archive_path,
         config.maximum_compressed_bytes,
@@ -982,14 +1062,21 @@ async fn reuse_hour(
         make_read_only(&manifest_path).await?;
         manifest
     } else {
-        let payload =
-            validate_archive_payload(config, spec, &spec.archive_path, cancellation).await?;
+        let payload = validate_archive_payload(
+            config,
+            spec,
+            &spec.archive_path,
+            spec.archive_format(),
+            cancellation,
+        )
+        .await?;
         let recovered = HourlyArchiveManifest {
             provider: CRYPTOHFT_ARCHIVE_PROVIDER.to_owned(),
             source_uri: spec.source_uri.clone(),
             logical_key: spec.logical_key.clone(),
             remote_file: spec.remote_file.clone(),
             archive_path: spec.archive_path.clone(),
+            archive_format: spec.archive_format(),
             sha256: digest.sha256,
             compressed_bytes: digest.bytes,
             raw_rows: payload.raw_rows,
@@ -1025,6 +1112,7 @@ fn cached_manifest_corruption(
         || manifest.logical_key != spec.logical_key
         || manifest.remote_file != spec.remote_file
         || manifest.archive_path != spec.archive_path
+        || manifest.archive_format != spec.archive_format()
         || manifest.sha256 != digest.sha256
         || manifest.compressed_bytes != digest.bytes
         || manifest.raw_rows == 0
@@ -1032,6 +1120,7 @@ fn cached_manifest_corruption(
         || manifest.validated_snapshot_events > manifest.snapshot_events
         || (market.is_some_and(|market| spec.remote_file == market.audited_anchor_remote_file())
             && (market.is_some_and(|market| manifest.sha256 != market.audited_anchor_sha256())
+                || manifest.archive_format != ArchiveFormat::ZstdParquet
                 || !manifest.audited_anchor_snapshot_verified))
         || (market.is_some_and(|market| spec.remote_file != market.audited_anchor_remote_file())
             && manifest.audited_anchor_snapshot_verified)
@@ -1215,6 +1304,7 @@ async fn validate_persisted_manifest(path: &Path, expected: &HourlyArchiveManife
         || actual.logical_key != expected.logical_key
         || actual.remote_file != expected.remote_file
         || actual.archive_path != expected.archive_path
+        || actual.archive_format != expected.archive_format
         || actual.sha256 != expected.sha256
         || actual.compressed_bytes != expected.compressed_bytes
         || actual.raw_rows != expected.raw_rows
@@ -1319,6 +1409,7 @@ async fn validate_archive_payload(
     config: &CryptoHftBinanceL2Config,
     spec: &CryptoHftHourlySpec,
     archive_path: &Path,
+    archive_format: ArchiveFormat,
     cancellation: &ArchiveCancellation,
 ) -> Result<HourlyPayloadValidation> {
     let provisional_timestamp = Utc::now();
@@ -1328,6 +1419,7 @@ async fn validate_archive_payload(
         logical_key: spec.logical_key.clone(),
         remote_file: spec.remote_file.clone(),
         archive_path: archive_path.to_path_buf(),
+        archive_format,
         sha256: String::new(),
         compressed_bytes: 0,
         raw_rows: 0,
@@ -3186,6 +3278,21 @@ fn decompress_hour_blocking(
     let final_path = partial_path.with_extension("parquet");
     let _cleanup = RemoveOnDrop(partial_path.clone());
 
+    if manifest.archive_format == ArchiveFormat::RawParquet {
+        let decoded_bytes = std_fs::metadata(&manifest.archive_path)?.len();
+        if decoded_bytes > config.maximum_decoded_bytes {
+            bail!("CryptoHFT raw Parquet exceeded the decoded size limit");
+        }
+        validate_parquet_magic(&manifest.archive_path)?;
+        std_fs::hard_link(&manifest.archive_path, &final_path)?;
+        let parquet = TemporaryParquetFile {
+            path: final_path,
+            decoded_bytes,
+        };
+        check_cancelled(cancellation)?;
+        return Ok(parquet);
+    }
+
     let input = std_fs::File::open(&manifest.archive_path)?;
     let mut decoder =
         zstd::stream::read::Decoder::new(BufReader::with_capacity(IO_BUFFER_BYTES, input))?;
@@ -3234,6 +3341,15 @@ fn validate_parquet_magic(path: &Path) -> Result<()> {
         bail!("CryptoHFT decoded object was not a complete Parquet file");
     }
     Ok(())
+}
+
+fn validate_archive_file_magic(path: &Path, format: ArchiveFormat) -> Result<()> {
+    if format == ArchiveFormat::RawParquet {
+        return validate_parquet_magic(path);
+    }
+    let mut leading = [0u8; 4];
+    std_fs::File::open(path)?.read_exact(&mut leading)?;
+    validate_archive_prefix(format, &leading)
 }
 
 #[cfg(test)]
@@ -3287,6 +3403,7 @@ mod tests {
             logical_key: spec.logical_key,
             remote_file: spec.remote_file,
             archive_path: spec.archive_path,
+            archive_format: ArchiveFormat::ZstdParquet,
             sha256,
             compressed_bytes,
             raw_rows: 1,
@@ -3497,6 +3614,81 @@ mod tests {
     }
 
     #[test]
+    fn raw_parquet_uses_a_distinct_local_object_without_changing_source_identity() {
+        let temporary = tempfile::tempdir().unwrap();
+        let config = test_config(temporary.path());
+        let date = NaiveDate::from_ymd_opt(2026, 9, 23).unwrap();
+        let compressed = CryptoHftHourlySpec::new(&config, date, 0).unwrap();
+        let raw = compressed.for_format(ArchiveFormat::RawParquet);
+
+        assert_eq!(raw.remote_file, compressed.remote_file);
+        assert_eq!(raw.source_uri, compressed.source_uri);
+        assert_eq!(raw.logical_key, compressed.logical_key);
+        assert_eq!(raw.archive_format(), ArchiveFormat::RawParquet);
+        assert_eq!(compressed.archive_format(), ArchiveFormat::ZstdParquet);
+        assert_eq!(raw.archive_path.extension().unwrap(), "parquet");
+        assert_ne!(raw.archive_path, compressed.archive_path);
+        assert_ne!(
+            manifest_path(&raw).unwrap(),
+            manifest_path(&compressed).unwrap()
+        );
+    }
+
+    #[test]
+    fn format_detection_requires_matching_mime_and_file_magic() {
+        assert_eq!(
+            validate_archive_content_type("application/vnd.apache.parquet").unwrap(),
+            ArchiveFormat::RawParquet
+        );
+        assert_eq!(
+            validate_archive_content_type("application/zstd").unwrap(),
+            ArchiveFormat::ZstdParquet
+        );
+        assert!(validate_archive_prefix(ArchiveFormat::RawParquet, b"PAR1").is_ok());
+        assert!(
+            validate_archive_prefix(ArchiveFormat::RawParquet, &[0x28, 0xb5, 0x2f, 0xfd]).is_err()
+        );
+        assert!(validate_archive_prefix(ArchiveFormat::ZstdParquet, b"PAR1").is_err());
+
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("hour.parquet");
+        std_fs::write(&path, b"PAR1payloadPAR1").unwrap();
+        assert!(validate_archive_file_magic(&path, ArchiveFormat::RawParquet).is_ok());
+        std_fs::write(&path, b"PAR1payloadBAD!").unwrap();
+        assert!(validate_archive_file_magic(&path, ArchiveFormat::RawParquet).is_err());
+    }
+
+    #[test]
+    fn audited_anchor_rejects_raw_parquet_but_new_hours_allow_it() {
+        let temporary = tempfile::tempdir().unwrap();
+        let config = test_config(temporary.path());
+        let anchor =
+            CryptoHftHourlySpec::new(&config, NaiveDate::from_ymd_opt(2026, 4, 13).unwrap(), 23)
+                .unwrap();
+        let recent =
+            CryptoHftHourlySpec::new(&config, NaiveDate::from_ymd_opt(2026, 9, 23).unwrap(), 0)
+                .unwrap();
+        assert!(validate_anchor_archive_format(
+            CryptoHftBinanceMarket::Futures,
+            &anchor,
+            ArchiveFormat::RawParquet
+        )
+        .is_err());
+        assert!(validate_anchor_archive_format(
+            CryptoHftBinanceMarket::Futures,
+            &anchor,
+            ArchiveFormat::ZstdParquet
+        )
+        .is_ok());
+        assert!(validate_anchor_archive_format(
+            CryptoHftBinanceMarket::Futures,
+            &recent,
+            ArchiveFormat::RawParquet
+        )
+        .is_ok());
+    }
+
+    #[test]
     fn spot_hourly_spec_and_lineage_are_isolated_from_futures() {
         let temporary = tempfile::tempdir().unwrap();
         let config = test_config(temporary.path());
@@ -3533,7 +3725,7 @@ mod tests {
         let date = NaiveDate::from_ymd_opt(2026, 4, 14).unwrap();
         let spec = CryptoHftHourlySpec::new(&config, date, 0).unwrap();
         std_fs::create_dir_all(spec.archive_path.parent().unwrap()).unwrap();
-        let compressed = b"intentionally-not-a-zstd-frame";
+        let compressed = b"\x28\xb5\x2f\xfdarchive-cache-fixture";
         std_fs::write(&spec.archive_path, compressed).unwrap();
         let sha256 = format!("{:x}", Sha256::digest(compressed));
         let manifest = hourly_manifest(
@@ -3615,6 +3807,86 @@ mod tests {
 
         assert!(matches!(reused, CachedHourReuse::ProvenCorruption(_)));
         assert!(spec.archive_path.is_file());
+    }
+
+    #[tokio::test]
+    async fn raw_parquet_cache_requires_format_identity_and_sha() {
+        let temporary = tempfile::tempdir().unwrap();
+        let config = test_config(temporary.path());
+        let date = NaiveDate::from_ymd_opt(2026, 9, 23).unwrap();
+        let spec = CryptoHftHourlySpec::new(&config, date, 0)
+            .unwrap()
+            .for_format(ArchiveFormat::RawParquet);
+        std_fs::create_dir_all(spec.archive_path.parent().unwrap()).unwrap();
+        let payload = b"PAR1payloadPAR1";
+        std_fs::write(&spec.archive_path, payload).unwrap();
+        let mut manifest = hourly_manifest(
+            &config,
+            date,
+            0,
+            format!("{:x}", Sha256::digest(payload)),
+            payload.len() as u64,
+            1,
+            1,
+            false,
+        );
+        manifest.archive_path = spec.archive_path.clone();
+        manifest.archive_format = ArchiveFormat::ZstdParquet;
+        let manifest_path = manifest_path(&spec).unwrap();
+        std_fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+
+        assert!(matches!(
+            reuse_hour(&config, &spec, &ArchiveCancellation::default())
+                .await
+                .unwrap(),
+            CachedHourReuse::ProvenCorruption(_)
+        ));
+
+        manifest.archive_format = ArchiveFormat::RawParquet;
+        std_fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert!(matches!(
+            reuse_hour(&config, &spec, &ArchiveCancellation::default())
+                .await
+                .unwrap(),
+            CachedHourReuse::Reused(_)
+        ));
+    }
+
+    #[test]
+    fn old_archive_manifests_default_to_zstd() {
+        let temporary = tempfile::tempdir().unwrap();
+        let config = test_config(temporary.path());
+        let date = NaiveDate::from_ymd_opt(2026, 4, 14).unwrap();
+        let manifest = hourly_manifest(&config, date, 0, "a".repeat(64), 1, 1, 1, false);
+        let mut legacy = serde_json::to_value(&manifest).unwrap();
+        legacy.as_object_mut().unwrap().remove("archive_format");
+        let restored: HourlyArchiveManifest = serde_json::from_value(legacy).unwrap();
+        assert_eq!(restored.archive_format, ArchiveFormat::ZstdParquet);
+    }
+
+    #[test]
+    fn raw_parquet_replay_uses_temporary_link_and_keeps_immutable_source() {
+        let temporary = tempfile::tempdir().unwrap();
+        let config = test_config(temporary.path());
+        let date = NaiveDate::from_ymd_opt(2026, 9, 23).unwrap();
+        let spec = CryptoHftHourlySpec::new(&config, date, 0)
+            .unwrap()
+            .for_format(ArchiveFormat::RawParquet);
+        std_fs::create_dir_all(spec.archive_path.parent().unwrap()).unwrap();
+        let payload = b"PAR1payloadPAR1";
+        std_fs::write(&spec.archive_path, payload).unwrap();
+        let mut manifest = hourly_manifest(&config, date, 0, String::new(), 0, 1, 1, false);
+        manifest.archive_path = spec.archive_path.clone();
+        manifest.archive_format = ArchiveFormat::RawParquet;
+
+        let replay =
+            decompress_hour_blocking(&config, &manifest, &ArchiveCancellation::default()).unwrap();
+        assert_eq!(replay.decoded_bytes, payload.len() as u64);
+        assert_eq!(std_fs::read(replay.path()).unwrap(), payload);
+        let replay_path = replay.path().to_path_buf();
+        drop(replay);
+        assert!(!replay_path.exists());
+        assert_eq!(std_fs::read(&spec.archive_path).unwrap(), payload);
     }
 
     #[test]
