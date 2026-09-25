@@ -243,7 +243,7 @@ pub async fn execute(
 }
 
 fn should_republish(source_count: Option<i64>, published_count: i64, file_valid: bool) -> bool {
-    source_count.is_some_and(|count| count != published_count || !file_valid)
+    !file_valid || source_count.is_some_and(|count| count != published_count)
 }
 
 fn chunks_to_process(
@@ -268,6 +268,7 @@ mod tests {
         assert!(should_republish(Some(100), 100, false));
         assert!(!should_republish(Some(100), 100, true));
         assert!(!should_republish(None, 100, true));
+        assert!(should_republish(None, 100, false));
     }
 
     #[test]
@@ -320,7 +321,16 @@ async fn remove_verified_chunk(
                     true,
                 ));
             }
-            Err(error) => return Err(db_error(error)),
+            Err(error) => {
+                if error
+                    .as_database_error()
+                    .and_then(|database| database.code())
+                    .is_some_and(|code| code == "P0001")
+                {
+                    return Err(invalid("drain_integrity_failed", error.to_string()));
+                }
+                return Err(db_error(error));
+            }
         }
     }
     unreachable!("chunk removal retry loop returns on its final attempt")

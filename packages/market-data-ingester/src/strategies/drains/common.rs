@@ -4,13 +4,15 @@ use std::{
     sync::Arc,
 };
 
-use arrow_array::RecordBatch;
+use arrow_array::{Array, RecordBatch};
+use arrow_cast::display::array_value_to_string;
 use arrow_schema::Schema;
 use chrono::{DateTime, Utc};
 use parquet::{
-    arrow::ArrowWriter,
+    arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter},
     basic::{Compression, ZstdLevel},
     file::{
+        metadata::KeyValue,
         properties::WriterProperties,
         reader::{FileReader, SerializedFileReader},
     },
@@ -32,6 +34,8 @@ pub struct Chunk {
 }
 
 const LAKE_FREE_SPACE_RESERVE: u64 = 256 * 1024 * 1024;
+const CONTENT_DIGEST_KEY: &str = "ingester_source_rows_sha256";
+const MISSING_PARITY_PROOF: &str = "Parquet source-row parity proof is missing";
 
 pub async fn preflight_lake_root(
     root: &Path,
@@ -211,6 +215,7 @@ pub fn start_writer(
 ) {
     let (sender, mut receiver) = mpsc::channel::<RecordBatch>(2);
     let writer = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let mut content_digest = content_hasher(&schema);
         let file = File::create(&staging).map_err(|error| error.to_string())?;
         let properties = WriterProperties::builder()
             .set_compression(Compression::ZSTD(
@@ -221,8 +226,13 @@ pub fn start_writer(
         let mut writer = ArrowWriter::try_new(file, schema, Some(properties))
             .map_err(|error| error.to_string())?;
         while let Some(batch) = receiver.blocking_recv() {
+            hash_batch_rows(&mut content_digest, &batch)?;
             writer.write(&batch).map_err(|error| error.to_string())?;
         }
+        writer.append_key_value_metadata(KeyValue::new(
+            CONTENT_DIGEST_KEY.to_owned(),
+            format!("{:x}", content_digest.finalize()),
+        ));
         let mut file = writer.into_inner().map_err(|error| error.to_string())?;
         use std::io::Write;
         file.flush().map_err(|error| error.to_string())?;
@@ -320,21 +330,88 @@ async fn verify_hash(path: &Path, expected: &str, size: i64) -> Result<(), Drain
 
 async fn verify_parquet(path: &Path, expected: i64) -> Result<(), DrainExecutionError> {
     let path = path.to_owned();
-    let rows = tokio::task::spawn_blocking(move || {
-        SerializedFileReader::new(File::open(path).map_err(|error| error.to_string())?)
-            .map(|reader| reader.metadata().file_metadata().num_rows())
-            .map_err(|error| error.to_string())
+    let (rows, expected_digest, actual_digest) = tokio::task::spawn_blocking(move || {
+        let reader =
+            SerializedFileReader::new(File::open(&path).map_err(|error| error.to_string())?)
+                .map_err(|error| error.to_string())?;
+        let metadata = reader.metadata().file_metadata();
+        let proof = metadata
+            .key_value_metadata()
+            .and_then(|items| items.iter().find(|item| item.key == CONTENT_DIGEST_KEY))
+            .and_then(|item| item.value.clone())
+            .ok_or_else(|| MISSING_PARITY_PROOF.to_owned())?;
+        let builder = ParquetRecordBatchReaderBuilder::try_new(
+            File::open(&path).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+        let mut digest = content_hasher(builder.schema());
+        let mut observed_rows = 0i64;
+        for batch in builder
+            .with_batch_size(2048)
+            .build()
+            .map_err(|error| error.to_string())?
+        {
+            let batch = batch.map_err(|error| error.to_string())?;
+            observed_rows += batch.num_rows() as i64;
+            hash_batch_rows(&mut digest, &batch)?;
+        }
+        if observed_rows != metadata.num_rows() {
+            return Err(format!(
+                "Parquet metadata reports {} rows but payload has {observed_rows}",
+                metadata.num_rows()
+            ));
+        }
+        Ok::<_, String>((observed_rows, proof, format!("{:x}", digest.finalize())))
     })
     .await
     .map_err(|error| io_error(error.to_string()))?
-    .map_err(io_error)?;
+    .map_err(|error| invalid("drain_parity_unverified", error))?;
     if rows != expected {
         return Err(invalid(
             "drain_row_count_mismatch",
             format!("Parquet has {rows} rows, expected {expected}"),
         ));
     }
+    if actual_digest != expected_digest {
+        return Err(invalid(
+            "drain_payload_mismatch",
+            "Parquet row values differ from the exported source rows",
+        ));
+    }
     Ok(())
+}
+
+fn content_hasher(schema: &Schema) -> Sha256 {
+    let mut digest = Sha256::new();
+    digest.update((schema.fields().len() as u64).to_le_bytes());
+    for field in schema.fields() {
+        hash_value(&mut digest, field.name().as_bytes());
+        hash_value(&mut digest, format!("{:?}", field.data_type()).as_bytes());
+        digest.update([u8::from(field.is_nullable())]);
+    }
+    digest
+}
+
+fn hash_batch_rows(digest: &mut Sha256, batch: &RecordBatch) -> Result<(), String> {
+    for row in 0..batch.num_rows() {
+        digest.update([0x52]);
+        for column in batch.columns() {
+            if column.is_null(row) {
+                digest.update([0]);
+            } else {
+                digest.update([1]);
+                let value = array_value_to_string(column.as_ref(), row)
+                    .map_err(|error| error.to_string())?;
+                hash_value(digest, value.as_bytes());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn hash_value(digest: &mut Sha256, value: &[u8]) {
+    digest.update((value.len() as u64).to_le_bytes());
+    digest.update(value);
 }
 
 async fn sync_directory(path: PathBuf) -> Result<(), DrainExecutionError> {
@@ -390,6 +467,47 @@ mod lake_preflight_tests {
 #[cfg(test)]
 mod verified_file_tests {
     use super::*;
+    use arrow_array::StringArray;
+    use arrow_schema::{DataType, Field};
+
+    #[tokio::test]
+    async fn publication_requires_every_parquet_value_to_match_exported_rows() {
+        let root = std::env::temp_dir().join(format!("drain-parity-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).await.unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+        let source = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(StringArray::from(vec![Some("source"), None]))],
+        )
+        .unwrap();
+        let valid_path = root.join("valid.parquet");
+        let (sender, writer) = start_writer(valid_path.clone(), schema.clone());
+        sender.send(source.clone()).await.unwrap();
+        finish_writer(sender, writer).await.unwrap();
+        verify_parquet(&valid_path, 2).await.unwrap();
+
+        let mut source_digest = content_hasher(&schema);
+        hash_batch_rows(&mut source_digest, &source).unwrap();
+        let changed = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(StringArray::from(vec![Some("changed"), None]))],
+        )
+        .unwrap();
+        let changed_path = root.join("changed.parquet");
+        let mut writer =
+            ArrowWriter::try_new(File::create(&changed_path).unwrap(), schema, None).unwrap();
+        writer.write(&changed).unwrap();
+        writer.append_key_value_metadata(KeyValue::new(
+            CONTENT_DIGEST_KEY.to_owned(),
+            format!("{:x}", source_digest.finalize()),
+        ));
+        writer.close().unwrap();
+        assert_eq!(
+            verify_parquet(&changed_path, 2).await.unwrap_err().code,
+            "drain_payload_mismatch"
+        );
+        fs::remove_dir_all(root).await.unwrap();
+    }
 
     #[tokio::test]
     async fn stale_object_path_is_atomically_replaced_after_new_file_verification() {

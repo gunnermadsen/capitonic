@@ -17,7 +17,7 @@ use futures_util::TryStreamExt;
 use sqlx::{postgres::PgRow, Row};
 use std::{
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{atomic::Ordering, Arc},
 };
 use tokio::fs;
 use uuid::Uuid;
@@ -152,7 +152,18 @@ impl RetainedDrainAdapter for BtcFeatureSnapshotsDrain {
                     true,
                 ));
             }
-            let mut stream=sqlx::query("SELECT snapshot_id::text,feature_as_of::text,received_at::text,market_id,window_start::text,window_end::text,feature_schema_version,feature_hash,chainlink_price::text,chainlink_open_price::text,binance_price::text,seconds_to_close::text,chainlink_gap_bps::text,binance_return_1s_bps::text,binance_return_5s_bps::text,binance_return_30s_bps::text,realized_vol_30s_bps::text,basis_bps::text,up_best_bid::text,up_best_ask::text,down_best_bid::text,down_best_ask::text,up_depth_ask::text,down_depth_ask::text,up_imbalance::text,down_imbalance::text,chainlink_age_ms::text,binance_age_ms::text,book_age_ms::text,source_skew_ms::text,fair_up_probability::text,fair_up_lower::text,fair_up_upper::text,deterministic_logit::text,readiness_status,quality_flags::text,features::text,lineage::text,created_at::text FROM polymarket.btc_feature_snapshots WHERE feature_as_of >= $1 AND feature_as_of < $2").bind(start).bind(end).fetch(&c.pool);
+            let mut transaction = c.pool.begin().await.map_err(db_error)?;
+            sqlx::query("SELECT set_config('application_name',$1,true),set_config('statement_timeout','30s',true)")
+                .bind(format!("ingester-drain:{}", c.job_id))
+                .execute(&mut *transaction)
+                .await
+                .map_err(db_error)?;
+            let pid = sqlx::query_scalar::<_, i32>("SELECT pg_backend_pid()")
+                .fetch_one(&mut *transaction)
+                .await
+                .map_err(db_error)?;
+            c.active_read_pid.store(pid, Ordering::SeqCst);
+            let mut stream=sqlx::query("SELECT snapshot_id::text,feature_as_of::text,received_at::text,market_id,window_start::text,window_end::text,feature_schema_version,feature_hash,chainlink_price::text,chainlink_open_price::text,binance_price::text,seconds_to_close::text,chainlink_gap_bps::text,binance_return_1s_bps::text,binance_return_5s_bps::text,binance_return_30s_bps::text,realized_vol_30s_bps::text,basis_bps::text,up_best_bid::text,up_best_ask::text,down_best_bid::text,down_best_ask::text,up_depth_ask::text,down_depth_ask::text,up_imbalance::text,down_imbalance::text,chainlink_age_ms::text,binance_age_ms::text,book_age_ms::text,source_skew_ms::text,fair_up_probability::text,fair_up_lower::text,fair_up_upper::text,deterministic_logit::text,readiness_status,quality_flags::text,features::text,lineage::text,created_at::text FROM polymarket.btc_feature_snapshots WHERE feature_as_of >= $1 AND feature_as_of < $2").bind(start).bind(end).fetch(&mut *transaction);
             while let Some(row) = stream.try_next().await.map_err(db_error)? {
                 rows.push(row);
                 count += 1;
@@ -165,6 +176,8 @@ impl RetainedDrainAdapter for BtcFeatureSnapshotsDrain {
                 }
             }
             drop(stream);
+            c.active_read_pid.store(0, Ordering::SeqCst);
+            transaction.commit().await.map_err(db_error)?;
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         }
         if !rows.is_empty() {

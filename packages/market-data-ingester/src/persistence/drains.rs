@@ -64,6 +64,19 @@ impl DrainRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
+    pub async fn cancel_btc_feature_read(&self, job_id: Uuid, pid: i32) -> Result<()> {
+        sqlx::query(
+            "SELECT pg_cancel_backend(activity.pid) FROM pg_stat_activity activity \
+             WHERE activity.pid=$1 AND activity.application_name=$2 \
+             AND activity.state='active' AND activity.query LIKE \
+             'SELECT snapshot_id::text,feature_as_of::text,received_at::text,market_id%'",
+        )
+        .bind(pid)
+        .bind(format!("ingester-drain:{job_id}"))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
     pub async fn submit(
         &self,
         request: &DrainRequest,

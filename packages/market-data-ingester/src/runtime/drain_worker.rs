@@ -4,10 +4,17 @@ use crate::{
     persistence::{ClaimedDrainJob, DrainRepository},
 };
 use anyhow::{Context, Result};
-use std::{env, sync::Arc, time::Duration};
+use std::{
+    env,
+    sync::{
+        atomic::{AtomicI32, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 pub struct DrainWorkerRuntime {
     registry: StrategyRegistry,
@@ -108,6 +115,7 @@ impl DrainWorkerRuntime {
             },
         };
         let execution_shutdown = shutdown.child_token();
+        let active_read_pid = Arc::new(AtomicI32::new(0));
         let heartbeat_shutdown = execution_shutdown.clone();
         let heartbeat = self.heartbeat_loop(&claim, heartbeat_shutdown);
         tokio::pin!(heartbeat);
@@ -118,11 +126,12 @@ impl DrainWorkerRuntime {
                 lease_token: claim.lease_token,
                 worker_id: Arc::from(self.worker_id.clone()),
                 shutdown: execution_shutdown.clone(),
+                active_read_pid: active_read_pid.clone(),
             },
             request,
         );
         tokio::pin!(execution);
-        let result = tokio::select! {result=&mut execution=>result,result=&mut heartbeat=>{execution_shutdown.cancel();Err(DrainExecutionError::new("drain_lease_lost",result.err().map(|e|e.to_string()).unwrap_or_else(||"drain heartbeat ended".into()),true))},_=shutdown.cancelled()=>{execution_shutdown.cancel();Err(DrainExecutionError::new("drain_worker_shutdown","worker shutdown interrupted drain",true))}};
+        let result = tokio::select! {result=&mut execution=>result,result=&mut heartbeat=>{execution_shutdown.cancel();self.cancel_active_read(claim.job.job_id,&active_read_pid).await;Err(DrainExecutionError::new("drain_lease_lost",result.err().map(|e|e.to_string()).unwrap_or_else(||"drain heartbeat ended".into()),true))},_=shutdown.cancelled()=>{execution_shutdown.cancel();self.cancel_active_read(claim.job.job_id,&active_read_pid).await;Err(DrainExecutionError::new("drain_worker_shutdown","worker shutdown interrupted drain",true))}};
         execution_shutdown.cancel();
         match result {
             Ok(outcome) => {
@@ -136,6 +145,7 @@ impl DrainWorkerRuntime {
                 }
             }
             Err(error) => {
+                error!(job_id=%claim.job.job_id,strategy_key=%claim.job.strategy_key,error_code=error.code,error=%error.message,"drain job stopped after error");
                 if let Err(report) = self
                     .repository
                     .fail(
@@ -152,12 +162,20 @@ impl DrainWorkerRuntime {
             }
         }
     }
+    async fn cancel_active_read(&self, job_id: uuid::Uuid, active_read_pid: &AtomicI32) {
+        let pid = active_read_pid.load(Ordering::SeqCst);
+        if pid != 0 {
+            if let Err(error) = self.repository.cancel_btc_feature_read(job_id, pid).await {
+                warn!(job_id=%job_id,pid,error=%error,"failed to cancel active drain read");
+            }
+        }
+    }
     async fn heartbeat_loop(
         &self,
         claim: &ClaimedDrainJob,
         shutdown: CancellationToken,
     ) -> Result<()> {
-        let mut interval = tokio::time::interval(Duration::from_secs(15));
+        let mut interval = tokio::time::interval(Duration::from_secs(5));
         interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
         interval.tick().await;
         loop {

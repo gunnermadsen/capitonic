@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{atomic::AtomicI32, Arc};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -57,6 +57,7 @@ pub struct DrainContext {
     pub lease_token: Uuid,
     pub worker_id: Arc<str>,
     pub shutdown: CancellationToken,
+    pub active_read_pid: Arc<AtomicI32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
