@@ -259,14 +259,27 @@ pub async fn publish_file(
         )
     })?;
     fs::create_dir_all(directory).await.map_err(io_error)?;
-    if final_path.exists() {
-        verify_hash(&final_path, &sha256, byte_size).await?;
-        fs::remove_file(staging).await.map_err(io_error)?;
-    } else {
-        fs::rename(staging, &final_path).await.map_err(io_error)?;
-        sync_directory(directory.to_owned()).await?;
-    }
+    install_verified_file(staging, &final_path, &sha256, byte_size).await?;
     Ok((sha256, byte_size))
+}
+
+async fn install_verified_file(
+    staging: &Path,
+    final_path: &Path,
+    sha256: &str,
+    byte_size: i64,
+) -> Result<(), DrainExecutionError> {
+    if final_path.exists() {
+        match verify_hash(final_path, sha256, byte_size).await {
+            Ok(()) => return fs::remove_file(staging).await.map_err(io_error),
+            Err(error) if error.code == "drain_object_conflict" => {}
+            Err(error) => return Err(error),
+        }
+    }
+    // The new Parquet was verified before this atomic replacement; source removal
+    // still requires a matching publication and an unchanged source row count.
+    fs::rename(staging, final_path).await.map_err(io_error)?;
+    sync_directory(final_path.parent().unwrap().to_owned()).await
 }
 
 pub async fn verify_existing(
@@ -371,5 +384,51 @@ mod lake_preflight_tests {
         assert!(!has_enough_space(LAKE_FREE_SPACE_RESERVE, 1));
         assert!(has_enough_space(LAKE_FREE_SPACE_RESERVE + 1, 1));
         assert!(!has_enough_space(LAKE_FREE_SPACE_RESERVE, i64::MAX));
+    }
+}
+
+#[cfg(test)]
+mod verified_file_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn stale_object_path_is_atomically_replaced_after_new_file_verification() {
+        let root = std::env::temp_dir().join(format!("stale-drain-object-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).await.unwrap();
+        let final_path = root.join("object.parquet");
+        let staging = root.join("object.tmp");
+        fs::write(&final_path, b"old publication").await.unwrap();
+        fs::write(&staging, b"verified replacement").await.unwrap();
+        let (sha256, byte_size) = hash_file(&staging).await.unwrap();
+
+        install_verified_file(&staging, &final_path, &sha256, byte_size)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            fs::read(&final_path).await.unwrap(),
+            b"verified replacement"
+        );
+        assert!(!staging.exists());
+        fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn matching_object_path_is_reused() {
+        let root = std::env::temp_dir().join(format!("matching-drain-object-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).await.unwrap();
+        let final_path = root.join("object.parquet");
+        let staging = root.join("object.tmp");
+        fs::write(&final_path, b"same publication").await.unwrap();
+        fs::write(&staging, b"same publication").await.unwrap();
+        let (sha256, byte_size) = hash_file(&staging).await.unwrap();
+
+        install_verified_file(&staging, &final_path, &sha256, byte_size)
+            .await
+            .unwrap();
+
+        assert_eq!(fs::read(&final_path).await.unwrap(), b"same publication");
+        assert!(!staging.exists());
+        fs::remove_dir_all(root).await.unwrap();
     }
 }
