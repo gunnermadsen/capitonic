@@ -168,9 +168,12 @@ pub async fn detect(
 
     let chunks = sqlx::query_as::<_, ChunkRow>(
         "WITH targets AS (SELECT * FROM unnest($1::text[],$2::text[],$3::text[],$4::text[]) \
-         AS target(product_key,schema_name,table_name,drain_strategy_key)) \
+         AS target(product_key,schema_name,table_name,drain_strategy_key)), \
+         chunk_sizes AS MATERIALIZED (SELECT target.product_key,size.chunk_schema, \
+         size.chunk_name,size.total_bytes FROM targets target CROSS JOIN LATERAL \
+         chunks_detailed_size(format('%I.%I',target.schema_name,target.table_name)::regclass) size) \
          SELECT target.product_key,chunk.range_start,chunk.range_end, \
-         pg_total_relation_size(format('%I.%I',chunk.chunk_schema,chunk.chunk_name)::regclass)::bigint AS size_bytes, \
+         size.total_bytes::bigint AS size_bytes, \
          EXISTS (SELECT 1 FROM ingester.drain_objects object \
          WHERE object.strategy_key=NULLIF(target.drain_strategy_key,'') \
          AND object.source_chunk_schema=chunk.chunk_schema \
@@ -179,6 +182,8 @@ pub async fn detect(
          FROM targets target JOIN timescaledb_information.chunks chunk \
          ON chunk.hypertable_schema=target.schema_name \
          AND chunk.hypertable_name=target.table_name \
+         JOIN chunk_sizes size ON size.product_key=target.product_key \
+         AND size.chunk_schema=chunk.chunk_schema AND size.chunk_name=chunk.chunk_name \
          ORDER BY target.product_key,chunk.range_start,chunk.range_end",
     )
     .bind(&relation_product_keys)

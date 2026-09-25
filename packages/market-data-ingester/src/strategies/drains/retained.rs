@@ -99,13 +99,17 @@ pub async fn execute(
     .await
     .map_err(db_error)?;
     let chunks = sqlx::query_as::<_, Chunk>(
-        "SELECT chunk_schema,chunk_name,range_start,range_end, \
-         pg_total_relation_size(format('%I.%I',chunk_schema,chunk_name)::regclass)::bigint AS size_bytes \
-         FROM timescaledb_information.chunks WHERE hypertable_schema=$1 \
-         AND hypertable_name=$2 ORDER BY range_start,chunk_name",
+        "SELECT chunk.chunk_schema,chunk.chunk_name,chunk.range_start,chunk.range_end, \
+         size.total_bytes::bigint AS size_bytes \
+         FROM timescaledb_information.chunks chunk \
+         JOIN chunks_detailed_size($3::regclass) size \
+         ON size.chunk_schema=chunk.chunk_schema AND size.chunk_name=chunk.chunk_name \
+         WHERE chunk.hypertable_schema=$1 AND chunk.hypertable_name=$2 \
+         ORDER BY chunk.range_start,chunk.chunk_name",
     )
     .bind(spec.schema)
     .bind(spec.table)
+    .bind(spec.relation)
     .fetch_all(&context.pool)
     .await
     .map_err(db_error)?;
