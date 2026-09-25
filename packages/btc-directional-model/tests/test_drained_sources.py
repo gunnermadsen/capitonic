@@ -7,7 +7,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from btc_directional_model.drained_sources import removed_source_rows
+from btc_directional_model.drained_sources import removed_source_rows, require_no_removed_chunks
 
 
 class _Cursor:
@@ -81,4 +81,42 @@ def test_removed_source_rows_verifies_file_and_rejects_live_overlap(tmp_path):
     with pytest.raises(RuntimeError, match="hash or size mismatch"):
         removed_source_rows(
             _Connection(publication[:4] + ("0" * 64,) + publication[5:]), **arguments
+        )
+
+
+def test_postgres_only_extraction_rejects_removed_history() -> None:
+    class Cursor:
+        def __init__(self, overlap):
+            self.overlap = overlap
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def execute(self, *_):
+            pass
+
+        def fetchone(self):
+            return self.overlap
+
+    class Connection:
+        def __init__(self, overlap):
+            self.overlap = overlap
+
+        def cursor(self, **_):
+            return Cursor(self.overlap)
+
+    start = datetime(2026, 8, 2, tzinfo=UTC)
+    arguments = {
+        "strategy_keys": ("pmdata_chainlink_btcusd_twap",),
+        "range_start": start,
+        "range_end": start + timedelta(days=1),
+    }
+    require_no_removed_chunks(Connection(None), **arguments)
+    with pytest.raises(RuntimeError, match="would omit verified drained rows"):
+        require_no_removed_chunks(
+            Connection(("pmdata_chainlink_btcusd_twap", start, start + timedelta(days=1))),
+            **arguments,
         )

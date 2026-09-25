@@ -38,6 +38,36 @@ def completed_backfill_providers(
     return completed
 
 
+def require_no_removed_chunks(
+    connection: psycopg.Connection,
+    *,
+    strategy_keys: tuple[str, ...],
+    range_start: datetime,
+    range_end: datetime,
+) -> None:
+    """Prevent a PostgreSQL-only extractor from silently omitting removed rows."""
+    with connection.cursor(row_factory=tuple_row) as cursor:
+        cursor.execute(
+            """
+            SELECT strategy_key, source_start, source_end
+            FROM ingester.drain_objects
+            WHERE strategy_key = ANY(%s) AND status = 'removed'
+              AND source_end > %s AND source_start < %s
+            ORDER BY source_start
+            LIMIT 1
+            """,
+            (list(strategy_keys), range_start, range_end),
+        )
+        overlap = cursor.fetchone()
+    if overlap is not None:
+        strategy_key, source_start, source_end = overlap
+        raise RuntimeError(
+            "PostgreSQL-only training extraction would omit verified drained rows: "
+            f"{strategy_key} [{source_start}, {source_end}); "
+            "use the canonical drain Parquet reader"
+        )
+
+
 def removed_source_rows(
     connection: psycopg.Connection,
     *,

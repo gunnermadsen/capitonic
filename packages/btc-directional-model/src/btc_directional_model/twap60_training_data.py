@@ -41,6 +41,7 @@ from .core_features import (
     derive_oracle_point_in_time_features,
     prepare_causal_oracle_rounds,
 )
+from .drained_sources import require_no_removed_chunks
 
 REFPRICE_RUNTIME_FEATURES = (
     "chainlink_ref_return_1s_bps",
@@ -152,6 +153,21 @@ def extract_tournament_sources(
         return existing
     if force:
         checkpoint_path.unlink(missing_ok=True)
+
+    with database_connection() as connection:
+        configure_read_only_connection(connection)
+        require_no_removed_chunks(
+            connection,
+            strategy_keys=(
+                "binance_spot_btcusdt_one_second_ohlcv",
+                "polygon_chainlink_btcusd_oracle_rounds",
+                "pmdata_chainlink_btcusd_twap",
+                "chainlink_btcusd_one_minute_candles",
+                "polymarket_btc_capacity_execution_snapshots",
+            ),
+            range_start=range_start - timedelta(minutes=121),
+            range_end=range_end,
+        )
 
     sql = {
         "labels": paths.label_sql.read_text(),
