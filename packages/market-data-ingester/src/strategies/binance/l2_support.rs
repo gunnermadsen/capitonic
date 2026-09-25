@@ -72,8 +72,9 @@ pub const CRYPTOHFT_SPOT_AUDITED_SNAPSHOT_LAST_UPDATE_ID: i64 = 91_924_965_391;
 const WRITE_PROBE_BYTES: usize = 16 * 1024 * 1024;
 const IO_BUFFER_BYTES: usize = 1024 * 1024;
 const STALE_WORK_FILE_AGE: Duration = Duration::from_secs(6 * 60 * 60);
-const MAX_LOGICAL_EVENT_LEVELS: usize = 10_000;
 const MAX_BOOK_LEVELS_PER_SIDE: usize = 100_000;
+const MAX_SNAPSHOT_EVENT_LEVELS: usize = 2 * MAX_BOOK_LEVELS_PER_SIDE;
+const MAX_UPDATE_EVENT_LEVELS: usize = 10_000;
 const MIN_FUTURES_FULL_DEPTH_SNAPSHOT_LEVELS: usize = 1_000;
 const MIN_SPOT_FULL_DEPTH_SNAPSHOT_LEVELS: usize = 200;
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
@@ -2084,12 +2085,21 @@ impl LogicalEvent {
             }
             return Ok(());
         }
-        if self.levels.len() >= MAX_LOGICAL_EVENT_LEVELS {
-            bail!("CryptoHFT logical event exceeded the price-level safety bound");
-        }
+        ensure_event_level_capacity(self.key.event_type, self.levels.len())?;
         self.levels.insert(key, level);
         Ok(())
     }
+}
+
+fn ensure_event_level_capacity(event_type: EventType, current_levels: usize) -> Result<()> {
+    let limit = match event_type {
+        EventType::Snapshot => MAX_SNAPSHOT_EVENT_LEVELS,
+        EventType::Update => MAX_UPDATE_EVENT_LEVELS,
+    };
+    if current_levels >= limit {
+        bail!("CryptoHFT {event_type:?} event exceeded the {limit}-level safety bound");
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -4756,6 +4766,93 @@ mod tests {
         assert_eq!(
             event.levels.values().next().unwrap().quantity,
             Decimal::from(2)
+        );
+    }
+
+    #[test]
+    fn full_depth_snapshot_accepts_32872_distinct_levels() {
+        let timestamp = NaiveDate::from_ymd_opt(2026, 9, 23)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc();
+        let key = event_key(
+            timestamp,
+            EventType::Snapshot,
+            None,
+            Some(42),
+            None,
+            Some(42),
+        );
+        let mut event = LogicalEvent::new(
+            key,
+            PriceLevel {
+                side: BookSide::Bid,
+                price: Decimal::ONE,
+                quantity: Decimal::ONE,
+            },
+        );
+        for price in 2..=18_936 {
+            event
+                .push_level(PriceLevel {
+                    side: BookSide::Bid,
+                    price: Decimal::from(price),
+                    quantity: Decimal::ONE,
+                })
+                .unwrap();
+        }
+        for price in 100_000..113_936 {
+            event
+                .push_level(PriceLevel {
+                    side: BookSide::Ask,
+                    price: Decimal::from(price),
+                    quantity: Decimal::ONE,
+                })
+                .unwrap();
+        }
+        assert_eq!(event.levels.len(), 32_872);
+        assert!(is_valid_full_depth_snapshot(&event).unwrap());
+    }
+
+    #[test]
+    fn update_still_rejects_level_10001() {
+        let timestamp = NaiveDate::from_ymd_opt(2026, 9, 23)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc();
+        let mut event = update(timestamp, 101, 100, 1);
+        for price in 101..10_100 {
+            event
+                .push_level(PriceLevel {
+                    side: BookSide::Bid,
+                    price: Decimal::from(price),
+                    quantity: Decimal::ONE,
+                })
+                .unwrap();
+        }
+        assert_eq!(event.levels.len(), 10_000);
+        let error = event
+            .push_level(PriceLevel {
+                side: BookSide::Bid,
+                price: Decimal::from(10_100),
+                quantity: Decimal::ONE,
+            })
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Update event exceeded the 10000-level safety bound"));
+        assert_eq!(event.levels.len(), 10_000);
+    }
+
+    #[test]
+    fn snapshot_capacity_remains_bounded_by_both_book_sides() {
+        assert!(ensure_event_level_capacity(EventType::Snapshot, 32_872).is_ok());
+        assert!(
+            ensure_event_level_capacity(EventType::Snapshot, MAX_SNAPSHOT_EVENT_LEVELS - 1).is_ok()
+        );
+        assert!(
+            ensure_event_level_capacity(EventType::Snapshot, MAX_SNAPSHOT_EVENT_LEVELS).is_err()
         );
     }
 

@@ -74,7 +74,7 @@ pub async fn execute(
         let manifest =
             l2_support::download_hour(&client, &context.pool, &config, &spec, &cancellation)
                 .await
-                .map_err(backfill_support::source_error)?;
+                .map_err(|error| backfill_support::source_error(format!("{error:#}")))?;
         compressed_bytes = compressed_bytes.saturating_add(manifest.compressed_bytes);
         target_archives.push(manifest);
     }
@@ -101,7 +101,7 @@ pub async fn execute(
         let manifest =
             l2_support::download_hour(&client, &context.pool, &config, &spec, &cancellation)
                 .await
-                .map_err(backfill_support::source_error)?;
+                .map_err(|error| backfill_support::source_error(format!("{error:#}")))?;
         compressed_bytes = compressed_bytes.saturating_add(manifest.compressed_bytes);
         let has_bootstrap = manifest.validated_snapshot_events > 0;
         context_archives.push(manifest);
