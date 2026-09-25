@@ -546,6 +546,44 @@ def _build_daily_frame(
         {"range_start": start, "range_end": end},
         f"ref_twap_refprice_{start:%Y%m%d}",
     )
+    archived_refprice = removed_source_rows(
+        connection,
+        strategy_key="pmdata_chainlink_btcusd_reference_price",
+        relation="market_data.pmdata_chainlink_btcusd_reference_prices",
+        time_column="source_timestamp",
+        root=Path(
+            os.environ.get(
+                "PMDATA_CHAINLINK_REFERENCE_PRICE_DATA_ROOT",
+                "/Volumes/docker-data/polymarket-bot/pmdata-chainlink-reference-prices",
+            )
+        ),
+        range_start=start - timedelta(seconds=70),
+        range_end=end,
+        columns=(
+            "source",
+            "source_timestamp",
+            "received_at",
+            "valid_from_timestamp",
+            "expires_at",
+            "price",
+            "bid",
+            "ask",
+            "report_sha256",
+        ),
+    )
+    if archived_refprice.height:
+        archived_refprice = (
+            archived_refprice.filter(
+                (pl.col("source") == "pmdata_chainlink_streams")
+                & (pl.col("source_timestamp") >= start - timedelta(seconds=70))
+                & (pl.col("source_timestamp") < end)
+            )
+            .with_columns(*(pl.col(name).cast(pl.Float64) for name in ("price", "bid", "ask")))
+            .select(refprice.columns)
+        )
+        refprice = pl.concat((refprice, archived_refprice), how="vertical_relaxed").sort(
+            "source_timestamp", "received_at"
+        )
     complete_refprice = refprice.drop_nulls(
         [
             "source_timestamp",
