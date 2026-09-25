@@ -26,7 +26,7 @@ from .core_extract import (
     file_sha256,
     write_json_atomic,
 )
-from .drained_sources import removed_source_rows
+from .drained_sources import completed_capture_ids, removed_source_rows
 from .refprice_twap_training import _query_frame
 from .twap60_training_data import piecewise_average
 
@@ -436,6 +436,76 @@ def _extract_day(
         frames["open_interest"] = pl.concat(
             (frames["open_interest"], archived_interest), how="vertical_relaxed"
         ).sort("source_timestamp")
+    archived_candles = removed_source_rows(
+        connection,
+        strategy_key="chainlink_btcusd_one_minute_candles",
+        relation="market_data.chainlink_btcusd_one_minute_candles",
+        time_column="open_timestamp",
+        root=Path(
+            os.environ.get(
+                "CHAINLINK_ONE_MINUTE_CANDLES_DATA_ROOT",
+                "/Volumes/docker-data/polymarket-bot/chainlink-one-minute-candles",
+            )
+        ),
+        range_start=start - timedelta(minutes=66),
+        range_end=end,
+        columns=(
+            "source",
+            "symbol",
+            "open_timestamp",
+            "close_timestamp",
+            "provider_available_at",
+            "received_at",
+            "open_price",
+            "high_price",
+            "low_price",
+            "close_price",
+            "capture_artifact_id",
+        ),
+    )
+    if archived_candles.height:
+        archived_candles = archived_candles.filter(
+            (pl.col("symbol") == "BTCUSD")
+            & (pl.col("close_timestamp") == pl.col("open_timestamp") + pl.duration(minutes=1))
+            & (pl.col("close_timestamp") >= start - timedelta(minutes=65))
+            & (pl.col("close_timestamp") < end)
+        )
+        completed = completed_capture_ids(
+            connection, archived_candles["capture_artifact_id"].unique().to_list()
+        )
+        legacy = archived_candles.filter(
+            pl.col("capture_artifact_id").is_in(completed)
+        ).with_columns(
+            pl.col("close_timestamp").alias("available_at"),
+            pl.lit(1).alias("source_priority"),
+        )
+        canonical = (
+            archived_candles.filter(pl.col("source") == "chainlink_candlestick")
+            .with_columns(
+                pl.max_horizontal("received_at", "provider_available_at").alias("available_at"),
+                pl.lit(2).alias("source_priority"),
+            )
+            .filter(
+                pl.col("available_at").is_not_null()
+                & (pl.col("close_timestamp") <= pl.col("available_at"))
+            )
+        )
+        archived_candles = pl.concat((legacy, canonical), how="vertical_relaxed")
+        if archived_candles.height:
+            archived_candles = archived_candles.sort(
+                ["open_timestamp", "source_priority"], descending=[False, True]
+            ).unique(subset="open_timestamp", keep="first", maintain_order=True)
+            archived_candles = archived_candles.with_columns(
+                *(
+                    pl.col(name).cast(pl.Float64)
+                    for name in ("open_price", "high_price", "low_price", "close_price")
+                ),
+                pl.lit("market_data.chainlink_btcusd_one_minute_candles").alias("source_relation"),
+                pl.col("capture_artifact_id").alias("source_artifact_id"),
+            ).select(frames["candles"].columns)
+            frames["candles"] = pl.concat(
+                (frames["candles"], archived_candles), how="vertical_relaxed"
+            ).sort("open_timestamp")
     frames["labels"] = _attach_refprice_reconstructed_targets(
         frames["labels"],
         frames["refprice"],
