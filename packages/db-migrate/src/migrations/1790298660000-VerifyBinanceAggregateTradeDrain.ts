@@ -65,7 +65,9 @@ export class VerifyBinanceAggregateTradeDrain1790298660000 implements MigrationI
     await queryRunner.query(removal);
 
     await queryRunner.query(`
-      CREATE OR REPLACE FUNCTION ingester.remove_verified_binance_aggregate_trade_chunk(uuid,text)
+      CREATE OR REPLACE FUNCTION ingester.remove_verified_binance_aggregate_trade_chunk(
+        requested_object_id uuid, expected_sha256 text
+      )
       RETURNS bigint LANGUAGE plpgsql AS $$
       BEGIN
         RAISE EXCEPTION 'legacy aggregate-trade removal is disabled; use verified drain removal';

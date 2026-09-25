@@ -39,6 +39,7 @@ test('aggregate trades use the guarded verified chunk path', async () => {
   assert.match(statements[2], /guard_trigger := 'trg_reject_drained_binance_aggregate_trade_history'/);
   assert.match(statements[2], /immutability_trigger := 'trg_reject_market_data_binance_spot_aggregate_trade_change'/);
   assert.match(statements[3], /legacy aggregate-trade removal is disabled/);
+  assert.match(statements[3], /requested_object_id uuid, expected_sha256 text/);
 });
 
 test('an unexpected removal baseline prevents aggregate registration', async () => {
