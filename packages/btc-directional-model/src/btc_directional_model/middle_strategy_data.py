@@ -12,7 +12,8 @@ import numpy as np
 import polars as pl
 from scipy.special import ndtr
 
-from .core_extract import file_sha256
+from .core_extract import configure_read_only_connection, database_connection, file_sha256
+from .drained_sources import require_no_removed_chunks
 from .multivenue_early_entry_data import KEY_COLUMNS, TournamentDataConfig, build_panel
 from .spot_l2_chainlink_features import L2_FEATURES, join_qualified_l2
 from .twap60_training_data import (
@@ -492,6 +493,18 @@ def extract_normalized_twap_labels(
                 raise RuntimeError(f"exact TWAP60 label checkpoint changed: {path}")
         frames = [pl.read_parquet(cache / row["path"]) for row in payload["partitions"]]
         return pl.concat(frames, how="diagonal_relaxed", rechunk=True), payload
+
+    with database_connection() as connection:
+        configure_read_only_connection(connection)
+        require_no_removed_chunks(
+            connection,
+            strategy_keys=(
+                "pmdata_chainlink_btcusd_twap",
+                "polymarket_chainlink_btcusd_twap",
+            ),
+            range_start=range_start,
+            range_end=config.sealed_end,
+        )
 
     if force:
         partial.unlink(missing_ok=True)
