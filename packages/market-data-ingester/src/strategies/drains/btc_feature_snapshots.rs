@@ -25,7 +25,7 @@ const SPEC: RetainedDrainSpec = RetainedDrainSpec {
     relation: "polymarket.btc_feature_snapshots",
     schema: "polymarket",
     table: "btc_feature_snapshots",
-    retention_days: Some(14),
+    retention_days: Some(0),
 };
 const BATCH_ROWS: usize = 500;
 const COLUMNS: [&str; 39] = [
