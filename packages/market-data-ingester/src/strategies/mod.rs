@@ -297,6 +297,22 @@ pub fn registry() -> Result<StrategyRegistry, StrategyFactoryError> {
             drains::PolygonChainlinkOracleRoundsDrain::from_environment()
                 .map_err(|error| StrategyFactoryError::Construction(error.to_string()))?,
         ),
+        Arc::new(
+            drains::VerifiedRowsDrain::new(drains::VerifiedRowKind::Goes)
+                .map_err(|error| StrategyFactoryError::Construction(error.to_string()))?,
+        ),
+        Arc::new(
+            drains::VerifiedRowsDrain::new(drains::VerifiedRowKind::Hrrr)
+                .map_err(|error| StrategyFactoryError::Construction(error.to_string()))?,
+        ),
+        Arc::new(
+            drains::VerifiedRowsDrain::new(drains::VerifiedRowKind::MarketPayload)
+                .map_err(|error| StrategyFactoryError::Construction(error.to_string()))?,
+        ),
+        Arc::new(
+            drains::VerifiedRowsDrain::new(drains::VerifiedRowKind::ReferenceEvidence)
+                .map_err(|error| StrategyFactoryError::Construction(error.to_string()))?,
+        ),
     ];
     StrategyRegistry::from_factories(factories)?
         .with_backfills(backfills)?
@@ -380,12 +396,16 @@ mod tests {
                 "binance_spot_btcusdt_l2_snapshots",
                 "binance_spot_btcusdt_one_second_ohlcv",
                 "chainlink_btcusd_one_minute_candles",
+                "goes_abi_features",
+                "hrrr_environment_features",
                 "pmdata_chainlink_btcusd_reference_price",
                 "pmdata_chainlink_btcusd_twap",
                 "polygon_chainlink_btcusd_oracle_rounds",
                 "polymarket_btc_capacity_execution_snapshots",
                 "polymarket_btc_feature_snapshots",
                 "polymarket_btc_five_minute_orderbooks",
+                "polymarket_btc_interval_market_payload",
+                "polymarket_btc_market_reference_fact_evidence",
                 "polymarket_chainlink_btcusd_twap",
                 "polymarket_reference_price_ticks",
             ]

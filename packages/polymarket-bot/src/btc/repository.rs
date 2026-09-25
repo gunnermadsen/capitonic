@@ -1225,9 +1225,23 @@ impl BtcRepository {
               fee_exponent = EXCLUDED.fee_exponent,
               fee_taker_only = EXCLUDED.fee_taker_only,
               validation_status = EXCLUDED.validation_status,
-              validation_errors = EXCLUDED.validation_errors,
+              validation_errors = CASE WHEN EXISTS (
+                SELECT 1 FROM ingester.drain_objects drained
+                WHERE drained.strategy_key = 'polymarket_btc_interval_market_payload'
+                  AND drained.status = 'removed'
+                  AND drained.source_start <= EXCLUDED.window_start
+                  AND drained.source_end > EXCLUDED.window_start
+              ) THEN polymarket.btc_interval_markets.validation_errors
+                ELSE EXCLUDED.validation_errors END,
               last_refreshed_at = EXCLUDED.last_refreshed_at,
-              raw_payload = EXCLUDED.raw_payload,
+              raw_payload = CASE WHEN EXISTS (
+                SELECT 1 FROM ingester.drain_objects drained
+                WHERE drained.strategy_key = 'polymarket_btc_interval_market_payload'
+                  AND drained.status = 'removed'
+                  AND drained.source_start <= EXCLUDED.window_start
+                  AND drained.source_end > EXCLUDED.window_start
+              ) THEN polymarket.btc_interval_markets.raw_payload
+                ELSE EXCLUDED.raw_payload END,
               updated_at = now()
             WHERE polymarket.btc_interval_markets.event_id = EXCLUDED.event_id
               AND polymarket.btc_interval_markets.event_slug = EXCLUDED.event_slug

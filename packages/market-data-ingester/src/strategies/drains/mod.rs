@@ -18,6 +18,7 @@ mod polymarket_chainlink_twap;
 mod polymarket_orderbooks;
 mod reference_price_ticks;
 mod retained;
+mod verified_rows;
 
 pub use binance_aggregate_trades::BinanceAggregateTradesDrain;
 pub use binance_futures_l2_one_second_features::BinanceFuturesL2OneSecondFeaturesDrain;
@@ -34,3 +35,4 @@ pub use polygon_chainlink_oracle_rounds::PolygonChainlinkOracleRoundsDrain;
 pub use polymarket_chainlink_twap::PolymarketChainlinkTwapDrain;
 pub use polymarket_orderbooks::PolymarketOrderbooksDrain;
 pub use reference_price_ticks::ReferencePriceTicksDrain;
+pub use verified_rows::{VerifiedRowKind, VerifiedRowsDrain};

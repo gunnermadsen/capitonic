@@ -287,9 +287,14 @@ services:
       FRED_API_KEY: "${FRED_API_KEY:-}"
       INGESTER_WEATHER_RAW_ROOT: "/var/lib/weather/raw"
       INGESTER_WEATHER_CURATED_ROOT: "/var/lib/weather/curated"
+      INGESTER_GOES_ABI_FEATURES_LAKE_ROOT: "/var/lib/weather/curated/drains/goes-abi-features"
+      INGESTER_HRRR_ENVIRONMENT_FEATURES_LAKE_ROOT: "/var/lib/weather/curated/drains/hrrr-environment-features"
+      INGESTER_BTC_INTERVAL_MARKET_PAYLOAD_LAKE_ROOT: "/var/lib/verified-drains/polymarket/btc-interval-market-payload"
+      INGESTER_BTC_MARKET_REFERENCE_EVIDENCE_LAKE_ROOT: "/var/lib/verified-drains/polymarket/btc-market-reference-evidence"
     volumes:
       - pmxt-cache:/var/lib/pmxt-cache
-      # - ${WEATHER_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/temperature-expectancy}:/var/lib/weather
+      - ${WEATHER_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/temperature-expectancy}:/var/lib/weather
+      - ${VERIFIED_DRAIN_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/verified-drains}:/var/lib/verified-drains
       - ${BINANCE_L2_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/binance-l2}:/var/lib/binance-l2
       - ${BINANCE_AGG_TRADE_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/binance-aggregate-trades}:/var/lib/binance-aggregate-trades
       - ${POLYMARKET_ORDERBOOK_DATA_ROOT:-/Volumes/docker-data/polymarket-bot/orderbook-drain}:/var/lib/polymarket-orderbooks
