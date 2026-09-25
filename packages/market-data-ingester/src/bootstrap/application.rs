@@ -11,8 +11,8 @@ use crate::{
     control::{ControlApi, ControlReadiness},
     persistence::ProfileRepository,
     runtime::{
-        BackfillWorkerRuntime, DrainWorkerRuntime, StrategyRegistry, StrategySupervisor,
-        SupervisorSettings,
+        BackfillWorkerRuntime, DrainWorkerRuntime, KubernetesWorkerScaler, StrategyRegistry,
+        StrategySupervisor, SupervisorSettings,
     },
     streaming::Publisher,
 };
@@ -154,6 +154,15 @@ impl Application {
                 }
             }
         });
+        if let Some(scaler) = KubernetesWorkerScaler::from_environment(self.control_pool.clone())? {
+            let scaler_shutdown = shutdown.clone();
+            components.spawn(async move {
+                (
+                    "kubernetes worker scaler",
+                    scaler.run(scaler_shutdown).await,
+                )
+            });
+        }
         let component_failure = tokio::select! {
             _ = shutdown_signal() => {
                 info!("ingester master shutdown requested");
