@@ -102,14 +102,15 @@ pub async fn execute(
         "SELECT chunk.chunk_schema,chunk.chunk_name,chunk.range_start,chunk.range_end, \
          size.total_bytes::bigint AS size_bytes \
          FROM timescaledb_information.chunks chunk \
-         JOIN chunks_detailed_size($3::regclass) size \
+         JOIN chunks_detailed_size((SELECT relation.oid FROM pg_class relation \
+         JOIN pg_namespace namespace ON namespace.oid=relation.relnamespace \
+         WHERE namespace.nspname=$1 AND relation.relname=$2)) size \
          ON size.chunk_schema=chunk.chunk_schema AND size.chunk_name=chunk.chunk_name \
          WHERE chunk.hypertable_schema=$1 AND chunk.hypertable_name=$2 \
          ORDER BY chunk.range_start,chunk.chunk_name",
     )
     .bind(spec.schema)
     .bind(spec.table)
-    .bind(spec.relation)
     .fetch_all(&context.pool)
     .await
     .map_err(db_error)?;

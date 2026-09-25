@@ -171,7 +171,10 @@ pub async fn detect(
          AS target(product_key,schema_name,table_name,drain_strategy_key)), \
          chunk_sizes AS MATERIALIZED (SELECT target.product_key,size.chunk_schema, \
          size.chunk_name,size.total_bytes FROM targets target CROSS JOIN LATERAL \
-         chunks_detailed_size(format('%I.%I',target.schema_name,target.table_name)::regclass) size) \
+         chunks_detailed_size((SELECT relation.oid FROM pg_class relation \
+         JOIN pg_namespace namespace ON namespace.oid=relation.relnamespace \
+         WHERE namespace.nspname=target.schema_name \
+         AND relation.relname=target.table_name)) size) \
          SELECT target.product_key,chunk.range_start,chunk.range_end, \
          size.total_bytes::bigint AS size_bytes, \
          EXISTS (SELECT 1 FROM ingester.drain_objects object \
