@@ -47,6 +47,7 @@ SOURCE_SQL = {
     "aggregate_trades": "btc-refprice-context-trade-print-source.sql",
     "spot_l2": "btc-refprice-context-l2-source.sql",
 }
+CORE_MARKET_SQL = "btc-refprice-context-market-source.sql"
 SOURCE_RELATIONS = {
     "labels": ("polymarket.btc_interval_markets",),
     "core": (
@@ -186,7 +187,9 @@ def _validate_config(config: SourceConfig) -> None:
     ):
         raise ValueError("optional source applicability windows changed")
     sql_root = config.package_root / "sql"
-    missing = [name for name in SOURCE_SQL.values() if not (sql_root / name).is_file()]
+    missing = [
+        name for name in (*SOURCE_SQL.values(), CORE_MARKET_SQL) if not (sql_root / name).is_file()
+    ]
     if missing:
         raise FileNotFoundError(", ".join(missing))
 
@@ -227,6 +230,7 @@ def extract_source_artifacts(config: SourceConfig) -> dict[str, Any]:
         "query_sha256": {
             name: file_sha256(sql_root / sql_name) for name, sql_name in SOURCE_SQL.items()
         },
+        "core_market_query_sha256": file_sha256(sql_root / CORE_MARKET_SQL),
     }
     final_path = destination / "source-manifest.json"
     checkpoint_path = destination / "source-manifest.partial.json"
@@ -316,6 +320,125 @@ def extract_source_artifacts(config: SourceConfig) -> dict[str, Any]:
     return manifest
 
 
+def _archived_core_rows(
+    connection: Any,
+    config: SourceConfig,
+    start: datetime,
+    end: datetime,
+    output_columns: list[str],
+) -> pl.DataFrame:
+    archived = removed_source_rows(
+        connection,
+        strategy_key="binance_spot_btcusdt_one_second_ohlcv",
+        relation="market_data.binance_spot_btcusdt_one_second_ohlcv",
+        time_column="open_timestamp",
+        root=Path(
+            os.environ.get(
+                "BINANCE_ONE_SECOND_OHLCV_DATA_ROOT",
+                "/Volumes/docker-data/polymarket-bot/binance-one-second-ohlcv",
+            )
+        ),
+        range_start=start - timedelta(seconds=1),
+        range_end=end,
+        columns=(
+            "source",
+            "symbol",
+            "open_timestamp",
+            "close_timestamp",
+            "provider_available_at",
+            "received_at",
+            "open_price",
+            "high_price",
+            "low_price",
+            "close_price",
+            "base_volume",
+            "quote_volume",
+            "trade_count",
+            "taker_buy_base_volume",
+            "taker_buy_quote_volume",
+            "capture_artifact_id",
+        ),
+    )
+    if archived.is_empty():
+        return pl.DataFrame({column: [] for column in output_columns})
+    markets = _query_frame(
+        connection,
+        (config.package_root / "sql" / CORE_MARKET_SQL).read_text(),
+        {"batch_start": start, "batch_end": end},
+        f"ref_context_markets_{start:%Y%m%d}",
+    )
+    if markets.is_empty():
+        return pl.DataFrame({column: [] for column in output_columns})
+    if markets["window_start"].n_unique() != markets.height:
+        raise RuntimeError("RefPrice context archived core has ambiguous market windows")
+    completed = completed_capture_ids(
+        connection, archived["capture_artifact_id"].drop_nulls().unique().to_list()
+    )
+    archived = archived.filter(
+        (pl.col("symbol") == "BTCUSDT")
+        & (pl.col("open_timestamp") >= start - timedelta(seconds=1))
+        & (pl.col("open_timestamp") < end)
+    )
+    legacy = archived.filter(pl.col("capture_artifact_id").is_in(completed)).with_columns(
+        pl.col("close_timestamp").alias("available_at"),
+        pl.lit(1).alias("source_priority"),
+    )
+    canonical = (
+        archived.filter(pl.col("source") == "binance_spot")
+        .with_columns(
+            pl.max_horizontal("received_at", "provider_available_at").alias("available_at"),
+            pl.lit(2).alias("source_priority"),
+        )
+        .filter(
+            pl.col("available_at").is_not_null()
+            & (pl.col("close_timestamp") <= pl.col("available_at"))
+        )
+    )
+    return (
+        pl.concat((legacy, canonical), how="vertical_relaxed")
+        .sort(["open_timestamp", "source_priority"], descending=[False, True])
+        .unique(subset="open_timestamp", keep="first", maintain_order=True)
+        .with_columns((pl.col("open_timestamp") + pl.duration(seconds=1)).alias("observed_at"))
+        .sort("observed_at")
+        .join_asof(
+            markets.sort("window_start"),
+            left_on="observed_at",
+            right_on="window_start",
+            strategy="backward",
+        )
+        .filter(
+            pl.col("market_id").is_not_null()
+            & (pl.col("observed_at") < pl.col("window_end"))
+            & (pl.col("close_timestamp") < pl.col("observed_at"))
+        )
+        .with_columns(
+            (pl.col("observed_at") - pl.col("window_start"))
+            .dt.total_seconds()
+            .cast(pl.Int32)
+            .alias("seconds_elapsed"),
+            *(
+                pl.col(source).cast(pl.Float64).alias(target)
+                for source, target in (
+                    ("open_price", "btc_open"),
+                    ("high_price", "btc_high"),
+                    ("low_price", "btc_low"),
+                    ("close_price", "btc_close"),
+                    ("base_volume", "btc_base_volume"),
+                    ("quote_volume", "btc_quote_volume"),
+                    ("taker_buy_base_volume", "btc_taker_buy_base_volume"),
+                    ("taker_buy_quote_volume", "btc_taker_buy_quote_volume"),
+                )
+            ),
+            pl.col("available_at").alias("kline_available_at"),
+            pl.lit("market_data.binance_spot_btcusdt_one_second_ohlcv").alias(
+                "kline_source_relation"
+            ),
+            pl.col("capture_artifact_id").alias("kline_source_artifact_id"),
+        )
+        .select(output_columns)
+    )
+
+
 def _extract_day(
     connection: Any,
     config: SourceConfig,
@@ -375,6 +498,11 @@ def _extract_day(
         )
     else:
         frames["spot_l2"] = pl.DataFrame()
+    archived_core = _archived_core_rows(connection, config, start, end, frames["core"].columns)
+    if archived_core.height:
+        frames["core"] = pl.concat((frames["core"], archived_core), how="vertical_relaxed").sort(
+            ["window_start", "market_id", "observed_at"]
+        )
     archived_refprice = removed_source_rows(
         connection,
         strategy_key="pmdata_chainlink_btcusd_reference_price",
