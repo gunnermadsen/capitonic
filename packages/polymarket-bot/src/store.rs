@@ -1050,6 +1050,35 @@ impl Store {
         rows.into_iter().map(order_from_db_row).collect()
     }
 
+    /// FAK may have a cancelled remainder and a fill whose websocket event was missed.
+    /// Keep those terminal orders in the bounded REST fill backup window.
+    pub async fn live_process_recent_cancelled_fak_orders(
+        &self,
+        process_id: Uuid,
+        since: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<OrderRecord>> {
+        let rows = sqlx::query_as::<_, OrderDbRow>(
+            r#"
+            SELECT order_id, state, raw_payload, created_at, updated_at
+            FROM polymarket.orders
+            WHERE process_id = $1
+              AND created_at >= $2
+              AND state = 'cancelled'
+              AND order_type = 'fak'
+            ORDER BY created_at DESC, order_id
+            LIMIT $3
+            "#,
+        )
+        .bind(process_id)
+        .bind(since)
+        .bind(limit.clamp(1, 1_001))
+        .fetch_all(&self.pool)
+        .await
+        .context("failed to load bounded recent cancelled FAK orders")?;
+        rows.into_iter().map(order_from_db_row).collect()
+    }
+
     /// Returns unresolved orders for every live trading-process sleeve configured for one account.
     /// Process status is deliberately not part of ownership: stopped sleeves retain their orders,
     /// fills and positions until their financial state is terminal.

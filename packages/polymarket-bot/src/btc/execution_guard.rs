@@ -301,7 +301,7 @@ impl BtcReferenceExecutionGuard {
                 && request.market_id == intent.market_id
                 && request.token_id == intent.token_id
                 && request.side == OrderSide::Buy
-                && request.order_type == OrderType::Fok
+                && matches!(request.order_type, OrderType::Fok | OrderType::Fak)
                 && request.price == intent.limit_price
                 && request.size == intent.size,
             "reference execution request does not match the approved intent"
@@ -524,7 +524,7 @@ impl BtcReferenceExecutionGuard {
         if !is_sha256(&self.feature_sha256)
             || self.legacy_signal_id.is_some()
             || self.side != OrderSide::Buy
-            || self.order_type != OrderType::Fok
+            || !matches!(self.order_type, OrderType::Fok | OrderType::Fak)
             || self.limit_price <= Decimal::ZERO
             || self.limit_price > Decimal::ONE
             || self.size <= Decimal::ZERO
@@ -1353,6 +1353,35 @@ mod tests {
                 .unwrap_err(),
             BtcReferenceExecutionRejectReason::InvalidGuard
         );
+    }
+
+    #[test]
+    fn directional_model_guard_accepts_sealed_fak_and_rejects_order_type_mismatch() {
+        let checked_at = Utc.with_ymd_and_hms(2026, 7, 27, 12, 0, 0).unwrap();
+        let mut guard = sealed_directional_model_guard(checked_at);
+        guard.order_type = OrderType::Fak;
+        guard.evidence_sha256 = guard.calculate_evidence_sha256().unwrap();
+        let mut request = directional_model_request(&guard);
+        request.order_type = OrderType::Fak;
+        assert!(guard
+            .validate_for_request(
+                &request,
+                checked_at,
+                guard.process_id,
+                Duration::seconds(2),
+                Some(Duration::seconds(5)),
+            )
+            .is_ok());
+        request.order_type = OrderType::Fok;
+        assert!(guard
+            .validate_for_request(
+                &request,
+                checked_at,
+                guard.process_id,
+                Duration::seconds(2),
+                Some(Duration::seconds(5)),
+            )
+            .is_err());
     }
 
     #[test]

@@ -17,6 +17,7 @@ use crate::btc::{
         BtcDecisionStrategyConfig, BtcStrategyConfig, BTC_ASYMMETRIC_VALUE_MODEL_STRATEGY_VERSION,
     },
 };
+use crate::models::OrderType;
 
 pub const PROCESS_SCHEMA_VERSION: &str = "btc_realtime_paper_process_v4";
 
@@ -55,6 +56,8 @@ pub enum TieBreak {
 pub struct Member {
     pub member_id: String,
     pub selection: Selection,
+    #[serde(default, skip_serializing_if = "OrderType::is_fok")]
+    pub entry_order_type: OrderType,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -142,6 +145,10 @@ impl RouterDefinition {
         let mut ids = HashSet::new();
         for member in &self.models {
             ensure!(
+                matches!(member.entry_order_type, OrderType::Fok | OrderType::Fak),
+                "router entry_order_type must be fok or fak"
+            );
+            ensure!(
                 !member.member_id.is_empty()
                     && member.member_id.len() <= 64
                     && member
@@ -203,7 +210,7 @@ impl RouterDefinition {
         &self,
         base: &BtcStrategyConfig,
         source_keys: &HashSet<&str>,
-    ) -> Result<Vec<(String, BtcStrategyConfig)>> {
+    ) -> Result<Vec<(String, BtcStrategyConfig, OrderType)>> {
         self.validate()?;
         self.models
             .iter()
@@ -280,7 +287,7 @@ impl RouterDefinition {
                     member.member_id
                 );
                 strategy.validate()?;
-                Ok((member.member_id.clone(), strategy))
+                Ok((member.member_id.clone(), strategy, member.entry_order_type))
             })
             .collect()
     }
@@ -321,5 +328,29 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("checksums"));
+    }
+    #[test]
+    fn entry_order_type_is_member_scoped_and_defaults_to_fok() {
+        let mut value = definition();
+        value["models"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "member_id": "second",
+                "selection": {"type": "btc_directional_model", "model_key": "test"},
+                "entry_order_type": "fak"
+            }));
+        let router: RouterDefinition = serde_json::from_value(value).unwrap();
+        assert_eq!(router.models[0].entry_order_type, OrderType::Fok);
+        assert_eq!(router.models[1].entry_order_type, OrderType::Fak);
+        let saved = serde_json::to_value(&router).unwrap();
+        assert!(saved["models"][0].get("entry_order_type").is_none());
+        assert_eq!(saved["models"][1]["entry_order_type"], "fak");
+        let mut invalid = saved;
+        invalid["models"][1]["entry_order_type"] = "gtc".into();
+        assert!(serde_json::from_value::<RouterDefinition>(invalid)
+            .unwrap()
+            .validate()
+            .is_err());
     }
 }

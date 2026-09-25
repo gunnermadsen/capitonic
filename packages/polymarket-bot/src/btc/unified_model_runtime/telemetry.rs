@@ -70,6 +70,10 @@ struct RouterMember {
 struct MemberPerformance {
     prediction_outcomes: BTreeMap<&'static str, u64>,
     order_outcomes: BTreeMap<String, u64>,
+    entry_attempts: BTreeMap<(&'static str, &'static str), u64>,
+    entry_requested_shares: BTreeMap<&'static str, f64>,
+    entry_filled_shares: BTreeMap<&'static str, f64>,
+    entry_fill_progress: BTreeMap<(&'static str, &'static str), u64>,
     trade_outcomes: BTreeMap<&'static str, u64>,
     bucket_evaluations: BTreeMap<&'static str, u64>,
     feature_failures: BTreeMap<String, u64>,
@@ -694,6 +698,77 @@ pub fn member_order(id: Uuid, member: &str, state: &str) {
         }
     });
 }
+pub fn member_entry_attempt(
+    id: Uuid,
+    member: &str,
+    order_type: &'static str,
+    outcome: &'static str,
+    requested_shares: f64,
+    filled_shares: f64,
+) {
+    if !matches!(order_type, "fok" | "fak")
+        || !matches!(
+            outcome,
+            "submitted"
+                | "filled"
+                | "partial"
+                | "fok_unfilled"
+                | "fak_unfilled"
+                | "local_gate_rejected"
+                | "venue_rejected"
+        )
+        || !requested_shares.is_finite()
+        || requested_shares <= 0.0
+        || !filled_shares.is_finite()
+        || filled_shares < 0.0
+    {
+        return;
+    }
+    update(id, |p| {
+        if let Some(m) = p.members.get_mut(member) {
+            *m.performance
+                .entry_attempts
+                .entry((order_type, outcome))
+                .or_default() += 1;
+            *m.performance
+                .entry_requested_shares
+                .entry(order_type)
+                .or_default() += requested_shares;
+            *m.performance
+                .entry_filled_shares
+                .entry(order_type)
+                .or_default() += filled_shares;
+        }
+    });
+}
+
+pub fn member_entry_fill_progress(
+    id: Uuid,
+    member: &str,
+    order_type: &'static str,
+    progress: &'static str,
+    new_shares: f64,
+) {
+    if !matches!(order_type, "fok" | "fak")
+        || !matches!(progress, "partial" | "full")
+        || !new_shares.is_finite()
+        || new_shares <= 0.0
+    {
+        return;
+    }
+    update(id, |p| {
+        if let Some(m) = p.members.get_mut(member) {
+            *m.performance
+                .entry_fill_progress
+                .entry((order_type, progress))
+                .or_default() += 1;
+            *m.performance
+                .entry_filled_shares
+                .entry(order_type)
+                .or_default() += new_shares;
+        }
+    });
+}
 #[allow(clippy::too_many_arguments)]
 pub fn member_fill(
     id: Uuid,
@@ -1032,6 +1107,10 @@ pub fn prometheus_metrics() -> String {
                 out.push_str("# HELP polymarket_umr_model_member_activity_events_total Session-scoped member opportunity and arbitration transitions.\n# TYPE polymarket_umr_model_member_activity_events_total counter\n");
                 out.push_str("# HELP polymarket_umr_model_member_prediction_outcomes_total Session-scoped resolved prediction outcomes.\n# TYPE polymarket_umr_model_member_prediction_outcomes_total counter\n");
                 out.push_str("# HELP polymarket_umr_model_member_order_outcomes_total Session-scoped execution order outcomes attributed to the selected member.\n# TYPE polymarket_umr_model_member_order_outcomes_total counter\n");
+                out.push_str("# HELP polymarket_umr_model_member_entry_attempts_total Session-scoped entry attempts by order type and immediate outcome.\n# TYPE polymarket_umr_model_member_entry_attempts_total counter\n");
+                out.push_str("# HELP polymarket_umr_model_member_entry_requested_shares_total Session-scoped requested entry shares by order type.\n# TYPE polymarket_umr_model_member_entry_requested_shares_total counter\n");
+                out.push_str("# HELP polymarket_umr_model_member_entry_filled_shares_total Session-scoped confirmed entry shares by order type.\n# TYPE polymarket_umr_model_member_entry_filled_shares_total counter\n");
+                out.push_str("# HELP polymarket_umr_model_member_entry_fill_progress_total Session-scoped confirmed fill progress events by order type.\n# TYPE polymarket_umr_model_member_entry_fill_progress_total counter\n");
                 out.push_str("# HELP polymarket_umr_model_member_trade_outcomes_total Session-scoped settled economic outcomes attributed to the selected member.\n# TYPE polymarket_umr_model_member_trade_outcomes_total counter\n");
                 out.push_str("# HELP polymarket_umr_model_member_bucket_evaluations_total Session-scoped inference evaluations classified against the immutable claimed bucket.\n# TYPE polymarket_umr_model_member_bucket_evaluations_total counter\n");
                 out.push_str("# HELP polymarket_umr_model_member_feature_failures_total Session-scoped feature failures by bounded reason.\n# TYPE polymarket_umr_model_member_feature_failures_total counter\n");
@@ -1076,6 +1155,18 @@ pub fn prometheus_metrics() -> String {
             }
             for (state, count) in &member.performance.order_outcomes {
                 let _ = writeln!(out, "polymarket_umr_model_member_order_outcomes_total{{{member_labels},state=\"{}\"}} {count}", escaped(state));
+            }
+            for ((order_type, outcome), count) in &member.performance.entry_attempts {
+                let _ = writeln!(out, "polymarket_umr_model_member_entry_attempts_total{{{member_labels},order_type=\"{order_type}\",outcome=\"{outcome}\"}} {count}");
+            }
+            for (order_type, shares) in &member.performance.entry_requested_shares {
+                let _ = writeln!(out, "polymarket_umr_model_member_entry_requested_shares_total{{{member_labels},order_type=\"{order_type}\"}} {shares}");
+            }
+            for (order_type, shares) in &member.performance.entry_filled_shares {
+                let _ = writeln!(out, "polymarket_umr_model_member_entry_filled_shares_total{{{member_labels},order_type=\"{order_type}\"}} {shares}");
+            }
+            for ((order_type, progress), count) in &member.performance.entry_fill_progress {
+                let _ = writeln!(out, "polymarket_umr_model_member_entry_fill_progress_total{{{member_labels},order_type=\"{order_type}\",progress=\"{progress}\"}} {count}");
             }
             for (outcome, count) in &member.performance.trade_outcomes {
                 let _ = writeln!(out, "polymarket_umr_model_member_trade_outcomes_total{{{member_labels},outcome=\"{outcome}\"}} {count}");
@@ -1231,6 +1322,24 @@ pub fn prometheus_metrics() -> String {
 #[cfg(test)]
 mod router_tests {
     use super::*;
+    #[test]
+    fn entry_fill_metrics_keep_fok_and_fak_separate() {
+        let id = Uuid::new_v4();
+        let identity = RuntimeModelSelection {
+            model_key: "test".into(),
+            artifact_sha256: "a".repeat(64),
+            feature_schema_sha256: "b".repeat(64),
+        };
+        register_member(id, "primary", &identity, 30, 210);
+        member_entry_attempt(id, "primary", "fok", "fok_unfilled", 5.0, 0.0);
+        member_entry_attempt(id, "primary", "fak", "submitted", 5.0, 0.0);
+        member_entry_fill_progress(id, "primary", "fak", "partial", 2.5);
+        let metrics = prometheus_metrics();
+        assert!(metrics.contains("order_type=\"fok\",outcome=\"fok_unfilled\"} 1"));
+        assert!(metrics.contains("order_type=\"fak\",outcome=\"submitted\"} 1"));
+        assert!(metrics.contains("order_type=\"fak\",progress=\"partial\"} 1"));
+        assert!(metrics.contains("order_type=\"fak\"} 2.5"));
+    }
     #[test]
     fn an_unready_member_does_not_poison_a_ready_member() {
         let id = Uuid::new_v4();

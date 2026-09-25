@@ -128,7 +128,7 @@ impl BtcProcessManager {
             ));
         }
         let members = resolve_btc_members(&control)?;
-        for (_, member) in &members {
+        for (_, member, _) in &members {
             validate_directional_model_entry_policy(
                 member,
                 control.paper.directional_model_entry_policy,

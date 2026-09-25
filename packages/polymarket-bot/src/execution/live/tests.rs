@@ -463,6 +463,50 @@ mod tests {
     }
 
     #[test]
+    fn rest_fill_backfill_recovers_partial_fill_for_cancelled_fak_order() {
+        let process_id = Uuid::new_v4();
+        let checked_at = Utc::now();
+        let mut order = rest_backfill_order(
+            process_id,
+            "venue-order-cancelled-fak",
+            OrderSide::Buy,
+            dec!(0.50),
+            dec!(5),
+            checked_at - chrono::Duration::seconds(2),
+        );
+        order.request.order_type = OrderType::Fak;
+        order.state = OrderState::Cancelled;
+        let trade = taker_trade(
+            "trade-cancelled-fak",
+            "venue-order-cancelled-fak",
+            dec!(0.50),
+            dec!(2.5),
+            dec!(25),
+            checked_at - chrono::Duration::seconds(1),
+        );
+        let owned_orders = HashMap::from([(
+            "venue-order-cancelled-fak".to_string(),
+            "venue-order-cancelled-fak".to_string(),
+        )]);
+        let fills = rest_fill_backfill_plan(
+            process_id,
+            std::slice::from_ref(&order),
+            &owned_orders,
+            &[trade],
+            checked_at,
+        )
+        .unwrap();
+        assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].size, dec!(2.5));
+        validate_live_cumulative_fill_economics(
+            &order.request,
+            fills[0].size,
+            fills[0].price * fills[0].size,
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn rest_fill_backfill_accepts_price_improved_buy_shares_within_authorized_notional() {
         let process_id = Uuid::new_v4();
         let checked_at = Utc::now();
@@ -1414,6 +1458,17 @@ mod tests {
                 OrderType::Gtc,
                 Some("order couldn't be fully filled")
             ),
+            LIVE_VENUE_REJECTED_REASON
+        );
+        assert_eq!(
+            definitive_live_venue_reject_reason(
+                OrderType::Fak,
+                Some("no orders found to match with FAK order")
+            ),
+            LIVE_VENUE_FAK_UNFILLED_REASON
+        );
+        assert_eq!(
+            definitive_live_venue_reject_reason(OrderType::Fak, Some("invalid signature")),
             LIVE_VENUE_REJECTED_REASON
         );
     }

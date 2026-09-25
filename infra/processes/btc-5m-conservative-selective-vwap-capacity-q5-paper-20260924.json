@@ -1,29 +1,23 @@
 {
-  "name": "BTC 5m conservative selective live pilot",
+  "name": "BTC 5m conservative selective VWAP capacity Q5 paper",
   "process_type": "btc_5m",
   "process_scope": "realtime_paper",
-  "process_key": "btc-5m-conservative-selective-live-pilot-20260921",
+  "process_key": "btc-5m-conservative-selective-vwap-capacity-q5-paper-20260924",
   "enabled": false,
   "status": "created",
   "config": {
     "execution": {
-      "mode": "live",
-      "execute_signals": false,
+      "mode": "paper",
+      "execute_signals": true,
       "live_capital": false,
-      "account_ref": "polymarket-primary",
-      "taker_fee_rate": null,
-      "max_order_notional_usd": "3",
-      "max_open_notional_usd": "3",
-      "max_open_positions": 1,
-      "max_daily_loss_usd": "3",
-      "require_exit_book": true
+      "taker_fee_rate": null
     },
     "raw": {
       "btc_realtime_paper": {
         "schema_version": "btc_realtime_paper_process_v4",
         "playbook_version": "v1.2",
-        "next_experiment_key": "btc-5m-conservative-selective-live-pilot-20260925-fak-run",
-        "preregistration_sha256": "1b142232c45a4af8f578e1a3a8ecb3be92bf90286a5de1be3216c9b1d3a38af6",
+        "next_experiment_key": "btc-5m-conservative-selective-vwap-capacity-q5-paper-20260924-run",
+        "preregistration_sha256": "7699c859316953367fe4b71f30696a73729ae7047edf302524a3c6366ea3f559",
         "sources": [
           "polymarket_btc_five_minute_market_contracts",
           "polymarket_btc_five_minute_orderbooks",
@@ -41,17 +35,16 @@
             "models": [
               {
                 "member_id": "primary",
-                "entry_order_type": "fak",
                 "selection": {
                   "type": "btc_directional_model",
-                  "model_key": "btc-5m-conservative-selective-development-live-pilot-20260921-v1",
-                  "artifact_sha256": "a26e1a7fbc014c362ec20251b6242c1953e8a59a0c34dfab2912a90c459405c7",
+                  "model_key": "btc-5m-conservative-selective-vwap-capacity-q5-paper-20260924",
+                  "artifact_sha256": "61c895293a6532e63d9dd6b6b6e1e58869b825a218523c2d181b6f6da1a4a54e",
                   "feature_schema_sha256": "5dceedc374621f50e844ddf43cea5f58068c4dc70c36169c037dbb2691c7f39a"
                 }
               }
             ]
           },
-          "target_size": "5",
+          "target_size": "5.0",
           "min_seconds_after_open": 30,
           "min_seconds_before_close": 90,
           "max_reference_age_ms": 2000,
@@ -97,22 +90,15 @@
   },
   "metadata": {
     "strategy_family": "btc_5m_directional_model",
-    "model_key": "btc-5m-conservative-selective-development-live-pilot-20260921-v1",
-    "model_artifact_sha256": "a26e1a7fbc014c362ec20251b6242c1953e8a59a0c34dfab2912a90c459405c7",
+    "model_key": "btc-5m-conservative-selective-vwap-capacity-q5-paper-20260924",
+    "model_artifact_sha256": "61c895293a6532e63d9dd6b6b6e1e58869b825a218523c2d181b6f6da1a4a54e",
     "model_feature_schema_version": "btc-5m-payoff-aware-conservative-price-v1",
     "model_feature_schema_sha256": "5dceedc374621f50e844ddf43cea5f58068c4dc70c36169c037dbb2691c7f39a",
-    "source_training_model_sha256": "88744a1cc1fb0af824a902212906944ea7873433e672111d38a740afc3e01481",
-    "source_process_id": "469d761a-0918-43a9-b708-37ce23ab20dc",
-    "source_process_key": "btc-5m-conservative-selective-paper-20260917",
-    "account_ref": "polymarket-primary",
-    "deployment_scope": "development_live_pilot",
+    "deployment_scope": "paper_only",
     "production_qualified": false,
-    "live_capital_allowed": true,
-    "credential_validation_only": true,
-    "live_execution_authorized": false,
     "umr_contract": "capitonic-unified-model-runtime-v1",
     "directional_model_entry_policy": "execute_directional_prediction",
     "native_admission": true,
-    "preregistration": "2026-09-21|btc-5m-conservative-selective-development-live-pilot-20260921-v1|paper-process-cutover|source-process-469d761a-0918-43a9-b708-37ce23ab20dc|account-ref-polymarket-primary|5-shares|seconds-30-210-q5|confidence-0.88|stressed-edge-0.10|max-share-cost-0.55|execution-disabled-pending-preflight"
+    "unavailable_optional_inputs": []
   }
 }
