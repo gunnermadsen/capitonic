@@ -146,13 +146,6 @@ async fn export_chunk(
             .map_err(|_| io_error("Parquet writer stopped"))?;
     }
     finish_writer(sender, writer).await?;
-    if count == 0 {
-        let _ = fs::remove_file(&staging).await;
-        return Err(invalid(
-            "drain_empty_chunk",
-            "eligible Timescale chunk contained no rows",
-        ));
-    }
     let partition = format!(
         "provider=binance_spot/dataset=aggregate_trades/symbol=BTCUSDT/year={}/month={}/day={}",
         chunk.range_start.format("%Y"),

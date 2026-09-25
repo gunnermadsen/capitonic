@@ -39,3 +39,32 @@ fn partial_historical_cutoff_is_valid_for_aggregate_trades() {
     };
     adapter.validate_request(&request).unwrap();
 }
+
+#[tokio::test]
+async fn empty_closed_chunk_can_publish_verified_parquet() {
+    use crate::strategies::drains::{
+        binance_schema,
+        common::{finish_writer, publish_file, start_writer, verify_existing, Publication},
+    };
+    use uuid::Uuid;
+
+    let root = std::env::temp_dir().join(format!("aggregate-empty-drain-{}", Uuid::new_v4()));
+    tokio::fs::create_dir_all(&root).await.unwrap();
+    let staging = root.join("empty.tmp");
+    let (sender, writer) = start_writer(staging.clone(), binance_schema::schema());
+    finish_writer(sender, writer).await.unwrap();
+    let (sha256, byte_size) = publish_file(&staging, &root, "empty.parquet", 0)
+        .await
+        .unwrap();
+    assert!(byte_size > 0);
+    let publication = Publication {
+        object_id: Uuid::new_v4(),
+        row_count: 0,
+        relative_path: "empty.parquet".into(),
+        sha256,
+        byte_size,
+        status: "published".into(),
+    };
+    verify_existing(&root, &publication).await.unwrap();
+    tokio::fs::remove_dir_all(root).await.unwrap();
+}
