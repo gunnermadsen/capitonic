@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -41,7 +42,7 @@ from .core_features import (
     derive_oracle_point_in_time_features,
     prepare_causal_oracle_rounds,
 )
-from .drained_sources import require_no_removed_chunks
+from .drained_sources import completed_capture_ids, removed_source_rows, require_no_removed_chunks
 
 REFPRICE_RUNTIME_FEATURES = (
     "chainlink_ref_return_1s_bps",
@@ -162,7 +163,6 @@ def extract_tournament_sources(
                 "binance_spot_btcusdt_one_second_ohlcv",
                 "polygon_chainlink_btcusd_oracle_rounds",
                 "pmdata_chainlink_btcusd_twap",
-                "chainlink_btcusd_one_minute_candles",
                 "polymarket_btc_capacity_execution_snapshots",
             ),
             range_start=range_start - timedelta(minutes=121),
@@ -354,24 +354,50 @@ def _query_completed_candles(
     candles = _isolated_query_frame(
         query, parameters, cursor_name=cursor_name
     )
-    if candles.is_empty():
-        return candles
-    artifact_ids = candles["artifact_id"].unique().to_list()
     connection = database_connection()
     configure_read_only_connection(connection)
     try:
-        rows = connection.execute(
-            """
-            SELECT artifact_id::text
-            FROM ingester.capture_artifacts
-            WHERE artifact_id = ANY(%s::uuid[])
-              AND status = 'completed'
-            """,
-            (artifact_ids,),
-        ).fetchall()
+        archived = removed_source_rows(
+            connection,
+            strategy_key="chainlink_btcusd_one_minute_candles",
+            relation="market_data.chainlink_btcusd_one_minute_candles",
+            time_column="open_timestamp",
+            root=Path(os.environ.get(
+                "CHAINLINK_ONE_MINUTE_CANDLES_DATA_ROOT",
+                "/Volumes/docker-data/polymarket-bot/chainlink-one-minute-candles",
+            )),
+            range_start=parameters["history_start"] - timedelta(minutes=1),
+            range_end=parameters["range_end"],
+            columns=(
+                "symbol", "open_timestamp", "close_timestamp", "capture_artifact_id",
+                "open_price", "high_price", "low_price", "close_price",
+            ),
+        )
+        if archived.height:
+            archived = (
+                archived.filter(
+                    (pl.col("symbol") == parameters["candle_symbol"])
+                    & (pl.col("close_timestamp") >= parameters["history_start"])
+                    & (pl.col("close_timestamp") < parameters["range_end"])
+                    & (pl.col("close_timestamp") == pl.col("open_timestamp") + pl.duration(minutes=1))
+                )
+                .with_columns(
+                    pl.col("close_timestamp").alias("available_at"),
+                    pl.col("capture_artifact_id").alias("artifact_id"),
+                    *(pl.col(name).cast(pl.Float64) for name in (
+                        "open_price", "high_price", "low_price", "close_price",
+                    )),
+                )
+                .select(candles.columns)
+            )
+            candles = pl.concat((candles, archived), how="vertical_relaxed")
+        if candles.is_empty():
+            return candles
+        completed = completed_capture_ids(
+            connection, candles["artifact_id"].drop_nulls().unique().to_list()
+        )
     finally:
         connection.close()
-    completed = [row[0] for row in rows]
     filtered = candles.filter(pl.col("artifact_id").is_in(completed))
     if filtered.height != candles.height:
         raise RuntimeError("candle source includes a non-completed artifact")
