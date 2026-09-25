@@ -42,7 +42,12 @@ from .core_features import (
     derive_oracle_point_in_time_features,
     prepare_causal_oracle_rounds,
 )
-from .drained_sources import completed_capture_ids, removed_source_rows, require_no_removed_chunks
+from .drained_sources import (
+    completed_backfill_providers,
+    completed_capture_ids,
+    removed_source_rows,
+    require_no_removed_chunks,
+)
 
 REFPRICE_RUNTIME_FEATURES = (
     "chainlink_ref_return_1s_bps",
@@ -241,6 +246,9 @@ def extract_tournament_sources(
                 capacity=True,
             ),
         }
+        frames["refprice"] = _with_archived_refprice(
+            frames["refprice"], day, end
+        )
         for name, frame in frames.items():
             directory = paths.cache / name
             directory.mkdir(parents=True, exist_ok=True)
@@ -343,6 +351,59 @@ def _query_stable_frame(
     if not chunks:
         return pl.DataFrame({column: [] for column in columns})
     return pl.concat(chunks, how="vertical_relaxed", rechunk=True)
+
+
+def _with_archived_refprice(
+    live: pl.DataFrame, start: datetime, end: datetime
+) -> pl.DataFrame:
+    connection = database_connection()
+    configure_read_only_connection(connection)
+    try:
+        archived = removed_source_rows(
+            connection,
+            strategy_key="pmdata_chainlink_btcusd_reference_price",
+            relation="market_data.pmdata_chainlink_btcusd_reference_prices",
+            time_column="source_timestamp",
+            root=Path(os.environ.get(
+                "PMDATA_CHAINLINK_REFERENCE_PRICE_DATA_ROOT",
+                "/Volumes/docker-data/polymarket-bot/pmdata-chainlink-reference-prices",
+            )),
+            range_start=start - timedelta(seconds=125),
+            range_end=end,
+            columns=(
+                "source", "source_timestamp", "valid_from_timestamp",
+                "provider_available_at", "received_at", "price", "bid", "ask",
+                "report_version", "source_date", "archive_row_number",
+                "backfill_artifact_id", "report_sha256",
+            ),
+        )
+        if archived.is_empty():
+            return live
+        completed = completed_backfill_providers(
+            connection, archived["backfill_artifact_id"].drop_nulls().unique().to_list()
+        )
+    finally:
+        connection.close()
+    archived = (
+        archived.filter(
+            (pl.col("source") == "pmdata_chainlink_streams")
+            & (pl.col("source_timestamp") >= start - timedelta(seconds=125))
+            & (pl.col("source_timestamp") < end)
+            & pl.col("valid_from_timestamp").is_not_null()
+            & pl.col("provider_available_at").is_not_null()
+            & pl.col("received_at").is_not_null()
+            & (pl.col("price") > 0)
+            & pl.col("backfill_artifact_id").is_in(list(completed))
+        )
+        .with_columns(
+            pl.col("backfill_artifact_id").alias("artifact_id"),
+            *(pl.col(name).cast(pl.Float64) for name in ("price", "bid", "ask")),
+        )
+        .select(live.columns)
+    )
+    return pl.concat((live, archived), how="vertical_relaxed").sort(
+        "source_timestamp", "archive_row_number"
+    )
 
 
 def _query_completed_candles(

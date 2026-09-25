@@ -11,7 +11,7 @@ SELECT
   report.archive_row_number,
   report.backfill_artifact_id::text AS artifact_id,
   report.report_sha256
-FROM market_data.chainlink_btcusd_reference_prices report
+FROM market_data.pmdata_chainlink_btcusd_reference_prices report
 JOIN ingester.backfill_artifacts artifact
   ON artifact.artifact_id = report.backfill_artifact_id
  AND artifact.status = 'completed'
