@@ -22,10 +22,10 @@ import numpy as np
 import polars as pl
 import pyarrow as pa
 
+from .capacity_training import EVIDENCE_SCHEMA, _archived_capacity_rows
 from .chainlink_oi_features import (
     _attach_candle_features,
 )
-from .capacity_training import EVIDENCE_SCHEMA, _archived_capacity_rows
 from .continuous_edge_training import (
     BOOK_RAW_FEATURES,
     CAPACITY_SCHEMA,

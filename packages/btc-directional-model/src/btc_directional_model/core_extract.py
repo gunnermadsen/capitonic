@@ -10,8 +10,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
-import psycopg
 import polars as pl
+import psycopg
 import pyarrow as pa
 import pyarrow.parquet as pq
 
