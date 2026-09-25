@@ -182,7 +182,7 @@ impl ModelAdapter for Adapter {
         let up = p >= 0.5;
         let confidence = p.max(1.0 - p);
         let cost = values[if up { self.up_cost } else { self.down_cost }];
-        let (accepted, reason, stressed_edge) = match &self.policy {
+        let (accepted, reason, stressed_edge, failed_policy_checks) = match &self.policy {
             Policy::Bucket(policy) => {
                 let fee = values[self.fee.expect("validated bucket fee feature")];
                 ensure!(fee.is_finite() && fee >= 0.0, "invalid bucket fee");
@@ -201,6 +201,7 @@ impl ModelAdapter for Adapter {
                         && edge >= policy.minimum_edge,
                     "frozen_bucket_policy",
                     None,
+                    None,
                 )
             }
             Policy::Conservative(policy) => {
@@ -214,14 +215,18 @@ impl ModelAdapter for Adapter {
                     - cost
                     - policy.execution_reserve_per_share
                     - policy.stress_slippage_per_share;
+                let failed = super::FailedPolicyChecks {
+                    share_cost: !cost.is_finite()
+                        || cost <= 0.0
+                        || cost > policy.maximum_share_cost,
+                    confidence: conservative_confidence < policy.minimum_confidence,
+                    stressed_edge: stressed_edge < policy.minimum_stressed_edge,
+                };
                 (
-                    cost.is_finite()
-                        && cost > 0.0
-                        && cost <= policy.maximum_share_cost
-                        && conservative_confidence >= policy.minimum_confidence
-                        && stressed_edge >= policy.minimum_stressed_edge,
+                    !failed.share_cost && !failed.confidence && !failed.stressed_edge,
                     "conservative_paper_policy",
                     Some(stressed_edge),
+                    Some(failed),
                 )
             }
         };
@@ -240,6 +245,7 @@ impl ModelAdapter for Adapter {
                 accepted,
             },
             reason: if accepted { "qualified" } else { reason },
+            failed_policy_checks,
             admission_probability: None,
             predicted_stress_edge: stressed_edge,
             predicted_loss: None,

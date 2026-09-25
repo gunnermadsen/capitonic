@@ -10,7 +10,9 @@ metadata:
     capitonic.io/environment: dev
     capitonic.io/rollout-domain: ingestion
 spec:
+{{- if not .Values.workerScaling.enabled }}
   replicas: {{ .Values.worker.replicaCount }}
+{{- end }}
   strategy: {type: Recreate}
   selector:
     matchLabels:

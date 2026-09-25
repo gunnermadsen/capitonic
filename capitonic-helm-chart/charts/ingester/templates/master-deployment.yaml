@@ -26,7 +26,12 @@ spec:
         capitonic.io/environment: dev
         capitonic.io/rollout-domain: ingestion
     spec:
+{{- if .Values.workerScaling.enabled }}
+      serviceAccountName: ingester-master
+      automountServiceAccountToken: true
+{{- else }}
       automountServiceAccountToken: false
+{{- end }}
       terminationGracePeriodSeconds: 60
       securityContext:
         runAsNonRoot: true
@@ -45,6 +50,11 @@ spec:
             - {name: INGESTER_MODE, value: master}
             - {name: INGESTER_INSTANCE, value: ingester-master}
             - {name: INGESTER_API_BIND, value: "0.0.0.0:8098"}
+{{- if .Values.workerScaling.enabled }}
+            - {name: INGESTER_WORKER_SCALING_MODE, value: kubernetes}
+            - {name: INGESTER_WORKER_MIN_REPLICAS, value: {{ .Values.workerScaling.minReplicas | quote }}}
+            - {name: INGESTER_WORKER_MAX_REPLICAS, value: {{ .Values.workerScaling.maxReplicas | quote }}}
+{{- end }}
           startupProbe:
             httpGet: {path: /health/live, port: http}
             failureThreshold: 30

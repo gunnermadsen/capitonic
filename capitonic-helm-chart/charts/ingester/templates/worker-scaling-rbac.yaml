@@ -1,0 +1,47 @@
+{{- if .Values.workerScaling.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ingester-master
+  labels:
+    app.kubernetes.io/name: ingester-master
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/part-of: capitonic-platform
+    app.kubernetes.io/managed-by: Helm
+    capitonic.io/environment: dev
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ingester-worker-scaler
+  labels:
+    app.kubernetes.io/name: ingester-master
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/part-of: capitonic-platform
+    app.kubernetes.io/managed-by: Helm
+    capitonic.io/environment: dev
+rules:
+  - apiGroups: [apps]
+    resources: [deployments/scale]
+    resourceNames: [ingester-worker]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ingester-worker-scaler
+  labels:
+    app.kubernetes.io/name: ingester-master
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/part-of: capitonic-platform
+    app.kubernetes.io/managed-by: Helm
+    capitonic.io/environment: dev
+subjects:
+  - kind: ServiceAccount
+    name: ingester-master
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: ingester-worker-scaler
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

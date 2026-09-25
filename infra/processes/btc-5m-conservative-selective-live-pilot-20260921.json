@@ -22,7 +22,7 @@
       "btc_realtime_paper": {
         "schema_version": "btc_realtime_paper_process_v4",
         "playbook_version": "v1.2",
-        "next_experiment_key": "btc-5m-conservative-selective-live-pilot-20260921-run",
+        "next_experiment_key": "btc-5m-conservative-selective-live-pilot-20260925-fak-run",
         "preregistration_sha256": "1b142232c45a4af8f578e1a3a8ecb3be92bf90286a5de1be3216c9b1d3a38af6",
         "sources": [
           "polymarket_btc_five_minute_market_contracts",
@@ -41,6 +41,7 @@
             "models": [
               {
                 "member_id": "primary",
+                "entry_order_type": "fak",
                 "selection": {
                   "type": "btc_directional_model",
                   "model_key": "btc-5m-conservative-selective-development-live-pilot-20260921-v1",

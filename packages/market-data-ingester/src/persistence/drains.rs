@@ -189,6 +189,14 @@ impl DrainRepository {
             active_objects,
         })
     }
+    pub async fn unfinished_count(&self) -> Result<i64> {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM ingester.drain_jobs WHERE status IN ('queued', 'running')",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("count unfinished drain jobs")
+    }
     pub async fn events(&self, id: Uuid, limit: i64) -> Result<Vec<DrainJobEvent>> {
         Ok(sqlx::query_as(
             "SELECT event_id,job_id,attempt,recorded_at,level,event_code,message,metadata FROM ingester.drain_job_events WHERE job_id=$1 ORDER BY recorded_at DESC,event_id DESC LIMIT $2",

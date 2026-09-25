@@ -1,7 +1,7 @@
 FROM node:20-alpine
 
-ARG DB_MIGRATE_GIT_REVISION=unknown
-LABEL org.opencontainers.image.revision=$DB_MIGRATE_GIT_REVISION
+ARG DB_MIGRATE_GIT_REVISION
+LABEL org.opencontainers.image.revision=${DB_MIGRATE_GIT_REVISION}
 
 WORKDIR /usr/src/app
 

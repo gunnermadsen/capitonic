@@ -323,6 +323,15 @@ impl BackfillRepository {
             .await?)
     }
 
+    pub async fn unfinished_shard_count(&self) -> Result<i64> {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM ingester.backfill_jobs WHERE job_kind = 'shard' AND status IN ('queued', 'running', 'cancel_requested')",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("count unfinished backfill shards")
+    }
+
     pub async fn children(&self, parent: Uuid) -> Result<Vec<BackfillJobRecord>> {
         let query = format!(
             "SELECT {JOB_COLUMNS} FROM ingester.backfill_jobs WHERE parent_job_id=$1 ORDER BY shard_key,job_id"

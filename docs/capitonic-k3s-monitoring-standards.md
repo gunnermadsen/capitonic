@@ -41,7 +41,7 @@ kubectl -n capitonic rollout restart deployment/grafana
 kubectl -n capitonic rollout status deployment/grafana
 ```
 
-Use `statefulset/prometheus`, `statefulset/loki`, or `daemonset/alloy` for those workloads. Check the workload and dependent services after any restart. Access Grafana only through a local `kubectl -n capitonic port-forward service/grafana 3030:3000` at `http://127.0.0.1:3030`.
+Use `statefulset/prometheus`, `statefulset/loki`, or `daemonset/alloy` for those workloads. Check the workload and dependent services after any restart. The Helm-managed Traefik route serves Grafana at `http://localhost/monitor/` and strips `/monitor` before forwarding, so in-cluster Grafana API paths stay at their existing root paths.
 
 ## Acceptance checks
 

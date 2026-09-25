@@ -70,6 +70,10 @@ struct RouterMember {
 struct MemberPerformance {
     prediction_outcomes: BTreeMap<&'static str, u64>,
     order_outcomes: BTreeMap<String, u64>,
+    entry_attempts: BTreeMap<(&'static str, &'static str), u64>,
+    entry_requested_shares: BTreeMap<&'static str, f64>,
+    entry_filled_shares: BTreeMap<&'static str, f64>,
+    entry_fill_progress: BTreeMap<(&'static str, &'static str), u64>,
     trade_outcomes: BTreeMap<&'static str, u64>,
     bucket_evaluations: BTreeMap<&'static str, u64>,
     feature_failures: BTreeMap<String, u64>,
@@ -126,7 +130,12 @@ struct Process {
     last_observation: f64,
     last_success: f64,
     counters: BTreeMap<(&'static str, String), u64>,
+    model_policy_failed_checks: BTreeMap<(String, &'static str), u64>,
     submission_risk_counters: BTreeMap<(&'static str, &'static str), u64>,
+    selected_entry_intents: BTreeMap<(String, String), u64>,
+    entry_intent_post_attempts: BTreeMap<(String, String), u64>,
+    entry_intent_dispositions:
+        BTreeMap<(String, String, &'static str, &'static str, &'static str), u64>,
     gauges: BTreeMap<&'static str, f64>,
     histograms: BTreeMap<&'static str, Histogram>,
     latest: Option<PredictionRecord>,
@@ -278,6 +287,39 @@ pub fn enabled(id: Uuid, value: bool) {
 }
 pub fn event(id: Uuid, metric: &'static str, reason: &str) {
     update(id, |p| increment(p, metric, reason));
+}
+pub fn selected_entry_intent(id: Uuid, member: &str, model: &str) {
+    update(id, |p| {
+        *p.selected_entry_intents
+            .entry((member.into(), model.into()))
+            .or_default() += 1;
+    });
+}
+pub fn entry_intent_disposition(
+    id: Uuid,
+    member: &str,
+    model: &str,
+    outcome: &'static str,
+    stage: &'static str,
+    reason: &'static str,
+) {
+    update(id, |p| {
+        *p.entry_intent_dispositions
+            .entry((member.into(), model.into(), outcome, stage, reason))
+            .or_default() += 1;
+    });
+}
+pub fn entry_intent_post_attempt(id: Uuid, member: &str, model: &str) {
+    update(id, |p| {
+        if p.members
+            .get(member)
+            .is_some_and(|registered| registered.identity.model_key == model)
+        {
+            *p.entry_intent_post_attempts
+                .entry((member.into(), model.into()))
+                .or_default() += 1;
+        }
+    });
 }
 fn bounded_failure_reason(detail: &str) -> &'static str {
     let lower = detail.to_ascii_lowercase();
@@ -569,6 +611,23 @@ pub fn prediction(
                 "rejected"
             },
         );
+        if let Some(checks) = record
+            .admission
+            .as_ref()
+            .and_then(|value| value.get("failed_policy_checks"))
+        {
+            for (name, failed) in [
+                ("share_cost", checks.get("share_cost")),
+                ("confidence", checks.get("confidence")),
+                ("stressed_edge", checks.get("stressed_edge")),
+            ] {
+                if failed.and_then(serde_json::Value::as_bool) == Some(true) {
+                    *p.model_policy_failed_checks
+                        .entry((model.model_key.clone(), name))
+                        .or_default() += 1;
+                }
+            }
+        }
         p.histograms
             .entry("inference")
             .or_default()
@@ -691,6 +750,77 @@ pub fn member_order(id: Uuid, member: &str, state: &str) {
                 .order_outcomes
                 .entry(state.to_string())
                 .or_default() += 1;
+        }
+    });
+}
+pub fn member_entry_attempt(
+    id: Uuid,
+    member: &str,
+    order_type: &'static str,
+    outcome: &'static str,
+    requested_shares: f64,
+    filled_shares: f64,
+) {
+    if !matches!(order_type, "fok" | "fak")
+        || !matches!(
+            outcome,
+            "submitted"
+                | "filled"
+                | "partial"
+                | "fok_unfilled"
+                | "fak_unfilled"
+                | "local_gate_rejected"
+                | "venue_rejected"
+        )
+        || !requested_shares.is_finite()
+        || requested_shares <= 0.0
+        || !filled_shares.is_finite()
+        || filled_shares < 0.0
+    {
+        return;
+    }
+    update(id, |p| {
+        if let Some(m) = p.members.get_mut(member) {
+            *m.performance
+                .entry_attempts
+                .entry((order_type, outcome))
+                .or_default() += 1;
+            *m.performance
+                .entry_requested_shares
+                .entry(order_type)
+                .or_default() += requested_shares;
+            *m.performance
+                .entry_filled_shares
+                .entry(order_type)
+                .or_default() += filled_shares;
+        }
+    });
+}
+
+pub fn member_entry_fill_progress(
+    id: Uuid,
+    member: &str,
+    order_type: &'static str,
+    progress: &'static str,
+    new_shares: f64,
+) {
+    if !matches!(order_type, "fok" | "fak")
+        || !matches!(progress, "partial" | "full")
+        || !new_shares.is_finite()
+        || new_shares <= 0.0
+    {
+        return;
+    }
+    update(id, |p| {
+        if let Some(m) = p.members.get_mut(member) {
+            *m.performance
+                .entry_fill_progress
+                .entry((order_type, progress))
+                .or_default() += 1;
+            *m.performance
+                .entry_filled_shares
+                .entry(order_type)
+                .or_default() += new_shares;
         }
     });
 }
@@ -972,7 +1102,11 @@ pub fn prometheus_metrics() -> String {
                     last_observation: p.last_observation,
                     last_success: p.last_success,
                     counters: p.counters.clone(),
+                    model_policy_failed_checks: p.model_policy_failed_checks.clone(),
                     submission_risk_counters: p.submission_risk_counters.clone(),
+                    selected_entry_intents: p.selected_entry_intents.clone(),
+                    entry_intent_post_attempts: p.entry_intent_post_attempts.clone(),
+                    entry_intent_dispositions: p.entry_intent_dispositions.clone(),
                     gauges,
                     histograms: p.histograms.clone(),
                     calibration_count: p.calibration_count,
@@ -1032,6 +1166,10 @@ pub fn prometheus_metrics() -> String {
                 out.push_str("# HELP polymarket_umr_model_member_activity_events_total Session-scoped member opportunity and arbitration transitions.\n# TYPE polymarket_umr_model_member_activity_events_total counter\n");
                 out.push_str("# HELP polymarket_umr_model_member_prediction_outcomes_total Session-scoped resolved prediction outcomes.\n# TYPE polymarket_umr_model_member_prediction_outcomes_total counter\n");
                 out.push_str("# HELP polymarket_umr_model_member_order_outcomes_total Session-scoped execution order outcomes attributed to the selected member.\n# TYPE polymarket_umr_model_member_order_outcomes_total counter\n");
+                out.push_str("# HELP polymarket_umr_model_member_entry_attempts_total Session-scoped entry attempts by order type and immediate outcome.\n# TYPE polymarket_umr_model_member_entry_attempts_total counter\n");
+                out.push_str("# HELP polymarket_umr_model_member_entry_requested_shares_total Session-scoped requested entry shares by order type.\n# TYPE polymarket_umr_model_member_entry_requested_shares_total counter\n");
+                out.push_str("# HELP polymarket_umr_model_member_entry_filled_shares_total Session-scoped confirmed entry shares by order type.\n# TYPE polymarket_umr_model_member_entry_filled_shares_total counter\n");
+                out.push_str("# HELP polymarket_umr_model_member_entry_fill_progress_total Session-scoped confirmed fill progress events by order type.\n# TYPE polymarket_umr_model_member_entry_fill_progress_total counter\n");
                 out.push_str("# HELP polymarket_umr_model_member_trade_outcomes_total Session-scoped settled economic outcomes attributed to the selected member.\n# TYPE polymarket_umr_model_member_trade_outcomes_total counter\n");
                 out.push_str("# HELP polymarket_umr_model_member_bucket_evaluations_total Session-scoped inference evaluations classified against the immutable claimed bucket.\n# TYPE polymarket_umr_model_member_bucket_evaluations_total counter\n");
                 out.push_str("# HELP polymarket_umr_model_member_feature_failures_total Session-scoped feature failures by bounded reason.\n# TYPE polymarket_umr_model_member_feature_failures_total counter\n");
@@ -1076,6 +1214,18 @@ pub fn prometheus_metrics() -> String {
             }
             for (state, count) in &member.performance.order_outcomes {
                 let _ = writeln!(out, "polymarket_umr_model_member_order_outcomes_total{{{member_labels},state=\"{}\"}} {count}", escaped(state));
+            }
+            for ((order_type, outcome), count) in &member.performance.entry_attempts {
+                let _ = writeln!(out, "polymarket_umr_model_member_entry_attempts_total{{{member_labels},order_type=\"{order_type}\",outcome=\"{outcome}\"}} {count}");
+            }
+            for (order_type, shares) in &member.performance.entry_requested_shares {
+                let _ = writeln!(out, "polymarket_umr_model_member_entry_requested_shares_total{{{member_labels},order_type=\"{order_type}\"}} {shares}");
+            }
+            for (order_type, shares) in &member.performance.entry_filled_shares {
+                let _ = writeln!(out, "polymarket_umr_model_member_entry_filled_shares_total{{{member_labels},order_type=\"{order_type}\"}} {shares}");
+            }
+            for ((order_type, progress), count) in &member.performance.entry_fill_progress {
+                let _ = writeln!(out, "polymarket_umr_model_member_entry_fill_progress_total{{{member_labels},order_type=\"{order_type}\",progress=\"{progress}\"}} {count}");
             }
             for (outcome, count) in &member.performance.trade_outcomes {
                 let _ = writeln!(out, "polymarket_umr_model_member_trade_outcomes_total{{{member_labels},outcome=\"{outcome}\"}} {count}");
@@ -1188,6 +1338,30 @@ pub fn prometheus_metrics() -> String {
                 escaped(&reason)
             );
         }
+        if declared.insert("model_policy_failed_checks_total".into()) {
+            out.push_str("# HELP polymarket_umr_model_policy_failed_checks_total Session-scoped model inferences failing each frozen policy check; one inference can fail multiple checks.\n# TYPE polymarket_umr_model_policy_failed_checks_total counter\n");
+        }
+        for ((model_key, check), value) in p.model_policy_failed_checks {
+            let _ = writeln!(out, "polymarket_umr_model_policy_failed_checks_total{{{labels},model_key=\"{}\",check=\"{check}\"}} {value}", escaped(&model_key));
+        }
+        if declared.insert("selected_entry_intents_total".into()) {
+            out.push_str("# HELP polymarket_umr_selected_entry_intents_total Selected, approved live entry intents before process admission and execution.\n# TYPE polymarket_umr_selected_entry_intents_total counter\n");
+        }
+        for ((member_id, model_key), value) in p.selected_entry_intents {
+            let _ = writeln!(out, "polymarket_umr_selected_entry_intents_total{{{labels},member_id=\"{}\",model_key=\"{}\"}} {value}", escaped(&member_id), escaped(&model_key));
+        }
+        if declared.insert("entry_intent_post_attempts_total".into()) {
+            out.push_str("# HELP polymarket_umr_entry_intent_post_attempts_total Selected live entry intents reaching an actual venue POST, by registered model member.\n# TYPE polymarket_umr_entry_intent_post_attempts_total counter\n");
+        }
+        for ((member_id, model_key), value) in p.entry_intent_post_attempts {
+            let _ = writeln!(out, "polymarket_umr_entry_intent_post_attempts_total{{{labels},member_id=\"{}\",model_key=\"{}\"}} {value}", escaped(&member_id), escaped(&model_key));
+        }
+        if declared.insert("entry_intent_dispositions_total".into()) {
+            out.push_str("# HELP polymarket_umr_entry_intent_dispositions_total Exactly one bounded first-stop classification per selected, approved live entry intent; no_local_veto does not imply a venue POST.\n# TYPE polymarket_umr_entry_intent_dispositions_total counter\n");
+        }
+        for ((member_id, model_key, outcome, stage, reason), value) in p.entry_intent_dispositions {
+            let _ = writeln!(out, "polymarket_umr_entry_intent_dispositions_total{{{labels},member_id=\"{}\",model_key=\"{}\",outcome=\"{outcome}\",stage=\"{stage}\",reason=\"{reason}\"}} {value}", escaped(&member_id), escaped(&model_key));
+        }
         if declared.insert("live_submission_risk_checks_total".into()) {
             out.push_str("# HELP polymarket_umr_live_submission_risk_checks_total Process-scoped live pre-submit risk checks by bounded outcome and reason.\n# TYPE polymarket_umr_live_submission_risk_checks_total counter\n");
         }
@@ -1231,6 +1405,139 @@ pub fn prometheus_metrics() -> String {
 #[cfg(test)]
 mod router_tests {
     use super::*;
+    #[test]
+    fn model_policy_checks_count_once_per_inference_and_keep_models_separate() {
+        let id = Uuid::new_v4();
+        let first = RuntimeModelSelection {
+            model_key: "first-model".into(),
+            artifact_sha256: "a".repeat(64),
+            feature_schema_sha256: "b".repeat(64),
+        };
+        let second = RuntimeModelSelection {
+            model_key: "second-model".into(),
+            ..first.clone()
+        };
+        register(id, Uuid::new_v4(), "config", "live", Some(&first));
+        let score = RuntimeModelScore {
+            raw_logit: 0.0,
+            probability_up: 0.6,
+            confidence: 0.6,
+            action: crate::btc::directional_model::RuntimeModelAction::NoTrade,
+            accepted: false,
+        };
+        let at = Utc::now();
+        let failed = Some(serde_json::json!({
+            "reason": "conservative_paper_policy",
+            "failed_policy_checks": {
+                "share_cost": false,
+                "confidence": true,
+                "stressed_edge": true
+            }
+        }));
+        prediction(
+            id,
+            Uuid::new_v4(),
+            "market",
+            &first,
+            at,
+            "input",
+            score,
+            0.001,
+            failed.clone(),
+        );
+        prediction(
+            id,
+            Uuid::new_v4(),
+            "market",
+            &first,
+            at,
+            "input",
+            score,
+            0.001,
+            failed,
+        );
+        prediction(
+            id,
+            Uuid::new_v4(),
+            "market",
+            &second,
+            at + chrono::Duration::seconds(5),
+            "input-2",
+            score,
+            0.001,
+            Some(serde_json::json!({
+                "reason": "conservative_paper_policy",
+                "failed_policy_checks": {
+                    "share_cost": true,
+                    "confidence": false,
+                    "stressed_edge": false
+                }
+            })),
+        );
+        let metrics = prometheus_metrics();
+        let scoped = metrics
+            .lines()
+            .filter(|line| line.contains(&id.to_string()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(scoped.contains("model_key=\"first-model\",check=\"confidence\"} 1"));
+        assert!(scoped.contains("model_key=\"first-model\",check=\"stressed_edge\"} 1"));
+        assert!(scoped.contains("model_key=\"second-model\",check=\"share_cost\"} 1"));
+        assert!(!scoped.contains("model_key=\"second-model\",check=\"confidence\""));
+    }
+    #[test]
+    fn entry_intent_metrics_keep_registered_model_members_and_actual_posts_separate() {
+        let id = Uuid::new_v4();
+        let model = RuntimeModelSelection {
+            model_key: "live-model".into(),
+            artifact_sha256: "a".repeat(64),
+            feature_schema_sha256: "b".repeat(64),
+        };
+        register(id, Uuid::new_v4(), "config", "live", Some(&model));
+        register_member(id, "primary", &model, 30, 210);
+        selected_entry_intent(id, "primary", "live-model");
+        entry_intent_disposition(
+            id,
+            "primary",
+            "live-model",
+            "vetoed",
+            "live_gate",
+            "orderbook_marketability",
+        );
+        entry_intent_post_attempt(id, "primary", "other-model");
+        entry_intent_post_attempt(id, "unknown-member", "live-model");
+        entry_intent_post_attempt(id, "primary", "live-model");
+        let scoped = prometheus_metrics()
+            .lines()
+            .filter(|line| line.contains(&id.to_string()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(scoped.contains("selected_entry_intents_total{process_id=\""));
+        assert!(scoped.contains(
+            "outcome=\"vetoed\",stage=\"live_gate\",reason=\"orderbook_marketability\"} 1"
+        ));
+        assert!(scoped.contains("entry_intent_post_attempts_total{process_id=\""));
+        assert!(scoped.contains("member_id=\"primary\",model_key=\"live-model\"} 1"));
+        assert!(!scoped.contains("model_key=\"other-model\""));
+    }
+    #[test]
+    fn entry_fill_metrics_keep_fok_and_fak_separate() {
+        let id = Uuid::new_v4();
+        let identity = RuntimeModelSelection {
+            model_key: "test".into(),
+            artifact_sha256: "a".repeat(64),
+            feature_schema_sha256: "b".repeat(64),
+        };
+        register_member(id, "primary", &identity, 30, 210);
+        member_entry_attempt(id, "primary", "fok", "fok_unfilled", 5.0, 0.0);
+        member_entry_attempt(id, "primary", "fak", "submitted", 5.0, 0.0);
+        member_entry_fill_progress(id, "primary", "fak", "partial", 2.5);
+        let metrics = prometheus_metrics();
+        assert!(metrics.contains("order_type=\"fok\",outcome=\"fok_unfilled\"} 1"));
+        assert!(metrics.contains("order_type=\"fak\",outcome=\"submitted\"} 1"));
+        assert!(metrics.contains("order_type=\"fak\",progress=\"partial\"} 1"));
+        assert!(metrics.contains("order_type=\"fak\"} 2.5"));
+    }
     #[test]
     fn an_unready_member_does_not_poison_a_ready_member() {
         let id = Uuid::new_v4();

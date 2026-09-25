@@ -146,6 +146,7 @@ pub(super) fn local_side(side: SdkSide) -> OrderSide {
 pub(super) fn sdk_order_type(order_type: OrderType) -> Result<SdkOrderType> {
     match order_type {
         OrderType::Fok => Ok(SdkOrderType::FOK),
+        OrderType::Fak => Ok(SdkOrderType::FAK),
         OrderType::Gtc => Ok(SdkOrderType::GTC),
         OrderType::Gtd => bail!("live GTD orders require explicit expiration and are not enabled"),
     }
@@ -155,6 +156,7 @@ pub(super) fn local_order_type(order_type: SdkOrderType) -> OrderType {
     match order_type {
         SdkOrderType::GTC => OrderType::Gtc,
         SdkOrderType::GTD => OrderType::Gtd,
+        SdkOrderType::FAK => OrderType::Fak,
         _ => OrderType::Fok,
     }
 }

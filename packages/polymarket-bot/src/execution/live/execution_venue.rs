@@ -537,6 +537,20 @@ impl ExecutionVenue for LiveVenue {
         }
         pre_post_guard.observe_post_attempt(&request);
         let post_started = std::time::Instant::now();
+        if let (Some(member_id), Some(model_key)) = (
+            request
+                .metadata
+                .pointer("/router/member_id")
+                .and_then(serde_json::Value::as_str),
+            request
+                .metadata
+                .pointer("/router/model_key")
+                .and_then(serde_json::Value::as_str),
+        ) {
+            crate::btc::unified_model_runtime::telemetry::entry_intent_post_attempt(
+                process_id, member_id, model_key,
+            );
+        }
         order_path.event("venue_post", "attempted", "attempted");
         let submit_result = self
             .clob_operation("venue_post", async {
@@ -907,10 +921,30 @@ impl ExecutionVenue for LiveVenue {
                 )?,
                 None => Vec::new(),
             };
+            let cancelled_fak = if let Some(process_id) = self.bound_process_id {
+                at_stage(
+                    ReconciliationStage::LocalOrders,
+                    store.live_process_recent_cancelled_fak_orders(
+                        process_id,
+                        checked_at - chrono::Duration::hours(1),
+                        (MAX_PROCESS_NONTERMINAL_ORDERS + 1) as i64,
+                    ).await,
+                )?
+            } else {
+                Vec::new()
+            };
+            let mut fill_candidates = local_nonterminal.clone();
+            fill_candidates.extend(cancelled_fak.iter().cloned());
+            if fill_candidates.len() > MAX_PROCESS_NONTERMINAL_ORDERS {
+                return at_stage(
+                    ReconciliationStage::LocalOrders,
+                    Err(anyhow::anyhow!("live process exceeds bounded FAK fill backup window")),
+                );
+            }
             let trades = if self.bound_process_id.is_some() {
                 let trade_window_start = at_stage(
                     ReconciliationStage::LocalOrders,
-                    reconciliation_trade_window_start(&local_nonterminal, checked_at),
+                    reconciliation_trade_window_start(&fill_candidates, checked_at),
                 )?;
                 let trades_request = TradesRequest::builder()
                     .after(trade_window_start.timestamp())
@@ -946,6 +980,14 @@ impl ExecutionVenue for LiveVenue {
                     )
                     .await,
                 )?;
+                fill_candidates = local_nonterminal.clone();
+                fill_candidates.extend(cancelled_fak.iter().cloned());
+                if fill_candidates.len() > MAX_PROCESS_NONTERMINAL_ORDERS {
+                    return at_stage(
+                        ReconciliationStage::LocalOrders,
+                        Err(anyhow::anyhow!("live process exceeds bounded FAK fill backup window")),
+                    );
+                }
             }
             let balances = at_stage(
                 ReconciliationStage::Balances,
@@ -1019,7 +1061,7 @@ impl ExecutionVenue for LiveVenue {
                     persist_rest_fill_backfill(
                         &store,
                         process_id,
-                        &local_nonterminal,
+                        &fill_candidates,
                         &owned_orders,
                         &trades,
                         checked_at,

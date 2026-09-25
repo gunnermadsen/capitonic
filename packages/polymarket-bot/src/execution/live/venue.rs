@@ -296,7 +296,32 @@ impl LiveVenue {
                         order.order_id
                     )
                 })?;
+            if order.request.order_type == OrderType::Fak
+                && cumulative_filled_size > Decimal::ZERO
+                && cumulative_filled_size < order.request.size
+            {
+                store
+                    .mark_order_cancelled(
+                        &order.order_id,
+                        json!({
+                            "source": "user_ws_fak_remainder",
+                            "cumulative_filled_size": cumulative_filled_size,
+                        }),
+                    )
+                    .await?
+                    .with_context(|| {
+                        format!(
+                            "FAK remainder cancellation could not find order {}",
+                            order.order_id
+                        )
+                    })?;
+            }
             if cumulative_filled_size > prior_filled_size {
+                record_member_live_fill_progress(
+                    order,
+                    cumulative_filled_size - prior_filled_size,
+                    cumulative_filled_size,
+                );
                 if let Some(process_id) = order.request.process_id {
                     let latency = (fill.filled_at - order.updated_at)
                         .num_milliseconds()

@@ -422,6 +422,7 @@ struct EntryAdmissionEvaluation {
 
 struct RouterMemberRuntime {
     member_id: String,
+    entry_order_type: OrderType,
     strategy: BtcStrategyConfig,
     max_feature_age_ms: Option<i64>,
     runtime: StdMutex<DirectionalModelProcessRuntime>,
@@ -454,6 +455,89 @@ struct PreparedTradeProposal<'a> {
     decision: BtcDecision,
     feature_hash: String,
     candidate: Option<DirectionalModelCandidateLease<'a>>,
+}
+
+struct LiveEntryIntentDisposition<'a> {
+    process_id: Uuid,
+    member_id: &'a str,
+    model_key: &'a str,
+    stage: &'static str,
+    finished: bool,
+}
+
+impl<'a> LiveEntryIntentDisposition<'a> {
+    fn new(process_id: Uuid, member_id: &'a str, model_key: &'a str) -> Self {
+        umr_telemetry::selected_entry_intent(process_id, member_id, model_key);
+        Self {
+            process_id,
+            member_id,
+            model_key,
+            stage: "process",
+            finished: false,
+        }
+    }
+
+    fn finish(&mut self, outcome: &'static str, stage: &'static str, reason: &'static str) {
+        if self.finished {
+            return;
+        }
+        umr_telemetry::entry_intent_disposition(
+            self.process_id,
+            self.member_id,
+            self.model_key,
+            outcome,
+            stage,
+            reason,
+        );
+        self.finished = true;
+    }
+}
+
+impl Drop for LiveEntryIntentDisposition<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.finish("error", self.stage, "operation_failed");
+        }
+    }
+}
+
+fn first_entry_admission_blocker(evaluation: &EntryAdmissionEvaluation) -> &'static str {
+    let first = evaluation
+        .evidence
+        .get("blocking_policies")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|policies| policies.first())
+        .and_then(serde_json::Value::as_str);
+    match first {
+        Some("daily_realized_pnl_high_water_mark") => "daily_realized_pnl_high_water_mark",
+        Some("loss_regime_confidence_floor") | None => "loss_regime_confidence_floor",
+        _ => "unknown_admission_policy",
+    }
+}
+
+fn bounded_live_intent_gate_reason(reason: &str) -> &'static str {
+    match reason {
+        "order_submission_disabled" => "order_submission_disabled",
+        "global_halt" => "global_halt",
+        "manual_enable_required" => "manual_enable_required",
+        "venue_readiness" => "venue_readiness",
+        "process_accounting_readiness" => "process_accounting_readiness",
+        "per_order_notional_limit" => "per_order_notional_limit",
+        "daily_loss_limit" => "daily_loss_limit",
+        "account_identity_evidence_unavailable" => "account_identity_evidence_unavailable",
+        "exposure_evidence_unavailable" => "exposure_evidence_unavailable",
+        "daily_loss_evidence_unavailable" => "daily_loss_evidence_unavailable",
+        "account_order_evidence_unavailable" => "account_order_evidence_unavailable",
+        "collateral_evidence_unavailable" => "collateral_evidence_unavailable",
+        "open_notional_limit" => "open_notional_limit",
+        "open_position_limit" => "open_position_limit",
+        "settlement_redemption_unproven" => "settlement_redemption_unproven",
+        "reference_freshness" => "reference_freshness",
+        "orderbook_readiness" => "orderbook_readiness",
+        "orderbook_freshness" => "orderbook_freshness",
+        "orderbook_marketability" => "orderbook_marketability",
+        _ => "unknown_live_gate",
+    }
 }
 
 pub struct BtcProcessRunner {
@@ -586,16 +670,21 @@ impl BtcProcessRunner {
                 .unwrap_or(20);
             definition.compile_members(&base, &keys)?
         } else {
-            vec![("legacy_primary".into(), config.strategy.clone())]
+            vec![(
+                "legacy_primary".into(),
+                config.strategy.clone(),
+                OrderType::Fok,
+            )]
         };
         let router_members = member_strategies
             .into_iter()
-            .map(|(member_id, strategy)| {
+            .map(|(member_id, strategy, entry_order_type)| {
                 let model = runtime_model(
                     &directional_model_selection(&strategy).context("missing member model")?,
                 )?;
                 Ok(RouterMemberRuntime {
                     member_id,
+                    entry_order_type,
                     max_feature_age_ms: strategy.effective_max_directional_feature_age_ms()?,
                     strategy,
                     runtime: StdMutex::new(DirectionalModelProcessRuntime::default()),
@@ -1656,6 +1745,16 @@ impl BtcProcessRunner {
             .approved_intent
             .clone()
             .context("router selected an unqualified proposal")?;
+        let member_identity = directional_model_selection(&member.strategy)
+            .context("selected member is missing immutable model identity")?;
+        let mut live_intent =
+            (self.execution_lifecycle.mode() == BtcExecutionMode::Live).then(|| {
+                LiveEntryIntentDisposition::new(
+                    self.config.process_id,
+                    &member.member_id,
+                    &member_identity.model_key,
+                )
+            });
         if !self.config.execution_enabled {
             self.insert_process_strategy_decision(
                 &member.strategy.strategy_version,
@@ -1666,10 +1765,16 @@ impl BtcProcessRunner {
                 "shadow_only",
             )
             .await?;
+            if let Some(disposition) = live_intent.as_mut() {
+                disposition.finish("vetoed", "process", "execution_disabled");
+            }
             complete_directional_model_candidate(&mut directional_candidate, true)?;
             return Ok(());
         }
 
+        if let Some(disposition) = live_intent.as_mut() {
+            disposition.stage = "entry_admission";
+        }
         let entry_admission = self
             .evaluate_entry_admission(
                 &decision,
@@ -1677,6 +1782,9 @@ impl BtcProcessRunner {
                 snapshot.fee_rate.unwrap_or_default(),
             )
             .await?;
+        if let Some(disposition) = live_intent.as_mut() {
+            disposition.stage = "risk";
+        }
         let risk_evaluation = match self.risk_model.as_ref() {
             None => None,
             Some(model) => match model.evaluate(&snapshot, &decision) {
@@ -1705,6 +1813,9 @@ impl BtcProcessRunner {
                         "risk_blocked",
                     )
                     .await?;
+                    if let Some(disposition) = live_intent.as_mut() {
+                        disposition.finish("error", "risk", "inference_error");
+                    }
                     complete_directional_model_candidate(&mut directional_candidate, false)?;
                     return Ok(());
                 }
@@ -1731,6 +1842,13 @@ impl BtcProcessRunner {
                 "admission_blocked",
             )
             .await?;
+            if let Some(disposition) = live_intent.as_mut() {
+                disposition.finish(
+                    "vetoed",
+                    "entry_admission",
+                    first_entry_admission_blocker(entry_admission.as_ref().expect("checked")),
+                );
+            }
             complete_directional_model_candidate(&mut directional_candidate, false)?;
             return Ok(());
         }
@@ -1752,6 +1870,9 @@ impl BtcProcessRunner {
                 "risk_blocked",
             )
             .await?;
+            if let Some(disposition) = live_intent.as_mut() {
+                disposition.finish("vetoed", "risk", "risk_defer");
+            }
             complete_directional_model_candidate(&mut directional_candidate, false)?;
             return Ok(());
         }
@@ -1780,8 +1901,6 @@ impl BtcProcessRunner {
             "executable_ask_vwap": decision_book.executable_ask_vwap,
             "available_ask_depth": decision_book.ask_depth,
         });
-        let member_identity = directional_model_selection(&member.strategy)
-            .context("selected member is missing immutable model identity")?;
         let feature_as_of = snapshot
             .directional_model
             .as_ref()
@@ -1809,7 +1928,7 @@ impl BtcProcessRunner {
             market_id: intent.market_id.clone(),
             token_id: intent.token_id.clone(),
             side: OrderSide::Buy,
-            order_type: OrderType::Fok,
+            order_type: member.entry_order_type,
             price: intent.limit_price,
             size: intent.size,
             metadata: order_metadata,
@@ -1827,12 +1946,18 @@ impl BtcProcessRunner {
             },
         )?;
         reference_execution_guard.insert_into_metadata(&mut request.metadata)?;
+        if let Some(disposition) = live_intent.as_mut() {
+            disposition.stage = "decision_persistence";
+        }
         if !self.primary_persistence_available().await {
             umr_telemetry::event(
                 self.config.process_id,
                 "qualified_without_post",
                 "persistence_unavailable",
             );
+            if let Some(disposition) = live_intent.as_mut() {
+                disposition.finish("vetoed", "decision_persistence", "persistence_unavailable");
+            }
             return Ok(());
         }
         self.insert_process_strategy_decision(
@@ -1853,6 +1978,9 @@ impl BtcProcessRunner {
                 "qualified_without_post",
                 "persistence_unavailable",
             );
+            if let Some(disposition) = live_intent.as_mut() {
+                disposition.finish("vetoed", "decision_persistence", "persistence_unavailable");
+            }
             return Ok(());
         }
         // Once this durable reservation succeeds, execution must proceed. A
@@ -1866,6 +1994,9 @@ impl BtcProcessRunner {
                 decision.evaluated_at,
             )
             .await?;
+        if let Some(disposition) = live_intent.as_mut() {
+            disposition.stage = "execution";
+        }
         let execution_started = Instant::now();
         let report = execute_order_plan(
             self.execution_venue.as_ref(),
@@ -1879,6 +2010,39 @@ impl BtcProcessRunner {
         let report = report.with_context(|| {
             format!("BTC {} OrderPlan execution failed", execution_mode.as_str())
         })?;
+        let primary_order = report
+            .orders
+            .first()
+            .context("BTC OrderPlan report omitted its primary order")?;
+        let gate_reason = primary_order
+            .request
+            .metadata
+            .pointer("/live_execution_gate/gate_reason")
+            .and_then(serde_json::Value::as_str);
+        if let Some(disposition) = live_intent.as_mut() {
+            if let Some(stage) = primary_order
+                .request
+                .metadata
+                .pointer("/live_pre_submit_error/stage")
+                .and_then(serde_json::Value::as_str)
+            {
+                let reason = match stage {
+                    "authentication" => "authentication",
+                    "order_metadata" => "order_metadata",
+                    "order_build" => "order_build",
+                    _ => "unknown_pre_submit_stage",
+                };
+                disposition.finish("error", "pre_submit_transport", reason);
+            } else if let Some(reason) = gate_reason {
+                disposition.finish(
+                    "vetoed",
+                    "live_gate",
+                    bounded_live_intent_gate_reason(reason),
+                );
+            } else {
+                disposition.finish("no_local_veto", "execution", "order_returned");
+            }
+        }
         umr_telemetry::duration(
             self.config.process_id,
             "primary_execution",
@@ -1923,19 +2087,14 @@ impl BtcProcessRunner {
                 );
             }
         }
-        let primary_order = report
-            .orders
-            .first()
-            .context("BTC OrderPlan report omitted its primary order")?;
         let primary_state = primary_order.state;
-        let filled = primary_state == OrderState::Filled;
-        let execution_status = decision_execution_status(primary_state);
+        let filled = primary_state == OrderState::Filled || !report.fills.is_empty();
+        let execution_status = if primary_state == OrderState::Cancelled && filled {
+            "filled"
+        } else {
+            decision_execution_status(primary_state)
+        };
         umr_telemetry::event(self.config.process_id, "execution", execution_status);
-        let gate_reason = primary_order
-            .request
-            .metadata
-            .pointer("/live_execution_gate/gate_reason")
-            .and_then(serde_json::Value::as_str);
         if let Some(reason) = gate_reason {
             umr_telemetry::event(self.config.process_id, "pre_submit_gate_rejections", reason);
             umr_telemetry::event(
@@ -1988,7 +2147,25 @@ impl BtcProcessRunner {
         let outcome = match primary_state {
             OrderState::Filled => "filled",
             OrderState::PartiallyFilled => "partial",
+            OrderState::Cancelled if !report.fills.is_empty() => "partial",
             OrderState::Rejected if gate_reason.is_some() => "local_gate_rejected",
+            OrderState::Rejected
+                if primary_order.request.order_type == OrderType::Fok
+                    && execution_reject_reason.as_deref().is_some_and(|reason| {
+                        matches!(
+                            reason,
+                            "insufficient_arrival_depth" | "arrival_depth_participation_exceeded"
+                        )
+                    }) =>
+            {
+                "fok_unfilled"
+            }
+            OrderState::Rejected
+                if primary_order.request.order_type == OrderType::Fak
+                    && execution_reject_reason.as_deref() == Some("insufficient_arrival_depth") =>
+            {
+                "fak_unfilled"
+            }
             OrderState::Rejected
                 if execution_reject_reason
                     .as_deref()
@@ -1996,10 +2173,37 @@ impl BtcProcessRunner {
             {
                 "fok_unfilled"
             }
+            OrderState::Rejected
+                if execution_reject_reason.as_deref() == Some("venue_fak_unfilled") =>
+            {
+                "fak_unfilled"
+            }
             OrderState::Rejected => "venue_rejected",
             OrderState::Unknown => "ambiguous",
             _ => "acknowledged_pending",
         };
+        umr_telemetry::member_entry_attempt(
+            self.config.process_id,
+            &member.member_id,
+            primary_order.request.order_type.as_str(),
+            match outcome {
+                "fok_unfilled" => "fok_unfilled",
+                "fak_unfilled" => "fak_unfilled",
+                "partial" => "partial",
+                "filled" => "filled",
+                "acknowledged_pending" => "submitted",
+                "local_gate_rejected" => "local_gate_rejected",
+                _ => "venue_rejected",
+            },
+            primary_order.request.size.to_f64().unwrap_or_default(),
+            report
+                .fills
+                .iter()
+                .map(|fill| fill.size)
+                .sum::<Decimal>()
+                .to_f64()
+                .unwrap_or_default(),
+        );
         umr_telemetry::event(self.config.process_id, "execution_outcomes", outcome);
         let preview_permit = if self.config.paper_stress_previews.is_empty() {
             None
@@ -3259,6 +3463,70 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
     use rust_decimal_macros::dec;
+
+    #[test]
+    fn live_intent_disposition_counts_one_terminal_result_and_bounds_gate_reason() {
+        let process_id = Uuid::new_v4();
+        {
+            let mut disposition =
+                LiveEntryIntentDisposition::new(process_id, "primary", "live-model");
+            disposition.finish(
+                "vetoed",
+                "live_gate",
+                bounded_live_intent_gate_reason("orderbook_marketability"),
+            );
+            disposition.finish("error", "execution", "operation_failed");
+        }
+        {
+            let mut disposition =
+                LiveEntryIntentDisposition::new(process_id, "primary", "live-model");
+            disposition.stage = "decision_persistence";
+        }
+        let scoped = umr_telemetry::prometheus_metrics()
+            .lines()
+            .filter(|line| line.contains(&process_id.to_string()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(scoped.contains("member_id=\"primary\",model_key=\"live-model\"} 2"));
+        assert!(scoped.contains(
+            "outcome=\"vetoed\",stage=\"live_gate\",reason=\"orderbook_marketability\"} 1"
+        ));
+        assert!(scoped.contains(
+            "outcome=\"error\",stage=\"decision_persistence\",reason=\"operation_failed\"} 1"
+        ));
+        assert!(!scoped.contains("outcome=\"error\",stage=\"execution\""));
+        assert_eq!(
+            bounded_live_intent_gate_reason("arbitrary"),
+            "unknown_live_gate"
+        );
+    }
+
+    #[test]
+    fn entry_admission_classifies_the_first_blocking_policy() {
+        let evaluation = EntryAdmissionEvaluation {
+            disposition: AdmissionDisposition::Defer,
+            evidence: serde_json::json!({
+                "blocking_policies": [
+                    "loss_regime_confidence_floor",
+                    "daily_realized_pnl_high_water_mark"
+                ]
+            }),
+        };
+        assert_eq!(
+            first_entry_admission_blocker(&evaluation),
+            "loss_regime_confidence_floor"
+        );
+        let high_water_mark = EntryAdmissionEvaluation {
+            evidence: serde_json::json!({
+                "blocking_policies": ["daily_realized_pnl_high_water_mark"]
+            }),
+            ..evaluation
+        };
+        assert_eq!(
+            first_entry_admission_blocker(&high_water_mark),
+            "daily_realized_pnl_high_water_mark"
+        );
+    }
 
     #[test]
     fn directional_feature_failures_persist_a_stable_machine_code() {

@@ -57,8 +57,30 @@ pub enum OrderSide {
 #[serde(rename_all = "snake_case")]
 pub enum OrderType {
     Fok,
+    Fak,
     Gtc,
     Gtd,
+}
+
+impl Default for OrderType {
+    fn default() -> Self {
+        Self::Fok
+    }
+}
+
+impl OrderType {
+    pub fn is_fok(&self) -> bool {
+        *self == Self::Fok
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fok => "fok",
+            Self::Fak => "fak",
+            Self::Gtc => "gtc",
+            Self::Gtd => "gtd",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

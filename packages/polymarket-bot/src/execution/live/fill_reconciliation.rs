@@ -123,6 +123,7 @@ pub(super) async fn persist_rest_fill_backfill(
         checked_at,
     )?;
     let mut fill_ids_by_order: HashMap<String, Vec<Uuid>> = HashMap::new();
+    let mut new_fill_size_by_order: HashMap<String, Decimal> = HashMap::new();
     let mut recovered_count = 0usize;
     for fill in &fills {
         let already_durable = store
@@ -132,6 +133,9 @@ pub(super) async fn persist_rest_fill_backfill(
         store.insert_fill(fill).await?;
         if !already_durable {
             recovered_count = recovered_count.saturating_add(1);
+            *new_fill_size_by_order
+                .entry(fill.order_id.clone())
+                .or_default() += fill.size;
         }
         fill_ids_by_order
             .entry(fill.order_id.clone())
@@ -176,8 +180,12 @@ pub(super) async fn persist_rest_fill_backfill(
             .with_context(|| {
                 format!("live REST fill progress could not find local order {order_id}")
             })?;
+        let partial_fak = order.request.order_type == OrderType::Fak
+            && cumulative_filled_size < order.request.size;
         let expected_state = if cumulative_filled_size >= order.request.size {
             OrderState::Filled
+        } else if order.state == OrderState::Cancelled {
+            OrderState::Cancelled
         } else {
             OrderState::PartiallyFilled
         };
@@ -187,11 +195,57 @@ pub(super) async fn persist_rest_fill_backfill(
                 order_id
             );
         }
+        if partial_fak && updated.state != OrderState::Cancelled {
+            store
+                .mark_order_cancelled(
+                    &order_id,
+                    json!({
+                        "source": "rest_reconcile_fak_remainder",
+                        "cumulative_filled_size": cumulative_filled_size,
+                    }),
+                )
+                .await?
+                .with_context(|| {
+                    format!("FAK remainder cancellation could not find order {order_id}")
+                })?;
+        }
+        if let Some(new_size) = new_fill_size_by_order.get(&order_id) {
+            record_member_live_fill_progress(order, *new_size, cumulative_filled_size);
+        }
     }
     Ok(RestFillBackfill {
         fills,
         recovered_count,
     })
+}
+
+pub(super) fn record_member_live_fill_progress(
+    order: &OrderRecord,
+    new_size: Decimal,
+    cumulative_size: Decimal,
+) {
+    let (Some(process_id), Some(member_id), Some(new_shares)) = (
+        order.request.process_id,
+        order
+            .request
+            .metadata
+            .pointer("/router/member_id")
+            .and_then(Value::as_str),
+        new_size.to_f64(),
+    ) else {
+        return;
+    };
+    crate::btc::unified_model_runtime::telemetry::member_entry_fill_progress(
+        process_id,
+        member_id,
+        order.request.order_type.as_str(),
+        if cumulative_size >= order.request.size {
+            "full"
+        } else {
+            "partial"
+        },
+        new_shares,
+    );
 }
 
 pub(super) async fn live_fill_records_from_event(
@@ -487,6 +541,7 @@ pub(super) fn post_order_response_payload(response: &PostOrderResponse) -> serde
 }
 
 pub(super) const LIVE_VENUE_FOK_UNFILLED_REASON: &str = "venue_fok_unfilled";
+pub(super) const LIVE_VENUE_FAK_UNFILLED_REASON: &str = "venue_fak_unfilled";
 pub(super) const LIVE_VENUE_REJECTED_REASON: &str = "venue_rejected";
 
 pub(super) fn definitive_live_venue_reject_reason(
@@ -502,6 +557,14 @@ pub(super) fn definitive_live_venue_reject_reason(
         });
     if fok_unfilled {
         LIVE_VENUE_FOK_UNFILLED_REASON
+    } else if order_type == OrderType::Fak
+        && error.is_some_and(|error| {
+            let normalized = error.to_ascii_lowercase();
+            normalized.contains("no orders found to match")
+                || normalized.contains("no matching orders")
+        })
+    {
+        LIVE_VENUE_FAK_UNFILLED_REASON
     } else {
         LIVE_VENUE_REJECTED_REASON
     }
