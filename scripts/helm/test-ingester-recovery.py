@@ -66,6 +66,7 @@ class Suite:
         self.started_profiles = set()
         self.created_jobs = set()
         self.results = []
+        self.original_scaler_verbs = None
 
     def api(self, method, path, body=None, headers=None):
         request_headers = {"Authorization": "Bearer " + self.token}
@@ -96,6 +97,18 @@ class Suite:
     def pods(self, name):
         items = json.loads(kubectl("get", "pods", "-l", f"app.kubernetes.io/name={name}", "-o", "json"))["items"]
         return [pod for pod in items if pod["status"]["phase"] == "Running"]
+
+    def scaler_verbs(self):
+        role = json.loads(kubectl("get", "role", "ingester-worker-scaler", "-o", "json"))
+        check(len(role["rules"]) == 1 and role["rules"][0]["resources"] == ["deployments/scale"]
+              and role["rules"][0]["resourceNames"] == ["ingester-worker"],
+              "scaler RBAC differs from the expected single-Deployment rule")
+        return role["rules"][0]["verbs"]
+
+    def set_scaler_verbs(self, verbs):
+        patch = json.dumps([{"op": "replace", "path": "/rules/0/verbs", "value": verbs}])
+        kubectl("patch", "role", "ingester-worker-scaler", "--type=json", "-p", patch)
+        check(self.scaler_verbs() == verbs, "scaler RBAC patch was not applied exactly")
 
     def profile(self, key):
         return self.api("GET", "/ingesters/" + key)
@@ -236,12 +249,77 @@ class Suite:
                              "summary": finished["summary"]})
         print("PASS drain dry run", flush=True)
 
+    def scale_permission_outage(self):
+        original = self.scaler_verbs()
+        check(original == ["get", "update"], "scaler RBAC is not in its provisioned state")
+        self.original_scaler_verbs = original
+        try:
+            self.set_scaler_verbs(["get"])
+            for key in PROFILES:
+                self.set_profile(key, "start")
+            wait_for("Kubernetes scale update denied", lambda: (
+                "Kubernetes rejected worker scale update" in kubectl(
+                    "logs", "deployment/ingester-master", "--since=2m", "--tail=100")), 60)
+            check(self.worker_replicas() == (1, 1), "workers unexpectedly scaled while update was denied")
+            check(self.api("GET", "/ingesters/" + PROFILES[0])["desired_state"] == "running",
+                  "desired realtime intent was lost during scale permission outage")
+        finally:
+            self.set_scaler_verbs(original)
+            self.original_scaler_verbs = None
+        wait_for("two ready workers after RBAC restoration", lambda: self.worker_replicas() == (2, 2), 120)
+        def healthy_profiles():
+            profiles = [self.profile(key) for key in PROFILES]
+            return profiles if all(p["desired_state"] == "running" and p["health_status"] == "healthy"
+                                   and p["lease_owner"] for p in profiles) else None
+        recovered = wait_for("healthy profiles after RBAC restoration", healthy_profiles, 120)
+        self.results.append({"case": "scale_permission_outage", "result": "pass",
+                             "owners_after_recovery": [p["lease_owner"] for p in recovered]})
+        print("PASS scale permission outage and restoration", flush=True)
+
+    def active_shard_loss(self):
+        start = self.start_date.isoformat() + "T00:01:00Z"
+        end = (self.start_date + dt.timedelta(days=25)).isoformat() + "T00:01:00Z"
+        job = self.api("POST", "/backfills", {
+            "strategy_key": BACKFILL, "range": {"start": start, "end": end},
+            "parameters": {}, "execution": {},
+        })
+        check(job["status"] == "queued", "active-shard test request was reused")
+        job_id = job["job_id"]
+        self.created_jobs.add(job_id)
+        def active_shard():
+            shards = self.job(job_id)["shards"]
+            return next((s for s in shards if s["status"] == "running" and s["assigned_worker_id"]), None)
+        shard = wait_for("active backfill shard", active_shard, 45, .1)
+        deleted_worker = shard["assigned_worker_id"]
+        kubectl("delete", "pod", deleted_worker, "--wait=false")
+        finished = wait_for("backfill completion after worker loss", lambda: (
+            state if (state := self.job(job_id))["job"]["status"] in ("completed", "failed", "cancelled")
+            else None), 240)
+        check(finished["job"]["status"] == "completed", "backfill did not recover after worker loss")
+        check(len(finished["shards"]) == 26 and all(s["status"] == "completed" for s in finished["shards"]),
+              "a shard failed after worker loss")
+        retried = [s for s in finished["shards"] if s["attempt"] > 1]
+        reassigned = False
+        for item in retried:
+            events = self.api("GET", "/backfills/" + item["job_id"] + "/events")
+            owners = {e["metadata"].get("worker_id") for e in events if e["event_code"] == "job_assigned"}
+            reassigned |= deleted_worker in owners and len(owners) > 1
+        rows = sum(s["verified_coverage"].get("records_verified", 0) for s in finished["shards"])
+        check(rows > 0, "recovered backfill has no verified coverage")
+        self.results.append({"case": "active_shard_loss",
+                             "result": "pass" if reassigned else "inconclusive_no_reassignment",
+                             "job_id": job_id, "deleted_worker": deleted_worker,
+                             "retried_shards": len(retried), "verified_rows": rows})
+        print("PASS backfill completion after active worker loss; reassigned:", reassigned, flush=True)
+
     def soak(self):
         if not self.soak_seconds:
             return
+        source_at_start = self.profile(PROFILES[0])["last_source_event_at"]
         deadline = time.monotonic() + self.soak_seconds
         checks = 0
         previous_heartbeats = {}
+        memory_samples = []
         while time.monotonic() < deadline:
             for key in PROFILES:
                 profile = self.profile(key)
@@ -255,13 +333,35 @@ class Suite:
                     check(heartbeat > previous_heartbeats[key], f"realtime heartbeat did not advance: {key}")
                 previous_heartbeats[key] = heartbeat
             check(self.worker_replicas()[1] >= 2, "worker capacity fell below realtime demand")
+            try:
+                memory_samples.append(kubectl("top", "pods", "-l", "app.kubernetes.io/instance=ingester",
+                                              "--no-headers"))
+            except RuntimeError:
+                pass
             checks += 1
             time.sleep(min(30, max(0, deadline - time.monotonic())))
-        self.results.append({"case": "soak", "result": "pass", "seconds": self.soak_seconds, "checks": checks})
+        source_at_end = self.profile(PROFILES[0])["last_source_event_at"]
+        if self.soak_seconds >= 360:
+            check(source_at_start is not None and source_at_end is not None
+                  and dt.datetime.fromisoformat(source_at_end.replace("Z", "+00:00"))
+                  > dt.datetime.fromisoformat(source_at_start.replace("Z", "+00:00")),
+                  "Binance realtime source timestamp did not advance during observation")
+        self.results.append({"case": "soak", "result": "pass", "seconds": self.soak_seconds,
+                             "checks": checks, "binance_source_at_start": source_at_start,
+                             "binance_source_at_end": source_at_end,
+                             "resource_samples": len(memory_samples),
+                             "initial_resources": memory_samples[0] if memory_samples else None,
+                             "final_resources": memory_samples[-1] if memory_samples else None})
         print(f"PASS {self.soak_seconds}-second soak", flush=True)
 
     def cleanup(self):
         errors = []
+        if self.original_scaler_verbs is not None:
+            try:
+                self.set_scaler_verbs(self.original_scaler_verbs)
+                self.original_scaler_verbs = None
+            except Exception as error:
+                errors.append(f"restore scaler RBAC: {error}")
         for job_id in self.created_jobs:
             try:
                 job = self.job(job_id)["job"]
@@ -285,13 +385,13 @@ class Suite:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--start-date", type=dt.date.fromisoformat, required=True,
-                        help="unused UTC start date for 24 Binance history days, within provider retention")
+                        help="unused UTC start date for up to 26 Binance history days, within provider retention")
     parser.add_argument("--soak-seconds", type=int, default=0)
-    parser.add_argument("--only", choices=("all", "realtime-soak", "cancel-retry", "drain-dry-run"), default="all")
+    parser.add_argument("--only", choices=("all", "realtime-soak", "cancel-retry", "drain-dry-run", "active-shard-loss", "scale-permission-outage"), default="all")
     parser.add_argument("--report", type=Path, default=Path("/private/tmp/capitonic-ingester-recovery.json"))
     args = parser.parse_args()
     check(0 <= args.soak_seconds <= 14400, "soak must be between zero and four hours")
-    check(args.start_date + dt.timedelta(days=24) < dt.datetime.now(dt.timezone.utc).date(),
+    check(args.start_date + dt.timedelta(days=26) < dt.datetime.now(dt.timezone.utc).date(),
           "test history must end before today")
     suite = Suite(args.start_date, args.soak_seconds)
     error = None
@@ -318,6 +418,10 @@ def main():
             suite.cancel_retry()
         if args.only in ("all", "drain-dry-run"):
             suite.drain_dry_run()
+        if args.only == "scale-permission-outage":
+            suite.scale_permission_outage()
+        if args.only == "active-shard-loss":
+            suite.active_shard_loss()
     except Exception as failure:
         error = str(failure)
         print("FAIL", error, file=sys.stderr, flush=True)
