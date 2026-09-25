@@ -258,6 +258,27 @@ pub async fn finish_writer(
     }
 }
 
+pub async fn send_batch(
+    sender: &mpsc::Sender<RecordBatch>,
+    writer: &mut tokio::task::JoinHandle<Result<(), String>>,
+    batch: RecordBatch,
+) -> Result<(), DrainExecutionError> {
+    if sender.send(batch).await.is_ok() {
+        return Ok(());
+    }
+    match writer.await.map_err(|error| io_error(error.to_string()))? {
+        Ok(()) => Err(io_error(
+            "Parquet writer stopped before accepting all source rows",
+        )),
+        Err(error)
+            if error.starts_with("Parquet row ") && error.contains("contains no source values") =>
+        {
+            Err(invalid("drain_empty_source_row", error))
+        }
+        Err(error) => Err(io_error(error)),
+    }
+}
+
 pub async fn publish_file(
     staging: &Path,
     root: &Path,
@@ -477,6 +498,24 @@ mod verified_file_tests {
     use super::*;
     use arrow_array::StringArray;
     use arrow_schema::{DataType, Field};
+
+    #[tokio::test]
+    async fn closed_writer_reports_its_original_error() {
+        let (sender, receiver) = mpsc::channel(1);
+        drop(receiver);
+        let mut writer =
+            tokio::spawn(async { Err("Parquet schema rejected source value".to_owned()) });
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Utf8,
+            false,
+        )]));
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(vec!["value"]))]).unwrap();
+        let error = send_batch(&sender, &mut writer, batch).await.unwrap_err();
+        assert_eq!(error.code, "drain_io_failed");
+        assert_eq!(error.message, "Parquet schema rejected source value");
+    }
 
     #[tokio::test]
     async fn publication_requires_every_parquet_value_to_match_exported_rows() {

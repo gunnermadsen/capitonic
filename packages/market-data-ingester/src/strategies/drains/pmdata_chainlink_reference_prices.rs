@@ -1,7 +1,7 @@
 use super::{
     common::{
-        create_object, db_error, finish_writer, invalid, io_error, publish_file, start_writer,
-        Chunk, Publication,
+        create_object, db_error, finish_writer, invalid, io_error, publish_file, send_batch,
+        start_writer, Chunk, Publication,
     },
     retained::{self, RetainedDrainAdapter, RetainedDrainSpec},
 };
@@ -241,7 +241,7 @@ impl RetainedDrainAdapter for PmdataChainlinkReferencePricesDrain {
         let id = create_object(c, SPEC.key, SPEC.relation, ch).await?;
         let staging = self.root.join(".staging").join(format!("{id}.parquet.tmp"));
         let _ = fs::remove_file(&staging).await;
-        let (sender, writer) = start_writer(staging.clone(), schema());
+        let (sender, mut writer) = start_writer(staging.clone(), schema());
         let mut stream=sqlx::query_as::<_,Row>("SELECT source,feed_id,source_timestamp,valid_from_timestamp,provider_available_at,received_at,price,bid,ask,report_sha256::text,payload_sha256::text,strategy_key,capture_artifact_id,ingested_at,expires_at,report_version,source_date,archive_row_number,backfill_artifact_id,report_hash_kind FROM market_data.pmdata_chainlink_btcusd_reference_prices WHERE source_timestamp >= $1 AND source_timestamp < $2 ORDER BY source_timestamp,source,feed_id,report_sha256").bind(ch.range_start).bind(ch.range_end).fetch(&c.pool);
         let mut rows = Vec::with_capacity(BATCH_ROWS);
         let mut count = 0i64;
@@ -249,17 +249,11 @@ impl RetainedDrainAdapter for PmdataChainlinkReferencePricesDrain {
             rows.push(row);
             count += 1;
             if rows.len() == BATCH_ROWS {
-                sender
-                    .send(batch(std::mem::take(&mut rows))?)
-                    .await
-                    .map_err(|_| io_error("Parquet writer stopped"))?;
+                send_batch(&sender, &mut writer, batch(std::mem::take(&mut rows))?).await?;
             }
         }
         if !rows.is_empty() {
-            sender
-                .send(batch(rows)?)
-                .await
-                .map_err(|_| io_error("Parquet writer stopped"))?;
+            send_batch(&sender, &mut writer, batch(rows)?).await?;
         }
         finish_writer(sender, writer).await?;
         publish(c, &self.root, ch, id, staging, count).await
