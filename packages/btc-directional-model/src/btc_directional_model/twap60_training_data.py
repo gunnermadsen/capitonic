@@ -167,7 +167,6 @@ def extract_tournament_sources(
         require_no_removed_chunks(
             connection,
             strategy_keys=(
-                "binance_spot_btcusdt_one_second_ohlcv",
                 "polymarket_btc_capacity_execution_snapshots",
             ),
             range_start=range_start - timedelta(minutes=121),
@@ -251,6 +250,9 @@ def extract_tournament_sources(
         )
         frames["labels"] = _with_archived_twap_labels(
             frames["labels"], day, end
+        )
+        frames["core_current"] = _with_archived_core(
+            frames["core_current"], frames["labels"], day, end, current_start
         )
         frames["oracle"] = _with_archived_oracle(
             frames["oracle"], day, end
@@ -511,6 +513,87 @@ def _with_archived_twap_labels(
                 row[f"twap_{side}_{column}"] = chosen[position] if chosen else None
         rows.append(row)
     return pl.from_dicts(rows, infer_schema_length=None).select(markets.columns)
+
+
+def _with_archived_core(
+    live: pl.DataFrame,
+    labels: pl.DataFrame,
+    start: datetime,
+    end: datetime,
+    current_start: datetime,
+) -> pl.DataFrame:
+    connection = database_connection()
+    configure_read_only_connection(connection)
+    try:
+        archived = removed_source_rows(
+            connection,
+            strategy_key="binance_spot_btcusdt_one_second_ohlcv",
+            relation="market_data.binance_spot_btcusdt_one_second_ohlcv",
+            time_column="open_timestamp",
+            root=Path(os.environ.get(
+                "BINANCE_ONE_SECOND_OHLCV_DATA_ROOT",
+                "/Volumes/docker-data/polymarket-bot/binance-one-second-ohlcv",
+            )),
+            range_start=start - timedelta(seconds=1),
+            range_end=end,
+            columns=(
+                "symbol", "open_timestamp", "close_timestamp", "open_price",
+                "high_price", "low_price", "close_price", "base_volume",
+                "quote_volume", "trade_count", "taker_buy_base_volume",
+                "taker_buy_quote_volume", "capture_artifact_id",
+            ),
+        )
+        if archived.is_empty():
+            return live
+        completed = completed_capture_ids(
+            connection, archived["capture_artifact_id"].drop_nulls().unique().to_list()
+        )
+    finally:
+        connection.close()
+    markets = labels.filter(pl.col("window_start") >= current_start).select(
+        "market_id", "window_start", "window_end", "official_outcome"
+    )
+    if markets.is_empty():
+        return live
+    if markets["window_start"].n_unique() != markets.height:
+        raise RuntimeError("TWAP60 archived core has ambiguous market windows")
+    archived = (
+        archived.filter(
+            (pl.col("symbol") == "BTCUSDT")
+            & (pl.col("open_timestamp") >= start - timedelta(seconds=1))
+            & (pl.col("open_timestamp") < end - timedelta(seconds=1))
+            & (pl.col("close_timestamp") < pl.col("open_timestamp") + pl.duration(seconds=1))
+            & pl.col("capture_artifact_id").is_in(completed)
+        )
+        .with_columns((pl.col("open_timestamp") + pl.duration(seconds=1)).alias("observed_at"))
+        .sort("observed_at")
+        .join_asof(
+            markets.sort("window_start"),
+            left_on="observed_at", right_on="window_start", strategy="backward",
+        )
+        .filter(
+            pl.col("market_id").is_not_null()
+            & (pl.col("observed_at") < pl.col("window_end"))
+            & (pl.col("open_timestamp") >= pl.col("window_start") - pl.duration(seconds=1))
+        )
+        .with_columns(
+            (pl.col("official_outcome") == "up").cast(pl.Int32).alias("label_up"),
+            pl.lit(1.0).alias("opening_boundary"),
+            pl.lit(None, dtype=pl.Float64).alias("final_price"),
+            (pl.col("observed_at") - pl.col("window_start")).dt.total_seconds().cast(pl.Int32).alias("seconds_elapsed"),
+            *(pl.col(source).cast(pl.Float64).alias(target) for source, target in (
+                ("open_price", "btc_open"), ("high_price", "btc_high"),
+                ("low_price", "btc_low"), ("close_price", "btc_close"),
+                ("base_volume", "btc_base_volume"), ("quote_volume", "btc_quote_volume"),
+                ("taker_buy_base_volume", "btc_taker_buy_base_volume"),
+                ("taker_buy_quote_volume", "btc_taker_buy_quote_volume"),
+            )),
+        )
+        .select(live.columns)
+    )
+    return pl.concat((live, archived), how="vertical_relaxed").sort(
+        "window_start", "observed_at"
+    )
 
 
 def _with_archived_oracle(
