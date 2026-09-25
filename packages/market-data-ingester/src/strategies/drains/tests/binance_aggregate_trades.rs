@@ -29,6 +29,7 @@ fn parquet_schema_contains_every_source_column() {
 
 #[test]
 fn partial_historical_cutoff_is_valid_for_aggregate_trades() {
+    assert_eq!(super::SPEC.retention_days, Some(0));
     let adapter = BinanceAggregateTradesDrain::from_environment().unwrap();
     let request = DrainRequest {
         strategy_key: "binance_spot_btcusdt_aggregate_trades".into(),

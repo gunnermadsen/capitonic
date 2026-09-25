@@ -1,0 +1,36 @@
+# Online-source data path certification
+
+One row represents one online-source dataset table, whether its collection mode is realtime, backfill, or both. Internally generated bot, trading, accounting, job, and model-training tables are outside this inventory. The source-to-table and table-to-SSD contracts remain the registered dataset, strategy, drain-job, and receipt contracts; this file records evidence, not a second registry.
+
+Certification requires all seven checks for that row: **T** working pathway tests; **I** schedulable realtime or backfill collection through the ingester API; **D** schedulable drain through `POST /drains`; **W** safe observed table writes; **P** enforced source-to-Parquet integrity and verified source removal; **M** strategy and worker health/progress instrumentation; **B** a configured buffer of at most five days. A completed real move job and a collection/write check under the selected image are the practical evidence for D, W, and P. A failed or absent check leaves the row pending.
+
+In the table, `R` means realtime, `B` backfill, `C` implemented and tested in code but awaiting selected-image live validation, `L` live evidence, `?` not yet proven, and `—` absent. The buffer is the source policy in this branch, not a claim that the image with that policy is deployed. A receipt job ID proves at least one completed historical source removal for that table; it does not certify the whole path. IDs below were read from the drain job and object ledgers on 2026-09-25.
+
+| Online-source table | I | T | D | W | P | M | B | Completed move evidence | Certification status and missing check |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `market_data.binance_futures_btcusdt_l2_one_second_features` | B | C | L | ? | L | C | 0d | `305afed8-ab0e-4c0e-93c0-36f2453b3f0c`: 168,209 rows, two verified files, zero source chunks | Pending: latest backfill failed on its mount; prove collection/write and deployed metrics. |
+| `market_data.binance_futures_btcusdt_open_interest` | R+B | C | L | ? | C | C | 1d | `38a2c8d4-5c46-4b70-bc3d-a0c6518c30ac` | Pending: selected-image collection/write, move, and metrics check. |
+| `market_data.binance_spot_btcusdt_aggregate_trades` | R+B | C | L | ? | C | C | 0d | `9ac71742-30f6-49da-9fcc-83443173ceeb` | Pending: export the three previously unarchived eligible chunks; selected-image collection/write and metrics check. |
+| `market_data.binance_spot_btcusdt_l2_one_second_features` | B | C | L | ? | C | C | 0d | `129f4a8f-9c03-4da5-a441-173b8a0c6771` | Pending: resolve failed backfill evidence; selected-image move and metrics check. |
+| `market_data.binance_spot_btcusdt_l2_snapshots` | R | C | L | ? | C | C | 0d | `67580d7d-d828-45f6-bcb5-164776390471` | Pending: selected-image realtime write, move, and metrics check. |
+| `market_data.binance_spot_btcusdt_one_second_ohlcv` | R+B | C | L | ? | C | C | 1d | `c316a1c5-fd2b-4939-aae2-1d40272ce4d2` | Pending: selected-image collection/write, move, and metrics check. |
+| `market_data.chainlink_btcusd_one_minute_candles` | R+B | C | L | ? | C | C | 2d | `2b707db8-f100-4478-80d9-828c4e7754bc` | Pending: selected-image collection/write, move, and metrics check. |
+| `market_data.chainlink_btcusd_reference_prices` | R+B | ? | — | ? | — | — | — | None; table currently has zero rows | Pending: resolve failing reference-tick backfill, add drain, then obtain real write and move evidence. |
+| `market_data.pmdata_chainlink_btcusd_reference_prices` | B | C | L | ? | C | C | 0d | `a278a00a-3feb-4ec4-ba94-b437e07b0450` | Pending: export six previously unarchived eligible chunks; selected-image collection/write and metrics check. |
+| `market_data.pmdata_chainlink_btcusd_twap` | B | C | L | ? | C | C | 0d | `c91fff69-3cef-45b7-a2f8-40c1e69fe09c` | Pending: export eight previously unarchived eligible chunks; validate both collection variants and metrics. |
+| `market_data.polygon_chainlink_btcusd_oracle_rounds` | R+B | C | L | ? | C | C | 5d* | `fd30fd29-71d1-4317-9f6e-f7b5421bee6e` | Pending: selected-image collection/write and move check, including preservation of the latest fact-bearing cursor chunk. |
+| `market_data.polymarket_btc_five_minute_contracts` | R+B | ? | — | ? | — | — | — | None | Pending scope decision: retain market identity/scalars; only a separately defined historical payload could move. |
+| `market_data.polymarket_btc_five_minute_resolutions` | R+B | ? | — | ? | — | — | — | None | Pending scope decision: settlement identity and required scalars remain durable; do not remove them as payload. |
+| `market_data.polymarket_chainlink_btcusd_twap` | R | C | L | ? | C | C | 5d | `de13cde7-8139-42b6-b1f0-121ecbd42348` | Pending: selected-image realtime write, move, and metrics check. |
+| `polymarket.reference_price_ticks` | R | C | L | ? | C | C | 5d | `21192df2-c3ef-4d8a-b53d-b5ac516c93d5` | Pending: selected-image realtime write, move, and metrics check. |
+| `polymarket.btc_five_minute_orderbook_snapshots` | R | C | L | ? | C | C | 0d | `894dd296-0479-4225-af14-2e08141ee60d` | Pending: selected-image realtime write, move, and metrics check. |
+| `polymarket.btc_interval_markets` | B | ? | — | ? | — | — | — | None | Pending: define payload-only drain while preserving market identity and required scalars; validate backfill and move. |
+| `polymarket.btc_market_capacity_execution_snapshots` | B | C | L | ? | C | C | 0d | `26430b48-26cb-44f5-ac0b-e0501ab61356` | Pending: resolve failed backfill evidence; selected-image move and metrics check. |
+| `polymarket.btc_market_reference_facts` | B | ? | — | ? | — | — | — | None | Pending: define evidence-payload drain while preserving scalar facts and provenance; validate backfill and move. |
+| `polymarket.btc_orderbook_archive_events` | B | ? | — | ? | — | — | — | None; table currently has zero rows | Pending: confirm source collection produces rows; add drain only for actual collectible payload and then live-test it. |
+| `weather.goes_abi_features` | external B | ? | — | ? | — | — | — | None | Pending: register the feature collection path with the shared ingester API, add zero-day drain, and prove write/move. |
+| `weather.hrrr_environment_features` | external B | ? | — | ? | — | — | — | None | Pending: register the feature collection path with the shared ingester API, add zero-day drain, and prove write/move. |
+
+\* The Polygon oracle realtime strategy reads the latest fact as a durable restart cursor. Its drain can remove older eligible chunks but preserves the chunk containing that fact until a newer durable fact moves the cursor. The five-day cutoff does not guarantee that the final fact-bearing chunk physically disappears after five days of source inactivity.
+
+No path is marked certified in this snapshot. The 14 registered online-source drains have completed removal evidence, while collection/write, new buffer deployment, and progress/health visibility still require a selected-image check per path. Tables with no drain registration remain pending rather than being treated as drainable by assumption.

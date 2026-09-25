@@ -2,6 +2,7 @@ use super::BtcCapacityExecutionSnapshotsDrain;
 use crate::domain::DrainWorkerStrategy;
 #[test]
 fn uses_existing_drain_contract() {
+    assert_eq!(super::SPEC.retention_days, Some(0));
     let adapter = BtcCapacityExecutionSnapshotsDrain::from_environment().unwrap();
     assert_eq!(adapter.descriptor().contract_version, 1);
     assert_eq!(
