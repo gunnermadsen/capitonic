@@ -180,8 +180,12 @@ pub(super) async fn persist_rest_fill_backfill(
             .with_context(|| {
                 format!("live REST fill progress could not find local order {order_id}")
             })?;
+        let partial_fak = order.request.order_type == OrderType::Fak
+            && cumulative_filled_size < order.request.size;
         let expected_state = if cumulative_filled_size >= order.request.size {
             OrderState::Filled
+        } else if order.state == OrderState::Cancelled {
+            OrderState::Cancelled
         } else {
             OrderState::PartiallyFilled
         };
@@ -190,6 +194,20 @@ pub(super) async fn persist_rest_fill_backfill(
                 "live REST fill progress did not persist expected state for order {}",
                 order_id
             );
+        }
+        if partial_fak && updated.state != OrderState::Cancelled {
+            store
+                .mark_order_cancelled(
+                    &order_id,
+                    json!({
+                        "source": "rest_reconcile_fak_remainder",
+                        "cumulative_filled_size": cumulative_filled_size,
+                    }),
+                )
+                .await?
+                .with_context(|| {
+                    format!("FAK remainder cancellation could not find order {order_id}")
+                })?;
         }
         if let Some(new_size) = new_fill_size_by_order.get(&order_id) {
             record_member_live_fill_progress(order, *new_size, cumulative_filled_size);
