@@ -537,6 +537,20 @@ impl ExecutionVenue for LiveVenue {
         }
         pre_post_guard.observe_post_attempt(&request);
         let post_started = std::time::Instant::now();
+        if let (Some(member_id), Some(model_key)) = (
+            request
+                .metadata
+                .pointer("/router/member_id")
+                .and_then(serde_json::Value::as_str),
+            request
+                .metadata
+                .pointer("/router/model_key")
+                .and_then(serde_json::Value::as_str),
+        ) {
+            crate::btc::unified_model_runtime::telemetry::entry_intent_post_attempt(
+                process_id, member_id, model_key,
+            );
+        }
         order_path.event("venue_post", "attempted", "attempted");
         let submit_result = self
             .clob_operation("venue_post", async {

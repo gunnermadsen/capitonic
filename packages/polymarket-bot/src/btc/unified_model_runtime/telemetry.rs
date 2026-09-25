@@ -132,6 +132,10 @@ struct Process {
     counters: BTreeMap<(&'static str, String), u64>,
     model_policy_failed_checks: BTreeMap<(String, &'static str), u64>,
     submission_risk_counters: BTreeMap<(&'static str, &'static str), u64>,
+    selected_entry_intents: BTreeMap<(String, String), u64>,
+    entry_intent_post_attempts: BTreeMap<(String, String), u64>,
+    entry_intent_dispositions:
+        BTreeMap<(String, String, &'static str, &'static str, &'static str), u64>,
     gauges: BTreeMap<&'static str, f64>,
     histograms: BTreeMap<&'static str, Histogram>,
     latest: Option<PredictionRecord>,
@@ -283,6 +287,39 @@ pub fn enabled(id: Uuid, value: bool) {
 }
 pub fn event(id: Uuid, metric: &'static str, reason: &str) {
     update(id, |p| increment(p, metric, reason));
+}
+pub fn selected_entry_intent(id: Uuid, member: &str, model: &str) {
+    update(id, |p| {
+        *p.selected_entry_intents
+            .entry((member.into(), model.into()))
+            .or_default() += 1;
+    });
+}
+pub fn entry_intent_disposition(
+    id: Uuid,
+    member: &str,
+    model: &str,
+    outcome: &'static str,
+    stage: &'static str,
+    reason: &'static str,
+) {
+    update(id, |p| {
+        *p.entry_intent_dispositions
+            .entry((member.into(), model.into(), outcome, stage, reason))
+            .or_default() += 1;
+    });
+}
+pub fn entry_intent_post_attempt(id: Uuid, member: &str, model: &str) {
+    update(id, |p| {
+        if p.members
+            .get(member)
+            .is_some_and(|registered| registered.identity.model_key == model)
+        {
+            *p.entry_intent_post_attempts
+                .entry((member.into(), model.into()))
+                .or_default() += 1;
+        }
+    });
 }
 fn bounded_failure_reason(detail: &str) -> &'static str {
     let lower = detail.to_ascii_lowercase();
@@ -1067,6 +1104,9 @@ pub fn prometheus_metrics() -> String {
                     counters: p.counters.clone(),
                     model_policy_failed_checks: p.model_policy_failed_checks.clone(),
                     submission_risk_counters: p.submission_risk_counters.clone(),
+                    selected_entry_intents: p.selected_entry_intents.clone(),
+                    entry_intent_post_attempts: p.entry_intent_post_attempts.clone(),
+                    entry_intent_dispositions: p.entry_intent_dispositions.clone(),
                     gauges,
                     histograms: p.histograms.clone(),
                     calibration_count: p.calibration_count,
@@ -1304,6 +1344,24 @@ pub fn prometheus_metrics() -> String {
         for ((model_key, check), value) in p.model_policy_failed_checks {
             let _ = writeln!(out, "polymarket_umr_model_policy_failed_checks_total{{{labels},model_key=\"{}\",check=\"{check}\"}} {value}", escaped(&model_key));
         }
+        if declared.insert("selected_entry_intents_total".into()) {
+            out.push_str("# HELP polymarket_umr_selected_entry_intents_total Selected, approved live entry intents before process admission and execution.\n# TYPE polymarket_umr_selected_entry_intents_total counter\n");
+        }
+        for ((member_id, model_key), value) in p.selected_entry_intents {
+            let _ = writeln!(out, "polymarket_umr_selected_entry_intents_total{{{labels},member_id=\"{}\",model_key=\"{}\"}} {value}", escaped(&member_id), escaped(&model_key));
+        }
+        if declared.insert("entry_intent_post_attempts_total".into()) {
+            out.push_str("# HELP polymarket_umr_entry_intent_post_attempts_total Selected live entry intents reaching an actual venue POST, by registered model member.\n# TYPE polymarket_umr_entry_intent_post_attempts_total counter\n");
+        }
+        for ((member_id, model_key), value) in p.entry_intent_post_attempts {
+            let _ = writeln!(out, "polymarket_umr_entry_intent_post_attempts_total{{{labels},member_id=\"{}\",model_key=\"{}\"}} {value}", escaped(&member_id), escaped(&model_key));
+        }
+        if declared.insert("entry_intent_dispositions_total".into()) {
+            out.push_str("# HELP polymarket_umr_entry_intent_dispositions_total Exactly one bounded first-stop classification per selected, approved live entry intent; no_local_veto does not imply a venue POST.\n# TYPE polymarket_umr_entry_intent_dispositions_total counter\n");
+        }
+        for ((member_id, model_key, outcome, stage, reason), value) in p.entry_intent_dispositions {
+            let _ = writeln!(out, "polymarket_umr_entry_intent_dispositions_total{{{labels},member_id=\"{}\",model_key=\"{}\",outcome=\"{outcome}\",stage=\"{stage}\",reason=\"{reason}\"}} {value}", escaped(&member_id), escaped(&model_key));
+        }
         if declared.insert("live_submission_risk_checks_total".into()) {
             out.push_str("# HELP polymarket_umr_live_submission_risk_checks_total Process-scoped live pre-submit risk checks by bounded outcome and reason.\n# TYPE polymarket_umr_live_submission_risk_checks_total counter\n");
         }
@@ -1426,6 +1484,41 @@ mod router_tests {
         assert!(scoped.contains("model_key=\"first-model\",check=\"stressed_edge\"} 1"));
         assert!(scoped.contains("model_key=\"second-model\",check=\"share_cost\"} 1"));
         assert!(!scoped.contains("model_key=\"second-model\",check=\"confidence\""));
+    }
+    #[test]
+    fn entry_intent_metrics_keep_registered_model_members_and_actual_posts_separate() {
+        let id = Uuid::new_v4();
+        let model = RuntimeModelSelection {
+            model_key: "live-model".into(),
+            artifact_sha256: "a".repeat(64),
+            feature_schema_sha256: "b".repeat(64),
+        };
+        register(id, Uuid::new_v4(), "config", "live", Some(&model));
+        register_member(id, "primary", &model, 30, 210);
+        selected_entry_intent(id, "primary", "live-model");
+        entry_intent_disposition(
+            id,
+            "primary",
+            "live-model",
+            "vetoed",
+            "live_gate",
+            "orderbook_marketability",
+        );
+        entry_intent_post_attempt(id, "primary", "other-model");
+        entry_intent_post_attempt(id, "unknown-member", "live-model");
+        entry_intent_post_attempt(id, "primary", "live-model");
+        let scoped = prometheus_metrics()
+            .lines()
+            .filter(|line| line.contains(&id.to_string()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(scoped.contains("selected_entry_intents_total{process_id=\""));
+        assert!(scoped.contains(
+            "outcome=\"vetoed\",stage=\"live_gate\",reason=\"orderbook_marketability\"} 1"
+        ));
+        assert!(scoped.contains("entry_intent_post_attempts_total{process_id=\""));
+        assert!(scoped.contains("member_id=\"primary\",model_key=\"live-model\"} 1"));
+        assert!(!scoped.contains("model_key=\"other-model\""));
     }
     #[test]
     fn entry_fill_metrics_keep_fok_and_fak_separate() {
