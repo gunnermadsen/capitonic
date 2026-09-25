@@ -78,11 +78,6 @@ impl DrainWorkerStrategy for BinanceAggregateTradesDrain {
         if !request.dry_run && request.mode.removes_source_data() {
             require_stopped(&context).await?;
         }
-        if !request.dry_run {
-            fs::create_dir_all(self.root.join(".staging"))
-                .await
-                .map_err(io_error)?;
-        }
         let snapshot_at = sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
             "SELECT requested_at FROM ingester.drain_jobs WHERE job_id=$1",
         )
@@ -90,7 +85,7 @@ impl DrainWorkerStrategy for BinanceAggregateTradesDrain {
         .fetch_one(&context.pool)
         .await
         .map_err(db_error)?;
-        let chunks = sqlx::query_as::<_, Chunk>("SELECT chunk_schema,chunk_name,range_start,range_end FROM timescaledb_information.chunks WHERE hypertable_schema='market_data' AND hypertable_name='binance_spot_btcusdt_aggregate_trades' ORDER BY range_start,chunk_name")
+        let chunks = sqlx::query_as::<_, Chunk>("SELECT chunk_schema,chunk_name,range_start,range_end,pg_total_relation_size(format('%I.%I',chunk_schema,chunk_name)::regclass)::bigint AS size_bytes FROM timescaledb_information.chunks WHERE hypertable_schema='market_data' AND hypertable_name='binance_spot_btcusdt_aggregate_trades' ORDER BY range_start,chunk_name")
             .fetch_all(&context.pool).await.map_err(db_error)?;
         let copyable: Vec<_> = chunks
             .iter()
@@ -106,6 +101,18 @@ impl DrainWorkerStrategy for BinanceAggregateTradesDrain {
                 summary: json!({"copyable_closed_chunks":copyable.len(),"eligible_chunks":chunks.iter().filter(|chunk| chunk.range_end <= request.cutoff).count(),"cutoff":request.cutoff,"mode":request.mode,"open_chunks":chunks.len()-copyable.len(),"relation":RELATION,"snapshot_at":snapshot_at}),
             });
         }
+        super::common::preflight_lake_root(
+            &self.root,
+            copyable
+                .iter()
+                .map(|chunk| chunk.size_bytes)
+                .max()
+                .unwrap_or(0),
+        )
+        .await?;
+        fs::create_dir_all(self.root.join(".staging"))
+            .await
+            .map_err(io_error)?;
         if request.mode.removes_source_data()
             && chunks.iter().any(|chunk| chunk.range_end > request.cutoff)
         {
@@ -142,6 +149,7 @@ impl DrainWorkerStrategy for BinanceAggregateTradesDrain {
                     publication
                 }
                 None => {
+                    super::common::preflight_lake_root(&self.root, chunk.size_bytes).await?;
                     objects_created += 1;
                     export_chunk(&context, &self.root, &chunk).await?
                 }

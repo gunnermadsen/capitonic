@@ -28,6 +28,74 @@ pub struct Chunk {
     pub chunk_name: String,
     pub range_start: DateTime<Utc>,
     pub range_end: DateTime<Utc>,
+    pub size_bytes: i64,
+}
+
+const LAKE_FREE_SPACE_RESERVE: u64 = 256 * 1024 * 1024;
+
+pub async fn preflight_lake_root(
+    root: &Path,
+    source_bytes: i64,
+) -> Result<(), DrainExecutionError> {
+    fs::create_dir_all(root).await.map_err(io_error)?;
+    #[cfg(target_os = "linux")]
+    {
+        let mountinfo = fs::read_to_string("/proc/self/mountinfo")
+            .await
+            .map_err(io_error)?;
+        if !has_persistent_mount(root, &mountinfo) {
+            return Err(invalid(
+                "drain_lake_mount_missing",
+                format!(
+                    "drain lake root {} is not on a persistent mount",
+                    root.display()
+                ),
+            ));
+        }
+    }
+    let statistics = rustix::fs::statvfs(root).map_err(|error| {
+        invalid(
+            "drain_lake_space_unavailable",
+            format!("cannot inspect free space at {}: {error}", root.display()),
+        )
+    })?;
+    let available = statistics.f_bavail.saturating_mul(statistics.f_frsize);
+    if !has_enough_space(available, source_bytes) {
+        let needed = u64::try_from(source_bytes.max(0))
+            .unwrap_or(u64::MAX)
+            .saturating_add(LAKE_FREE_SPACE_RESERVE);
+        return Err(invalid(
+            "drain_lake_space_insufficient",
+            format!(
+                "drain lake root {} has {available} free bytes; at least {needed} are required",
+                root.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn has_enough_space(available: u64, source_bytes: i64) -> bool {
+    let needed = u64::try_from(source_bytes.max(0))
+        .unwrap_or(u64::MAX)
+        .saturating_add(LAKE_FREE_SPACE_RESERVE);
+    available >= needed
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn has_persistent_mount(root: &Path, mountinfo: &str) -> bool {
+    mountinfo
+        .lines()
+        .filter_map(|line| {
+            let (mount, filesystem) = line.split_once(" - ")?;
+            let path = mount.split_whitespace().nth(4)?;
+            let kind = filesystem.split_whitespace().next()?;
+            let mountpoint = Path::new(path);
+            (mountpoint != Path::new("/") && root.starts_with(mountpoint))
+                .then_some((mountpoint.components().count(), kind))
+        })
+        .max_by_key(|(depth, _)| *depth)
+        .is_some_and(|(_, kind)| kind != "overlay")
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -293,4 +361,35 @@ pub fn io_error(error: impl std::fmt::Display) -> DrainExecutionError {
 
 pub fn db_error(error: impl std::fmt::Display) -> DrainExecutionError {
     DrainExecutionError::new("drain_database_failed", error.to_string(), true)
+}
+
+#[cfg(test)]
+mod lake_preflight_tests {
+    use super::*;
+
+    #[test]
+    fn drain_root_requires_a_non_overlay_mount() {
+        let mountinfo = "1 0 0:1 / / rw - overlay overlay rw\n\
+            2 1 0:2 /lake /var/lib/lake rw - virtiofs none rw\n\
+            3 2 0:3 /nested /var/lib/lake/overlay rw - overlay overlay rw\n";
+        assert!(has_persistent_mount(
+            Path::new("/var/lib/lake/drains"),
+            mountinfo
+        ));
+        assert!(!has_persistent_mount(
+            Path::new("/var/lib/unmounted"),
+            mountinfo
+        ));
+        assert!(!has_persistent_mount(
+            Path::new("/var/lib/lake/overlay"),
+            mountinfo
+        ));
+    }
+
+    #[test]
+    fn drain_root_reserves_space_for_a_source_chunk() {
+        assert!(!has_enough_space(LAKE_FREE_SPACE_RESERVE, 1));
+        assert!(has_enough_space(LAKE_FREE_SPACE_RESERVE + 1, 1));
+        assert!(!has_enough_space(LAKE_FREE_SPACE_RESERVE, i64::MAX));
+    }
 }

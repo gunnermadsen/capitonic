@@ -10,8 +10,8 @@ use crate::domain::{
 };
 
 use super::common::{
-    archived_publications, db_error, existing_publication, invalid, reset_publication,
-    verify_existing, Chunk, Publication,
+    archived_publications, db_error, existing_publication, invalid, preflight_lake_root,
+    reset_publication, verify_existing, Chunk, Publication,
 };
 
 pub struct RetainedDrainSpec {
@@ -99,7 +99,8 @@ pub async fn execute(
     .await
     .map_err(db_error)?;
     let chunks = sqlx::query_as::<_, Chunk>(
-        "SELECT chunk_schema,chunk_name,range_start,range_end \
+        "SELECT chunk_schema,chunk_name,range_start,range_end, \
+         pg_total_relation_size(format('%I.%I',chunk_schema,chunk_name)::regclass)::bigint AS size_bytes \
          FROM timescaledb_information.chunks WHERE hypertable_schema=$1 \
          AND hypertable_name=$2 ORDER BY range_start,chunk_name",
     )
@@ -154,6 +155,15 @@ pub async fn execute(
             }),
         });
     }
+    preflight_lake_root(
+        adapter.root(),
+        copyable
+            .iter()
+            .map(|chunk| chunk.size_bytes)
+            .max()
+            .unwrap_or(0),
+    )
+    .await?;
     fs::create_dir_all(adapter.root().join(".staging"))
         .await
         .map_err(super::common::io_error)?;
@@ -181,6 +191,7 @@ pub async fn execute(
                 let source_count = adapter.source_count(&context, &chunk).await?;
                 let verified = verify_existing(adapter.root(), &publication).await;
                 if should_republish(source_count, publication.row_count, verified.is_ok()) {
+                    preflight_lake_root(adapter.root(), chunk.size_bytes).await?;
                     reset_publication(&context, &publication).await?;
                     objects_created += 1;
                     adapter.export_chunk(&context, &chunk).await?
@@ -191,6 +202,7 @@ pub async fn execute(
                 }
             }
             None => {
+                preflight_lake_root(adapter.root(), chunk.size_bytes).await?;
                 objects_created += 1;
                 adapter.export_chunk(&context, &chunk).await?
             }
