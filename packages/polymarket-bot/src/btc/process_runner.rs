@@ -422,6 +422,7 @@ struct EntryAdmissionEvaluation {
 
 struct RouterMemberRuntime {
     member_id: String,
+    entry_order_type: OrderType,
     strategy: BtcStrategyConfig,
     max_feature_age_ms: Option<i64>,
     runtime: StdMutex<DirectionalModelProcessRuntime>,
@@ -586,16 +587,21 @@ impl BtcProcessRunner {
                 .unwrap_or(20);
             definition.compile_members(&base, &keys)?
         } else {
-            vec![("legacy_primary".into(), config.strategy.clone())]
+            vec![(
+                "legacy_primary".into(),
+                config.strategy.clone(),
+                OrderType::Fok,
+            )]
         };
         let router_members = member_strategies
             .into_iter()
-            .map(|(member_id, strategy)| {
+            .map(|(member_id, strategy, entry_order_type)| {
                 let model = runtime_model(
                     &directional_model_selection(&strategy).context("missing member model")?,
                 )?;
                 Ok(RouterMemberRuntime {
                     member_id,
+                    entry_order_type,
                     max_feature_age_ms: strategy.effective_max_directional_feature_age_ms()?,
                     strategy,
                     runtime: StdMutex::new(DirectionalModelProcessRuntime::default()),
@@ -1809,7 +1815,7 @@ impl BtcProcessRunner {
             market_id: intent.market_id.clone(),
             token_id: intent.token_id.clone(),
             side: OrderSide::Buy,
-            order_type: OrderType::Fok,
+            order_type: member.entry_order_type,
             price: intent.limit_price,
             size: intent.size,
             metadata: order_metadata,
@@ -1928,8 +1934,12 @@ impl BtcProcessRunner {
             .first()
             .context("BTC OrderPlan report omitted its primary order")?;
         let primary_state = primary_order.state;
-        let filled = primary_state == OrderState::Filled;
-        let execution_status = decision_execution_status(primary_state);
+        let filled = primary_state == OrderState::Filled || !report.fills.is_empty();
+        let execution_status = if primary_state == OrderState::Cancelled && filled {
+            "filled"
+        } else {
+            decision_execution_status(primary_state)
+        };
         umr_telemetry::event(self.config.process_id, "execution", execution_status);
         let gate_reason = primary_order
             .request
@@ -1988,7 +1998,25 @@ impl BtcProcessRunner {
         let outcome = match primary_state {
             OrderState::Filled => "filled",
             OrderState::PartiallyFilled => "partial",
+            OrderState::Cancelled if !report.fills.is_empty() => "partial",
             OrderState::Rejected if gate_reason.is_some() => "local_gate_rejected",
+            OrderState::Rejected
+                if primary_order.request.order_type == OrderType::Fok
+                    && execution_reject_reason.as_deref().is_some_and(|reason| {
+                        matches!(
+                            reason,
+                            "insufficient_arrival_depth" | "arrival_depth_participation_exceeded"
+                        )
+                    }) =>
+            {
+                "fok_unfilled"
+            }
+            OrderState::Rejected
+                if primary_order.request.order_type == OrderType::Fak
+                    && execution_reject_reason.as_deref() == Some("insufficient_arrival_depth") =>
+            {
+                "fak_unfilled"
+            }
             OrderState::Rejected
                 if execution_reject_reason
                     .as_deref()
@@ -1996,10 +2024,37 @@ impl BtcProcessRunner {
             {
                 "fok_unfilled"
             }
+            OrderState::Rejected
+                if execution_reject_reason.as_deref() == Some("venue_fak_unfilled") =>
+            {
+                "fak_unfilled"
+            }
             OrderState::Rejected => "venue_rejected",
             OrderState::Unknown => "ambiguous",
             _ => "acknowledged_pending",
         };
+        umr_telemetry::member_entry_attempt(
+            self.config.process_id,
+            &member.member_id,
+            primary_order.request.order_type.as_str(),
+            match outcome {
+                "fok_unfilled" => "fok_unfilled",
+                "fak_unfilled" => "fak_unfilled",
+                "partial" => "partial",
+                "filled" => "filled",
+                "acknowledged_pending" => "submitted",
+                "local_gate_rejected" => "local_gate_rejected",
+                _ => "venue_rejected",
+            },
+            primary_order.request.size.to_f64().unwrap_or_default(),
+            report
+                .fills
+                .iter()
+                .map(|fill| fill.size)
+                .sum::<Decimal>()
+                .to_f64()
+                .unwrap_or_default(),
+        );
         umr_telemetry::event(self.config.process_id, "execution_outcomes", outcome);
         let preview_permit = if self.config.paper_stress_previews.is_empty() {
             None

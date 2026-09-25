@@ -353,7 +353,8 @@ pub async fn execute_order_plan<V: ExecutionVenue + ?Sized>(
     for request in plan.orders {
         let order = venue.submit_order(request).await?;
         if venue.synchronous_post_order_fill_lookup()
-            && !matches!(order.state, OrderState::Rejected | OrderState::Cancelled)
+            && (order.request.order_type == OrderType::Fak
+                || !matches!(order.state, OrderState::Rejected | OrderState::Cancelled))
         {
             match venue.fills_for_order(&order.order_id).await {
                 Ok(order_fills) => fills.extend(order_fills),

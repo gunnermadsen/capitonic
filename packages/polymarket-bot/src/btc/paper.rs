@@ -543,8 +543,8 @@ impl PaperVenue {
         if request.side != OrderSide::Buy {
             return paper_reject(base, "paper_only_supports_buy_orders");
         }
-        if request.order_type != OrderType::Fok {
-            return paper_reject(base, "paper_only_supports_fok_orders");
+        if !matches!(request.order_type, OrderType::Fok | OrderType::Fak) {
+            return paper_reject(base, "paper_unsupported_order_type");
         }
         if request.price <= Decimal::ZERO
             || request.price > Decimal::ONE
@@ -669,7 +669,10 @@ impl PaperVenue {
                 }
             }),
         );
-        if depth.executable_size >= request.size && request.size > max_participating_size {
+        if depth.executable_size >= request.size
+            && request.size > max_participating_size
+            && request.order_type == OrderType::Fok
+        {
             return paper_reject_with_details(
                 base,
                 "arrival_depth_participation_exceeded",
@@ -681,7 +684,12 @@ impl PaperVenue {
             );
         }
 
-        let mut remaining = request.size;
+        let executable_target = if request.order_type == OrderType::Fak {
+            request.size.min(max_participating_size)
+        } else {
+            request.size
+        };
+        let mut remaining = executable_target;
         let mut walked = Vec::new();
         for level in &checkpoint.asks {
             if level.price > request.price || level.size <= Decimal::ZERO {
@@ -701,7 +709,7 @@ impl PaperVenue {
                 break;
             }
         }
-        if remaining > Decimal::ZERO {
+        if remaining > Decimal::ZERO && request.order_type == OrderType::Fok {
             return paper_reject_with_details(
                 base,
                 "insufficient_arrival_depth",
@@ -729,6 +737,17 @@ impl PaperVenue {
             })
             .collect::<Vec<_>>();
         let filled_size = fills.iter().map(|fill| fill.size).sum::<Decimal>();
+        if filled_size == Decimal::ZERO {
+            return paper_reject_with_details(
+                base,
+                "insufficient_arrival_depth",
+                &checkpoint,
+                depth.executable_size,
+                depth.executable_notional,
+                fee_rate,
+                &walked,
+            );
+        }
         let filled_notional = fills
             .iter()
             .map(|fill| fill.price * fill.size)
@@ -766,7 +785,11 @@ impl PaperVenue {
         }
         let average_price = filled_notional / filled_size;
         PaperExecution {
-            state: OrderState::Filled,
+            state: if filled_size == request.size {
+                OrderState::Filled
+            } else {
+                OrderState::Cancelled
+            },
             fills,
             metadata: merge_json(
                 base,
@@ -906,7 +929,7 @@ impl ExecutionVenue for PaperVenue {
             updated_at: arrival_at,
         };
         let mut state = self.state.lock().await;
-        if execution.state == OrderState::Filled {
+        if !execution.fills.is_empty() {
             let debit = execution
                 .fills
                 .iter()
@@ -1928,6 +1951,52 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn fak_keeps_fractional_fill_and_cancels_unfilled_remainder() {
+        let venue = venue(
+            registry_with_book(
+                Utc::now(),
+                vec![OrderbookLevel {
+                    price: dec!(0.40),
+                    size: dec!(2.5),
+                }],
+            ),
+            Decimal::ONE,
+        );
+        let mut entry = request(dec!(5), dec!(0.40));
+        entry.order_type = OrderType::Fak;
+        let report = crate::execution::execute_order_plan(
+            &venue,
+            crate::execution::OrderPlan {
+                plan_id: Uuid::from_u128(901),
+                orders: vec![entry],
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.orders[0].state, OrderState::Cancelled);
+        assert_eq!(report.fills.len(), 1);
+        assert_eq!(report.fills[0].size, dec!(2.5));
+        assert_eq!(report.fills[0].price, dec!(0.40));
+        assert_eq!(venue.status().await.entry_debits_usd, dec!(1.15));
+        assert!(venue.get_open_orders().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn fak_without_executable_depth_does_not_debit_capital() {
+        let venue = venue(registry_with_book(Utc::now(), vec![]), Decimal::ONE);
+        let mut entry = request(dec!(5), dec!(0.40));
+        entry.order_type = OrderType::Fak;
+        let order = venue.submit_order(entry).await.unwrap();
+        assert_eq!(order.state, OrderState::Rejected);
+        assert!(venue
+            .fills_for_order(&order.order_id)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(venue.status().await.entry_debits_usd, Decimal::ZERO);
     }
 
     #[tokio::test]

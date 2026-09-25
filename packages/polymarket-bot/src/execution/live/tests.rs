@@ -1416,6 +1416,17 @@ mod tests {
             ),
             LIVE_VENUE_REJECTED_REASON
         );
+        assert_eq!(
+            definitive_live_venue_reject_reason(
+                OrderType::Fak,
+                Some("no orders found to match with FAK order")
+            ),
+            LIVE_VENUE_FAK_UNFILLED_REASON
+        );
+        assert_eq!(
+            definitive_live_venue_reject_reason(OrderType::Fak, Some("invalid signature")),
+            LIVE_VENUE_REJECTED_REASON
+        );
     }
 
     #[test]

@@ -1028,7 +1028,7 @@ mod lifecycle_tests {
             .unwrap();
             let members = resolve_btc_members(&control).unwrap();
             assert_eq!(members.len(), 5);
-            for (_, strategy) in &members {
+            for (_, strategy, _) in &members {
                 strategy.validate().unwrap();
                 validate_btc_entry_timing(strategy).unwrap();
                 validate_directional_model_entry_policy(

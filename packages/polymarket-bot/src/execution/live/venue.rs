@@ -297,6 +297,11 @@ impl LiveVenue {
                     )
                 })?;
             if cumulative_filled_size > prior_filled_size {
+                record_member_live_fill_progress(
+                    order,
+                    cumulative_filled_size - prior_filled_size,
+                    cumulative_filled_size,
+                );
                 if let Some(process_id) = order.request.process_id {
                     let latency = (fill.filled_at - order.updated_at)
                         .num_milliseconds()

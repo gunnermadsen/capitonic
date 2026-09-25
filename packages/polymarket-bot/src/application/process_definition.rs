@@ -371,11 +371,12 @@ pub(super) fn resolve_legacy_btc_strategy(
 
 pub(super) fn resolve_btc_members(
     control: &BtcRealtimePaperControlConfig,
-) -> Result<Vec<(String, BtcStrategyConfig)>, HttpError> {
+) -> Result<Vec<(String, BtcStrategyConfig, polymarket_bot::models::OrderType)>, HttpError> {
     if control.schema_version != ROUTER_PROCESS_SCHEMA_VERSION {
         return Ok(vec![(
             "legacy_primary".into(),
             resolve_legacy_btc_strategy(control)?,
+            polymarket_bot::models::OrderType::Fok,
         )]);
     }
     let overrides = control
