@@ -143,8 +143,10 @@ export class RegisterFiveMinutePayloadDrains1790356900000 implements MigrationIn
     );
     removal = replaceOnce(
       removal,
-      "        CASE object_record.strategy_key\n          WHEN 'goes_abi_features' THEN",
-      `        IF object_record.strategy_key IN (
+      "          RAISE EXCEPTION 'reference evidence must retain three days';\n        END IF;\n\n        CASE object_record.strategy_key\n          WHEN 'goes_abi_features' THEN",
+      `          RAISE EXCEPTION 'reference evidence must retain three days';
+        END IF;
+        IF object_record.strategy_key IN (
           'polymarket_btc_five_minute_contract_payload',
           'polymarket_btc_five_minute_resolution_payload')
           AND job_cutoff > clock_timestamp() - interval '5 days' THEN
