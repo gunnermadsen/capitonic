@@ -36,6 +36,7 @@ from .core_features import (
     derive_core_point_in_time_features,
     derive_oracle_point_in_time_features,
 )
+from .drained_sources import require_no_removed_chunks
 from .provenance import runtime_provenance
 from .refprice_twap_training import _query_frame
 from .twap60_training_data import (
@@ -307,6 +308,19 @@ def build_dataset(config: TournamentConfig, *, force: bool = False) -> dict[str,
         manifest = json.loads(manifest_path.read_text())
         _verify_manifest(manifest, contract, destination)
         return manifest
+    with database_connection() as connection:
+        configure_read_only_connection(connection)
+        require_no_removed_chunks(
+            connection,
+            strategy_keys=(
+                "binance_spot_btcusdt_one_second_ohlcv",
+                "polygon_chainlink_btcusd_oracle_rounds",
+                "pmdata_chainlink_btcusd_twap",
+                "polymarket_btc_capacity_execution_snapshots",
+            ),
+            range_start=config.windows.data_start,
+            range_end=config.windows.prospective_end,
+        )
     if force:
         for path in destination.glob("*.parquet"):
             path.unlink()
