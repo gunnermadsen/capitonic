@@ -8,6 +8,7 @@ use arrow_array::{Array, RecordBatch, TimestampMicrosecondArray};
 use arrow_cast::display::array_value_to_string;
 use arrow_schema::{DataType, Schema, TimeUnit};
 use chrono::{DateTime, Utc};
+use futures_util::TryStreamExt;
 use parquet::{
     arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter},
     basic::{Compression, ZstdLevel},
@@ -18,8 +19,9 @@ use parquet::{
     },
 };
 use sha2::{Digest, Sha256};
-use sqlx::FromRow;
+use sqlx::{FromRow, Row};
 use tokio::{fs, io::AsyncReadExt, sync::mpsc};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::domain::{DrainContext, DrainExecutionError};
@@ -325,6 +327,233 @@ pub async fn verify_existing(
     let path = root.join(&publication.relative_path);
     verify_hash(&path, &publication.sha256, publication.byte_size).await?;
     verify_parquet(&path, publication.row_count).await
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct RowMultiset {
+    rows: i64,
+    sum: [u64; 4],
+}
+
+impl RowMultiset {
+    fn add(&mut self, digest: [u8; 32]) {
+        self.rows += 1;
+        for (part, bytes) in self.sum.iter_mut().zip(digest.chunks_exact(8)) {
+            *part = part.wrapping_add(u64::from_le_bytes(bytes.try_into().unwrap()));
+        }
+    }
+}
+
+fn source_projection(schema: &Schema) -> Result<String, DrainExecutionError> {
+    schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let name = field.name();
+            if !name
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+                || name.is_empty()
+                || name.as_bytes()[0].is_ascii_digit()
+            {
+                return Err(invalid(
+                    "drain_source_schema_invalid",
+                    format!("invalid source field {name}"),
+                ));
+            }
+            let column = format!("\"{name}\"");
+            let expression = match field.data_type() {
+                DataType::Timestamp(TimeUnit::Microsecond, Some(zone))
+                    if zone.as_ref() == "UTC" =>
+                {
+                    format!("(EXTRACT(EPOCH FROM {column}) * 1000000)::bigint::text")
+                }
+                DataType::Decimal128(precision, scale) => {
+                    format!("{column}::numeric({precision},{scale})::text")
+                }
+                DataType::Utf8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::Boolean
+                | DataType::Date32 => format!("{column}::text"),
+                other => {
+                    return Err(invalid(
+                        "drain_source_schema_invalid",
+                        format!("unsupported source field {name}: {other:?}"),
+                    ))
+                }
+            };
+            Ok(expression)
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|fields| fields.join(","))
+}
+
+fn row_digest<'a>(values: impl Iterator<Item = Option<&'a [u8]>>) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update([0x52]);
+    for value in values {
+        match value {
+            Some(value) => {
+                digest.update([1]);
+                hash_value(&mut digest, value);
+            }
+            None => digest.update([0]),
+        }
+    }
+    digest.finalize().into()
+}
+
+fn canonical_json(value: String, is_json: bool) -> Result<String, DrainExecutionError> {
+    if is_json {
+        serde_json::from_str::<serde_json::Value>(&value)
+            .map(|value| value.to_string())
+            .map_err(|error| invalid("drain_source_payload_invalid", error.to_string()))
+    } else {
+        Ok(value)
+    }
+}
+
+fn parquet_row_multiset(
+    path: &Path,
+    json_columns: &[bool],
+    shutdown: &CancellationToken,
+) -> Result<(Arc<Schema>, RowMultiset), DrainExecutionError> {
+    let builder = ParquetRecordBatchReaderBuilder::try_new(File::open(path).map_err(io_error)?)
+        .map_err(io_error)?;
+    let schema = builder.schema().clone();
+    let mut multiset = RowMultiset::default();
+    for batch in builder.with_batch_size(2048).build().map_err(io_error)? {
+        if shutdown.is_cancelled() {
+            return Err(DrainExecutionError::new(
+                "drain_cancelled",
+                "drain was cancelled",
+                true,
+            ));
+        }
+        let batch = batch.map_err(io_error)?;
+        for row in 0..batch.num_rows() {
+            let values = batch.columns().iter().zip(json_columns).map(|(column, is_json)| {
+                if column.is_null(row) { return Ok(None); }
+                if matches!(column.data_type(), DataType::Timestamp(TimeUnit::Microsecond, Some(zone)) if zone.as_ref() == "UTC") {
+                    let timestamps = column.as_any().downcast_ref::<TimestampMicrosecondArray>()
+                        .ok_or_else(|| invalid("drain_source_schema_invalid", "unexpected timestamp array"))?;
+                    return Ok(Some(timestamps.value(row).to_string()));
+                }
+                array_value_to_string(column.as_ref(), row)
+                    .map_err(io_error).and_then(|value| canonical_json(value, *is_json)).map(Some)
+            }).collect::<Result<Vec<_>, _>>()?;
+            multiset.add(row_digest(
+                values
+                    .iter()
+                    .map(|value| value.as_deref().map(str::as_bytes)),
+            ));
+        }
+    }
+    Ok((schema, multiset))
+}
+
+pub async fn verify_source_parity(
+    context: &DrainContext,
+    relation: &str,
+    time_column: &str,
+    chunk: &Chunk,
+    root: &Path,
+    publication: &Publication,
+) -> Result<(), DrainExecutionError> {
+    let column_types: Vec<(String, String)> = sqlx::query_as(
+        "SELECT attname,atttypid::regtype::text FROM pg_attribute \
+         WHERE attrelid=$1::regclass AND attnum>0 AND NOT attisdropped",
+    )
+    .bind(relation)
+    .fetch_all(&context.pool)
+    .await
+    .map_err(db_error)?;
+    let path = root.join(&publication.relative_path);
+    let schema = tokio::task::spawn_blocking({
+        let path = path.clone();
+        move || {
+            ParquetRecordBatchReaderBuilder::try_new(File::open(path).map_err(io_error)?)
+                .map(|builder| builder.schema().clone())
+                .map_err(io_error)
+        }
+    })
+    .await
+    .map_err(|error| io_error(error.to_string()))??;
+    let json_columns = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            column_types
+                .iter()
+                .find(|(name, _)| name == field.name())
+                .is_some_and(|(_, kind)| kind == "json" || kind == "jsonb")
+        })
+        .collect::<Vec<_>>();
+    let json_for_file = json_columns.clone();
+    let shutdown = context.shutdown.clone();
+    let (schema, parquet) =
+        tokio::task::spawn_blocking(move || parquet_row_multiset(&path, &json_for_file, &shutdown))
+            .await
+            .map_err(|error| io_error(error.to_string()))??;
+    if parquet.rows != publication.row_count {
+        return Err(invalid(
+            "drain_source_payload_mismatch",
+            "Parquet payload row count changed before source removal",
+        ));
+    }
+    let columns = source_projection(&schema)?;
+    let query = format!(
+        "SELECT {columns} FROM {relation} WHERE {time_column} >= $1 AND {time_column} < $2"
+    );
+    let mut transaction = context.pool.begin().await.map_err(db_error)?;
+    sqlx::query("SELECT set_config('statement_timeout','120s',true)")
+        .execute(&mut *transaction)
+        .await
+        .map_err(db_error)?;
+    let mut rows = sqlx::query(&query)
+        .bind(chunk.range_start)
+        .bind(chunk.range_end)
+        .fetch(&mut *transaction);
+    let mut source = RowMultiset::default();
+    loop {
+        let row = tokio::select! {
+            _ = context.shutdown.cancelled() => return Err(DrainExecutionError::new("drain_cancelled", "drain was cancelled", true)),
+            result = rows.try_next() => result.map_err(db_error)?,
+        };
+        let Some(row) = row else {
+            break;
+        };
+        let values = (0..schema.fields().len())
+            .map(|index| {
+                row.try_get::<Option<String>, _>(index)
+                    .map_err(db_error)
+                    .and_then(|value| {
+                        value
+                            .map(|value| canonical_json(value, json_columns[index]))
+                            .transpose()
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        source.add(row_digest(
+            values
+                .iter()
+                .map(|value| value.as_deref().map(str::as_bytes)),
+        ));
+        if source.rows % 1_000 == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+    drop(rows);
+    transaction.commit().await.map_err(db_error)?;
+    if source != parquet {
+        return Err(invalid("drain_source_payload_mismatch", format!(
+            "source {relation} chunk {} differs from Parquet publication: source rows {}, Parquet rows {}",
+            chunk.chunk_name, source.rows, parquet.rows
+        )));
+    }
+    Ok(())
 }
 
 async fn hash_file(path: &Path) -> Result<(String, i64), DrainExecutionError> {
@@ -660,5 +889,111 @@ mod verified_file_tests {
         assert_eq!(fs::read(&final_path).await.unwrap(), b"same publication");
         assert!(!staging.exists());
         fs::remove_dir_all(root).await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod source_parity_tests {
+    use super::*;
+    use arrow_array::StringArray;
+    use arrow_schema::Field;
+
+    #[test]
+    fn projection_uses_source_fields_and_exact_decimal_scale() {
+        let schema = Schema::new(vec![
+            Field::new(
+                "observed_at",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                false,
+            ),
+            Field::new("price", DataType::Decimal128(30, 10), false),
+            Field::new("payload", DataType::Utf8, true),
+        ]);
+        assert_eq!(source_projection(&schema).unwrap(),
+            "(EXTRACT(EPOCH FROM \"observed_at\") * 1000000)::bigint::text,\"price\"::numeric(30,10)::text,\"payload\"::text");
+        let bad = Schema::new(vec![Field::new(
+            "x); DROP TABLE source; --",
+            DataType::Utf8,
+            true,
+        )]);
+        assert_eq!(
+            source_projection(&bad).unwrap_err().code,
+            "drain_source_schema_invalid"
+        );
+    }
+
+    #[test]
+    fn multiset_preserves_row_multiplicity_and_field_values() {
+        let row_a = row_digest([Some(b"a".as_slice()), Some(b"1".as_slice())].into_iter());
+        let row_b = row_digest([Some(b"b".as_slice()), None].into_iter());
+        let changed = row_digest([Some(b"a".as_slice()), Some(b"2".as_slice())].into_iter());
+        let mut source = RowMultiset::default();
+        source.add(row_a);
+        source.add(row_a);
+        source.add(row_b);
+        let mut reordered = RowMultiset::default();
+        reordered.add(row_b);
+        reordered.add(row_a);
+        reordered.add(row_a);
+        assert_eq!(source, reordered);
+        let mut missing_duplicate = RowMultiset::default();
+        missing_duplicate.add(row_a);
+        missing_duplicate.add(row_b);
+        assert_ne!(source, missing_duplicate);
+        let mut mutated = RowMultiset::default();
+        mutated.add(row_a);
+        mutated.add(changed);
+        mutated.add(row_b);
+        assert_ne!(source, mutated);
+    }
+
+    #[test]
+    fn json_values_compare_by_database_semantics() {
+        assert_eq!(
+            canonical_json("{\"b\": 2, \"a\": 1}".into(), true).unwrap(),
+            "{\"a\":1,\"b\":2}"
+        );
+        assert_eq!(
+            canonical_json("{\"b\": 2, \"a\": 1}".into(), false).unwrap(),
+            "{\"b\": 2, \"a\": 1}"
+        );
+    }
+
+    #[tokio::test]
+    async fn parquet_rows_match_independent_source_values() {
+        let path = std::env::temp_dir().join(format!("source-parity-{}.parquet", Uuid::new_v4()));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("payload", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["one", "two", "two"])),
+                Arc::new(StringArray::from(vec![
+                    Some("{\"b\":2,\"a\":1}"),
+                    None,
+                    None,
+                ])),
+            ],
+        )
+        .unwrap();
+        let (sender, writer) = start_writer(path.clone(), schema);
+        sender.send(batch).await.unwrap();
+        finish_writer(sender, writer).await.unwrap();
+        let (_, actual) =
+            parquet_row_multiset(&path, &[false, true], &CancellationToken::new()).unwrap();
+        let mut expected = RowMultiset::default();
+        expected.add(row_digest(
+            [
+                Some(b"one".as_slice()),
+                Some(b"{\"a\":1,\"b\":2}".as_slice()),
+            ]
+            .into_iter(),
+        ));
+        expected.add(row_digest([Some(b"two".as_slice()), None].into_iter()));
+        expected.add(row_digest([Some(b"two".as_slice()), None].into_iter()));
+        assert_eq!(actual, expected);
+        fs::remove_file(path).await.unwrap();
     }
 }

@@ -11,7 +11,7 @@ use crate::domain::{
 
 use super::common::{
     archived_publications, db_error, existing_publication, invalid, preflight_lake_root,
-    reset_publication, verify_existing, Chunk, Publication,
+    reset_publication, verify_existing, verify_source_parity, Chunk, Publication,
 };
 
 pub struct RetainedDrainSpec {
@@ -270,6 +270,15 @@ pub async fn execute(
         outcome.objects_published += 1;
         outcome.bytes_written += publication.byte_size;
         if request.mode.removes_source_data() && chunk.range_end <= request.cutoff {
+            verify_source_parity(
+                &context,
+                spec.relation,
+                spec.time_column,
+                &chunk,
+                adapter.root(),
+                &publication,
+            )
+            .await?;
             outcome.rows_removed += remove_verified_chunk(&context, &publication).await?;
             chunks_removed += 1;
             tokio::select! {
