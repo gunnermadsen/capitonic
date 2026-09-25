@@ -1,6 +1,19 @@
-use super::BtcFeatureSnapshotsDrain;
+use super::{export_slices, BtcFeatureSnapshotsDrain};
 use crate::domain::{DrainRequest, DrainWorkerStrategy, ExecutionSelector};
-use chrono::{Duration, Utc};
+use chrono::{Duration, TimeZone, Utc};
+#[test]
+fn export_slices_cover_chunk_without_overlap() {
+    let start = Utc.with_ymd_and_hms(2026, 9, 15, 0, 0, 0).unwrap();
+    let end = start + Duration::minutes(37);
+    assert_eq!(
+        export_slices(start, end),
+        vec![
+            (start, start + Duration::minutes(15)),
+            (start + Duration::minutes(15), start + Duration::minutes(30)),
+            (start + Duration::minutes(30), end),
+        ]
+    );
+}
 #[test]
 fn permits_draining_all_closed_feature_chunks() {
     let adapter = BtcFeatureSnapshotsDrain::from_environment().unwrap();

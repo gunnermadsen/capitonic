@@ -12,6 +12,7 @@ use crate::domain::{
 use arrow_array::{ArrayRef, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
+use chrono::{DateTime, Duration, Utc};
 use futures_util::TryStreamExt;
 use sqlx::{postgres::PgRow, Row};
 use std::{
@@ -28,6 +29,7 @@ const SPEC: RetainedDrainSpec = RetainedDrainSpec {
     retention_days: Some(0),
 };
 const BATCH_ROWS: usize = 500;
+const EXPORT_SLICE: Duration = Duration::minutes(15);
 const COLUMNS: [&str; 39] = [
     "snapshot_id",
     "feature_as_of",
@@ -113,6 +115,16 @@ fn batch(rows: Vec<PgRow>) -> Result<RecordBatch, DrainExecutionError> {
         .collect::<Result<Vec<_>, _>>()?;
     RecordBatch::try_new(schema(), arrays).map_err(|e| io_error(e.to_string()))
 }
+fn export_slices(start: DateTime<Utc>, end: DateTime<Utc>) -> Vec<(DateTime<Utc>, DateTime<Utc>)> {
+    let mut slices = Vec::new();
+    let mut cursor = start;
+    while cursor < end {
+        let next = (cursor + EXPORT_SLICE).min(end);
+        slices.push((cursor, next));
+        cursor = next;
+    }
+    slices
+}
 #[async_trait]
 impl RetainedDrainAdapter for BtcFeatureSnapshotsDrain {
     fn spec(&self) -> &RetainedDrainSpec {
@@ -130,19 +142,30 @@ impl RetainedDrainAdapter for BtcFeatureSnapshotsDrain {
         let staging = self.root.join(".staging").join(format!("{id}.parquet.tmp"));
         let _ = fs::remove_file(&staging).await;
         let (sender, writer) = start_writer(staging.clone(), schema());
-        let mut stream=sqlx::query("SELECT snapshot_id::text,feature_as_of::text,received_at::text,market_id,window_start::text,window_end::text,feature_schema_version,feature_hash,chainlink_price::text,chainlink_open_price::text,binance_price::text,seconds_to_close::text,chainlink_gap_bps::text,binance_return_1s_bps::text,binance_return_5s_bps::text,binance_return_30s_bps::text,realized_vol_30s_bps::text,basis_bps::text,up_best_bid::text,up_best_ask::text,down_best_bid::text,down_best_ask::text,up_depth_ask::text,down_depth_ask::text,up_imbalance::text,down_imbalance::text,chainlink_age_ms::text,binance_age_ms::text,book_age_ms::text,source_skew_ms::text,fair_up_probability::text,fair_up_lower::text,fair_up_upper::text,deterministic_logit::text,readiness_status,quality_flags::text,features::text,lineage::text,created_at::text FROM polymarket.btc_feature_snapshots WHERE feature_as_of >= $1 AND feature_as_of < $2").bind(ch.range_start).bind(ch.range_end).fetch(&c.pool);
         let mut rows = Vec::with_capacity(BATCH_ROWS);
         let mut count = 0;
-        while let Some(row) = stream.try_next().await.map_err(db_error)? {
-            rows.push(row);
-            count += 1;
-            if rows.len() == BATCH_ROWS {
-                sender
-                    .send(batch(std::mem::take(&mut rows))?)
-                    .await
-                    .map_err(|_| io_error("Parquet writer stopped"))?;
-                tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+        for (start, end) in export_slices(ch.range_start, ch.range_end) {
+            if c.shutdown.is_cancelled() {
+                return Err(DrainExecutionError::new(
+                    "drain_cancelled",
+                    "drain was cancelled",
+                    true,
+                ));
             }
+            let mut stream=sqlx::query("SELECT snapshot_id::text,feature_as_of::text,received_at::text,market_id,window_start::text,window_end::text,feature_schema_version,feature_hash,chainlink_price::text,chainlink_open_price::text,binance_price::text,seconds_to_close::text,chainlink_gap_bps::text,binance_return_1s_bps::text,binance_return_5s_bps::text,binance_return_30s_bps::text,realized_vol_30s_bps::text,basis_bps::text,up_best_bid::text,up_best_ask::text,down_best_bid::text,down_best_ask::text,up_depth_ask::text,down_depth_ask::text,up_imbalance::text,down_imbalance::text,chainlink_age_ms::text,binance_age_ms::text,book_age_ms::text,source_skew_ms::text,fair_up_probability::text,fair_up_lower::text,fair_up_upper::text,deterministic_logit::text,readiness_status,quality_flags::text,features::text,lineage::text,created_at::text FROM polymarket.btc_feature_snapshots WHERE feature_as_of >= $1 AND feature_as_of < $2").bind(start).bind(end).fetch(&c.pool);
+            while let Some(row) = stream.try_next().await.map_err(db_error)? {
+                rows.push(row);
+                count += 1;
+                if rows.len() == BATCH_ROWS {
+                    sender
+                        .send(batch(std::mem::take(&mut rows))?)
+                        .await
+                        .map_err(|_| io_error("Parquet writer stopped"))?;
+                    tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+                }
+            }
+            drop(stream);
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         }
         if !rows.is_empty() {
             sender
