@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { GuardRegisteredDrainHistory1790298540000 } = require('../dist/migrations/1790298540000-GuardRegisteredDrainHistory');
+const { MatchDrainGuardTriggerNames1790298600000 } = require('../dist/migrations/1790298600000-MatchDrainGuardTriggerNames');
 
 const baseline = `CREATE OR REPLACE FUNCTION ingester.remove_verified_drain_chunk()
 DECLARE
@@ -59,4 +60,24 @@ test('all eleven registered tables receive matching guards and removal requires 
 test('unexpected removal function baseline aborts before replacement', async () => {
   await assert.rejects(() => generateSql(baseline.replace('ELSE immutability_trigger := NULL;', '')),
     /approved baseline/);
+});
+
+test('removal checks use PostgreSQL stored trigger names for long strategies', async () => {
+  const statements = await generateSql(baseline);
+  const originalFunction = statements.at(-1);
+  let correctedFunction;
+  await new MatchDrainGuardTriggerNames1790298600000().up({
+    query: async (sql) => {
+      if (sql.includes('SELECT pg_get_functiondef(')) return [{ definition: originalFunction }];
+      correctedFunction = sql;
+      return [];
+    },
+  });
+  const triggerNames = statements.filter((sql) => sql.includes('CREATE TRIGGER'))
+    .map((sql) => sql.match(/CREATE TRIGGER (\S+)/)[1].slice(0, 63));
+  for (const name of triggerNames) {
+    assert.ok(correctedFunction.includes(`guard_trigger := '${name}'`), name);
+  }
+  assert.ok(correctedFunction.includes('ELSE immutability_trigger := NULL;'));
+  assert.ok(correctedFunction.includes('historical insert guard is unavailable'));
 });
