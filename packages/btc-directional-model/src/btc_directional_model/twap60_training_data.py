@@ -11,8 +11,10 @@ import hashlib
 import json
 import math
 import os
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from itertools import chain
 from pathlib import Path
 from typing import Any, Literal
 
@@ -166,7 +168,6 @@ def extract_tournament_sources(
             connection,
             strategy_keys=(
                 "binance_spot_btcusdt_one_second_ohlcv",
-                "pmdata_chainlink_btcusd_twap",
                 "polymarket_btc_capacity_execution_snapshots",
             ),
             range_start=range_start - timedelta(minutes=121),
@@ -247,6 +248,9 @@ def extract_tournament_sources(
         }
         frames["refprice"] = _with_archived_refprice(
             frames["refprice"], day, end
+        )
+        frames["labels"] = _with_archived_twap_labels(
+            frames["labels"], day, end
         )
         frames["oracle"] = _with_archived_oracle(
             frames["oracle"], day, end
@@ -406,6 +410,107 @@ def _with_archived_refprice(
     return pl.concat((live, archived), how="vertical_relaxed").sort(
         "source_timestamp", "archive_row_number"
     )
+
+
+def _with_archived_twap_labels(
+    markets: pl.DataFrame, start: datetime, end: datetime
+) -> pl.DataFrame:
+    connection = database_connection()
+    configure_read_only_connection(connection)
+    try:
+        archived = removed_source_rows(
+            connection,
+            strategy_key="pmdata_chainlink_btcusd_twap",
+            relation="market_data.pmdata_chainlink_btcusd_twap",
+            time_column="source_timestamp",
+            root=Path(os.environ.get(
+                "PMDATA_CHAINLINK_TWAP_DATA_ROOT",
+                "/Volumes/docker-data/polymarket-bot/pmdata-chainlink-twap",
+            )),
+            range_start=start - timedelta(seconds=5),
+            range_end=end + timedelta(minutes=5, seconds=5),
+            columns=(
+                "source_timestamp", "valid_from_timestamp", "provider_received_at",
+                "twap_price", "report_version", "artifact_id",
+                "archive_row_number", "window_seconds",
+            ),
+        )
+        if archived.is_empty():
+            return markets
+        completed = completed_backfill_providers(
+            connection, archived["artifact_id"].drop_nulls().unique().to_list()
+        )
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT report.source_timestamp, report.valid_from_timestamp,
+                       report.provider_received_at, report.twap_price::double precision,
+                       report.report_version, report.artifact_id::text,
+                       report.archive_row_number, report.window_seconds
+                FROM market_data.pmdata_chainlink_btcusd_twap report
+                JOIN ingester.backfill_artifacts artifact
+                  ON artifact.artifact_id = report.artifact_id
+                 AND artifact.status = 'completed'
+                WHERE report.window_seconds = 60
+                  AND report.source_timestamp >= %s
+                  AND report.source_timestamp <= %s
+                ORDER BY report.source_timestamp
+                """,
+                (start - timedelta(seconds=5), end + timedelta(minutes=5, seconds=5)),
+            )
+            current = cursor.fetchall()
+    finally:
+        connection.close()
+    archived = (
+        archived.with_columns(
+            pl.col("source_timestamp").cast(pl.Utf8).str.to_datetime(time_zone="UTC"),
+            pl.col("valid_from_timestamp").cast(pl.Utf8).str.to_datetime(time_zone="UTC"),
+            pl.col("provider_received_at").cast(pl.Utf8).str.to_datetime(time_zone="UTC"),
+            pl.col("twap_price").cast(pl.Float64),
+            pl.col("archive_row_number").cast(pl.Int64),
+        )
+        .filter(
+            (pl.col("window_seconds") == 60)
+            & pl.col("artifact_id").is_in(list(completed))
+            & (pl.col("source_timestamp") >= start - timedelta(seconds=5))
+            & (pl.col("source_timestamp") <= end + timedelta(minutes=5, seconds=5))
+        )
+        .select(
+            "source_timestamp", "valid_from_timestamp", "provider_received_at",
+            "twap_price", "report_version", "artifact_id", "archive_row_number",
+            "window_seconds",
+        )
+    )
+    reports = [
+        row for row in chain(current, archived.iter_rows())
+        if row[0] is not None
+    ]
+    reports.sort(key=lambda row: row[0])
+    timestamps = [row[0] for row in reports]
+
+    def selected(target: datetime) -> tuple[Any, ...] | None:
+        left = bisect_left(timestamps, target - timedelta(seconds=5))
+        right = bisect_right(timestamps, target + timedelta(seconds=5))
+        candidates = [row for row in reports[left:right] if row[1] is not None and row[1] <= target]
+        if not candidates:
+            return None
+        best = max(candidates, key=lambda row: (row[1], row[0], row[6]))
+        return (*best, sum(row[1] == best[1] for row in candidates))
+
+    rows = []
+    for source in markets.iter_rows(named=True):
+        row = dict(source)
+        for side, target in (("open", row["window_start"]), ("close", row["window_end"])):
+            chosen = selected(target)
+            for column, position in (
+                ("source_timestamp", 0), ("valid_from_timestamp", 1),
+                ("provider_received_at", 2), ("price", 3),
+                ("report_version", 4), ("artifact_id", 5),
+                ("archive_row_number", 6), ("effective_timestamp_rows", 8),
+            ):
+                row[f"twap_{side}_{column}"] = chosen[position] if chosen else None
+        rows.append(row)
+    return pl.from_dicts(rows, infer_schema_length=None).select(markets.columns)
 
 
 def _with_archived_oracle(
