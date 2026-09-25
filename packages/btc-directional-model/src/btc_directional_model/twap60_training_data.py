@@ -166,7 +166,6 @@ def extract_tournament_sources(
             connection,
             strategy_keys=(
                 "binance_spot_btcusdt_one_second_ohlcv",
-                "polygon_chainlink_btcusd_oracle_rounds",
                 "pmdata_chainlink_btcusd_twap",
                 "polymarket_btc_capacity_execution_snapshots",
             ),
@@ -248,6 +247,9 @@ def extract_tournament_sources(
         }
         frames["refprice"] = _with_archived_refprice(
             frames["refprice"], day, end
+        )
+        frames["oracle"] = _with_archived_oracle(
+            frames["oracle"], day, end
         )
         for name, frame in frames.items():
             directory = paths.cache / name
@@ -403,6 +405,84 @@ def _with_archived_refprice(
     )
     return pl.concat((live, archived), how="vertical_relaxed").sort(
         "source_timestamp", "archive_row_number"
+    )
+
+
+def _with_archived_oracle(
+    live: pl.DataFrame, start: datetime, end: datetime
+) -> pl.DataFrame:
+    connection = database_connection()
+    configure_read_only_connection(connection)
+    try:
+        archived = removed_source_rows(
+            connection,
+            strategy_key="polygon_chainlink_btcusd_oracle_rounds",
+            relation="market_data.polygon_chainlink_btcusd_oracle_rounds",
+            time_column="source_timestamp",
+            root=Path(os.environ.get(
+                "POLYGON_CHAINLINK_ORACLE_ROUNDS_DATA_ROOT",
+                "/Volumes/docker-data/polymarket-bot/polygon-chainlink-oracle-rounds",
+            )),
+            range_start=start - timedelta(seconds=300),
+            range_end=end,
+            columns=(
+                "feed_proxy_address", "price", "source_timestamp", "block_timestamp",
+                "phase_id", "aggregator_round_id", "block_number", "log_index",
+                "capture_artifact_id",
+            ),
+        )
+        if archived.is_empty():
+            return live
+        completed = completed_capture_ids(
+            connection, archived["capture_artifact_id"].drop_nulls().unique().to_list()
+        )
+    finally:
+        connection.close()
+    archived = (
+        archived.with_columns(
+            *(pl.col(name).cast(pl.Utf8).str.to_datetime(time_zone="UTC") for name in (
+                "source_timestamp", "block_timestamp",
+            )),
+            *(pl.col(name).cast(pl.Int64) for name in (
+                "phase_id", "aggregator_round_id", "block_number", "log_index",
+            )),
+        ).filter(
+            (pl.col("feed_proxy_address") == POLYGON_CHAINLINK_BTCUSD_PROXY)
+            & (pl.col("source_timestamp") >= start - timedelta(seconds=300))
+            & (pl.col("source_timestamp") < end)
+            & (pl.col("source_timestamp") <= pl.col("block_timestamp"))
+            & pl.col("capture_artifact_id").is_in(completed)
+        )
+        .with_columns(
+            pl.col("price").cast(pl.Float64).alias("oracle_price"),
+            pl.col("source_timestamp").alias("oracle_source_timestamp"),
+            pl.col("block_timestamp").alias("oracle_block_timestamp"),
+            pl.col("phase_id").alias("oracle_phase_id"),
+            pl.col("aggregator_round_id").alias("oracle_round_id"),
+            pl.col("block_number").alias("oracle_block_number"),
+            pl.col("log_index").alias("oracle_log_index"),
+        )
+        .select(live.columns)
+    )
+    daily = archived.filter(
+        (pl.col("oracle_block_timestamp") >= start)
+        & (pl.col("oracle_block_timestamp") < end)
+    )
+    prior = pl.concat(
+        (
+            live.filter(pl.col("oracle_block_timestamp") <= start),
+            archived.filter(pl.col("oracle_block_timestamp") <= start),
+        ),
+        how="vertical_relaxed",
+    ).sort(
+        ["oracle_block_timestamp", "oracle_source_timestamp", "oracle_block_number", "oracle_log_index"],
+        descending=True,
+    ).head(1)
+    return pl.concat(
+        (prior, live.filter(pl.col("oracle_block_timestamp") >= start), daily),
+        how="vertical_relaxed",
+    ).sort(
+        ["oracle_block_timestamp", "oracle_source_timestamp", "oracle_block_number", "oracle_log_index"]
     )
 
 
