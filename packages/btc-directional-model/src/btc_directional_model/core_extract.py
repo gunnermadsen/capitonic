@@ -20,6 +20,7 @@ from .core_config import (
     CoreTrainingConfig,
     evaluation_holdout_range,
 )
+from .drained_sources import require_no_removed_chunks
 
 CoreScope = Literal["pre_holdout", "holdout"]
 CORE_SOURCE_SCHEMA_VERSION = "btc-core-source-v1"
@@ -316,6 +317,12 @@ def extract_core_source(
                 if connection is None:
                     connection = database_connection()
                     configure_read_only_connection(connection)
+                require_no_removed_chunks(
+                    connection,
+                    strategy_keys=("binance_spot_btcusdt_one_second_ohlcv",),
+                    range_start=batch_start - timedelta(seconds=1),
+                    range_end=batch_end,
+                )
                 rows = extract_partition(
                     connection,
                     query,
@@ -374,6 +381,12 @@ def extract_core_source(
                     if connection is None:
                         connection = database_connection()
                         configure_read_only_connection(connection)
+                    require_no_removed_chunks(
+                        connection,
+                        strategy_keys=("polygon_chainlink_btcusd_oracle_rounds",),
+                        range_start=batch_start,
+                        range_end=batch_end,
+                    )
                     oracle_rows = extract_oracle_partition(
                         connection,
                         oracle_query,
