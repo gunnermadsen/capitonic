@@ -25,7 +25,7 @@ import pyarrow as pa
 from .chainlink_oi_features import (
     _attach_candle_features,
 )
-from .capacity_training import _archived_capacity_rows
+from .capacity_training import EVIDENCE_SCHEMA, _archived_capacity_rows
 from .continuous_edge_training import (
     BOOK_RAW_FEATURES,
     CAPACITY_SCHEMA,
@@ -591,6 +591,8 @@ def _with_archived_core(
 def _with_archived_execution(
     live: pl.DataFrame, start: datetime, end: datetime
 ) -> pl.DataFrame:
+    if not CAPACITY_SCHEMA.equals(EVIDENCE_SCHEMA):
+        raise RuntimeError("TWAP60 capacity source schema differs from the canonical archive reader")
     connection = database_connection()
     configure_read_only_connection(connection)
     try:
