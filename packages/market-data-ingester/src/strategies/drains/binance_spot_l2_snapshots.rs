@@ -28,6 +28,7 @@ const SPEC: RetainedDrainSpec = RetainedDrainSpec {
     relation: "market_data.binance_spot_btcusdt_l2_snapshots",
     schema: "market_data",
     table: "binance_spot_btcusdt_l2_snapshots",
+    time_column: "source_timestamp",
     retention_days: Some(1),
 };
 const BATCH_ROWS: usize = 250;

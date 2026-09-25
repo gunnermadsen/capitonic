@@ -25,6 +25,7 @@ const SPEC: RetainedDrainSpec = RetainedDrainSpec {
     relation: RELATION,
     schema: "market_data",
     table: "binance_spot_btcusdt_aggregate_trades",
+    time_column: "trade_timestamp",
     retention_days: None,
 };
 

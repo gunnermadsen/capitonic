@@ -10,6 +10,7 @@ const SPEC: RetainedDrainSpec = RetainedDrainSpec {
     relation: "market_data.binance_spot_btcusdt_l2_one_second_features",
     schema: "market_data",
     table: "binance_spot_btcusdt_l2_one_second_features",
+    time_column: "second_start",
     retention_days: Some(14),
 };
 pub struct BinanceSpotL2OneSecondFeaturesDrain(BinanceL2FeaturesDrain);

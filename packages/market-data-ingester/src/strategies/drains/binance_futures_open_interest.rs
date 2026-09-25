@@ -26,6 +26,7 @@ const SPEC: RetainedDrainSpec = RetainedDrainSpec {
     relation: "market_data.binance_futures_btcusdt_open_interest",
     schema: "market_data",
     table: "binance_futures_btcusdt_open_interest",
+    time_column: "source_timestamp",
     retention_days: Some(14),
 };
 const COLUMNS: [&str; 14] = [

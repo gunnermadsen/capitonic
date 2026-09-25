@@ -30,6 +30,7 @@ const SPEC: RetainedDrainSpec = RetainedDrainSpec {
     relation: "market_data.chainlink_btcusd_one_minute_candles",
     schema: "market_data",
     table: "chainlink_btcusd_one_minute_candles",
+    time_column: "open_timestamp",
     retention_days: Some(14),
 };
 const BATCH_ROWS: usize = 5_000;

@@ -247,10 +247,15 @@ pub async fn finish_writer(
     writer: tokio::task::JoinHandle<Result<(), String>>,
 ) -> Result<(), DrainExecutionError> {
     drop(sender);
-    writer
-        .await
-        .map_err(|error| io_error(error.to_string()))?
-        .map_err(io_error)
+    match writer.await.map_err(|error| io_error(error.to_string()))? {
+        Ok(()) => Ok(()),
+        Err(error)
+            if error.starts_with("Parquet row ") && error.contains("contains no source values") =>
+        {
+            Err(invalid("drain_empty_source_row", error))
+        }
+        Err(error) => Err(io_error(error)),
+    }
 }
 
 pub async fn publish_file(
@@ -394,6 +399,9 @@ fn content_hasher(schema: &Schema) -> Sha256 {
 
 fn hash_batch_rows(digest: &mut Sha256, batch: &RecordBatch) -> Result<(), String> {
     for row in 0..batch.num_rows() {
+        if batch.columns().iter().all(|column| column.is_null(row)) {
+            return Err(format!("Parquet row {row} contains no source values"));
+        }
         digest.update([0x52]);
         for column in batch.columns() {
             if column.is_null(row) {
@@ -474,10 +482,16 @@ mod verified_file_tests {
     async fn publication_requires_every_parquet_value_to_match_exported_rows() {
         let root = std::env::temp_dir().join(format!("drain-parity-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).await.unwrap();
-        let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, true),
+        ]));
         let source = RecordBatch::try_new(
             schema.clone(),
-            vec![Arc::new(StringArray::from(vec![Some("source"), None]))],
+            vec![
+                Arc::new(StringArray::from(vec!["a", "b"])),
+                Arc::new(StringArray::from(vec![Some("source"), None])),
+            ],
         )
         .unwrap();
         let valid_path = root.join("valid.parquet");
@@ -490,7 +504,10 @@ mod verified_file_tests {
         hash_batch_rows(&mut source_digest, &source).unwrap();
         let changed = RecordBatch::try_new(
             schema.clone(),
-            vec![Arc::new(StringArray::from(vec![Some("changed"), None]))],
+            vec![
+                Arc::new(StringArray::from(vec!["a", "b"])),
+                Arc::new(StringArray::from(vec![Some("changed"), None])),
+            ],
         )
         .unwrap();
         let changed_path = root.join("changed.parquet");
@@ -507,6 +524,26 @@ mod verified_file_tests {
             "drain_payload_mismatch"
         );
         fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn empty_row_cannot_receive_a_parity_proof() {
+        let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(StringArray::from(vec![None::<&str>]))],
+        )
+        .unwrap();
+        assert!(hash_batch_rows(&mut content_hasher(&schema), &batch)
+            .unwrap_err()
+            .contains("contains no source values"));
+        let path = std::env::temp_dir().join(format!("empty-drain-row-{}.parquet", Uuid::new_v4()));
+        let (sender, writer) = start_writer(path.clone(), schema);
+        sender.send(batch).await.unwrap();
+        let error = finish_writer(sender, writer).await.unwrap_err();
+        assert_eq!(error.code, "drain_empty_source_row");
+        assert!(!error.retryable);
+        fs::remove_file(path).await.unwrap();
     }
 
     #[tokio::test]

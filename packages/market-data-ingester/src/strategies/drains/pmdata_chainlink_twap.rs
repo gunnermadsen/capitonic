@@ -31,6 +31,7 @@ const SPEC: RetainedDrainSpec = RetainedDrainSpec {
     relation: "market_data.pmdata_chainlink_btcusd_twap",
     schema: "market_data",
     table: "pmdata_chainlink_btcusd_twap",
+    time_column: "source_timestamp",
     retention_days: None,
 };
 const BATCH_ROWS: usize = 10_000;

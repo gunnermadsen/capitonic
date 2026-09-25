@@ -29,6 +29,7 @@ const SPEC: RetainedDrainSpec = RetainedDrainSpec {
     relation: "polymarket.reference_price_ticks",
     schema: "polymarket",
     table: "reference_price_ticks",
+    time_column: "source_timestamp",
     retention_days: Some(14),
 };
 const BATCH_ROWS: usize = 5_000;

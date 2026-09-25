@@ -27,6 +27,7 @@ const SPEC: RetainedDrainSpec = RetainedDrainSpec {
     relation: RELATION,
     schema: "polymarket",
     table: "btc_five_minute_orderbook_snapshots",
+    time_column: "sampled_at",
     retention_days: Some(RETENTION_DAYS),
 };
 

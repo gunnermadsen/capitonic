@@ -25,6 +25,7 @@ const SPEC: RetainedDrainSpec = RetainedDrainSpec {
     relation: "market_data.polygon_chainlink_btcusd_oracle_rounds",
     schema: "market_data",
     table: "polygon_chainlink_btcusd_oracle_rounds",
+    time_column: "source_timestamp",
     retention_days: Some(30),
 };
 const BATCH_ROWS: usize = 5_000;

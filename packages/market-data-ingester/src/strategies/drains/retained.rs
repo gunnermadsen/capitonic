@@ -19,6 +19,7 @@ pub struct RetainedDrainSpec {
     pub relation: &'static str,
     pub schema: &'static str,
     pub table: &'static str,
+    pub time_column: &'static str,
     pub retention_days: Option<i64>,
 }
 
@@ -35,10 +36,21 @@ pub trait RetainedDrainAdapter: Send + Sync {
     fn root(&self) -> &Path;
     async fn source_count(
         &self,
-        _context: &DrainContext,
-        _chunk: &Chunk,
+        context: &DrainContext,
+        chunk: &Chunk,
     ) -> Result<Option<i64>, DrainExecutionError> {
-        Ok(None)
+        let spec = self.spec();
+        let query = format!(
+            "SELECT count(*) FROM {} WHERE {} >= $1 AND {} < $2",
+            spec.relation, spec.time_column, spec.time_column
+        );
+        sqlx::query_scalar::<_, i64>(&query)
+            .bind(chunk.range_start)
+            .bind(chunk.range_end)
+            .fetch_one(&context.pool)
+            .await
+            .map(Some)
+            .map_err(db_error)
     }
     async fn export_chunk(
         &self,
@@ -213,6 +225,24 @@ pub async fn execute(
                 adapter.export_chunk(&context, &chunk).await?
             }
         };
+        let source_count = adapter
+            .source_count(&context, &chunk)
+            .await?
+            .ok_or_else(|| {
+                invalid(
+                    "drain_source_count_unavailable",
+                    format!("cannot verify source row count for {}", spec.key),
+                )
+            })?;
+        if source_count != publication.row_count {
+            return Err(invalid(
+                "drain_source_row_count_mismatch",
+                format!(
+                    "source {} chunk {} has {source_count} rows but Parquet publication has {}",
+                    spec.relation, chunk.chunk_name, publication.row_count
+                ),
+            ));
+        }
         outcome.rows_exported += publication.row_count;
         outcome.objects_published += 1;
         outcome.bytes_written += publication.byte_size;
