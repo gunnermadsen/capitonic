@@ -11,7 +11,7 @@ metadata:
     capitonic.io/environment: dev
     capitonic.io/rollout-domain: trading
 spec:
-  replicas: 1
+  replicas: {{ .Values.replicaCount }}
   strategy: {type: Recreate}
   selector:
     matchLabels:
@@ -48,9 +48,21 @@ spec:
             - {name: POSTGRES_SSL_MODE, value: disable}
             - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: postgres-credentials, key: CAPITONIC_TRADING_POSTGRES_PASSWORD}}}
             - {name: INGESTER_MASTER_URL, value: "http://ingester-master:8098"}
+            - {name: INGESTER_ADMIN_TOKEN, valueFrom: {secretKeyRef: {name: ingester-auth, key: admin-token}}}
+            - {name: POLYMARKET_BTC_MODEL_DIR, value: /usr/local/share/polymarket-bot/models}
+            - {name: POLYMARKET_GRAFANA_LIVE_ENABLED, value: "true"}
+            - {name: POLYMARKET_GRAFANA_LIVE_PUSH_URL, value: "http://grafana:3000/api/live/push/polymarket"}
+            - {name: POLYMARKET_GRAFANA_LIVE_USERNAME, valueFrom: {secretKeyRef: {name: grafana-auth, key: admin-user}}}
+            - {name: POLYMARKET_GRAFANA_LIVE_PASSWORD, valueFrom: {secretKeyRef: {name: grafana-auth, key: admin-password}}}
             - {name: POLYMARKET_HTTP_ENABLED, value: "true"}
             - {name: POLYMARKET_HTTP_BIND, value: "0.0.0.0:8097"}
             - {name: POLYMARKET_HTTP_ADMIN_TOKEN, valueFrom: {secretKeyRef: {name: polymarket-bot-auth, key: admin-token}}}
+            - {name: POLYMARKET_CLOB_API_KEY, valueFrom: {secretKeyRef: {name: polymarket-live-auth, key: POLYMARKET_CLOB_API_KEY}}}
+            - {name: POLYMARKET_CLOB_SECRET, valueFrom: {secretKeyRef: {name: polymarket-live-auth, key: POLYMARKET_CLOB_SECRET}}}
+            - {name: POLYMARKET_CLOB_PASSPHRASE, valueFrom: {secretKeyRef: {name: polymarket-live-auth, key: POLYMARKET_CLOB_PASSPHRASE}}}
+            - {name: POLYMARKET_PRIVATE_KEY, valueFrom: {secretKeyRef: {name: polymarket-live-auth, key: POLYMARKET_PRIVATE_KEY}}}
+            - {name: POLYMARKET_FUNDER_ADDRESS, valueFrom: {secretKeyRef: {name: polymarket-live-auth, key: POLYMARKET_FUNDER_ADDRESS}}}
+            - {name: POLYMARKET_SIGNATURE_TYPE, valueFrom: {secretKeyRef: {name: polymarket-live-auth, key: POLYMARKET_SIGNATURE_TYPE}}}
           startupProbe:
             httpGet: {path: /health/live, port: http}
             failureThreshold: 30

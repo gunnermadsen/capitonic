@@ -32,7 +32,8 @@ spec:
       terminationGracePeriodSeconds: 120
       securityContext:
         runAsNonRoot: true
-        runAsUser: 10003
+        runAsUser: {{ .Values.archiveStorage.runAsUser }}
+        runAsGroup: {{ .Values.archiveStorage.runAsGroup }}
       containers:
         - name: ingester-worker
           image: {{ .Values.image | quote }}
@@ -58,6 +59,35 @@ spec:
             - {name: INGESTER_WORKER_REALTIME_SLOT_LIMIT, value: "1"}
             - {name: INGESTER_IMAGE_DIGEST, value: {{ .Values.imageDigest | quote }}}
             - {name: INGESTER_GIT_REVISION, value: {{ .Values.gitRevision | quote }}}
+            - {name: MARKET_DATA_INGESTER_CHAINLINK_DATA_STREAMS_API_KEY, valueFrom: {secretKeyRef: {name: ingester-provider-auth, key: POLYMARKET_CHAINLINK_DATA_STREAMS_API_KEY}}}
+            - {name: MARKET_DATA_INGESTER_CHAINLINK_DATA_STREAMS_API_SECRET, valueFrom: {secretKeyRef: {name: ingester-provider-auth, key: POLYMARKET_CHAINLINK_DATA_STREAMS_API_SECRET}}}
+            - {name: MARKET_DATA_INGESTER_CHAINLINK_DATA_STREAMS_CANDLESTICK_API_KEY, valueFrom: {secretKeyRef: {name: ingester-provider-auth, key: POLYMARKET_CHAINLINK_DATA_STREAMS_CANDLESTICK_API_KEY}}}
+            - {name: INGESTER_BINANCE_AGG_TRADE_LAKE_ROOT, value: /var/lib/capitonic-data/binance-aggregate-trades}
+            - {name: INGESTER_POLYMARKET_ORDERBOOK_LAKE_ROOT, value: /var/lib/capitonic-data/orderbook-drain}
+            - {name: INGESTER_BINANCE_ONE_SECOND_OHLCV_LAKE_ROOT, value: /var/lib/capitonic-data/binance-one-second-ohlcv}
+            - {name: INGESTER_PMDATA_CHAINLINK_REFERENCE_PRICE_LAKE_ROOT, value: /var/lib/capitonic-data/pmdata-chainlink-reference-prices}
+            - {name: INGESTER_CHAINLINK_REFERENCE_PRICE_LAKE_ROOT, value: /var/lib/capitonic-data/chainlink-reference-prices}
+            - {name: INGESTER_PMDATA_CHAINLINK_TWAP_LAKE_ROOT, value: /var/lib/capitonic-data/pmdata-chainlink-twap}
+            - {name: INGESTER_POLYMARKET_CHAINLINK_TWAP_LAKE_ROOT, value: /var/lib/capitonic-data/polymarket-chainlink-twap}
+            - {name: INGESTER_REFERENCE_PRICE_TICKS_LAKE_ROOT, value: /var/lib/capitonic-data/reference-price-ticks}
+            - {name: INGESTER_CHAINLINK_ONE_MINUTE_CANDLES_LAKE_ROOT, value: /var/lib/capitonic-data/chainlink-one-minute-candles}
+            - {name: INGESTER_BTC_CAPACITY_EXECUTION_SNAPSHOTS_LAKE_ROOT, value: /var/lib/capitonic-data/btc-capacity-execution-snapshots}
+            - {name: INGESTER_BTC_FEATURE_SNAPSHOTS_LAKE_ROOT, value: /var/lib/capitonic-data/btc-feature-snapshots}
+            - {name: INGESTER_BINANCE_SPOT_L2_SNAPSHOTS_LAKE_ROOT, value: /var/lib/capitonic-data/binance-spot-l2-snapshots}
+            - {name: INGESTER_POLYGON_CHAINLINK_ORACLE_ROUNDS_LAKE_ROOT, value: /var/lib/capitonic-data/polygon-chainlink-oracle-rounds}
+            - {name: INGESTER_CRYPTOHFT_ARCHIVE_ROOT, value: /var/lib/capitonic-data/binance-l2}
+            - {name: INGESTER_CRYPTOHFT_TEMPORARY_DIRECTORY, value: /var/lib/capitonic-data/binance-l2/tmp}
+            - {name: INGESTER_COINAPI_ARCHIVE_ROOT, value: /var/lib/capitonic-data/binance-l2/coinapi}
+            - {name: INGESTER_KRAKEN_DATA_ROOT, value: /var/lib/capitonic-data/kraken-data}
+            - {name: INGESTER_FINANCIAL_DATA_ROOT, value: /var/lib/capitonic-data/global-financial-data}
+            - {name: INGESTER_WEATHER_RAW_ROOT, value: /var/lib/capitonic-data/temperature-expectancy/raw}
+            - {name: INGESTER_WEATHER_CURATED_ROOT, value: /var/lib/capitonic-data/temperature-expectancy/curated}
+            - {name: INGESTER_GOES_ABI_FEATURES_LAKE_ROOT, value: /var/lib/capitonic-data/temperature-expectancy/curated/drains/goes-abi-features}
+            - {name: INGESTER_HRRR_ENVIRONMENT_FEATURES_LAKE_ROOT, value: /var/lib/capitonic-data/temperature-expectancy/curated/drains/hrrr-environment-features}
+            - {name: INGESTER_BTC_INTERVAL_MARKET_PAYLOAD_LAKE_ROOT, value: /var/lib/capitonic-data/verified-drains/polymarket/btc-interval-market-payload}
+            - {name: INGESTER_BTC_MARKET_REFERENCE_EVIDENCE_LAKE_ROOT, value: /var/lib/capitonic-data/verified-drains/polymarket/btc-market-reference-evidence}
+            - {name: INGESTER_BTC_FIVE_MINUTE_CONTRACT_PAYLOAD_LAKE_ROOT, value: /var/lib/capitonic-data/verified-drains/market-data/btc-five-minute-contract-payload}
+            - {name: INGESTER_BTC_FIVE_MINUTE_RESOLUTION_PAYLOAD_LAKE_ROOT, value: /var/lib/capitonic-data/verified-drains/market-data/btc-five-minute-resolution-payload}
           startupProbe:
             httpGet: {path: /health/live, port: http}
             failureThreshold: 30
@@ -73,5 +103,13 @@ spec:
             failureThreshold: 3
           resources:
 {{ toYaml .Values.worker.resources | indent 12 }}
+          volumeMounts:
+            - {name: archives, mountPath: /var/lib/capitonic-data}
+            - {name: pmxt-cache, mountPath: /var/lib/pmxt-cache}
           securityContext:
             allowPrivilegeEscalation: false
+      volumes:
+        - name: archives
+          persistentVolumeClaim: {claimName: ingester-archives}
+        - name: pmxt-cache
+          emptyDir: {}

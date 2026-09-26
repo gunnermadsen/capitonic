@@ -1,6 +1,6 @@
-image: capitonic/ingester:k3s-82759c5d9ef4185cf85317fcd2b1d96ac73089cd
-imageDigest: sha256:8ff234db7629d9fe2a73297a67df941f312dbb50b6d714e5daba186a8cc35dc1
-gitRevision: 82759c5d9ef4185cf85317fcd2b1d96ac73089cd
+image: capitonic/ingester:weather-features-3760b0ff
+imageDigest: sha256:084ee3e02c5457d480cf76b22d33c770a8beefa042d8d7a5d02554290a57bfb0
+gitRevision: 3760b0ffdf2d3b63a278e34af0f44d4454c463c9
 deploymentId: capitonic-k3s-dev
 master:
   replicaCount: 1
@@ -15,4 +15,10 @@ worker:
 workerScaling:
   enabled: true
   minReplicas: 1
-  maxReplicas: 4
+  maxReplicas: 14
+archiveStorage:
+  path: /Volumes/docker-data/polymarket-bot
+  nodeName: lima-rancher-desktop
+  size: 300Gi
+  runAsUser: 501
+  runAsGroup: 1000

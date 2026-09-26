@@ -1,25 +1,25 @@
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
-  name: ingester-strip-api-ingester
+  name: polymarket-bot-strip-api-bot
   labels:
-    app.kubernetes.io/name: ingester-master
+    app.kubernetes.io/name: polymarket-bot
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/part-of: capitonic-platform
     app.kubernetes.io/managed-by: Helm
     capitonic.io/environment: dev
 spec:
   stripPrefix:
-    prefixes: [/api/ingester]
+    prefixes: [/api/bot]
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: ingester-master
+  name: polymarket-bot
   annotations:
-    traefik.ingress.kubernetes.io/router.middlewares: {{ .Release.Namespace }}-ingester-strip-api-ingester@kubernetescrd
+    traefik.ingress.kubernetes.io/router.middlewares: {{ .Release.Namespace }}-polymarket-bot-strip-api-bot@kubernetescrd
   labels:
-    app.kubernetes.io/name: ingester-master
+    app.kubernetes.io/name: polymarket-bot
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/part-of: capitonic-platform
     app.kubernetes.io/managed-by: Helm
@@ -30,9 +30,9 @@ spec:
     - host: localhost
       http:
         paths:
-          - path: /api/ingester
+          - path: /api/bot
             pathType: Prefix
             backend:
               service:
-                name: ingester-master
+                name: polymarket-bot
                 port: {name: http}
