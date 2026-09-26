@@ -38,7 +38,7 @@ def test_verified_weather_archive_checks_source_rows_and_file_hash(tmp_path, mon
                                     "goes_abi_features"))
 
 
-def test_weather_snapshot_merges_removed_archive_with_retained_rows(tmp_path, monkeypatch):
+def test_weather_snapshot_requires_drain_before_export(tmp_path, monkeypatch):
     start = datetime(2026, 1, 1, tzinfo=UTC)
     fields = [
         ("process_id", 2950), ("station_id", 25), ("decision_time", 1184),
@@ -47,40 +47,35 @@ def test_weather_snapshot_merges_removed_archive_with_retained_rows(tmp_path, mo
         ("station_daily_max_f", 1700), ("station_rounded_max_f", 23),
         ("winner_matches_station", 16),
     ]
-    retained = {
+    archived = {
         "process_id": PROCESS_ID, "station_id": STATION_ID, "decision_time": start,
-        "requested_offset_minutes": 60, "spatial_radius_km": 25, "sector": "all",
-        "feature_schema_version": "goes-abi-klga-v2", "source_metadata": {"source": "db"},
-        "station_daily_max_f": None, "station_rounded_max_f": None,
-        "winner_matches_station": None,
+        "requested_offset_minutes": 15, "spatial_radius_km": 25, "sector": "all",
+        "feature_schema_version": "goes-abi-klga-v2", "source_metadata": {"source": "archive"},
     }
-    archived = {**retained, "requested_offset_minutes": 15,
-                "decision_time": start.isoformat(), "source_metadata": {"source": "archive"}}
-    for label in ("station_daily_max_f", "station_rounded_max_f", "winner_matches_station"):
-        archived.pop(label)
+    archived["decision_time"] = start.isoformat()
 
     class Cursor:
         def __init__(self):
-            self.read = False
             self.description = [
                 SimpleNamespace(name=name, type_code=type_code)
                 for name, type_code in fields
             ]
 
-        def execute(self, query, parameters):
+        def execute(self, query):
             assert "weather.goes_abi_features" in query
-
-        def fetchmany(self, count):
-            if self.read:
-                return []
-            self.read = True
-            return [retained]
 
         def close(self):
             pass
 
     class Connection:
-        def execute(self, query, parameters):
+        def __init__(self, retained=False):
+            self.retained = retained
+
+        def execute(self, query, parameters=None):
+            if "EXISTS" in query:
+                return SimpleNamespace(fetchone=lambda: {"retained": self.retained})
+            if "to_regclass" in query:
+                return SimpleNamespace(fetchone=lambda: {"present": False})
             return SimpleNamespace(fetchall=list)
 
         def cursor(self, name):
@@ -95,16 +90,24 @@ def test_weather_snapshot_merges_removed_archive_with_retained_rows(tmp_path, mo
         end_at=datetime(2026, 1, 2, tzinfo=UTC), version="goes-abi-klga-v2",
         destination=output,
         order_fields=("decision_time", "requested_offset_minutes", "spatial_radius_km", "sector"),
-    ) == 2
+    ) == 1
     rows = pq.read_table(output).to_pylist()
-    assert [row["requested_offset_minutes"] for row in rows] == [15, 60]
-    assert [json.loads(row["source_metadata"])["source"] for row in rows] == ["archive", "db"]
+    assert [row["requested_offset_minutes"] for row in rows] == [15]
+    assert [json.loads(row["source_metadata"])["source"] for row in rows] == ["archive"]
 
-    archived["requested_offset_minutes"] = 60
-    with pytest.raises(RuntimeError, match="overlap"):
+    with pytest.raises(RuntimeError, match="must be drained"):
+        snapshot._write_weather_snapshot(
+            Connection(retained=True), "goes_abi_features", start_at=start,
+            end_at=datetime(2026, 1, 2, tzinfo=UTC), version="goes-abi-klga-v2",
+            destination=tmp_path / "undrained.parquet",
+            order_fields=("decision_time", "requested_offset_minutes", "spatial_radius_km", "sector"),
+        )
+
+    monkeypatch.setattr(snapshot, "_removed_weather_objects", lambda *args: [])
+    with pytest.raises(RuntimeError, match="lacks verified drain publications"):
         snapshot._write_weather_snapshot(
             Connection(), "goes_abi_features", start_at=start,
             end_at=datetime(2026, 1, 2, tzinfo=UTC), version="goes-abi-klga-v2",
-            destination=tmp_path / "overlap.parquet",
+            destination=tmp_path / "missing.parquet",
             order_fields=("decision_time", "requested_offset_minutes", "spatial_radius_km", "sector"),
         )

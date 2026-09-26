@@ -108,45 +108,55 @@ def _write_weather_snapshot(
     objects_by_day = {row["source_start"].date(): row for row in objects}
     if len(objects_by_day) != len(objects):
         raise RuntimeError(f"weather drain has overlapping publications for {strategy}")
-    labels = {
-        row["event_date"]: row
-        for row in conn.execute(
-            """SELECT event_date, station_daily_max_f, station_rounded_max_f,
-                      winner_matches_station
-               FROM weather.label_reconciliation
-               WHERE process_id=%s AND event_date >= %s AND event_date <= %s""",
-            (PROCESS_ID, start_at.astimezone(_NYC).date(), end_at.astimezone(_NYC).date()),
-        ).fetchall()
+    expected_days = {
+        start_at.date() + timedelta(days=offset)
+        for offset in range((end_at.date() - start_at.date()).days)
     }
-    query = f"""SELECT t.*, l.station_daily_max_f, l.station_rounded_max_f,
-                   l.winner_matches_station
-            FROM {relation} t
-            LEFT JOIN weather.label_reconciliation l
-              ON l.process_id=t.process_id
-             AND l.event_date=(t.decision_time AT TIME ZONE 'America/New_York')::date
-            WHERE t.process_id=%s AND t.station_id=%s
-              AND t.decision_time >= %s AND t.decision_time < %s
-              AND t.feature_schema_version=%s
-            ORDER BY {','.join('t.' + field for field in order_fields)}"""
+    if missing_days := expected_days - objects_by_day.keys():
+        raise RuntimeError(
+            f"weather snapshot lacks verified drain publications for {strategy}: "
+            f"{sorted(missing_days)}"
+        )
+    if conn.execute(
+        f"""SELECT EXISTS(SELECT 1 FROM {relation} t
+              WHERE t.process_id=%s AND t.station_id=%s
+                AND t.decision_time >= %s AND t.decision_time < %s
+                AND t.feature_schema_version=%s) AS retained""",
+        (PROCESS_ID, STATION_ID, start_at, end_at, version),
+    ).fetchone()["retained"]:
+        raise RuntimeError(f"weather feature rows must be drained before snapshot: {strategy}")
+    has_labels = conn.execute(
+        "SELECT to_regclass('weather.label_reconciliation') IS NOT NULL AS present"
+    ).fetchone()["present"]
+    labels = (
+        {
+            row["event_date"]: row
+            for row in conn.execute(
+                """SELECT event_date, station_daily_max_f, station_rounded_max_f,
+                          winner_matches_station
+                   FROM weather.label_reconciliation
+                   WHERE process_id=%s AND event_date >= %s AND event_date <= %s""",
+                (PROCESS_ID, start_at.astimezone(_NYC).date(), end_at.astimezone(_NYC).date()),
+            ).fetchall()
+        }
+        if has_labels else {}
+    )
+    schema_cursor = conn.cursor(name=f"snapshot_schema_{destination.stem}")
+    try:
+        schema_cursor.execute(
+            f"""SELECT t.*, NULL::numeric(8,3) AS station_daily_max_f,
+                       NULL::integer AS station_rounded_max_f,
+                       NULL::boolean AS winner_matches_station
+                FROM {relation} t WHERE false"""
+        )
+        schema = _snapshot_schema(schema_cursor.description)
+    finally:
+        schema_cursor.close()
     writer = None
     rows_written = 0
     day = start_at.date()
     try:
         while day < end_at.date():
-            day_start = datetime.combine(day, datetime.min.time(), UTC)
-            day_end = day_start + timedelta(days=1)
-            cursor = conn.cursor(name=f"snapshot_{destination.stem}_{day:%Y%m%d}")
-            retained: list[dict] = []
-            try:
-                cursor.execute(query, (PROCESS_ID, STATION_ID, day_start, day_end, version))
-                schema = _snapshot_schema(cursor.description)
-                while rows := cursor.fetchmany(10_000):
-                    retained.extend(
-                        {key: _snapshot_value(value) for key, value in row.items()}
-                        for row in rows
-                    )
-            finally:
-                cursor.close()
             archived: list[dict] = []
             if object_row := objects_by_day.get(day):
                 for row in _archive_rows(object_row, strategy):
@@ -169,21 +179,18 @@ def _write_weather_snapshot(
                         })
                         archived.append({key: _snapshot_value(value) for key, value in row.items()})
             primary_key = ("process_id", "station_id", *order_fields, "feature_schema_version")
-            seen = {tuple(str(row[field]) for field in primary_key) for row in retained}
+            seen: set[tuple[str, ...]] = set()
             for row in archived:
                 key = tuple(str(row[field]) for field in primary_key)
                 if key in seen:
-                    raise RuntimeError(
-                        f"weather drain and PostgreSQL overlap for {strategy}: {key}"
-                    )
+                    raise RuntimeError(f"duplicate weather drain row for {strategy}: {key}")
                 seen.add(key)
-            result = retained + archived
-            if result:
-                result.sort(key=lambda row: tuple(row[field] for field in order_fields))
+            if archived:
+                archived.sort(key=lambda row: tuple(row[field] for field in order_fields))
                 if writer is None:
                     writer = pq.ParquetWriter(destination, schema, compression="zstd")
-                writer.write_table(pa.Table.from_pylist(result, schema=schema))
-                rows_written += len(result)
+                writer.write_table(pa.Table.from_pylist(archived, schema=schema))
+                rows_written += len(archived)
             day += timedelta(days=1)
     finally:
         if writer is not None:
