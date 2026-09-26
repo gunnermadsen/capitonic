@@ -441,7 +441,7 @@ mod tests {
                 bytes_published: 1024,
             }],
         };
-        let rendered = render(&[], &[], &[strategy.clone()], &drains, true).unwrap();
+        let rendered = render(&[], &[], std::slice::from_ref(&strategy), &drains, true).unwrap();
         assert!(rendered.contains(&format!(
             "market_data_ingester_drain_strategy_registered{{strategy=\"{strategy}\"}} 1"
         )));

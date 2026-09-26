@@ -329,67 +329,6 @@ fn contains_required_source(chunk: &Chunk, timestamp: Option<DateTime<Utc>>) -> 
     timestamp.is_some_and(|value| chunk.range_start <= value && value < chunk.range_end)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{chunks_to_process, should_republish, Chunk, DrainMode};
-    use chrono::{Duration, TimeZone, Utc};
-
-    #[test]
-    fn stale_or_missing_publication_must_be_exported_again() {
-        assert!(should_republish(Some(101), 100, true));
-        assert!(should_republish(Some(100), 100, false));
-        assert!(!should_republish(Some(100), 100, true));
-        assert!(!should_republish(None, 100, true));
-        assert!(should_republish(None, 100, false));
-    }
-
-    #[test]
-    fn drain_stops_at_cutoff_while_reconcile_keeps_closed_chunks() {
-        let cutoff = Utc.with_ymd_and_hms(2026, 9, 11, 0, 0, 0).unwrap();
-        let chunks = (0..3)
-            .map(|day| Chunk {
-                chunk_schema: "polymarket".into(),
-                chunk_name: format!("chunk_{day}"),
-                range_start: cutoff + Duration::days(day - 1),
-                range_end: cutoff + Duration::days(day),
-                size_bytes: 1,
-            })
-            .collect::<Vec<_>>();
-
-        let drain = chunks_to_process(chunks.clone(), DrainMode::Drain, cutoff, None);
-        assert_eq!(drain.len(), 1);
-        assert_eq!(drain[0].range_end, cutoff);
-        assert_eq!(
-            chunks_to_process(chunks, DrainMode::Reconcile, cutoff, None).len(),
-            3
-        );
-    }
-
-    #[test]
-    fn drain_preserves_chunk_containing_required_realtime_cursor() {
-        let cutoff = Utc.with_ymd_and_hms(2026, 9, 11, 0, 0, 0).unwrap();
-        let chunks = (0..3)
-            .map(|day| Chunk {
-                chunk_schema: "market_data".into(),
-                chunk_name: format!("oracle_{day}"),
-                range_start: cutoff - Duration::days(3 - day),
-                range_end: cutoff - Duration::days(2 - day),
-                size_bytes: 1,
-            })
-            .collect::<Vec<_>>();
-        let cursor = cutoff - Duration::hours(12);
-        let removable = chunks_to_process(chunks.clone(), DrainMode::Drain, cutoff, Some(cursor));
-        assert_eq!(removable.len(), 2);
-        assert!(!removable
-            .iter()
-            .any(|chunk| { chunk.range_start <= cursor && cursor < chunk.range_end }));
-        assert_eq!(
-            chunks_to_process(chunks, DrainMode::Reconcile, cutoff, Some(cursor)).len(),
-            3
-        );
-    }
-}
-
 async fn remove_verified_chunk(
     context: &DrainContext,
     publication: &Publication,
@@ -487,4 +426,65 @@ pub fn validate_strategy(
     request: &DrainRequest,
 ) -> Result<(), DrainExecutionError> {
     validate(adapter, request)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{chunks_to_process, should_republish, Chunk, DrainMode};
+    use chrono::{Duration, TimeZone, Utc};
+
+    #[test]
+    fn stale_or_missing_publication_must_be_exported_again() {
+        assert!(should_republish(Some(101), 100, true));
+        assert!(should_republish(Some(100), 100, false));
+        assert!(!should_republish(Some(100), 100, true));
+        assert!(!should_republish(None, 100, true));
+        assert!(should_republish(None, 100, false));
+    }
+
+    #[test]
+    fn drain_stops_at_cutoff_while_reconcile_keeps_closed_chunks() {
+        let cutoff = Utc.with_ymd_and_hms(2026, 9, 11, 0, 0, 0).unwrap();
+        let chunks = (0..3)
+            .map(|day| Chunk {
+                chunk_schema: "polymarket".into(),
+                chunk_name: format!("chunk_{day}"),
+                range_start: cutoff + Duration::days(day - 1),
+                range_end: cutoff + Duration::days(day),
+                size_bytes: 1,
+            })
+            .collect::<Vec<_>>();
+
+        let drain = chunks_to_process(chunks.clone(), DrainMode::Drain, cutoff, None);
+        assert_eq!(drain.len(), 1);
+        assert_eq!(drain[0].range_end, cutoff);
+        assert_eq!(
+            chunks_to_process(chunks, DrainMode::Reconcile, cutoff, None).len(),
+            3
+        );
+    }
+
+    #[test]
+    fn drain_preserves_chunk_containing_required_realtime_cursor() {
+        let cutoff = Utc.with_ymd_and_hms(2026, 9, 11, 0, 0, 0).unwrap();
+        let chunks = (0..3)
+            .map(|day| Chunk {
+                chunk_schema: "market_data".into(),
+                chunk_name: format!("oracle_{day}"),
+                range_start: cutoff - Duration::days(3 - day),
+                range_end: cutoff - Duration::days(2 - day),
+                size_bytes: 1,
+            })
+            .collect::<Vec<_>>();
+        let cursor = cutoff - Duration::hours(12);
+        let removable = chunks_to_process(chunks.clone(), DrainMode::Drain, cutoff, Some(cursor));
+        assert_eq!(removable.len(), 2);
+        assert!(!removable
+            .iter()
+            .any(|chunk| { chunk.range_start <= cursor && cursor < chunk.range_end }));
+        assert_eq!(
+            chunks_to_process(chunks, DrainMode::Reconcile, cutoff, Some(cursor)).len(),
+            3
+        );
+    }
 }

@@ -13,8 +13,9 @@ use tracing::{info, warn};
 
 use crate::{
     domain::{
-        BackfillContext, BackfillFailureKind, BackfillOutcome, BackfillShard,
-        ALLOCATION_CONTRACT_VERSION, DEFAULT_REALTIME_SLOT_LIMIT, DEFAULT_WORKER_CAPACITY_UNITS,
+        BackfillContext, BackfillExecutionError, BackfillFailureKind, BackfillOutcome,
+        BackfillShard, ALLOCATION_CONTRACT_VERSION, DEFAULT_REALTIME_SLOT_LIMIT,
+        DEFAULT_WORKER_CAPACITY_UNITS,
     },
     persistence::{ClaimedBackfillJob, WorkerRegistration},
 };
@@ -259,9 +260,10 @@ impl BackfillWorkerRuntime {
             }
             _ = shutdown.cancelled() => {
                 execution_shutdown.cancel();
-                Err(crate::domain::BackfillExecutionError::new(BackfillFailureKind::Cancelled, "worker_shutdown", "worker shutdown interrupted the job"))
+                Err(crate::domain::BackfillExecutionError::new(BackfillFailureKind::LeaseLost, "worker_shutdown", "worker shutdown interrupted the job"))
             }
         };
+        let result = result.map_err(|error| retry_worker_shutdown(error, &shutdown));
         execution_shutdown.cancel();
         match result {
             Ok(outcome) => {
@@ -335,6 +337,21 @@ impl BackfillWorkerRuntime {
             .await?
             .error_for_status()?;
         Ok(())
+    }
+}
+
+fn retry_worker_shutdown(
+    error: BackfillExecutionError,
+    shutdown: &CancellationToken,
+) -> BackfillExecutionError {
+    if shutdown.is_cancelled() && error.kind == BackfillFailureKind::Cancelled {
+        BackfillExecutionError::new(
+            BackfillFailureKind::LeaseLost,
+            "worker_shutdown",
+            "worker shutdown interrupted the job",
+        )
+    } else {
+        error
     }
 }
 
@@ -434,6 +451,26 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn worker_shutdown_retries_a_cancelled_execution_without_changing_operator_cancellation() {
+        let shutdown = CancellationToken::new();
+        let cancelled = || {
+            BackfillExecutionError::new(
+                BackfillFailureKind::Cancelled,
+                "cancelled",
+                "execution was cancelled",
+            )
+        };
+        assert_eq!(
+            retry_worker_shutdown(cancelled(), &shutdown).kind,
+            BackfillFailureKind::Cancelled
+        );
+        shutdown.cancel();
+        let retry = retry_worker_shutdown(cancelled(), &shutdown);
+        assert_eq!(retry.kind, BackfillFailureKind::LeaseLost);
+        assert_eq!(retry.code, "worker_shutdown");
+    }
 
     async fn heartbeat_server(statuses: Vec<&'static str>) -> (String, Arc<AtomicUsize>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{btree_map::Entry, BTreeMap},
     path::{Path, PathBuf},
 };
 
@@ -34,6 +34,15 @@ const RADII: [i32; 3] = [25, 50, 100];
 const SECTORS: [&str; 5] = ["all", "north", "south", "east", "west"];
 const OFFSETS: [i32; 3] = [180, 60, 15];
 const TRANSITION: &str = "2025-04-07T15:10:00Z";
+
+type CoverageReceipt = (
+    String,
+    Option<DateTime<Utc>>,
+    Option<DateTime<Utc>>,
+    Option<f64>,
+    Option<uuid::Uuid>,
+    Option<String>,
+);
 
 struct Product {
     key: &'static str,
@@ -209,7 +218,7 @@ impl GoesAbiFeaturesBackfill {
                     .and_then(|v| v.with_second(0))
                     .and_then(|v| v.with_nanosecond(0))
                     .ok_or_else(|| invalid("invalid GOES catalog hour"))?;
-                if !catalog.contains_key(&start) {
+                if let Entry::Vacant(entry) = catalog.entry(start) {
                     let shard = BackfillShard {
                         shard_key: start.to_rfc3339(),
                         range_start: start,
@@ -217,7 +226,7 @@ impl GoesAbiFeaturesBackfill {
                         parameters: json!({}),
                     };
                     let objects = raw_support::goes_objects(&self.client, &shard).await?;
-                    catalog.insert(start, objects);
+                    entry.insert(objects);
                 }
             }
             let mut results = Vec::new();
@@ -544,7 +553,7 @@ async fn persist_offset(
         .bind(result.patch_path.as_ref().map(|path| path.to_string_lossy().to_string()))
         .bind(&result.patch_sha).bind(quality).bind(metadata)
         .execute(&mut *tx).await.map_err(backfill_support::database_error)?;
-        let stored: (String, Option<DateTime<Utc>>, Option<DateTime<Utc>>, Option<f64>, Option<uuid::Uuid>, Option<String>) = sqlx::query_as(
+        let stored: CoverageReceipt = sqlx::query_as(
             "SELECT status,scan_start,scan_end,valid_pixel_fraction,source_artifact_id,cropped_artifact_sha256 FROM weather.goes_abi_window_coverage WHERE process_id=$1 AND station_id=$2 AND decision_time=$3 AND requested_offset_minutes=$4 AND product=$5 AND feature_schema_version=$6",
         )
         .bind(process_id).bind(STATION_ID).bind(decision).bind(offset).bind(result.key).bind(SCHEMA_VERSION)
