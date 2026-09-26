@@ -9,6 +9,11 @@ pub struct StrategyDatasetBinding {
 /// Authoritative strategy-to-dataset mapping. Realtime and backfill are
 /// collection modes; neither is allowed to define a second data product.
 pub const STRATEGY_DATASETS: &[StrategyDatasetBinding] = &[
+    binding("goes_abi_features_backfill", DatasetKey::GoesAbiFeatures),
+    binding(
+        "hrrr_environment_features_backfill",
+        DatasetKey::HrrrEnvironmentFeatures,
+    ),
     binding(
         "binance_spot_btcusdt_aggregate_trades",
         DatasetKey::BinanceSpotAggregateTrades,

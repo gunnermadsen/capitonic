@@ -226,6 +226,84 @@ pub struct PmdataChainlinkBtcusdRefpriceRecord {
     pub archive_row_number: i64,
 }
 
+pub const GOES_COLUMNS: &[&str] = &[
+    "process_id",
+    "station_id",
+    "decision_time",
+    "requested_offset_minutes",
+    "spatial_radius_km",
+    "sector",
+    "feature_schema_version",
+    "satellite",
+    "scan_end",
+    "clear_pixel_fraction",
+    "cloudy_pixel_fraction",
+    "infrared_brightness_temperature_mean_k",
+    "infrared_brightness_temperature_stddev_k",
+    "infrared_brightness_temperature_p10_k",
+    "infrared_brightness_temperature_p50_k",
+    "infrared_brightness_temperature_p90_k",
+    "cloud_top_temperature_mean_k",
+    "cloud_top_temperature_p10_k",
+    "cloud_top_temperature_p50_k",
+    "cloud_top_temperature_p90_k",
+    "cloud_top_height_mean_m",
+    "cloud_top_height_p10_m",
+    "cloud_top_height_p50_m",
+    "cloud_top_height_p90_m",
+    "visible_reflectance_mean",
+    "visible_reflectance_stddev",
+    "visible_reflectance_p10",
+    "visible_reflectance_p50",
+    "visible_reflectance_p90",
+    "cloud_optical_depth_mean",
+    "cloud_optical_depth_p50",
+    "cloud_optical_depth_p90",
+    "water_vapor_brightness_temperature_mean_k",
+    "infrared_change_45m_k",
+    "infrared_change_165m_k",
+    "valid_pixel_fraction",
+    "quality_flags",
+    "source_metadata",
+    "created_at",
+    "infrared_north_south_gradient_k",
+    "infrared_east_west_gradient_k",
+    "cloudy_north_south_gradient",
+    "cloudy_east_west_gradient",
+];
+
+pub const HRRR_COLUMNS: &[&str] = &[
+    "process_id",
+    "station_id",
+    "decision_time",
+    "model_run",
+    "valid_at",
+    "lead_hours",
+    "spatial_radius_km",
+    "sector",
+    "feature_schema_version",
+    "temperature_2m_mean_k",
+    "temperature_2m_stddev_k",
+    "dew_point_2m_mean_k",
+    "dew_point_2m_stddev_k",
+    "total_cloud_cover_mean_fraction",
+    "total_cloud_cover_stddev_fraction",
+    "downward_shortwave_radiation_mean_w_m2",
+    "wind_u_10m_mean_m_s",
+    "wind_v_10m_mean_m_s",
+    "wind_speed_10m_mean_m_s",
+    "boundary_layer_height_mean_m",
+    "accumulated_precipitation_mean_mm",
+    "composite_reflectivity_mean_dbz",
+    "composite_reflectivity_max_dbz",
+    "valid_pixel_fraction",
+    "quality_flags",
+    "source_metadata",
+    "created_at",
+    "temperature_2m_north_south_gradient_k",
+    "temperature_2m_east_west_gradient_k",
+];
+
 /// Stable identity of a logical data product. Collection mode and physical
 /// storage are deliberately excluded from this identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -243,6 +321,8 @@ pub enum DatasetKey {
     PmdataChainlinkBtcusdTwap,
     PolymarketChainlinkBtcusdTwap,
     PolymarketBtcFiveMinuteOrderbookSnapshots,
+    GoesAbiFeatures,
+    HrrrEnvironmentFeatures,
 }
 
 impl DatasetKey {
@@ -267,6 +347,8 @@ impl DatasetKey {
             Self::PolymarketBtcFiveMinuteOrderbookSnapshots => {
                 "polymarket_btc_five_minute_orderbook_snapshots"
             }
+            Self::GoesAbiFeatures => "goes_abi_features",
+            Self::HrrrEnvironmentFeatures => "hrrr_environment_features",
         }
     }
 }
@@ -302,6 +384,34 @@ const fn contract(
 }
 
 pub const CONTRACTS: &[DatasetContract] = &[
+    contract(
+        DatasetKey::GoesAbiFeatures,
+        "weather.goes_abi_features",
+        &[
+            "process_id",
+            "station_id",
+            "decision_time",
+            "requested_offset_minutes",
+            "spatial_radius_km",
+            "sector",
+            "feature_schema_version",
+        ],
+        GOES_COLUMNS,
+    ),
+    contract(
+        DatasetKey::HrrrEnvironmentFeatures,
+        "weather.hrrr_environment_features",
+        &[
+            "process_id",
+            "station_id",
+            "decision_time",
+            "valid_at",
+            "spatial_radius_km",
+            "sector",
+            "feature_schema_version",
+        ],
+        HRRR_COLUMNS,
+    ),
     contract(
         DatasetKey::BinanceSpotAggregateTrades,
         "market_data.binance_spot_btcusdt_aggregate_trades",
@@ -648,6 +758,7 @@ mod tests {
         assert_eq!(tables.len(), CONTRACTS.len());
         assert!(CONTRACTS.iter().all(|item| {
             item.canonical_table.starts_with("market_data.")
+                || item.canonical_table.starts_with("weather.")
                 || item.canonical_table == "polymarket.btc_five_minute_orderbook_snapshots"
         }));
     }
