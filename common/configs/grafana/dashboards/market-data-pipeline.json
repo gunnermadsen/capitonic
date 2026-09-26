@@ -1573,10 +1573,10 @@
     },
     {
       "datasource": {
-        "type": "loki",
-        "uid": "loki"
+        "type": "prometheus",
+        "uid": "prometheus"
       },
-      "description": "Exact provider slow-consumer disconnect events. Each red bar means Polymarket closed the orderbook websocket with 'slow consumer: send buffer full'. This excludes all other reconnect reasons.",
+      "description": "Orderbook provider close-code 1013 events classified as slow_consumer_send_buffer_full by the ingester. Each red bar shows the number of disconnects in that interval; other reconnect reasons are excluded.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1663,13 +1663,13 @@
       "targets": [
         {
           "datasource": {
-            "type": "loki",
-            "uid": "loki"
+            "type": "prometheus",
+            "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service_name=\"ingester\",strategy=\"polymarket_btc_five_minute_orderbooks\"} |= \"slow consumer: send buffer full\"[$__interval]))",
+          "expr": "sum(increase(market_data_ingester_clob_remote_closes_total{product=\"polymarket_btc_five_minute_orderbooks\",code=\"1013\",reason=\"slow_consumer_send_buffer_full\"}[$__interval]))",
+          "interval": "1m",
           "legendFormat": "SLOW-CONSUMER DISCONNECT",
-          "queryType": "range",
           "refId": "A"
         }
       ],
