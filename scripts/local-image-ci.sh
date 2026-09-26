@@ -10,7 +10,7 @@ Usage: scripts/local-image-ci.sh <polymarket-bot|ingester|db-migrate> --checks-o
 
 Run local checks on working-tree changes, or check a clean commit and build its production image.
 --build selects the next unused local candidate version only for a distinct built image.
-Identical build inputs and runtime content reuse their existing image and Git tag.
+Unchanged committed image inputs reuse an existing local image and Git tag.
 --checks-only does not build or tag an image.
 Images are not deployed, promoted, pushed, or marked golden by this script.
 EOF
@@ -75,19 +75,6 @@ image_inputs_sha256() {
   git ls-tree -r --full-tree "$1" -- "${image_inputs[@]}" | LC_ALL=C shasum -a 256 | awk '{print $1}'
 }
 
-runtime_sha256() {
-  "${image_cli[@]}" image inspect "$1" | jq -Se -c '
-    .[0] | {
-      architecture: .Architecture,
-      os: .Os,
-      layers: .RootFS.Layers,
-      config: (.Config | {
-        User, Env, Entrypoint, Cmd, WorkingDir,
-        Labels: (.Labels | del(."org.opencontainers.image.version", ."org.opencontainers.image.revision"))
-      })
-    }' | LC_ALL=C shasum -a 256 | awk '{print $1}'
-}
-
 next_local_version() {
   local highest=0 tag annotation numbered
   while IFS= read -r tag; do
@@ -121,7 +108,7 @@ require_clean_source() {
 }
 
 if [[ "$mode" == "--build" ]]; then
-  for tool in jq shasum; do
+  for tool in shasum; do
     command -v "$tool" >/dev/null 2>&1 || { echo "Missing $tool" >&2; exit 69; }
   done
   require_clean_source
@@ -163,18 +150,34 @@ if [[ "$(git rev-parse HEAD)" != "$git_revision" ]]; then
   exit 68
 fi
 require_clean_source
-version="$(next_local_version)"
-if [[ -n "$requested_version" && "$requested_version" != "$version" ]]; then
-  echo "Requested v$requested_version is not the next available candidate (v$version)." >&2
-  exit 69
-fi
-
 if command -v nerdctl >/dev/null 2>&1 && nerdctl --namespace k8s.io info >/dev/null 2>&1; then
   image_cli=(nerdctl --namespace k8s.io)
 elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   image_cli=(docker)
 else
   echo "No local container image builder is running (Rancher Desktop containerd or Docker)." >&2
+  exit 69
+fi
+
+inputs_sha256="$(image_inputs_sha256 "$git_revision")"
+while IFS= read -r existing_tag; do
+  annotation="$(git cat-file -p "refs/tags/$existing_tag")"
+  prior_image="$(sed -n 's/^image: //p' <<< "$annotation" | head -1)"
+  prior_id="$(sed -n 's/^image_id: //p' <<< "$annotation" | head -1)"
+  prior_revision="$(sed -n 's/^source_revision: //p' <<< "$annotation" | head -1)"
+  [[ "$prior_image" == "capitonic/$component:"* && "$prior_id" =~ ^sha256:[0-9a-f]{64}$ && "$prior_revision" =~ ^[0-9a-f]{40}$ ]] || continue
+  [[ "$(git rev-list -n 1 "refs/tags/$existing_tag")" == "$prior_revision" ]] || continue
+  git merge-base --is-ancestor "$prior_revision" "$git_revision" || continue
+  [[ "$(image_inputs_sha256 "$prior_revision")" == "$inputs_sha256" ]] || continue
+  "${image_cli[@]}" image inspect "$prior_image" >/dev/null 2>&1 || continue
+  [[ "$("${image_cli[@]}" image inspect --format '{{ .Id }}' "$prior_image")" == "$prior_id" ]] || continue
+  echo "Reusing $prior_image ($prior_id) from $existing_tag; no new image or local version was created."
+  exit 0
+done < <(git tag --list "image/$component/v*" "image/$component/sha256-*")
+
+version="$(next_local_version)"
+if [[ -n "$requested_version" && "$requested_version" != "$version" ]]; then
+  echo "Requested v$requested_version is not the next available candidate (v$version)." >&2
   exit 69
 fi
 
@@ -210,11 +213,7 @@ if [[ "$(git rev-parse HEAD)" != "$git_revision" ]]; then
   exit 68
 fi
 require_clean_source
-inputs_sha256="$(image_inputs_sha256 "$git_revision")"
-runtime_digest="$(runtime_sha256 "$temporary_image")"
-
-# A later commit may change only chart or tooling files. Reuse the earlier image
-# when its copied build inputs and runtime bytes/configuration are identical.
+# A rare exact image-ID repeat must not consume another candidate number.
 while IFS= read -r existing_tag; do
   annotation="$(git cat-file -p "refs/tags/$existing_tag")"
   prior_image="$(sed -n 's/^image: //p' <<< "$annotation" | head -1)"
@@ -222,11 +221,8 @@ while IFS= read -r existing_tag; do
   prior_revision="$(sed -n 's/^source_revision: //p' <<< "$annotation" | head -1)"
   [[ "$prior_image" == "capitonic/$component:"* && "$prior_id" =~ ^sha256:[0-9a-f]{64}$ && "$prior_revision" =~ ^[0-9a-f]{40}$ ]] || continue
   [[ "$(git rev-list -n 1 "refs/tags/$existing_tag")" == "$prior_revision" ]] || continue
-  [[ "$(image_inputs_sha256 "$prior_revision")" == "$inputs_sha256" ]] || continue
-  "${image_cli[@]}" image inspect "$prior_image" >/dev/null 2>&1 || continue
-  [[ "$("${image_cli[@]}" image inspect --format '{{ .Id }}' "$prior_image")" == "$prior_id" ]] || continue
-  if [[ "$(runtime_sha256 "$prior_image")" == "$runtime_digest" ]]; then
-    echo "Identical runtime and build inputs already exist as $prior_image ($prior_id)."
+  if [[ "$prior_id" == "$image_id" ]]; then
+    echo "Built image ID matches $prior_image ($prior_id)."
     echo "Reusing $existing_tag; v$version was not assigned or tagged."
     exit 0
   fi
@@ -244,7 +240,6 @@ if ! git tag -a "$provenance_tag" "$git_revision" \
   -m "image: $image" \
   -m "image_id: $image_id" \
   -m "inputs_sha256: $inputs_sha256" \
-  -m "runtime_sha256: $runtime_digest" \
   -m "source_branch: $source_branch" \
   -m "source_revision: $git_revision" \
   -m "checks: local formatting, lint, and component tests passed" \
