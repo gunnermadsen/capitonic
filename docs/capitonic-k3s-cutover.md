@@ -2,11 +2,15 @@
 
 Rancher Desktop k3s uses namespace `capitonic`. Each service has one owning Helm chart under `capitonic-helm-chart/charts/`. This document records the Docker-to-k3s data cutover and the normal local operations contract. The main worktree's `.env` files remain the only secret source; feature worktrees symlink them. `common/configs/` and `common/scripts/` remain the checked-in configuration and microservice script sources. `scripts/helm/bake-assets.py` copies these into ignored chart `assets/` directories only; it does not deploy resources.
 
+As of 2026-09-26 04:07 UTC, the restored k3s stack is running on the selected golden bot and ingester image IDs, all long-running pods are ready with zero restarts, all 21 Prometheus targets are up, and current bot logs reach Loki. Nine desired realtime profiles have healthy leases. Seven previously enabled processes (one live, six paper) resumed with fresh heartbeats, rising callbacks, zero strategy errors, and registered models. The live process reports proven accounting, connected user websocket, enabled order submission under its existing per-order limits, and zero unresolved live orders. Docker Compose services remain stopped. The only firing Grafana alert is the expected RTDS Chainlink candle-window gap from the 03:18–03:35 UTC shutdown interval; live RTDS ticks are current. The `RTDS candle recovery` task checks for automatic 61-minute window recovery and alert clearance every five minutes. No branch merge or image rebuild was performed.
+
 ## Cutover data and rollback identity
 
 The Compose stack was stopped before any source backup. The database was cleanly shut down, and the bot, ingester master/workers, PgBouncer, and monitoring containers were stopped. No Compose service was restarted during the restore. The cold physical PostgreSQL volume came from PostgreSQL 14 with the same TimescaleDB image as the k3s target. This preserves the complete `polymarket` database: migrations, trading processes, model references, realtime profiles, jobs, leases, and application data. The PgBouncer alias `polymarket_trading` maps to that database; it is not a second database.
 
 The external SSD backup root is `/Volumes/docker-data/capitonic-cutover/2026-09-26/`:
+
+The imported golden image IDs are `sha256:defd46e79f698eb8492a02b5fce42a035bea120ffb0ae09002ba0fb34223c69a` for `polymarket-bot` (embedded revision `8e471a1c7e6789b84928b514a5aa8c6170e5e0e9`) and `sha256:084ee3e02c5457d480cf76b22d33c770a8beefa042d8d7a5d02554290a57bfb0` for both ingester roles (embedded revision `3760b0ffdf2d3b63a278e34af0f44d4454c463c9`).
 
 | Directory | Contents |
 | --- | --- |
