@@ -164,6 +164,19 @@ verify_image_pods() {
       (.status.containerStatuses[0].restartCount == 0))' >/dev/null
 }
 
+verify_bot_routes() {
+  local failures
+  # Allow a brief route handoff, then reject a repeating affected-path error.
+  sleep 20
+  failures="$(kubectl -n "$namespace" logs deployment/polymarket-bot --since=30s --tail=300 |
+    jq -Rr 'fromjson? | select(.fields.message? == "market-data worker route unavailable; preserving other worker streams") | .timestamp' |
+    wc -l | tr -d ' ')"
+  if (( failures >= 2 )); then
+    echo "The bot still reports repeated unavailable ingester routes; investigate before accepting this deployment." >&2
+    exit 70
+  fi
+}
+
 if [[ "$1" == pin ]]; then
   candidate_identity
   if [[ "$component" == ingester ]]; then
@@ -226,8 +239,10 @@ if [[ "$1" == deploy ]]; then
     cmp -s "$snapshot/pre/migrations.txt" "$snapshot/post/migrations.txt" || {
       echo "Migration ledger changed during deployment." >&2; exit 70;
     }
+    verify_bot_routes
   else
     verify_image_pods polymarket-bot "$image_id"
+    verify_bot_routes
   fi
   echo "Deployed $image ($image_id); source $image_revision; provenance $provenance_tag."
 fi
