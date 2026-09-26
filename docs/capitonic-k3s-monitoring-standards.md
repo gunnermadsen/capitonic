@@ -11,7 +11,7 @@ The `capitonic` namespace on the Rancher Desktop k3s cluster holds Capitonic ser
 | Grafana | single-replica Deployment with `Recreate` strategy | `local-path` ReadWriteOnce PVC | SQLite and dashboard state persist without simultaneous writers. |
 | Alloy | DaemonSet | ephemeral working directory | One log collector per node; log data is stored by Loki. |
 
-The local-path provisioner has a `Delete` reclaim policy. Treat these claims as disposable development data; chart upgrades retain them, but deleting PVCs destroys the stored metrics, logs, or Grafana state. Do not run multiple replicas against the same local PVC.
+The local-path provisioner has a `Delete` reclaim policy. Chart upgrades retain the claims, but deleting PVCs destroys the stored metrics, logs, or Grafana state. Before storage maintenance, take verified cold backups on the external SSD. Do not run multiple replicas against the same local PVC. Prometheus and Loki retain 30 days of data; watch actual Rancher Desktop VM disk usage because local-path does not enforce the PVC's requested capacity.
 
 The monitoring rollout does not include node-exporter or cAdvisor. They are reserved for production. Database, ingester, and trading services are not deployed by these charts.
 
@@ -21,7 +21,7 @@ The monitoring rollout does not include node-exporter or cAdvisor. They are rese
 
 The bake reads the shared source files, copies them to ignored `assets/` directories inside each chart, and filters the Docker-specific Prometheus target list to currently deployed Kubernetes services. It does not edit the shared sources or generated chart assets by hand. It does not invoke Helm or kubectl, manage Secrets, or clean up automatically. Run `--clean` after the Helm operation to remove only the generated assets. Running the bake is required before linting, rendering, packaging, or upgrading the charts from their directories; the chart templates fail if required assets are missing. No generated manifest or secret is committed.
 
-Kubernetes Secrets `prometheus-auth` and `grafana-auth` are managed separately from baking and Helm using the runtime environment files. They already exist in the development namespace and must be present before installing these charts on a new cluster. Helm templates contain only secret references. Prometheus authentication remains enabled. Grafana provisions Prometheus and Loki datasources, shared dashboards, and the Prometheus connectivity alert. The Postgres datasource and database scrape jobs require the database charts and `postgres-credentials` Secret. The bot scrape and availability alert are provisioned with the bot; process-dependent trading alerts wait for their data inputs.
+Kubernetes Secrets `prometheus-auth` and `grafana-auth` are managed separately from baking and Helm using the runtime environment files. They already exist in the development namespace and must be present before installing these charts on a new cluster. Helm templates contain only secret references. Prometheus authentication remains enabled. Grafana provisions Prometheus, Loki, and PostgreSQL datasources, shared dashboards, and every alert rule in `common/configs/grafana/provisioning/alerting/`. Alert evaluation depends on the corresponding services and process data being present.
 
 ## Commands
 

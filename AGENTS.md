@@ -316,3 +316,10 @@ docker compose up -d --force-recreate --no-deps db-migrate
 - Never create purpose-specific worker services, container names, deployment names, or worker variants. All ingester workers must use the standard `ingester-worker` service name and existing runtime contract.
 - Operational worker scaling does not require source, Dockerfile, Compose, or environment-file edits. Changes to the Kubernetes worker scaler itself are feature work and must preserve Compose behavior.
 - Do not introduce a parallel worker standard or contract. If the owning `ingester-worker` service or Deployment cannot perform the requested work through ordinary scaling, stop and report the incompatibility instead of creating replacement infrastructure.
+
+## Local development deployment ownership
+
+- Rancher Desktop k3s in namespace `capitonic` is the primary local development runtime after its cutover is certified. Docker Compose remains maintained as a compatible runtime for focused tests and recovery; keep service configuration, image inputs, and operational instructions in both paths aligned when changing a shared capability.
+- Maintain Kubernetes resources through their owning charts under `capitonic-helm-chart/charts/`. Keep `common/configs/` and `common/scripts/` authoritative; run `python3 scripts/helm/bake-assets.py` before Helm operations that need those assets and `--clean` afterward. Runtime `.env` files in the main worktree remain the secret source of truth.
+- Schedule realtime and backfill work through the ingester master's authenticated API. With Kubernetes worker scaling enabled, never use Helm replica values, `kubectl scale`, or direct Kubernetes API calls to satisfy operational worker demand; the master alone owns the worker Deployment `/scale` resource.
+- Use `docs/capitonic-k3s-cutover.md` for local routes, data backups, cutover acceptance, and routine Helm and Kubernetes commands. Never start both Compose and k3s trading runtimes against the same live process state.

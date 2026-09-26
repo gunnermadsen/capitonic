@@ -1,5 +1,7 @@
 # Capitonic k3s development migration plan
 
+This is the historical rollout plan. For the current Docker-to-k3s data cutover, operational commands, and acceptance criteria, use `docs/capitonic-k3s-cutover.md`.
+
 Status: monitoring, database, migration runner, and bot service are deployed on `feature/capitonic-monitoring-k3s`. Ingester master, workers, and trading-process acceptance follow them. Docker Compose remains unchanged.
 
 ## Recommended architecture
