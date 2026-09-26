@@ -160,20 +160,22 @@ else
 fi
 
 inputs_sha256="$(image_inputs_sha256 "$git_revision")"
-while IFS= read -r existing_tag; do
-  annotation="$(git cat-file -p "refs/tags/$existing_tag")"
-  prior_image="$(sed -n 's/^image: //p' <<< "$annotation" | head -1)"
-  prior_id="$(sed -n 's/^image_id: //p' <<< "$annotation" | head -1)"
-  prior_revision="$(sed -n 's/^source_revision: //p' <<< "$annotation" | head -1)"
-  [[ "$prior_image" == "capitonic/$component:"* && "$prior_id" =~ ^sha256:[0-9a-f]{64}$ && "$prior_revision" =~ ^[0-9a-f]{40}$ ]] || continue
-  [[ "$(git rev-list -n 1 "refs/tags/$existing_tag")" == "$prior_revision" ]] || continue
-  git merge-base --is-ancestor "$prior_revision" "$git_revision" || continue
-  [[ "$(image_inputs_sha256 "$prior_revision")" == "$inputs_sha256" ]] || continue
-  "${image_cli[@]}" image inspect "$prior_image" >/dev/null 2>&1 || continue
-  [[ "$("${image_cli[@]}" image inspect --format '{{ .Id }}' "$prior_image")" == "$prior_id" ]] || continue
-  echo "Reusing $prior_image ($prior_id) from $existing_tag; no new image or local version was created."
-  exit 0
-done < <(git tag --list "image/$component/v*" "image/$component/sha256-*")
+for tag_pattern in "image/$component/v*" "image/$component/sha256-*"; do
+  while IFS= read -r existing_tag; do
+    annotation="$(git cat-file -p "refs/tags/$existing_tag")"
+    prior_image="$(sed -n 's/^image: //p' <<< "$annotation" | head -1)"
+    prior_id="$(sed -n 's/^image_id: //p' <<< "$annotation" | head -1)"
+    prior_revision="$(sed -n 's/^source_revision: //p' <<< "$annotation" | head -1)"
+    [[ "$prior_image" == "capitonic/$component:"* && "$prior_id" =~ ^sha256:[0-9a-f]{64}$ && "$prior_revision" =~ ^[0-9a-f]{40}$ ]] || continue
+    [[ "$(git rev-list -n 1 "refs/tags/$existing_tag")" == "$prior_revision" ]] || continue
+    git merge-base --is-ancestor "$prior_revision" "$git_revision" || continue
+    [[ "$(image_inputs_sha256 "$prior_revision")" == "$inputs_sha256" ]] || continue
+    "${image_cli[@]}" image inspect "$prior_image" >/dev/null 2>&1 || continue
+    [[ "$("${image_cli[@]}" image inspect --format '{{ .Id }}' "$prior_image")" == "$prior_id" ]] || continue
+    echo "Reusing $prior_image ($prior_id) from $existing_tag; no new image or local version was created."
+    exit 0
+  done < <(git tag --list "$tag_pattern")
+done
 
 version="$(next_local_version)"
 if [[ -n "$requested_version" && "$requested_version" != "$version" ]]; then
