@@ -10,7 +10,8 @@ Usage: scripts/local-image-ci.sh <polymarket-bot|ingester|db-migrate> --checks-o
 
 Run local checks on working-tree changes, or check a clean commit and build its production image.
 --build selects the next unused local candidate version only for a distinct built image.
-Unchanged committed image inputs reuse an existing local image and Git tag.
+Each new image receives one version tag and one image-ID provenance tag on its source commit.
+Unchanged committed image inputs reuse the existing image and Git tag pair.
 --checks-only does not build or tag an image.
 Images are not deployed, promoted, pushed, or marked golden by this script.
 EOF
@@ -163,23 +164,81 @@ else
   exit 69
 fi
 
+git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
+build_lock="$git_common_dir/local-image-ci-$component.lock"
+if ! mkdir "$build_lock" 2>/dev/null; then
+  echo "Another local image CI build holds $build_lock; refusing concurrent version allocation." >&2
+  exit 69
+fi
+release_build_lock() { rmdir "$build_lock"; }
+trap release_build_lock EXIT
+
+tag_field() {
+  git cat-file -p "refs/tags/$1" | sed -n "s/^$2: //p" | head -1
+}
+
+validate_candidate_pair() {
+  local version_tag="$1" prior_version prior_image prior_id prior_revision hash_tag
+  [[ "$(git cat-file -t "refs/tags/$version_tag")" == tag ]] || {
+    echo "Candidate $version_tag is not annotated." >&2; exit 67;
+  }
+  prior_version="$(tag_field "$version_tag" version)"
+  prior_image="$(tag_field "$version_tag" image)"
+  prior_id="$(tag_field "$version_tag" image_id)"
+  prior_revision="$(tag_field "$version_tag" source_revision)"
+  [[ "$prior_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-local\.[1-9][0-9]*$ \
+    && "$prior_image" == "capitonic/$component:$prior_version" \
+    && "$prior_id" =~ ^sha256:[0-9a-f]{64}$ \
+    && "$prior_revision" =~ ^[0-9a-f]{40}$ \
+    && "$(git rev-list -n 1 "refs/tags/$version_tag")" == "$prior_revision" ]] || {
+    echo "Candidate $version_tag has inconsistent version, image, or source metadata." >&2; exit 67;
+  }
+  hash_tag="image/$component/sha256-${prior_id#sha256:}"
+  git show-ref --verify --quiet "refs/tags/$hash_tag" || {
+    echo "Candidate $version_tag lacks mandatory hash tag $hash_tag." >&2; exit 67;
+  }
+  [[ "$(git cat-file -t "refs/tags/$hash_tag")" == tag \
+    && "$(git rev-list -n 1 "refs/tags/$hash_tag")" == "$prior_revision" \
+    && "$(tag_field "$hash_tag" version)" == "$prior_version" \
+    && "$(tag_field "$hash_tag" image)" == "$prior_image" \
+    && "$(tag_field "$hash_tag" image_id)" == "$prior_id" \
+    && "$(tag_field "$hash_tag" source_revision)" == "$prior_revision" ]] || {
+    echo "Candidate $version_tag and $hash_tag disagree." >&2; exit 67;
+  }
+  "${image_cli[@]}" image inspect "$prior_image" >/dev/null 2>&1 || {
+    echo "Candidate image $prior_image is missing; refusing to mint a replacement version." >&2; exit 67;
+  }
+  [[ "$("${image_cli[@]}" image inspect --format '{{ .Id }}' "$prior_image")" == "$prior_id" \
+    && "$("${image_cli[@]}" image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$prior_image")" == "$prior_revision" \
+    && "$("${image_cli[@]}" image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$prior_image")" == "${prior_version#v}" ]] || {
+    echo "Candidate image $prior_image does not match its Git tag pair." >&2; exit 67;
+  }
+  verified_image="$prior_image"
+  verified_image_id="$prior_id"
+}
+
 inputs_sha256="$(image_inputs_sha256 "$git_revision")"
-for tag_pattern in "image/$component/v*" "image/$component/sha256-*"; do
-  while IFS= read -r existing_tag; do
-    annotation="$(git cat-file -p "refs/tags/$existing_tag")"
-    prior_image="$(sed -n 's/^image: //p' <<< "$annotation" | head -1)"
-    prior_id="$(sed -n 's/^image_id: //p' <<< "$annotation" | head -1)"
-    prior_revision="$(sed -n 's/^source_revision: //p' <<< "$annotation" | head -1)"
-    [[ "$prior_image" == "capitonic/$component:"* && "$prior_id" =~ ^sha256:[0-9a-f]{64}$ && "$prior_revision" =~ ^[0-9a-f]{40}$ ]] || continue
-    [[ "$(git rev-list -n 1 "refs/tags/$existing_tag")" == "$prior_revision" ]] || continue
-    git merge-base --is-ancestor "$prior_revision" "$git_revision" || continue
-    [[ "$(image_inputs_sha256 "$prior_revision")" == "$inputs_sha256" ]] || continue
-    "${image_cli[@]}" image inspect "$prior_image" >/dev/null 2>&1 || continue
-    [[ "$("${image_cli[@]}" image inspect --format '{{ .Id }}' "$prior_image")" == "$prior_id" ]] || continue
-    echo "Reusing $prior_image ($prior_id) from $existing_tag; no new image or local version was created."
-    exit 0
-  done < <(git tag --list "$tag_pattern")
-done
+current_commit_versions=0
+while IFS= read -r existing_tag; do
+  [[ "$(git rev-list -n 1 "refs/tags/$existing_tag")" == "$git_revision" ]] || continue
+  current_commit_versions=$((current_commit_versions + 1))
+done < <(git tag --list "image/$component/v*-local.*")
+(( current_commit_versions <= 1 )) || {
+  echo "This commit already has multiple $component local version tags." >&2; exit 67;
+}
+
+while IFS= read -r existing_tag; do
+  prior_revision="$(git rev-list -n 1 "refs/tags/$existing_tag")"
+  git merge-base --is-ancestor "$prior_revision" "$git_revision" || continue
+  [[ "$(image_inputs_sha256 "$prior_revision")" == "$inputs_sha256" ]] || continue
+  validate_candidate_pair "$existing_tag"
+  echo "Reusing $verified_image ($verified_image_id) from $existing_tag; no new image or tags were created."
+  exit 0
+done < <(git tag --list "image/$component/v*-local.*")
+
+(( current_commit_versions == 0 )) || {
+  echo "This commit already has a $component version tag for different image inputs." >&2; exit 67;
+}
 
 version="$(next_local_version)"
 if [[ -n "$requested_version" && "$requested_version" != "$version" ]]; then
@@ -197,7 +256,11 @@ temporary_image="capitonic/$component:build-${git_revision:0:12}-$$"
 cleanup_temporary_image() {
   "${image_cli[@]}" image rm "$temporary_image" >/dev/null 2>&1 || true
 }
-trap cleanup_temporary_image EXIT
+cleanup_build() {
+  cleanup_temporary_image
+  release_build_lock
+}
+trap cleanup_build EXIT
 "${image_cli[@]}" build \
   --file "$dockerfile" \
   --build-arg "$revision_arg=$git_revision" \
@@ -219,44 +282,69 @@ if [[ "$(git rev-parse HEAD)" != "$git_revision" ]]; then
   exit 68
 fi
 require_clean_source
-# A rare exact image-ID repeat must not consume another candidate number.
+# A repeated image ID cannot acquire another source-commit tag pair.
 while IFS= read -r existing_tag; do
-  annotation="$(git cat-file -p "refs/tags/$existing_tag")"
-  prior_image="$(sed -n 's/^image: //p' <<< "$annotation" | head -1)"
-  prior_id="$(sed -n 's/^image_id: //p' <<< "$annotation" | head -1)"
-  prior_revision="$(sed -n 's/^source_revision: //p' <<< "$annotation" | head -1)"
-  [[ "$prior_image" == "capitonic/$component:"* && "$prior_id" =~ ^sha256:[0-9a-f]{64}$ && "$prior_revision" =~ ^[0-9a-f]{40}$ ]] || continue
-  [[ "$(git rev-list -n 1 "refs/tags/$existing_tag")" == "$prior_revision" ]] || continue
-  if [[ "$prior_id" == "$image_id" ]]; then
-    echo "Built image ID matches $prior_image ($prior_id)."
-    echo "Reusing $existing_tag; v$version was not assigned or tagged."
-    exit 0
+  if [[ "$(tag_field "$existing_tag" image_id)" == "$image_id" ]]; then
+    echo "Image ID $image_id already has $existing_tag; refusing a second source-commit tag pair." >&2
+    exit 67
   fi
-done < <(git tag --list "image/$component/v*" "image/$component/sha256-*")
+done < <(git tag --list "image/$component/sha256-*")
 
-provenance_tag="image/$component/v$version"
-if [[ "$(next_local_version)" != "$version" ]] || git show-ref --verify --quiet "refs/tags/$provenance_tag" || "${image_cli[@]}" image inspect "$image" >/dev/null 2>&1; then
+version_tag="image/$component/v$version"
+hash_tag="image/$component/sha256-${image_id#sha256:}"
+if [[ "$(next_local_version)" != "$version" ]] || git show-ref --verify --quiet "refs/tags/$version_tag" || git show-ref --verify --quiet "refs/tags/$hash_tag" || "${image_cli[@]}" image inspect "$image" >/dev/null 2>&1; then
   echo "Candidate version v$version was allocated elsewhere during the build; refusing to reuse it." >&2
   exit 69
 fi
+tagger_identity="$(git var GIT_COMMITTER_IDENT)"
+version_tag_object="$(git mktag <<EOF
+object $git_revision
+type commit
+tag $version_tag
+tagger $tagger_identity
+
+component: $component
+version: v$version
+image: $image
+image_id: $image_id
+inputs_sha256: $inputs_sha256
+source_branch: $source_branch
+source_revision: $git_revision
+checks: $checks_description
+deployment: not deployed; golden status: not assigned
+EOF
+)"
+hash_tag_object="$(git mktag <<EOF
+object $git_revision
+type commit
+tag $hash_tag
+tagger $tagger_identity
+
+component: $component
+version: v$version
+image: $image
+image_id: $image_id
+inputs_sha256: $inputs_sha256
+source_branch: $source_branch
+source_revision: $git_revision
+checks: $checks_description
+deployment: not deployed; golden status: not assigned
+EOF
+)"
 "${image_cli[@]}" image tag "$temporary_image" "$image"
-if ! git tag -a "$provenance_tag" "$git_revision" \
-  -m "component: $component" \
-  -m "version: v$version" \
-  -m "image: $image" \
-  -m "image_id: $image_id" \
-  -m "inputs_sha256: $inputs_sha256" \
-  -m "source_branch: $source_branch" \
-  -m "source_revision: $git_revision" \
-  -m "checks: $checks_description" \
-  -m "deployment: not deployed; golden status: not assigned"; then
+if ! git update-ref --stdin <<EOF
+start
+verify refs/heads/$source_branch $git_revision
+create refs/tags/$version_tag $version_tag_object
+create refs/tags/$hash_tag $hash_tag_object
+prepare
+commit
+EOF
+then
   "${image_cli[@]}" image rm "$image" >/dev/null 2>&1 || true
   exit 69
 fi
-if [[ "$(git rev-list -n 1 "refs/tags/$provenance_tag")" != "$git_revision" ]]; then
-  echo "Image provenance tag does not point to its build commit." >&2
-  exit 67
-fi
+validate_candidate_pair "$version_tag"
 
-printf 'Candidate image: %s\nImage ID: %s\nGit revision: %s\nProvenance tag: %s\n' \
-  "$image" "$image_id" "$git_revision" "$provenance_tag"
+printf 'Candidate image: %s\nImage ID: %s\nGit revision: %s\nVersion tag: %s\nHash tag: %s\n' \
+  "$image" "$image_id" "$git_revision" "$version_tag" "$hash_tag"
