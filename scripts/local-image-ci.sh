@@ -126,6 +126,7 @@ fi
 echo "Checking $component locally"
 case "$component" in
   polymarket-bot)
+    cargo +1.92.0 fmt --all -- --check
     cargo +1.92.0 test --locked --package polymarket-bot --all-targets
     ;;
   ingester)
