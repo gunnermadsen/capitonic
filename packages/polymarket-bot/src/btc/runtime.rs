@@ -1581,6 +1581,23 @@ mod tests {
     }
 
     #[test]
+    fn binance_one_second_hydration_deduplicates_receipt_metadata_on_overlap() {
+        let start = DateTime::from_timestamp(1_788_436_800, 0).unwrap();
+        let canonical = one_second_candle(start);
+        let mut live_replay = canonical.clone();
+        live_replay.last_source_timestamp += chrono::Duration::milliseconds(1);
+        live_replay.max_received_at += chrono::Duration::milliseconds(250);
+        let later = one_second_candle(start + chrono::Duration::seconds(1));
+        let mut window =
+            BinanceOneSecondWindow::from_completed(vec![live_replay, later.clone()]).unwrap();
+
+        merge_binance_one_second_history(&mut window, vec![canonical.clone()]).unwrap();
+
+        assert_eq!(window.completed().front(), Some(&canonical));
+        assert_eq!(window.completed().back(), Some(&later));
+    }
+
+    #[test]
     fn binance_one_second_recovery_bridges_persisted_gap_and_keeps_triggering_live_candle() {
         let start = DateTime::from_timestamp(1_788_436_800, 0).unwrap();
         let hydrated = (0..BINANCE_ONE_SECOND_BOOTSTRAP_CAPACITY)
