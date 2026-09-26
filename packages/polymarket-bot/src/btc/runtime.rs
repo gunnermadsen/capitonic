@@ -306,13 +306,13 @@ fn build_binance_one_second_history(
     mut hydrated: Vec<BinanceOneSecondKline>,
 ) -> Result<BinanceOneSecondWindow> {
     hydrated.extend(window.completed().iter().cloned());
-    hydrated.sort_unstable_by_key(|candle| candle.open_timestamp);
+    hydrated.sort_by_key(|candle| candle.open_timestamp);
     let mut canonical: Vec<BinanceOneSecondKline> = Vec::with_capacity(hydrated.len());
     for candle in hydrated {
         if let Some(previous) = canonical.last() {
             if previous.open_timestamp == candle.open_timestamp {
                 ensure!(
-                    previous == &candle,
+                    same_binance_one_second_exchange_fact(previous, &candle),
                     "Binance one-second bootstrap conflicts with live runtime candle"
                 );
                 continue;
@@ -354,10 +354,32 @@ pub(crate) fn build_binance_one_second_recovery(
         candidate
             .completed()
             .iter()
-            .any(|candle| candle == &required),
+            .any(|candle| same_binance_one_second_exchange_fact(candle, &required)),
         "Binance one-second recovery omitted the triggering live candle"
     );
     Ok(candidate)
+}
+
+pub(crate) fn same_binance_one_second_exchange_fact(
+    left: &BinanceOneSecondKline,
+    right: &BinanceOneSecondKline,
+) -> bool {
+    left.open_timestamp == right.open_timestamp
+        && left.close_timestamp == right.close_timestamp
+        && left.open_price == right.open_price
+        && left.high_price == right.high_price
+        && left.low_price == right.low_price
+        && left.close_price == right.close_price
+        && left.base_volume == right.base_volume
+        && left.quote_volume == right.quote_volume
+        && left.trade_count == right.trade_count
+        && left.taker_buy_base_volume == right.taker_buy_base_volume
+        && left.taker_buy_quote_volume == right.taker_buy_quote_volume
+        && left.first_aggregate_trade_id == right.first_aggregate_trade_id
+        && left.last_aggregate_trade_id == right.last_aggregate_trade_id
+        && left.first_source_timestamp == right.first_source_timestamp
+        && left.source_complete == right.source_complete
+        && left.synthetic == right.synthetic
 }
 
 async fn apply_binance_one_second_history(
@@ -1576,6 +1598,28 @@ mod tests {
         .unwrap();
 
         assert_eq!(recovered.completed().back(), Some(&required));
+        assert_eq!(
+            recovered.completed_five_minute_summaries().len(),
+            BINANCE_PREWINDOW_SUMMARY_CAPACITY
+        );
+    }
+
+    #[test]
+    fn binance_one_second_recovery_accepts_different_receipt_metadata() {
+        let start = DateTime::from_timestamp(1_788_436_800, 0).unwrap();
+        let mut hydrated = (0..=BINANCE_ONE_SECOND_BOOTSTRAP_CAPACITY)
+            .map(|index| one_second_candle(start + chrono::Duration::seconds(index as i64)))
+            .collect::<Vec<_>>();
+        let required = hydrated.last().unwrap().clone();
+        hydrated.last_mut().unwrap().max_received_at += chrono::Duration::milliseconds(250);
+        let mut live_replay = required.clone();
+        live_replay.last_source_timestamp += chrono::Duration::milliseconds(1);
+        let live_window = BinanceOneSecondWindow::from_completed(vec![live_replay]).unwrap();
+
+        let recovered =
+            build_binance_one_second_recovery(&live_window, hydrated.clone(), required).unwrap();
+
+        assert_eq!(recovered.completed().back(), hydrated.last());
         assert_eq!(
             recovered.completed_five_minute_summaries().len(),
             BINANCE_PREWINDOW_SUMMARY_CAPACITY
