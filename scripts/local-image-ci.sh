@@ -4,10 +4,11 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/local-image-ci.sh <polymarket-bot|ingester|db-migrate> <MAJOR.MINOR.PATCH> [--checks-only]
+Usage: scripts/local-image-ci.sh <polymarket-bot|ingester|db-migrate> --checks-only
+       scripts/local-image-ci.sh <polymarket-bot|ingester|db-migrate> <MAJOR.MINOR.PATCH-local.N>
 
-Run local checks for one committed component, then build and tag its production image.
---checks-only runs the checks without building or tagging an image.
+Run local checks on working-tree changes, or check a clean commit and build its production image.
+--checks-only does not build or tag an image.
 Images are not deployed, promoted, pushed, or marked golden by this script.
 EOF
 }
@@ -22,11 +23,17 @@ if (( $# < 2 || $# > 3 )) || { (( $# == 3 )) && [[ "$3" != "--checks-only" ]]; }
 fi
 
 component="$1"
-version="$2"
-checks_only="${3:-}"
-if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-  echo "Use a stable semantic version such as 1.2.3." >&2
-  exit 64
+version=""
+checks_only=""
+if [[ "$2" == "--checks-only" ]]; then
+  checks_only="--checks-only"
+else
+  version="$2"
+  checks_only="${3:-}"
+  if [[ -z "$checks_only" && ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-local\.([1-9][0-9]*)$ ]]; then
+    echo "Use a local candidate version such as 1.2.1-local.1." >&2
+    exit 64
+  fi
 fi
 
 case "$component" in
@@ -61,28 +68,29 @@ require_clean_source() {
   fi
 }
 
-require_clean_source
-git_revision="$(git rev-parse --verify 'HEAD^{commit}')"
-source_branch="$(git symbolic-ref --quiet --short HEAD)" || {
-  echo "Build from a named source branch so image provenance is unambiguous." >&2
-  exit 66
-}
-if [[ ! "$git_revision" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
-  echo "Git returned an invalid full commit ID: $git_revision" >&2
-  exit 66
+if [[ "$checks_only" != "--checks-only" ]]; then
+  require_clean_source
+  git_revision="$(git rev-parse --verify 'HEAD^{commit}')"
+  source_branch="$(git symbolic-ref --quiet --short HEAD)" || {
+    echo "Build from a named source branch so image provenance is unambiguous." >&2
+    exit 66
+  }
+  if [[ ! "$git_revision" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
+    echo "Git returned an invalid full commit ID: $git_revision" >&2
+    exit 66
+  fi
 fi
 
-echo "Checking $component at $git_revision"
+echo "Checking $component locally"
 case "$component" in
   polymarket-bot)
-    cargo fmt --all -- --check
-    cargo clippy --locked --package polymarket-bot --all-targets -- -D warnings
-    cargo test --locked --package polymarket-bot --all-targets
+    cargo +1.92.0 test --locked --package polymarket-bot --all-targets
     ;;
   ingester)
-    cargo fmt --all -- --check
-    cargo clippy --locked --package market-data-ingester --all-targets --all-features -- -D warnings -A clippy::too_many_arguments
-    cargo test --locked --package market-data-ingester --all-targets --all-features
+    cargo +1.92.0 fmt --all -- --check
+    cargo +1.92.0 clippy --locked --package market-data-ingester --all-targets --all-features -- -D warnings -A clippy::too_many_arguments
+    cargo +1.92.0 test --locked --package market-data-ingester --all-targets --all-features
+    cargo +1.92.0 doc --locked --package market-data-ingester --no-deps --all-features
     ;;
   db-migrate)
     npm ci --prefix packages/db-migrate
@@ -91,18 +99,27 @@ case "$component" in
     ;;
 esac
 
+if [[ "$checks_only" == "--checks-only" ]]; then
+  echo "Checks passed for $component; no image was built."
+  exit 0
+fi
 if [[ "$(git rev-parse HEAD)" != "$git_revision" ]]; then
   echo "HEAD changed during checks; refusing to build." >&2
   exit 68
 fi
 require_clean_source
-if [[ "$checks_only" == "--checks-only" ]]; then
-  echo "Checks passed for $component at $git_revision; no image was built."
-  exit 0
+
+if command -v nerdctl >/dev/null 2>&1 && nerdctl --namespace k8s.io info >/dev/null 2>&1; then
+  image_cli=(nerdctl --namespace k8s.io)
+elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  image_cli=(docker)
+else
+  echo "No local container image builder is running (Rancher Desktop containerd or Docker)." >&2
+  exit 69
 fi
 
 image="capitonic/$component:v$version"
-if docker image inspect "$image" >/dev/null 2>&1; then
+if "${image_cli[@]}" image inspect "$image" >/dev/null 2>&1; then
   echo "Image tag $image already exists locally; select or reuse its existing immutable image." >&2
   exit 69
 fi
@@ -116,16 +133,16 @@ while IFS= read -r existing_tag; do
   fi
 done < <(git tag --list "image/$component/sha256-*")
 
-docker build \
+"${image_cli[@]}" build \
   --file "$dockerfile" \
   --build-arg "$revision_arg=$git_revision" \
   --label "org.opencontainers.image.version=$version" \
   --tag "$image" \
   .
 
-image_id="$(docker image inspect --format '{{ .Id }}' "$image")"
-image_revision="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")"
-image_version="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$image")"
+image_id="$("${image_cli[@]}" image inspect --format '{{ .Id }}' "$image")"
+image_revision="$("${image_cli[@]}" image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")"
+image_version="$("${image_cli[@]}" image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$image")"
 if [[ ! "$image_id" =~ ^sha256:[0-9a-f]{64}$ \
   || "$image_revision" != "$git_revision" \
   || "$image_version" != "$version" ]]; then
