@@ -1,6 +1,6 @@
-image: capitonic/ingester:weather-features-3760b0ff
-imageDigest: sha256:084ee3e02c5457d480cf76b22d33c770a8beefa042d8d7a5d02554290a57bfb0
-gitRevision: 3760b0ffdf2d3b63a278e34af0f44d4454c463c9
+image: capitonic/ingester:v1.2.1-local.1
+imageDigest: sha256:97d849a598b8a39133995c02d8b165683af50668d7d7ec17c648ab6d6e801a15
+gitRevision: 0730cb61538208ffdc3cf13d07d0f20be42a3419
 deploymentId: capitonic-k3s-dev
 master:
   replicaCount: 1
