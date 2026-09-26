@@ -100,10 +100,10 @@ def bake() -> None:
         write_asset("grafana", f"dashboards/{dashboard.name}", dashboard.read_text())
     for relative in (
         "provisioning/dashboards/dashboards.yml",
-        "provisioning/alerting/rules-prometheus.yml",
-        "provisioning/alerting/rules-polymarket-bot.yml",
     ):
         write_asset("grafana", relative, (grafana_source / relative).read_text())
+    for rules in (grafana_source / "provisioning/alerting").glob("*.yml"):
+        write_asset("grafana", f"provisioning/alerting/{rules.name}", rules.read_text())
     write_asset(
         "grafana",
         "provisioning/datasources/datasources.yml",

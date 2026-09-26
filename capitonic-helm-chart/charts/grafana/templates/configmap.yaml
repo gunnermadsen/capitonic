@@ -14,10 +14,13 @@ data:
 {{ required "run scripts/helm/bake-assets.py before Helm: missing Grafana dashboard provisioning" (.Files.Get "assets/provisioning/dashboards/dashboards.yml") | nindent 4 }}
   datasources.yml: |-
 {{ required "run scripts/helm/bake-assets.py before Helm: missing Grafana datasources" (.Files.Get "assets/provisioning/datasources/datasources.yml") | nindent 4 }}
-  rules-prometheus.yml: |-
-{{ required "run scripts/helm/bake-assets.py before Helm: missing Grafana alert rules" (.Files.Get "assets/provisioning/alerting/rules-prometheus.yml") | nindent 4 }}
-  rules-polymarket-bot.yml: |-
-{{ required "run scripts/helm/bake-assets.py before Helm: missing bot availability alert" (.Files.Get "assets/provisioning/alerting/rules-polymarket-bot.yml") | nindent 4 }}
+{{- if eq (len (.Files.Glob "assets/provisioning/alerting/*.yml")) 0 }}
+{{- fail "run scripts/helm/bake-assets.py before Helm: missing Grafana alert rules" }}
+{{- end }}
+{{- range $path, $_ := .Files.Glob "assets/provisioning/alerting/*.yml" }}
+  {{ base $path }}: |-
+{{ $.Files.Get $path | nindent 4 }}
+{{- end }}
 {{- if eq (len (.Files.Glob "assets/dashboards/*.json")) 0 }}
 {{- fail "run scripts/helm/bake-assets.py before Helm: missing Grafana dashboards" }}
 {{- end }}

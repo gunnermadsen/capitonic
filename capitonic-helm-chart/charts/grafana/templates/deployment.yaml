@@ -44,6 +44,7 @@ spec:
             - {name: GF_USERS_DEFAULT_THEME, value: dark}
             - {name: GF_SERVER_ROOT_URL, value: "http://localhost/monitor/"}
             - {name: PROMETHEUS_ENVIRONMENT, value: dev}
+            - {name: GRAFANA_ALERT_ENVIRONMENT, value: dev}
             - {name: GF_SECURITY_ADMIN_USER, valueFrom: {secretKeyRef: {name: grafana-auth, key: admin-user}}}
             - {name: GF_SECURITY_ADMIN_PASSWORD, valueFrom: {secretKeyRef: {name: grafana-auth, key: admin-password}}}
             - {name: PROMETHEUS_BASIC_AUTH_USER, valueFrom: {secretKeyRef: {name: prometheus-auth, key: username}}}
@@ -65,8 +66,9 @@ spec:
             - {name: data, mountPath: /var/lib/grafana}
             - {name: provisioning, mountPath: /etc/grafana/provisioning/dashboards/dashboards.yml, subPath: dashboards.yml, readOnly: true}
             - {name: provisioning, mountPath: /etc/grafana/provisioning/datasources/datasources.yml, subPath: datasources.yml, readOnly: true}
-            - {name: provisioning, mountPath: /etc/grafana/provisioning/alerting/rules-prometheus.yml, subPath: rules-prometheus.yml, readOnly: true}
-            - {name: provisioning, mountPath: /etc/grafana/provisioning/alerting/rules-polymarket-bot.yml, subPath: rules-polymarket-bot.yml, readOnly: true}
+{{- range $path, $_ := .Files.Glob "assets/provisioning/alerting/*.yml" }}
+            - {name: provisioning, mountPath: /etc/grafana/provisioning/alerting/{{ base $path }}, subPath: {{ base $path }}, readOnly: true}
+{{- end }}
 {{- range $path, $_ := .Files.Glob "assets/dashboards/*.json" }}
             - {name: dashboard-{{ base $path | trimSuffix ".json" }}, mountPath: /etc/grafana/dashboards/polymarket-bot/{{ base $path }}, subPath: {{ base $path }}, readOnly: true}
 {{- end }}
