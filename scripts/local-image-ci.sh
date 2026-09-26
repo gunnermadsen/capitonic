@@ -45,18 +45,21 @@ case "$component" in
     dockerfile="packages/polymarket-bot/Dockerfile.production"
     revision_arg="POLYMARKET_GIT_REVISION"
     base_version="3.2.1"
+    checks_description="local formatting and component tests passed"
     image_inputs=(.dockerignore Cargo.toml Cargo.lock packages/polymarket-bot/Cargo.toml packages/market-data-ingester/Cargo.toml packages/polymarket-bot/build.rs common/proto packages/polymarket-bot/src packages/btc-directional-model/runtime-models "$dockerfile")
     ;;
   ingester)
     dockerfile="packages/market-data-ingester/Dockerfile.production"
     revision_arg="INGESTER_GIT_REVISION"
     base_version="1.2.1"
+    checks_description="local formatting, Clippy, component tests, and docs passed"
     image_inputs=(.dockerignore Cargo.toml Cargo.lock packages/polymarket-bot/Cargo.toml packages/market-data-ingester/Cargo.toml packages/market-data-ingester/build.rs common/proto packages/market-data-ingester/src "$dockerfile")
     ;;
   db-migrate)
     dockerfile="packages/db-migrate/Dockerfile.production"
     revision_arg="DB_MIGRATE_GIT_REVISION"
     base_version="0.2.0"
+    checks_description="local TypeScript build and component tests passed"
     image_inputs=(.dockerignore packages/db-migrate/package.json packages/db-migrate/package-lock.json packages/db-migrate/tsconfig.json packages/db-migrate/src "$dockerfile")
     ;;
   *)
@@ -245,7 +248,7 @@ if ! git tag -a "$provenance_tag" "$git_revision" \
   -m "inputs_sha256: $inputs_sha256" \
   -m "source_branch: $source_branch" \
   -m "source_revision: $git_revision" \
-  -m "checks: local formatting, lint, and component tests passed" \
+  -m "checks: $checks_description" \
   -m "deployment: not deployed; golden status: not assigned"; then
   "${image_cli[@]}" image rm "$image" >/dev/null 2>&1 || true
   exit 69
