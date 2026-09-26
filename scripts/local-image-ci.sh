@@ -9,7 +9,8 @@ Usage: scripts/local-image-ci.sh <polymarket-bot|ingester|db-migrate> --checks-o
        scripts/local-image-ci.sh <polymarket-bot|ingester|db-migrate> --build
 
 Run local checks on working-tree changes, or check a clean commit and build its production image.
---build selects the next unused local candidate version after a successful build.
+--build selects the next unused local candidate version only for a distinct built image.
+Identical build inputs and runtime content reuse their existing image and Git tag.
 --checks-only does not build or tag an image.
 Images are not deployed, promoted, pushed, or marked golden by this script.
 EOF
@@ -44,16 +45,19 @@ case "$component" in
     dockerfile="packages/polymarket-bot/Dockerfile.production"
     revision_arg="POLYMARKET_GIT_REVISION"
     base_version="3.2.1"
+    image_inputs=(.dockerignore Cargo.toml Cargo.lock packages/polymarket-bot/Cargo.toml packages/market-data-ingester/Cargo.toml packages/polymarket-bot/build.rs common/proto packages/polymarket-bot/src packages/btc-directional-model/runtime-models "$dockerfile")
     ;;
   ingester)
     dockerfile="packages/market-data-ingester/Dockerfile.production"
     revision_arg="INGESTER_GIT_REVISION"
     base_version="1.2.1"
+    image_inputs=(.dockerignore Cargo.toml Cargo.lock packages/polymarket-bot/Cargo.toml packages/market-data-ingester/Cargo.toml packages/market-data-ingester/build.rs common/proto packages/market-data-ingester/src "$dockerfile")
     ;;
   db-migrate)
     dockerfile="packages/db-migrate/Dockerfile.production"
     revision_arg="DB_MIGRATE_GIT_REVISION"
     base_version="0.2.0"
+    image_inputs=(.dockerignore packages/db-migrate/package.json packages/db-migrate/package-lock.json packages/db-migrate/tsconfig.json packages/db-migrate/src "$dockerfile")
     ;;
   *)
     usage >&2
@@ -66,6 +70,23 @@ repository_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
   exit 64
 }
 cd "$repository_root"
+
+image_inputs_sha256() {
+  git ls-tree -r --full-tree "$1" -- "${image_inputs[@]}" | LC_ALL=C shasum -a 256 | awk '{print $1}'
+}
+
+runtime_sha256() {
+  "${image_cli[@]}" image inspect "$1" | jq -Se -c '
+    .[0] | {
+      architecture: .Architecture,
+      os: .Os,
+      layers: .RootFS.Layers,
+      config: (.Config | {
+        User, Env, Entrypoint, Cmd, WorkingDir,
+        Labels: (.Labels | del(."org.opencontainers.image.version", ."org.opencontainers.image.revision"))
+      })
+    }' | LC_ALL=C shasum -a 256 | awk '{print $1}'
+}
 
 next_local_version() {
   local highest=0 tag annotation numbered
@@ -100,6 +121,9 @@ require_clean_source() {
 }
 
 if [[ "$mode" == "--build" ]]; then
+  for tool in jq shasum; do
+    command -v "$tool" >/dev/null 2>&1 || { echo "Missing $tool" >&2; exit 69; }
+  done
   require_clean_source
   git_revision="$(git rev-parse --verify 'HEAD^{commit}')"
   source_branch="$(git symbolic-ref --quiet --short HEAD)" || {
@@ -186,6 +210,27 @@ if [[ "$(git rev-parse HEAD)" != "$git_revision" ]]; then
   exit 68
 fi
 require_clean_source
+inputs_sha256="$(image_inputs_sha256 "$git_revision")"
+runtime_digest="$(runtime_sha256 "$temporary_image")"
+
+# A later commit may change only chart or tooling files. Reuse the earlier image
+# when its copied build inputs and runtime bytes/configuration are identical.
+while IFS= read -r existing_tag; do
+  annotation="$(git cat-file -p "refs/tags/$existing_tag")"
+  prior_image="$(sed -n 's/^image: //p' <<< "$annotation" | head -1)"
+  prior_id="$(sed -n 's/^image_id: //p' <<< "$annotation" | head -1)"
+  prior_revision="$(sed -n 's/^source_revision: //p' <<< "$annotation" | head -1)"
+  [[ "$prior_image" == "capitonic/$component:"* && "$prior_id" =~ ^sha256:[0-9a-f]{64}$ && "$prior_revision" =~ ^[0-9a-f]{40}$ ]] || continue
+  [[ "$(git rev-list -n 1 "refs/tags/$existing_tag")" == "$prior_revision" ]] || continue
+  [[ "$(image_inputs_sha256 "$prior_revision")" == "$inputs_sha256" ]] || continue
+  "${image_cli[@]}" image inspect "$prior_image" >/dev/null 2>&1 || continue
+  [[ "$("${image_cli[@]}" image inspect --format '{{ .Id }}' "$prior_image")" == "$prior_id" ]] || continue
+  if [[ "$(runtime_sha256 "$prior_image")" == "$runtime_digest" ]]; then
+    echo "Identical runtime and build inputs already exist as $prior_image ($prior_id)."
+    echo "Reusing $existing_tag; v$version was not assigned or tagged."
+    exit 0
+  fi
+done < <(git tag --list "image/$component/v*" "image/$component/sha256-*")
 
 provenance_tag="image/$component/v$version"
 if [[ "$(next_local_version)" != "$version" ]] || git show-ref --verify --quiet "refs/tags/$provenance_tag" || "${image_cli[@]}" image inspect "$image" >/dev/null 2>&1; then
@@ -198,12 +243,18 @@ if ! git tag -a "$provenance_tag" "$git_revision" \
   -m "version: v$version" \
   -m "image: $image" \
   -m "image_id: $image_id" \
+  -m "inputs_sha256: $inputs_sha256" \
+  -m "runtime_sha256: $runtime_digest" \
   -m "source_branch: $source_branch" \
   -m "source_revision: $git_revision" \
   -m "checks: local formatting, lint, and component tests passed" \
   -m "deployment: not deployed; golden status: not assigned"; then
   "${image_cli[@]}" image rm "$image" >/dev/null 2>&1 || true
   exit 69
+fi
+if [[ "$(git rev-list -n 1 "refs/tags/$provenance_tag")" != "$git_revision" ]]; then
+  echo "Image provenance tag does not point to its build commit." >&2
+  exit 67
 fi
 
 printf 'Candidate image: %s\nImage ID: %s\nGit revision: %s\nProvenance tag: %s\n' \
