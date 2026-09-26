@@ -1,0 +1,38 @@
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: prometheus-strip-api-metrics
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/part-of: capitonic-platform
+    app.kubernetes.io/managed-by: Helm
+    capitonic.io/environment: dev
+spec:
+  stripPrefix:
+    prefixes: [/api/metrics]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: prometheus
+  annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: {{ .Release.Namespace }}-prometheus-strip-api-metrics@kubernetescrd
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/part-of: capitonic-platform
+    app.kubernetes.io/managed-by: Helm
+    capitonic.io/environment: dev
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: localhost
+      http:
+        paths:
+          - path: /api/metrics
+            pathType: Prefix
+            backend:
+              service:
+                name: prometheus
+                port: {name: http}

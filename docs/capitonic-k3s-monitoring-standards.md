@@ -43,6 +43,18 @@ kubectl -n capitonic rollout status deployment/grafana
 
 Use `statefulset/prometheus`, `statefulset/loki`, or `daemonset/alloy` for those workloads. Check the workload and dependent services after any restart. The Helm-managed Traefik route serves Grafana at `http://localhost/monitor/` and strips `/monitor` before forwarding, so in-cluster Grafana API paths stay at their existing root paths.
 
+The Prometheus chart exposes its existing Basic Auth-protected query API through Traefik at `http://localhost/api/metrics/`. Traefik strips `/api/metrics`, so `/api/metrics/api/v1/query` maps to Prometheus `/api/v1/query`. The Basic Auth credentials come from the main worktree's `.env.prometheus` and the existing `prometheus-auth` Secret; do not add credentials to chart values or documentation. For a read-only target health check from the feature worktree:
+
+```bash
+set -a
+. ./.env.prometheus
+set +a
+curl --fail --silent --show-error \
+  --user "$PROMETHEUS_BASIC_AUTH_USER:$PROMETHEUS_BASIC_AUTH_PASSWORD" \
+  --get --data-urlencode 'query=up' \
+  http://localhost/api/metrics/api/v1/query
+```
+
 ## Acceptance checks
 
 - All four workloads have their intended ready pod count, no restart loop, and the expected immutable image where a digest is specified.

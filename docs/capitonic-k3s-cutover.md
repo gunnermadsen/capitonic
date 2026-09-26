@@ -30,8 +30,9 @@ Traefik alone exposes Grafana and the APIs on the Mac host:
 | `http://localhost/monitor/` | Grafana | Grafana login |
 | `http://localhost/api/bot/` | Bot API; prefix stripped | Bot admin bearer token for admin routes |
 | `http://localhost/api/ingester/` | Ingester master API; prefix stripped | Ingester admin bearer token for work routes |
+| `http://localhost/api/metrics/` | Prometheus query API; prefix stripped | Prometheus Basic Auth |
 
-Do not add `/api` to downstream application route definitions. PostgreSQL, PgBouncer, Prometheus, Loki, and worker gRPC remain internal to the cluster. Use `kubectl -n capitonic get pods,ingress,pvc` and `helm list -n capitonic` for service inventory. Use `kubectl -n capitonic rollout status deployment/<name>` or `statefulset/<name>` for readiness. Changes to chart resources or provisioned configuration go through ordinary Helm commands:
+Do not add `/api` to downstream application route definitions. PostgreSQL, PgBouncer, Loki, and worker gRPC remain internal to the cluster; Prometheus is reachable from the Mac host through its authenticated Traefik route. Use `kubectl -n capitonic get pods,ingress,pvc` and `helm list -n capitonic` for service inventory. Use `kubectl -n capitonic rollout status deployment/<name>` or `statefulset/<name>` for readiness. Changes to chart resources or provisioned configuration go through ordinary Helm commands:
 
 ```sh
 python3 scripts/helm/bake-assets.py
