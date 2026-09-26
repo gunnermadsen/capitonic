@@ -210,10 +210,13 @@ def _manifest_query() -> str:
       )
       SELECT c.source_family,c.decision_time,c.dimension,c.status,
              c.cropped_artifact_path,c.cropped_artifact_sha256,
-             a.provider,a.logical_key,a.source_uri,a.sha256 AS source_sha256,
-             a.compressed_bytes,a.source_start,a.source_end,a.metadata::text AS source_metadata
+             a.provider,a.logical_key,a.source_uri,a.checksum AS source_sha256,
+             a.byte_size AS compressed_bytes,
+             a.minimum_source_timestamp AS source_start,
+             a.maximum_source_timestamp AS source_end,
+             a.metadata::text AS source_metadata
       FROM coverage c
-      LEFT JOIN weather.source_artifacts a ON a.artifact_id=c.source_artifact_id
+      LEFT JOIN ingester.backfill_artifacts a ON a.artifact_id=c.source_artifact_id
       ORDER BY c.source_family,c.decision_time,c.dimension
     """
 
