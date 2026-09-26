@@ -131,6 +131,7 @@ struct Process {
     last_success: f64,
     counters: BTreeMap<(&'static str, String), u64>,
     model_policy_failed_checks: BTreeMap<(String, &'static str), u64>,
+    confidence_rejection_outcomes: BTreeMap<(String, &'static str, &'static str), u64>,
     submission_risk_counters: BTreeMap<(&'static str, &'static str), u64>,
     selected_entry_intents: BTreeMap<(String, String), u64>,
     entry_intent_post_attempts: BTreeMap<(String, String), u64>,
@@ -925,11 +926,38 @@ pub fn resolve(market: &str, up: bool) {
             }
             let probability = item.record.score.probability_up;
             let correct = (probability >= 0.5) == up;
-            increment(
-                p,
-                "prediction_outcomes",
-                if correct { "correct" } else { "incorrect" },
-            );
+            let outcome = if correct { "correct" } else { "incorrect" };
+            increment(p, "prediction_outcomes", outcome);
+            if let Some(checks) = item
+                .record
+                .admission
+                .as_ref()
+                .and_then(|admission| admission.get("failed_policy_checks"))
+            {
+                if checks
+                    .get("share_cost")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(false)
+                    && checks
+                        .get("confidence")
+                        .and_then(serde_json::Value::as_bool)
+                        == Some(true)
+                {
+                    let rejection = match checks
+                        .get("stressed_edge")
+                        .and_then(serde_json::Value::as_bool)
+                    {
+                        Some(false) => Some("confidence_only"),
+                        Some(true) => Some("confidence_and_edge"),
+                        None => None,
+                    };
+                    if let Some(rejection) = rejection {
+                        *p.confidence_rejection_outcomes
+                            .entry((item.record.model.model_key.clone(), rejection, outcome))
+                            .or_default() += 1;
+                    }
+                }
+            }
             *p.gauges.entry("brier_sum").or_default() += (probability - f64::from(up)).powi(2);
             *p.gauges.entry("brier_count").or_default() += 1.0;
             let bin = ((probability * 10.0) as usize).min(9);
@@ -1103,6 +1131,7 @@ pub fn prometheus_metrics() -> String {
                     last_success: p.last_success,
                     counters: p.counters.clone(),
                     model_policy_failed_checks: p.model_policy_failed_checks.clone(),
+                    confidence_rejection_outcomes: p.confidence_rejection_outcomes.clone(),
                     submission_risk_counters: p.submission_risk_counters.clone(),
                     selected_entry_intents: p.selected_entry_intents.clone(),
                     entry_intent_post_attempts: p.entry_intent_post_attempts.clone(),
@@ -1344,6 +1373,12 @@ pub fn prometheus_metrics() -> String {
         for ((model_key, check), value) in p.model_policy_failed_checks {
             let _ = writeln!(out, "polymarket_umr_model_policy_failed_checks_total{{{labels},model_key=\"{}\",check=\"{check}\"}} {value}", escaped(&model_key));
         }
+        if declared.insert("confidence_rejection_outcomes_total".into()) {
+            out.push_str("# HELP polymarket_umr_confidence_rejection_outcomes_total Session-scoped officially resolved predictions whose first policy veto was confidence, split by whether stressed edge also failed.\n# TYPE polymarket_umr_confidence_rejection_outcomes_total counter\n");
+        }
+        for ((model_key, rejection, outcome), value) in p.confidence_rejection_outcomes {
+            let _ = writeln!(out, "polymarket_umr_confidence_rejection_outcomes_total{{{labels},model_key=\"{}\",rejection=\"{rejection}\",outcome=\"{outcome}\"}} {value}", escaped(&model_key));
+        }
         if declared.insert("selected_entry_intents_total".into()) {
             out.push_str("# HELP polymarket_umr_selected_entry_intents_total Selected, approved live entry intents before process admission and execution.\n# TYPE polymarket_umr_selected_entry_intents_total counter\n");
         }
@@ -1474,16 +1509,44 @@ mod router_tests {
                 }
             })),
         );
+        prediction(
+            id,
+            Uuid::new_v4(),
+            "other-market",
+            &first,
+            at + chrono::Duration::seconds(10),
+            "input-3",
+            score,
+            0.001,
+            Some(serde_json::json!({
+                "failed_policy_checks": {
+                    "share_cost": false,
+                    "confidence": true,
+                    "stressed_edge": false
+                }
+            })),
+        );
         let metrics = prometheus_metrics();
         let scoped = metrics
             .lines()
             .filter(|line| line.contains(&id.to_string()))
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(scoped.contains("model_key=\"first-model\",check=\"confidence\"} 1"));
+        assert!(scoped.contains("model_key=\"first-model\",check=\"confidence\"} 2"));
         assert!(scoped.contains("model_key=\"first-model\",check=\"stressed_edge\"} 1"));
         assert!(scoped.contains("model_key=\"second-model\",check=\"share_cost\"} 1"));
         assert!(!scoped.contains("model_key=\"second-model\",check=\"confidence\""));
+        resolve("market", true);
+        resolve("other-market", false);
+        resolve("market", true);
+        let resolved = prometheus_metrics();
+        assert!(resolved.contains(
+            "model_key=\"first-model\",rejection=\"confidence_and_edge\",outcome=\"correct\"} 1"
+        ));
+        assert!(resolved.contains(
+            "model_key=\"first-model\",rejection=\"confidence_only\",outcome=\"incorrect\"} 1"
+        ));
+        assert!(!resolved.contains("model_key=\"second-model\",rejection="));
     }
     #[test]
     fn entry_intent_metrics_keep_registered_model_members_and_actual_posts_separate() {
