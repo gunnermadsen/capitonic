@@ -274,6 +274,20 @@ verify_runtime_recovery() {
   wait_for_process_recovery "$rollout_epoch" || return 1
 }
 
+verify_bot_recovery() {
+  verify_bot_routes || return 1
+  wait_for_process_recovery "$rollout_epoch" || return 1
+}
+
+verify_shared_runtime() {
+  ingester_snapshot "$snapshot/post" || return 1
+  check_ingester_capacity "$snapshot/post" || return 1
+  cmp -s "$snapshot/pre/enabled-processes.txt" "$snapshot/post/enabled-processes.txt" || return 1
+  cmp -s "$snapshot/pre/migrations.txt" "$snapshot/post/migrations.txt" || return 1
+  wait_for_profile_recovery || return 1
+  verify_feed_advancement
+}
+
 rollback_release() {
   local reason="$1" rollback_epoch
   echo "Deployment failed: $reason; checking rollback compatibility." >&2
@@ -393,12 +407,12 @@ if [[ "$1" == deploy ]]; then
       exit 70
     fi
   else
-    if ! verify_image_pods polymarket-bot "$image_id" "$image" || ! verify_runtime_recovery; then
+    if ! verify_image_pods polymarket-bot "$image_id" "$image" || ! verify_bot_recovery; then
       rollback_release "bot image or process recovery verification failed" || exit 71
       exit 70
     fi
-    if ! verify_feed_advancement; then
-      echo "Required feeds did not advance after the bot rollout; attribution is unresolved, so the bot was not rolled back." >&2
+    if ! verify_shared_runtime; then
+      echo "Shared ingester or migration checks failed after the bot rollout; attribution is unresolved, so the bot was not rolled back." >&2
       exit 71
     fi
   fi
