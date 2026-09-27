@@ -122,4 +122,14 @@ mod tests {
         let raw = serde_json::json!({"type":"TRADE","id":"abc","status":"CONFIRMED"});
         assert_eq!(event_hash(&raw), event_hash(&raw));
     }
+
+    #[test]
+    fn event_hash_ignores_json_object_field_order() {
+        let first: serde_json::Value =
+            serde_json::from_str(r#"{"type":"TRADE","id":"abc","status":"CONFIRMED"}"#).unwrap();
+        let reordered: serde_json::Value =
+            serde_json::from_str(r#"{"status":"CONFIRMED","id":"abc","type":"TRADE"}"#).unwrap();
+
+        assert_eq!(event_hash(&first), event_hash(&reordered));
+    }
 }
