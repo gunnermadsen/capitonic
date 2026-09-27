@@ -1598,6 +1598,21 @@ mod tests {
     }
 
     #[test]
+    fn binance_one_second_hydration_rejects_conflicting_exchange_fact() {
+        let start = DateTime::from_timestamp(1_788_436_800, 0).unwrap();
+        let hydrated = one_second_candle(start);
+        let mut live = hydrated.clone();
+        live.close_price += dec!(1);
+        let mut window = BinanceOneSecondWindow::from_completed(vec![live]).unwrap();
+
+        let error = merge_binance_one_second_history(&mut window, vec![hydrated]).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("Binance one-second bootstrap conflicts with live runtime candle"));
+    }
+
+    #[test]
     fn binance_one_second_recovery_bridges_persisted_gap_and_keeps_triggering_live_candle() {
         let start = DateTime::from_timestamp(1_788_436_800, 0).unwrap();
         let hydrated = (0..BINANCE_ONE_SECOND_BOOTSTRAP_CAPACITY)
