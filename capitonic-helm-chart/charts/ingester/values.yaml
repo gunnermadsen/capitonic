@@ -1,4 +1,4 @@
-image: capitonic/ingester:v1.2.1-local.4
+image: capitonic/ingester:v1.2.1-rc.2
 imageDigest: sha256:777ba3da56ebca8a7c924754f6274365cdac5e801013f526e5636f03abe8214a
 gitRevision: 2c92345ec6029882f0eaf1188880821a919815c1
 deploymentId: capitonic-k3s-dev
