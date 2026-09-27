@@ -6,6 +6,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
+    future::Future,
     sync::Arc,
     time::Duration,
 };
@@ -297,6 +298,16 @@ impl Drop for SocketPump {
     }
 }
 
+async fn publish_after_continuity<C, P>(continuity: C, publication: P) -> Result<(), StrategyError>
+where
+    C: Future<Output = Result<(), StrategyError>>,
+    P: Future<Output = ()>,
+{
+    continuity.await?;
+    publication.await;
+    Ok(())
+}
+
 async fn pump_websocket<S>(
     mut socket: WebSocketStream<S>,
     candle_tx: mpsc::Sender<OneSecondOhlcv>,
@@ -352,19 +363,6 @@ where
                         "Binance one-second persistence queue reached capacity",
                     ));
                 }
-                crate::streaming::publish(
-                    STRATEGY_KEY.as_str(),
-                    candle.open_timestamp.timestamp_micros().to_string(),
-                    candle.close_timestamp,
-                    candle
-                        .provider_available_at
-                        .unwrap_or(candle.close_timestamp),
-                    candle.received_at,
-                    candle.payload_sha256.clone(),
-                    true,
-                    &candle,
-                )
-                .await;
                 match candle_tx.try_send(candle) {
                     Ok(()) => crate::streaming::set_persistence_queue_depth(
                         STRATEGY_KEY.as_str(),
@@ -1561,25 +1559,41 @@ impl BinanceSpotOneSecondOhlcvStrategy {
             .last()
             .map(|pending| pending.open_timestamp)
             .or(state.last_open);
-        if let Some(last_seen) = last_seen {
-            let expected = last_seen + chrono::Duration::seconds(1);
-            if candle.open_timestamp > expected {
-                self.persist_candles_observed(state, std::mem::take(pending))
+        let continuity = async {
+            if let Some(last_seen) = last_seen {
+                let expected = last_seen + chrono::Duration::seconds(1);
+                if candle.open_timestamp > expected {
+                    self.persist_candles_observed(state, std::mem::take(pending))
+                        .await?;
+                    await_closed_boundary(
+                        candle.open_timestamp - chrono::Duration::seconds(1),
+                        shutdown,
+                    )
                     .await?;
-                await_closed_boundary(
-                    candle.open_timestamp - chrono::Duration::seconds(1),
-                    shutdown,
-                )
-                .await?;
-                self.repair_gap(
-                    state,
-                    expected,
-                    candle.open_timestamp - chrono::Duration::seconds(1),
-                    shutdown,
-                )
-                .await?;
+                    self.repair_gap(
+                        state,
+                        expected,
+                        candle.open_timestamp - chrono::Duration::seconds(1),
+                        shutdown,
+                    )
+                    .await?;
+                }
             }
-        }
+            Ok(())
+        };
+        let publication = crate::streaming::publish(
+            STRATEGY_KEY.as_str(),
+            candle.open_timestamp.timestamp_micros().to_string(),
+            candle.close_timestamp,
+            candle
+                .provider_available_at
+                .unwrap_or(candle.close_timestamp),
+            candle.received_at,
+            candle.payload_sha256.clone(),
+            true,
+            &candle,
+        );
+        publish_after_continuity(continuity, publication).await?;
         pending.push(candle);
         if pending.len() >= self.config.batch_size {
             self.persist_candles_observed(state, std::mem::take(pending))
@@ -2369,6 +2383,91 @@ mod tests {
         .expect("socket pump must not wait for persistence before answering ping");
         assert_eq!(pong.as_ref(), &[1, 2, 3, 4]);
 
+        shutdown.cancel();
+        pump.await
+            .expect("socket pump task")
+            .expect("socket pump shutdown");
+    }
+
+    #[tokio::test]
+    async fn handoff_candle_waits_for_continuity_repair_without_blocking_socket() {
+        let publisher = crate::streaming::Publisher::install("binance-handoff-test");
+        let (client_io, server_io) = tokio::io::duplex(16 * 1024);
+        let client = WebSocketStream::from_raw_socket(client_io, Role::Client, None).await;
+        let mut server = WebSocketStream::from_raw_socket(server_io, Role::Server, None).await;
+        let (candle_tx, mut candle_rx) = mpsc::channel(1);
+        let shutdown = CancellationToken::new();
+        let pump = tokio::spawn(pump_websocket(
+            client,
+            candle_tx,
+            shutdown.clone(),
+            Duration::from_secs(5),
+        ));
+
+        server
+            .send(Message::Text(CLOSED_WEBSOCKET_FIXTURE.into()))
+            .await
+            .expect("send handoff candle");
+        let candle = tokio::time::timeout(Duration::from_millis(250), candle_rx.recv())
+            .await
+            .expect("socket pump must enqueue the candle")
+            .expect("candle channel closed");
+        assert_eq!(
+            candle.open_timestamp,
+            OneSecondOhlcv::from_websocket(CLOSED_WEBSOCKET_FIXTURE, Utc::now())
+                .expect("valid fixture")
+                .expect("closed candle")
+                .open_timestamp
+        );
+        let publication_metric = format!(
+            "ingester_stream_published_total{{product=\"{}\"}}",
+            STRATEGY_KEY.as_str()
+        );
+        assert!(!publisher.render_metrics().contains(&publication_metric));
+
+        let (repair_tx, repair_rx) = tokio::sync::oneshot::channel::<()>();
+        let consumer = tokio::spawn(publish_after_continuity(
+            async {
+                repair_rx.await.expect("complete gap repair");
+                Ok(())
+            },
+            async move {
+                crate::streaming::publish(
+                    STRATEGY_KEY.as_str(),
+                    candle.open_timestamp.timestamp_micros().to_string(),
+                    candle.close_timestamp,
+                    candle
+                        .provider_available_at
+                        .unwrap_or(candle.close_timestamp),
+                    candle.received_at,
+                    candle.payload_sha256.clone(),
+                    true,
+                    &candle,
+                )
+                .await;
+            },
+        ));
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert!(!publisher.render_metrics().contains(&publication_metric));
+
+        server
+            .send(Message::Ping(vec![1, 2, 3, 4].into()))
+            .await
+            .expect("send ping during repair");
+        let pong = tokio::time::timeout(Duration::from_millis(250), server.next())
+            .await
+            .expect("socket pump must keep reading during repair")
+            .expect("server websocket ended")
+            .expect("server websocket failed");
+        assert!(matches!(pong, Message::Pong(_)));
+        assert!(!publisher.render_metrics().contains(&publication_metric));
+
+        repair_tx.send(()).expect("release gap repair");
+        consumer
+            .await
+            .expect("consumer task")
+            .expect("continuity check");
+        assert!(publisher.render_metrics().contains(&publication_metric));
         shutdown.cancel();
         pump.await
             .expect("socket pump task")
