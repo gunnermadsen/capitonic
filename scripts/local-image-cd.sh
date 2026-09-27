@@ -254,7 +254,8 @@ verify_profile_recovery() {
 
 wait_for_profile_recovery() {
   local destination="$1" attempt
-  for ((attempt = 0; attempt < 18; attempt++)); do
+  # Resolution evidence may not mature until the next five-minute market window.
+  for ((attempt = 0; attempt < 96; attempt++)); do
     verify_profile_recovery "$destination" && return 0
     sleep 5
     ingester_snapshot "$destination" || return 1
