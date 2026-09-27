@@ -164,9 +164,11 @@ check_ingester_capacity() {
     echo "Worker capacity is below the conservative rollout requirement; master must add capacity first." >&2; return 1;
   }
   jq -e 'all(.[] | select(.desired_state == "running");
-    .observed_state == "running" and .health_status == "healthy" and .lease_owner != null)' \
+    .lease_owner != null and
+    ((.observed_state == "running" and .health_status == "healthy") or
+     (.observed_state == "degraded" and .health_status == "degraded")))' \
     "$destination/profiles.json" >/dev/null || {
-    echo "A desired realtime profile lacks a healthy owner." >&2; return 1;
+    echo "A desired realtime profile lacks a running or degraded owner." >&2; return 1;
   }
 }
 
@@ -263,9 +265,12 @@ verify_profile_recovery() {
     (.[1] | map(select(.desired_state == "running") | {key: .strategy_key, value: .}) | from_entries) as $current |
     ($prior | keys) == ($current | keys) and
     all($current[];
-      .observed_state == "running" and .health_status == "healthy" and
-      .lease_owner != null and .heartbeat_at != null and
-      .heartbeat_at > ($prior[.strategy_key].heartbeat_at // ""))' \
+      . as $profile | $prior[$profile.strategy_key] as $previous |
+      $profile.lease_owner != null and $profile.heartbeat_at != null and
+      $profile.heartbeat_at > ($previous.heartbeat_at // "") and
+      (($profile.observed_state == "running" and $profile.health_status == "healthy") or
+       ($previous.observed_state == "degraded" and $previous.health_status == "degraded" and
+        $profile.observed_state == "degraded" and $profile.health_status == "degraded")))' \
     "$snapshot/pre/profiles.json" "$destination/profiles.json" >/dev/null
 }
 
@@ -277,7 +282,7 @@ wait_for_profile_recovery() {
     sleep 5
     ingester_snapshot "$destination" || return 1
   done
-  echo "Desired ingester profiles did not recover healthy owners and new heartbeats." >&2
+  echo "Desired ingester profiles did not recover owners and new heartbeats without a health regression." >&2
   return 1
 }
 
