@@ -1,4 +1,4 @@
-image: capitonic/polymarket-bot:confidence-rejection-8e471a1c
+image: capitonic/polymarket-bot:v3.2.1-local.4
 replicaCount: 1
 resources:
   requests: {cpu: 100m, memory: 256Mi}
