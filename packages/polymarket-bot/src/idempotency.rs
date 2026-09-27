@@ -81,6 +81,26 @@ mod tests {
     }
 
     #[test]
+    fn deterministic_order_id_is_scoped_to_process() {
+        let source_id = Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        let process_id = Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap();
+        let mut seed = ClientOrderIdSeed {
+            strategy_version: "v1",
+            process_id: None,
+            source_id,
+            purpose: "entry",
+            market_id: "m1",
+            token_id: "t1",
+            side: OrderSide::Buy,
+            notional_key: "5",
+        };
+
+        let legacy_id = deterministic_client_order_id(&seed);
+        seed.process_id = Some(process_id);
+        assert_ne!(deterministic_client_order_id(&seed), legacy_id);
+    }
+
+    #[test]
     fn order_notional_key_rounds_to_four_decimals() {
         let request = OrderRequest {
             client_order_id: Uuid::new_v4(),
