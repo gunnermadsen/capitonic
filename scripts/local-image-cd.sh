@@ -100,7 +100,8 @@ pod_image_id() {
 }
 
 route_failure_count() {
-  kubectl -n "$namespace" logs deployment/polymarket-bot --since=30s --tail=300 |
+  local window="${1:-30s}"
+  kubectl -n "$namespace" logs deployment/polymarket-bot --since="$window" --tail=300 |
     jq -Rr 'fromjson? | select(.fields.message? == "market-data worker route unavailable; preserving other worker streams") | .timestamp' |
     wc -l | tr -d ' '
 }
@@ -143,12 +144,12 @@ check_ingester_capacity() {
   ready="$(kubectl -n "$namespace" get deployment ingester-worker -o json | jq -r '.status.readyReplicas // 0')"
   printf 'Ingester capacity: %s ready workers, %s desired realtime profiles, %s active backfill shards\n' "$ready" "$desired" "$active"
   (( ready >= desired + active )) || {
-    echo "Worker capacity is below the conservative rollout requirement; master must add capacity first." >&2; exit 70;
+    echo "Worker capacity is below the conservative rollout requirement; master must add capacity first." >&2; return 1;
   }
   jq -e 'all(.[] | select(.desired_state == "running");
     .observed_state == "running" and .health_status == "healthy" and .lease_owner != null)' \
     "$destination/profiles.json" >/dev/null || {
-    echo "A desired realtime profile lacks a healthy owner before rollout." >&2; exit 70;
+    echo "A desired realtime profile lacks a healthy owner." >&2; return 1;
   }
 }
 
@@ -220,17 +221,26 @@ verify_image_pods() {
 }
 
 verify_bot_routes() {
-  local failures
-  # Allow a brief route handoff, then reject a repeating affected-path error.
-  sleep 20
-  failures="$(route_failure_count)" || return 1
-  if (( failures >= 2 )); then
-    echo "The bot still reports repeated unavailable ingester routes; investigate before accepting this deployment." >&2
-    return 1
-  fi
+  local attempt failures quiet=0
+  # A replaced worker may publish missing history shortly after becoming ready.
+  # Require a quiet route window, with a bounded deadline for sustained failures.
+  sleep 10
+  for ((attempt = 0; attempt < 12; attempt++)); do
+    failures="$(route_failure_count 10s)" || return 1
+    if (( failures == 0 )); then
+      quiet=$((quiet + 1))
+      if (( quiet >= 2 )); then return 0; fi
+    else
+      quiet=0
+    fi
+    sleep 5
+  done
+  echo "The bot still reports repeated unavailable ingester routes after the recovery window." >&2
+  return 1
 }
 
 verify_profile_recovery() {
+  local destination="$1"
   jq -e -s '
     (.[0] | map(select(.desired_state == "running") | {key: .strategy_key, value: .}) | from_entries) as $prior |
     (.[1] | map(select(.desired_state == "running") | {key: .strategy_key, value: .}) | from_entries) as $current |
@@ -239,15 +249,15 @@ verify_profile_recovery() {
       .observed_state == "running" and .health_status == "healthy" and
       .lease_owner != null and .heartbeat_at != null and
       .heartbeat_at > ($prior[.strategy_key].heartbeat_at // ""))' \
-    "$snapshot/pre/profiles.json" "$snapshot/post/profiles.json" >/dev/null
+    "$snapshot/pre/profiles.json" "$destination/profiles.json" >/dev/null
 }
 
 wait_for_profile_recovery() {
-  local attempt
+  local destination="$1" attempt
   for ((attempt = 0; attempt < 18; attempt++)); do
-    verify_profile_recovery && return 0
+    verify_profile_recovery "$destination" && return 0
     sleep 5
-    ingester_snapshot "$snapshot/post" || return 1
+    ingester_snapshot "$destination" || return 1
   done
   echo "Desired ingester profiles did not recover healthy owners and new heartbeats." >&2
   return 1
@@ -267,10 +277,10 @@ verify_feed_advancement() {
 verify_runtime_recovery() {
   verify_bot_routes || return 1
   ingester_snapshot "$snapshot/post" || return 1
-  check_ingester_capacity "$snapshot/post" || return 1
   cmp -s "$snapshot/pre/enabled-processes.txt" "$snapshot/post/enabled-processes.txt" || return 1
   cmp -s "$snapshot/pre/migrations.txt" "$snapshot/post/migrations.txt" || return 1
-  wait_for_profile_recovery || return 1
+  wait_for_profile_recovery "$snapshot/post" || return 1
+  check_ingester_capacity "$snapshot/post" || return 1
   wait_for_process_recovery "$rollout_epoch" || return 1
 }
 
@@ -281,10 +291,10 @@ verify_bot_recovery() {
 
 verify_shared_runtime() {
   ingester_snapshot "$snapshot/post" || return 1
-  check_ingester_capacity "$snapshot/post" || return 1
   cmp -s "$snapshot/pre/enabled-processes.txt" "$snapshot/post/enabled-processes.txt" || return 1
   cmp -s "$snapshot/pre/migrations.txt" "$snapshot/post/migrations.txt" || return 1
-  wait_for_profile_recovery || return 1
+  wait_for_profile_recovery "$snapshot/post" || return 1
+  check_ingester_capacity "$snapshot/post" || return 1
   verify_feed_advancement
 }
 
@@ -318,9 +328,10 @@ rollback_release() {
   fi
   verify_bot_routes || return 1
   ingester_snapshot "$snapshot/rollback" || return 1
-  check_ingester_capacity "$snapshot/rollback" || return 1
   cmp -s "$snapshot/pre/enabled-processes.txt" "$snapshot/rollback/enabled-processes.txt" || return 1
   cmp -s "$snapshot/pre/migrations.txt" "$snapshot/rollback/migrations.txt" || return 1
+  wait_for_profile_recovery "$snapshot/rollback" || return 1
+  check_ingester_capacity "$snapshot/rollback" || return 1
   wait_for_process_recovery "$rollback_epoch" || return 1
   echo "Restored $component to $rollback_image ($rollback_image_id); chart pin still needs reconciliation." >&2
 }
