@@ -1358,7 +1358,11 @@ mod tests {
 
         let mut uniquely_owned = vec![trade.clone()];
         assert_eq!(
-            link_process_owned_trades(&mut uniquely_owned, &HashMap::new(), &[exact.clone()]),
+            link_process_owned_trades(
+                &mut uniquely_owned,
+                &HashMap::new(),
+                std::slice::from_ref(&exact),
+            ),
             0
         );
         assert_eq!(

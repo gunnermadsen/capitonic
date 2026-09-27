@@ -1,5 +1,6 @@
 use super::*;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn wallet_candidate_address_diagnostics(
     requested_candidates: Vec<String>,
     configured_funder_address: Option<&str>,
@@ -150,7 +151,7 @@ pub(super) async fn rpc_call_quantity(
     let raw = response
         .result
         .with_context(|| format!("Polygon RPC method {method} did not return a result"))?;
-    Ok(u256_hex_to_decimal_string(&raw)?)
+    u256_hex_to_decimal_string(&raw)
 }
 
 pub(super) fn u256_hex_to_decimal_string(value: &str) -> Result<String> {

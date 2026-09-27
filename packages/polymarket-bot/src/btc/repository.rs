@@ -2016,6 +2016,7 @@ impl BtcRepository {
 
     /// Persists the exchange's official winner independently of the local Chainlink label. The
     /// official fact may arrive before or after label creation and is immutable once observed.
+    #[allow(clippy::too_many_arguments)]
     pub async fn persist_official_market_resolution(
         &self,
         market_or_condition_id: &str,
@@ -3000,6 +3001,7 @@ impl BtcRepository {
         Ok(inserted.rows_affected() == 1)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_strategy_decision_execution(
         &self,
         process_id: Uuid,

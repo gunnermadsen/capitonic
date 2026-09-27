@@ -576,7 +576,6 @@ impl ControlApi for FakeControlApi {
                     "process_schema_version": "btc_realtime_paper_process_v2",
                     "preregistration_sha256": "b".repeat(64),
                 }),
-                ..TradingProcessConfig::default()
             },
         })
     }
@@ -1328,6 +1327,7 @@ async fn authenticated_admin_can_manage_trading_processes() {
     assert_eq!(complete_json["process"]["enabled"], false);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn test_process(
     process_id: Uuid,
     name: String,

@@ -9,7 +9,6 @@ impl RuntimeMetrics {
     pub(super) fn new() -> Self {
         Self {
             started_at: Utc::now(),
-            ..Self::default()
         }
     }
 

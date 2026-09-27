@@ -668,6 +668,7 @@ impl Store {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn record_trading_process_event_idempotent(
         &self,
         event_id: Uuid,
@@ -3099,6 +3100,7 @@ impl Store {
             .collect())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_live_reconciliation_run(
         &self,
         process_id: Option<Uuid>,

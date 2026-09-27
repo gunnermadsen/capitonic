@@ -972,7 +972,6 @@ pub(super) fn prepare_btc_start_definition_for_execution(
             require_exit_book: execution.require_exit_book,
         }),
         raw: frozen_raw,
-        ..TradingProcessConfig::default()
     };
     let config_hash = hash_btc_frozen_process_config(&frozen_process_config)?;
     Ok(PreparedBtcStartDefinition {

@@ -53,19 +53,14 @@ pub enum OrderSide {
     Sell,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OrderType {
+    #[default]
     Fok,
     Fak,
     Gtc,
     Gtd,
-}
-
-impl Default for OrderType {
-    fn default() -> Self {
-        Self::Fok
-    }
 }
 
 impl OrderType {

@@ -2,7 +2,7 @@ use uuid::Uuid;
 
 use crate::models::{OrderRequest, OrderSide};
 
-const ORDER_NAMESPACE: Uuid = Uuid::from_u128(0x7b0d_5a3c_2b87_4d2f_94f2_6d7c52d5c001);
+const ORDER_NAMESPACE: Uuid = Uuid::from_u128(0x7b0d_5a3c_2b87_4d2f_94f2_6d7c_52d5_c001);
 
 #[derive(Debug, Clone)]
 pub struct ClientOrderIdSeed<'a> {

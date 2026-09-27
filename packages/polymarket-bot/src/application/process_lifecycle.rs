@@ -173,7 +173,6 @@ impl BtcProcessManager {
             strategy_interval: Duration::from_millis(control.runtime.strategy_interval_ms),
             max_book_age: Duration::from_millis(strategy.max_book_age_ms as u64),
             max_reference_age: Duration::from_millis(strategy.max_reference_age_ms as u64),
-            ..BtcRuntimeConfig::default()
         };
         runtime
             .validate()
@@ -541,9 +540,7 @@ impl BtcProcessManager {
         venue: Option<&Arc<LiveVenue>>,
         reason: &str,
     ) -> Option<String> {
-        let Some(venue) = venue else {
-            return None;
-        };
+        let venue = venue?;
         let quiesce = async {
             let mut failures = Vec::with_capacity(3);
             if let Err(error) = venue

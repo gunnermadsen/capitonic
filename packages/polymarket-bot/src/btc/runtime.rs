@@ -1440,8 +1440,10 @@ mod tests {
 
     #[test]
     fn runtime_config_rejects_zero_durations() {
-        let mut config = BtcRuntimeConfig::default();
-        config.strategy_interval = StdDuration::ZERO;
+        let config = BtcRuntimeConfig {
+            strategy_interval: StdDuration::ZERO,
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
     }
 

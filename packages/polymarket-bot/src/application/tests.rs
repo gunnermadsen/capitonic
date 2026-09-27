@@ -697,8 +697,10 @@ mod lifecycle_tests {
             paper_stress_previews: Vec::new(),
         };
 
-        let mut relaxed_reference = BtcStrategyConfig::default();
-        relaxed_reference.max_reference_age_ms = BTC_LIVE_EXECUTION_FRESHNESS_LIMIT_MS + 1;
+        let relaxed_reference = BtcStrategyConfig {
+            max_reference_age_ms: BTC_LIVE_EXECUTION_FRESHNESS_LIMIT_MS + 1,
+            ..Default::default()
+        };
         assert!(prepare_btc_start_definition_for_execution(
             resolved(relaxed_reference.clone()),
             &execution,
@@ -709,8 +711,10 @@ mod lifecycle_tests {
             "the live-only ceiling must not break existing paper definitions"
         );
 
-        let mut relaxed_book = BtcStrategyConfig::default();
-        relaxed_book.max_book_age_ms = BTC_LIVE_EXECUTION_FRESHNESS_LIMIT_MS + 1;
+        let relaxed_book = BtcStrategyConfig {
+            max_book_age_ms: BTC_LIVE_EXECUTION_FRESHNESS_LIMIT_MS + 1,
+            ..Default::default()
+        };
         assert!(
             prepare_btc_start_definition_for_execution(resolved(relaxed_book), &execution,)
                 .is_err()

@@ -1,6 +1,7 @@
 use super::*;
 
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use rust_decimal_macros::dec;
 

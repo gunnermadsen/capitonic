@@ -477,6 +477,7 @@ impl PaperVenue {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn execute_at_arrival(
         &self,
         order_id: &str,

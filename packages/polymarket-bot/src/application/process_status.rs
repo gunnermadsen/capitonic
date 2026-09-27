@@ -108,14 +108,10 @@ impl BtcProcessManager {
             .await
             .as_ref()
             .map(|shared| shared.state.clone());
-        let Some(state) = state else {
-            return None;
-        };
+        let state = state?;
         let (market, twap_history) = {
             let state = state.read().await;
-            let Some(market) = state.display_market.clone() else {
-                return None;
-            };
+            let market = state.display_market.clone()?;
             let twap_history = state.chainlink_twap_60.iter().cloned().collect::<Vec<_>>();
             (market, twap_history)
         };

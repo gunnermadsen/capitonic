@@ -3168,6 +3168,7 @@ fn sign(value: f64) -> f64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::excessive_precision)]
 mod tests {
     use chrono::{Duration, TimeZone};
     use rust_decimal::Decimal;

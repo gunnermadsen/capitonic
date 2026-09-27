@@ -134,6 +134,7 @@ impl LivePrePostGuard for BtcLiveExecutionAdapter {
 }
 
 impl BtcLiveExecutionAdapter {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         delegate: Arc<dyn ExecutionVenue>,
         registry: Arc<RwLock<BookRegistry>>,
@@ -430,8 +431,8 @@ fn validate_marketable_depth(
     request: &OrderRequest,
     max_depth_participation: Decimal,
 ) -> Result<Option<LiveExecutionGateReason>> {
-    let (levels, marketable): (&[OrderbookLevel], fn(Decimal, Decimal) -> bool) = match request.side
-    {
+    type PriceMatch = fn(Decimal, Decimal) -> bool;
+    let (levels, marketable): (&[OrderbookLevel], PriceMatch) = match request.side {
         OrderSide::Buy => (&checkpoint.asks, |level_price, limit_price| {
             level_price <= limit_price
         }),
