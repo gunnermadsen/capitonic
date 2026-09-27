@@ -1,6 +1,6 @@
-image: capitonic/ingester:v1.2.1-rc.2
-imageDigest: sha256:777ba3da56ebca8a7c924754f6274365cdac5e801013f526e5636f03abe8214a
-gitRevision: 2c92345ec6029882f0eaf1188880821a919815c1
+image: capitonic/ingester:v1.2.1-local.5
+imageDigest: sha256:a5c86b6bf8274f54a42c103a9736d079e455992094632a46b89c3f3ad533b147
+gitRevision: 7a08eed38aa6191bc37e21edd4dbc98351aec7f2
 deploymentId: capitonic-k3s-dev
 master:
   replicaCount: 1
