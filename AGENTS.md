@@ -27,7 +27,7 @@ Think of Capitonic as a vision to generate income through systems with automatio
 - Source changes do not by themselves authorize or require a local container image build. Do not build, rebuild, push, tag, deploy, or promote an image unless the user explicitly requests that image or release action.
 - Use Cargo compilation, tests, linting, and focused checks as the default verification for Rust source changes. CI may validate production Dockerfiles using configured path filters, but agents must not trigger a release-image workflow without explicit user authorization.
 - After ingester Rust changes, run `scripts/local-image-ci.sh ingester --checks-only` on the working tree before committing or pushing. It runs the CI formatting, Clippy, tests, and documentation checks with Rust 1.92.0 and does not build an image.
-- Run `scripts/local-image-ci.sh <component> <MAJOR.MINOR.PATCH-local.N>` only when a local candidate image build is explicitly requested; it requires a clean commit and does not deploy the image.
+- Run `scripts/local-image-ci.sh <component> --build` only when a local candidate image build is explicitly requested; it selects the next local version for changed inputs, requires a clean commit, and does not deploy the image. Use an explicit `<MAJOR.MINOR.PATCH-local.N>` only when that exact version is requested.
 - Do not copy or vendor third-party Rust crates into the repository. Declare registry dependencies in the owning `Cargo.toml`; inspect downloaded crate sources only in Cargo's external registry cache.
 - When an image build is explicitly requested, build only affected components: bot changes build `polymarket-bot`; ingester changes build the single `ingester` image used by both `ingester-master` and `ingester-worker` through runtime `INGESTER_MODE` configuration; database migration runner changes build `db-migrate`. Never build separate master and worker images.
 - Build the bot with `POLYMARKET_GIT_REVISION=<GIT_COMMIT_HASH>`, the ingester with `INGESTER_GIT_REVISION=<GIT_COMMIT_HASH>`, and db-migrate with `DB_MIGRATE_GIT_REVISION=<GIT_COMMIT_HASH>`.
@@ -62,6 +62,11 @@ Think of Capitonic as a vision to generate income through systems with automatio
 - Before merging, give one compact summary of each selected branch's lineage, worktree state, checks, commits, and diff against integration. Stop only for an ambiguous target, potential loss of uncommitted work, or unauthorized destructive history rewriting.
 - Use `--ff-only` when integration has not diverged from the branch merge base; otherwise use `--no-ff`. Do not rewrite or discard lineage to obtain a fast-forward.
 - Advance `development` only through the golden image workflow or an explicitly authorized configuration-only promotion.
+
+## Local Image Boundaries
+
+- Initiate local CI and CD as separate commands for explicitly requested bot or ingester image work. CI owns candidate image builds, local versions, and image provenance; CD owns chart image and `appVersion` pins and local deployment. The agent coordinates branch integration and golden checkpoint provenance.
+- Model training and observability provisioning retain their `model/...` and `provisioned/observability/...` provenance. They do not enter the application image version sequence unless an image input changes.
 
 ## Golden Image Workflow
 
