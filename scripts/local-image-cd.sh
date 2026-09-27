@@ -4,10 +4,12 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage: scripts/local-image-cd.sh pin <ingester|polymarket-bot> <vMAJOR.MINOR.PATCH-local.N>
+       scripts/local-image-cd.sh rc <ingester|polymarket-bot> <vMAJOR.MINOR.PATCH-local.N> <vMAJOR.MINOR.PATCH-rc.N>
        scripts/local-image-cd.sh prepare-ingester
        scripts/local-image-cd.sh deploy <ingester|polymarket-bot>
 
 pin edits local Helm values only. Commit and review those values before deploy.
+rc aliases verified local candidate bytes and pins the RC image in Helm values.
 prepare-ingester applies only the worker rolling-update strategy with the old image.
 deploy applies the exact committed, prebuilt image pinned in the chart.
 Database migration Jobs and golden promotion are separate workflows.
@@ -17,6 +19,7 @@ EOF
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then usage; exit 0; fi
 case "${1:-}" in
   pin) [[ $# == 3 ]] || { usage >&2; exit 64; }; component="$2"; version="$3" ;;
+  rc) [[ $# == 4 ]] || { usage >&2; exit 64; }; component="$2"; local_version="$3"; rc_version="$4"; version="$3" ;;
   prepare-ingester) [[ $# == 1 ]] || { usage >&2; exit 64; }; component=ingester ;;
   deploy) [[ $# == 2 ]] || { usage >&2; exit 64; }; component="$2" ;;
   *) usage >&2; exit 64 ;;
@@ -46,20 +49,20 @@ tag_field() {
 }
 
 validate_candidate_tag() {
-  local tag="$1"
+  local tag="$1" expected_version="$2" expected_image="$3"
   git show-ref --verify --quiet "refs/tags/$tag" &&
     [[ "$(git cat-file -t "refs/tags/$tag")" == tag ]] &&
     [[ "$(git rev-list -n 1 "refs/tags/$tag")" == "$image_revision" ]] &&
     [[ "$(tag_field "$tag" component)" == "$component" ]] &&
-    [[ "$(tag_field "$tag" version)" == "$version" ]] &&
-    [[ "$(tag_field "$tag" image)" == "$image" ]] &&
+    [[ "$(tag_field "$tag" version)" == "$expected_version" ]] &&
+    [[ "$(tag_field "$tag" image)" == "$expected_image" ]] &&
     [[ "$(tag_field "$tag" image_id)" == "$image_id" ]] &&
     [[ "$(tag_field "$tag" source_revision)" == "$image_revision" ]]
 }
 
 candidate_identity() {
-  [[ "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-local\.([1-9][0-9]*)$ ]] || {
-    echo "Select a local candidate such as v1.2.1-local.1." >&2; exit 64;
+  [[ "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(local|rc)\.([1-9][0-9]*)$ ]] || {
+    echo "Select a local candidate or RC version." >&2; exit 64;
   }
   image="capitonic/$component:$version"
   nerdctl --namespace k8s.io image inspect "$image" >/dev/null 2>&1 || {
@@ -68,18 +71,31 @@ candidate_identity() {
   image_id="$(nerdctl --namespace k8s.io image inspect --format '{{ .Id }}' "$image")"
   image_revision="$(nerdctl --namespace k8s.io image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")"
   image_version="$(nerdctl --namespace k8s.io image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$image")"
-  [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ && "$image_revision" =~ ^[0-9a-f]{40}$ && "$image_version" == "${version#v}" ]] || {
+  provenance_version="v$image_version"
+  [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ && "$image_revision" =~ ^[0-9a-f]{40}$
+    && "$provenance_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-local\.[1-9][0-9]*$
+    && "${version%%-*}" == "${provenance_version%%-*}" ]] || {
     echo "Candidate image labels or identity are invalid." >&2; exit 67;
   }
-  version_tag="image/$component/$version"
+  if [[ "$version" == *-local.* && "$version" != "$provenance_version" ]]; then
+    echo "Candidate tag disagrees with its build version label." >&2; exit 67
+  fi
+  version_tag="image/$component/$provenance_version"
   hash_tag="image/$component/sha256-${image_id#sha256:}"
-  validate_candidate_tag "$version_tag" && validate_candidate_tag "$hash_tag" || {
+  provenance_image="capitonic/$component:$provenance_version"
+  validate_candidate_tag "$version_tag" "$provenance_version" "$provenance_image" &&
+    validate_candidate_tag "$hash_tag" "$provenance_version" "$provenance_image" || {
     echo "Candidate $image requires matching annotated version and image-hash Git tags." >&2
     exit 67
   }
   [[ "$(tag_field "$version_tag" inputs_sha256)" == "$(tag_field "$hash_tag" inputs_sha256)" ]] || {
     echo "Candidate Git tag pair disagrees on image inputs." >&2; exit 67
   }
+  if [[ "$version" == *-rc.* ]]; then
+    [[ "$(nerdctl --namespace k8s.io image inspect --format '{{ .Id }}' "$provenance_image")" == "$image_id" ]] || {
+      echo "RC alias differs from its tested local candidate bytes." >&2; exit 67;
+    }
+  fi
   git merge-base --is-ancestor "$image_revision" HEAD || {
     echo "Candidate source commit is outside this branch lineage." >&2; exit 67;
   }
@@ -337,13 +353,34 @@ rollback_release() {
   echo "Restored $component to $rollback_image ($rollback_image_id); chart pin still needs reconciliation." >&2
 }
 
-if [[ "$1" == pin ]]; then
+if [[ "$1" == rc ]]; then
+  [[ "$rc_version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.([1-9][0-9]*)$
+    && "${rc_version%%-*}" == "${local_version%%-*}" ]] || {
+    echo "RC version must share the candidate's major.minor.patch version." >&2; exit 64;
+  }
+  candidate_identity
+  rc_image="capitonic/$component:$rc_version"
+  if nerdctl --namespace k8s.io image inspect "$rc_image" >/dev/null 2>&1; then
+    [[ "$(nerdctl --namespace k8s.io image inspect --format '{{ .Id }}' "$rc_image")" == "$image_id" ]] || {
+      echo "RC tag already names different image bytes." >&2; exit 67;
+    }
+  else
+    nerdctl --namespace k8s.io image tag "$image" "$rc_image"
+  fi
+  version="$rc_version"
+  candidate_identity
+fi
+
+if [[ "$1" == pin || "$1" == rc ]]; then
   candidate_identity
   if [[ "$component" == ingester ]]; then
     IMAGE="$image" IMAGE_ID="$image_id" IMAGE_REVISION="$image_revision" \
       yq -i '.image = strenv(IMAGE) | .imageDigest = strenv(IMAGE_ID) | .gitRevision = strenv(IMAGE_REVISION)' "$values"
   else
     IMAGE="$image" yq -i '.image = strenv(IMAGE)' "$values"
+  fi
+  if [[ "$1" == rc ]]; then
+    VERSION="$version" yq -i '.appVersion = strenv(VERSION)' "$chart/Chart.yaml"
   fi
   echo "Pinned $image ($image_id) in $values; review and commit before deploy."
   exit 0
@@ -387,9 +424,14 @@ if [[ "$1" == deploy ]]; then
   version="${version#capitonic/$component:}"
   candidate_identity
   [[ "$(chart_image)" == "$image" ]] || exit 67
+  if [[ "$version" == *-rc.* ]]; then
+    [[ "$(yq -r '.appVersion' "$chart/Chart.yaml")" == "$version" ]] || {
+      echo "Chart appVersion disagrees with its RC image." >&2; exit 67;
+    }
+  fi
   if [[ "$component" == ingester ]]; then
     [[ "$(yq -r '.imageDigest' "$values")" == "$image_id" && "$(yq -r '.gitRevision' "$values")" == "$image_revision" ]] || {
-      echo "Ingester chart digest or revision does not match candidate provenance." >&2; exit 67;
+      echo "Ingester chart image ID or revision does not match candidate provenance." >&2; exit 67;
     }
     [[ "$(kubectl -n "$namespace" get deployment ingester-worker -o json | jq -r '.spec.strategy.type')" == RollingUpdate ]] || {
       echo "Apply and verify the worker RollingUpdate strategy before replacing the image." >&2; exit 70;
