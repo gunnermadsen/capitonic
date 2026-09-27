@@ -215,3 +215,29 @@ pub trait BackfillWorkerStrategy: Send + Sync {
         shard: BackfillShard,
     ) -> Result<BackfillOutcome, BackfillExecutionError>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ExecutionSelector;
+
+    #[test]
+    fn execution_selector_rejects_ambiguous_or_blank_targets() {
+        let ambiguous = ExecutionSelector {
+            required_worker_id: Some("worker-1".to_owned()),
+            required_deployment: Some("development".to_owned()),
+        };
+        assert_eq!(
+            ambiguous.validate().unwrap_err().code,
+            "execution_selector_ambiguous"
+        );
+
+        let blank_worker = ExecutionSelector {
+            required_worker_id: Some(" ".to_owned()),
+            required_deployment: None,
+        };
+        assert_eq!(
+            blank_worker.validate().unwrap_err().code,
+            "execution_selector_invalid"
+        );
+    }
+}
