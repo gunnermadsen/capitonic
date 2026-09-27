@@ -8,7 +8,7 @@ Usage: scripts/local-image-cd.sh pin <ingester|polymarket-bot> <vMAJOR.MINOR.PAT
        scripts/local-image-cd.sh prepare-ingester
        scripts/local-image-cd.sh deploy <ingester|polymarket-bot>
 
-pin edits local Helm values only. Commit and review those values before deploy.
+pin edits the local Helm image values and chart appVersion. Commit and review before deploy.
 rc aliases verified local candidate bytes and pins the RC image in Helm values.
 Without an explicit RC version, a new component version starts at rc.0.
 prepare-ingester applies only the worker rolling-update strategy with the old image.
@@ -396,9 +396,7 @@ if [[ "$1" == pin || "$1" == rc ]]; then
   else
     IMAGE="$image" yq -i '.image = strenv(IMAGE)' "$values"
   fi
-  if [[ "$1" == rc ]]; then
-    VERSION="$version" yq -i '.appVersion = strenv(VERSION)' "$chart/Chart.yaml"
-  fi
+  VERSION="$version" yq -i '.appVersion = strenv(VERSION)' "$chart/Chart.yaml"
   echo "Pinned $image ($image_id) in $values; review and commit before deploy."
   exit 0
 fi
@@ -441,11 +439,9 @@ if [[ "$1" == deploy ]]; then
   version="${version#capitonic/$component:}"
   candidate_identity
   [[ "$(chart_image)" == "$image" ]] || exit 67
-  if [[ "$version" == *-rc.* ]]; then
-    [[ "$(yq -r '.appVersion' "$chart/Chart.yaml")" == "$version" ]] || {
-      echo "Chart appVersion disagrees with its RC image." >&2; exit 67;
-    }
-  fi
+  [[ "$(yq -r '.appVersion' "$chart/Chart.yaml")" == "$version" ]] || {
+    echo "Chart appVersion disagrees with its image." >&2; exit 67;
+  }
   if [[ "$component" == ingester ]]; then
     [[ "$(yq -r '.imageDigest' "$values")" == "$image_id" && "$(yq -r '.gitRevision' "$values")" == "$image_revision" ]] || {
       echo "Ingester chart image ID or revision does not match candidate provenance." >&2; exit 67;
