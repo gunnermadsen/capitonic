@@ -84,7 +84,11 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install Rust
-        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+        run: >-
+          rustup toolchain install "$RUST_TOOLCHAIN"
+          --profile minimal
+          --component rustfmt
+          --component clippy
 
       - name: Cache Cargo registry and build output
         uses: actions/cache@v5
@@ -96,6 +100,12 @@ jobs:
           key: polymarket-bot-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             polymarket-bot-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-
+
+      - name: Check Rust formatting
+        run: cargo +"$RUST_TOOLCHAIN" fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo +"$RUST_TOOLCHAIN" clippy --locked --package polymarket-bot --all-targets -- -D warnings
 
       - name: Run Rust tests
         run: cargo +"$RUST_TOOLCHAIN" test --locked --package polymarket-bot --all-targets

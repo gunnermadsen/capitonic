@@ -88,7 +88,9 @@ else:
 state_file.write_text(json.dumps(state))
 ''')
         runner.chmod(0o755)
-        checker = '#!/bin/sh\n[ "${FAKE_CHECK_FAIL:-0}" != 1 ]\n'
+        checker = ('#!/bin/sh\n'
+                   'printf "%s %s\\n" "$(basename "$0")" "$*" >> "$FAKE_CHECK_LOG"\n'
+                   '[ "${FAKE_CHECK_FAIL:-0}" != 1 ]\n')
         for name in ("cargo", "npm", "node"):
             tool = self.bin / name
             tool.write_text(checker)
@@ -96,9 +98,12 @@ state_file.write_text(json.dumps(state))
         self.state = self.root / "images.json"
         self.count = self.root / "build-count"
         self.count.write_text("0")
+        self.check_log = self.root / "checks.log"
+        self.check_log.write_text("")
         self.env = os.environ.copy()
         self.env.update(PATH=f"{self.bin}:{self.env['PATH']}", FAKE_IMAGE_STATE=str(self.state),
-                        FAKE_BUILD_COUNT=str(self.count), GIT_AUTHOR_NAME="CI test",
+                        FAKE_BUILD_COUNT=str(self.count), FAKE_CHECK_LOG=str(self.check_log),
+                        GIT_AUTHOR_NAME="CI test",
                         GIT_AUTHOR_EMAIL="ci-test@example.invalid", GIT_COMMITTER_NAME="CI test",
                         GIT_COMMITTER_EMAIL="ci-test@example.invalid")
         self.git("init", "-q", "-b", "defect/local-ci-test")
@@ -129,6 +134,12 @@ state_file.write_text(json.dumps(state))
                 prior_builds = int(self.count.read_text())
                 first = self.run_ci(component)
                 self.assertEqual(first.returncode, 0, first.stderr)
+                if component == "polymarket-bot":
+                    self.assertIn("cargo +1.92.0 clippy --locked --package polymarket-bot --all-targets -- -D warnings",
+                                  self.check_log.read_text())
+                elif component == "ingester":
+                    self.assertIn("cargo +1.92.0 clippy --locked --package market-data-ingester --all-targets --all-features -- -D warnings",
+                                  self.check_log.read_text())
                 self.assertEqual(len(self.tags(component)), 2)
                 self.assertEqual(self.count.read_text(), str(prior_builds + 1))
                 repeated = self.run_ci(component)

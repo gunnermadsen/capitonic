@@ -46,7 +46,7 @@ case "$component" in
     dockerfile="packages/polymarket-bot/Dockerfile.production"
     revision_arg="POLYMARKET_GIT_REVISION"
     base_version="3.2.1"
-    checks_description="local formatting and component tests passed"
+    checks_description="local formatting, Clippy, and component tests passed"
     image_inputs=(.dockerignore Cargo.toml Cargo.lock packages/polymarket-bot/Cargo.toml packages/market-data-ingester/Cargo.toml packages/polymarket-bot/build.rs common/proto packages/polymarket-bot/src packages/btc-directional-model/runtime-models "$dockerfile")
     ;;
   ingester)
@@ -134,6 +134,7 @@ fi
 case "$component" in
   polymarket-bot)
     cargo +1.92.0 fmt --all -- --check
+    cargo +1.92.0 clippy --locked --package polymarket-bot --all-targets -- -D warnings
     cargo +1.92.0 test --locked --package polymarket-bot --all-targets
     ;;
   ingester)
