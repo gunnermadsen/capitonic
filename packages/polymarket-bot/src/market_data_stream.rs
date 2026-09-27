@@ -18,7 +18,10 @@ use tokio_util::sync::CancellationToken;
 use tonic::{metadata::MetadataValue, transport::Channel, Request};
 use uuid::Uuid;
 
-use crate::btc::runtime::{binance_one_second_bootstrap_start, build_binance_one_second_recovery};
+use crate::btc::runtime::{
+    binance_one_second_bootstrap_start, build_binance_one_second_recovery,
+    same_binance_one_second_exchange_fact,
+};
 use crate::btc::{
     BinanceOneSecondKline, BinanceOpenInterestPoint, BookRegistry, BtcIntervalMarket, BtcOutcome,
     BtcRepository, ChainlinkTwap60Point, PolygonOraclePoint, RealtimeState, ReferencePriceSource,
@@ -992,7 +995,7 @@ impl MarketDataStreamRuntime {
                 .find(|candle| candle.open_timestamp == required.open_timestamp)
             {
                 ensure!(
-                    existing == &required,
+                    same_binance_one_second_exchange_fact(existing, &required),
                     "Binance one-second recovery conflicts with an applied live candle"
                 );
                 return Ok(());
@@ -1081,28 +1084,6 @@ fn apply_binance_one_second_kline(
         Err(_) if is_forward_discontinuity => Ok(true),
         Err(error) => Err(error),
     }
-}
-
-fn same_binance_one_second_exchange_fact(
-    left: &BinanceOneSecondKline,
-    right: &BinanceOneSecondKline,
-) -> bool {
-    left.open_timestamp == right.open_timestamp
-        && left.close_timestamp == right.close_timestamp
-        && left.open_price == right.open_price
-        && left.high_price == right.high_price
-        && left.low_price == right.low_price
-        && left.close_price == right.close_price
-        && left.base_volume == right.base_volume
-        && left.quote_volume == right.quote_volume
-        && left.trade_count == right.trade_count
-        && left.taker_buy_base_volume == right.taker_buy_base_volume
-        && left.taker_buy_quote_volume == right.taker_buy_quote_volume
-        && left.first_aggregate_trade_id == right.first_aggregate_trade_id
-        && left.last_aggregate_trade_id == right.last_aggregate_trade_id
-        && left.first_source_timestamp == right.first_source_timestamp
-        && left.source_complete == right.source_complete
-        && left.synthetic == right.synthetic
 }
 
 fn stream_timestamp(micros: i64, field: &'static str) -> Result<DateTime<Utc>> {
