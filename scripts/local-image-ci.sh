@@ -14,9 +14,10 @@ Run local checks on working-tree changes, or check a clean commit and build its 
 Each new image receives one version tag and one image-ID provenance tag on its source commit.
 Unchanged committed image inputs reuse the existing image and Git tag pair.
 --checks-only does not build or tag an image.
-Images are not deployed, promoted, pushed, or marked golden by this script.
+Build and check modes do not deploy, promote, push, or mark images golden.
 --tag-rc records an already accepted RC image on the development checkpoint commit.
-It requires the checkpoint and golden tags, committed chart pin, and running image identity.
+It requires the checkpoint and golden tags, committed chart pin, and running image identity,
+then atomically pushes the accepted refs to origin.
 EOF
 }
 
@@ -98,7 +99,7 @@ tag_accepted_rc() {
   image="$(git show "$accepted:$chart/values.yaml" | yq -r '.image' -)"
   version="${image#capitonic/$component:}"
   [[ "$image" == "capitonic/$component:$version"
-    && "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[1-9][0-9]*$
+    && "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.(0|[1-9][0-9]*)$
     && "$(git show "$accepted:$chart/Chart.yaml" | yq -r '.appVersion' -)" == "$version" ]] || {
     echo "Accepted Helm chart does not pin a matching RC image and appVersion." >&2; exit 67;
   }
@@ -161,9 +162,8 @@ tag_accepted_rc() {
       echo "RC Git tag already identifies different image bytes." >&2; exit 67;
     }
     echo "Reusing $rc_tag on accepted checkpoint $accepted; no Git tag was changed."
-    return
-  fi
-  git tag -a "$rc_tag" "$accepted" -m "component: $component
+  else
+    git tag -a "$rc_tag" "$accepted" -m "component: $component
 version: $version
 image: $image
 image_id: $id
@@ -172,7 +172,16 @@ candidate_tag: $candidate_tag
 golden_tag: $golden_tag
 checkpoint_tag: $checkpoint
 status: accepted local k3s RC; no registry manifest digest claimed"
-  echo "Tagged accepted checkpoint $accepted with $rc_tag ($id)."
+    echo "Tagged accepted checkpoint $accepted with $rc_tag ($id)."
+  fi
+  git push --atomic origin \
+    refs/heads/development \
+    "refs/tags/$checkpoint" \
+    "refs/tags/$candidate_tag" \
+    "refs/tags/$hash_tag" \
+    "refs/tags/$golden_tag" \
+    "refs/tags/$rc_tag"
+  echo "Atomically pushed $rc_tag and its accepted provenance refs to origin."
 }
 
 next_local_version() {

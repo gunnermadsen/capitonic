@@ -4,12 +4,13 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage: scripts/local-image-cd.sh pin <ingester|polymarket-bot> <vMAJOR.MINOR.PATCH-local.N>
-       scripts/local-image-cd.sh rc <ingester|polymarket-bot> <vMAJOR.MINOR.PATCH-local.N> <vMAJOR.MINOR.PATCH-rc.N>
+       scripts/local-image-cd.sh rc <ingester|polymarket-bot> <vMAJOR.MINOR.PATCH-local.N> [vMAJOR.MINOR.PATCH-rc.N]
        scripts/local-image-cd.sh prepare-ingester
        scripts/local-image-cd.sh deploy <ingester|polymarket-bot>
 
 pin edits local Helm values only. Commit and review those values before deploy.
 rc aliases verified local candidate bytes and pins the RC image in Helm values.
+Without an explicit RC version, a new component version starts at rc.0.
 prepare-ingester applies only the worker rolling-update strategy with the old image.
 deploy applies the exact committed, prebuilt image pinned in the chart.
 Database migration Jobs and golden promotion are separate workflows.
@@ -19,7 +20,7 @@ EOF
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then usage; exit 0; fi
 case "${1:-}" in
   pin) [[ $# == 3 ]] || { usage >&2; exit 64; }; component="$2"; version="$3" ;;
-  rc) [[ $# == 4 ]] || { usage >&2; exit 64; }; component="$2"; local_version="$3"; rc_version="$4"; version="$3" ;;
+  rc) [[ $# == 3 || $# == 4 ]] || { usage >&2; exit 64; }; component="$2"; local_version="$3"; rc_version="${4:-}"; version="$3" ;;
   prepare-ingester) [[ $# == 1 ]] || { usage >&2; exit 64; }; component=ingester ;;
   deploy) [[ $# == 2 ]] || { usage >&2; exit 64; }; component="$2" ;;
   *) usage >&2; exit 64 ;;
@@ -61,7 +62,7 @@ validate_candidate_tag() {
 }
 
 candidate_identity() {
-  [[ "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(local|rc)\.([1-9][0-9]*)$ ]] || {
+  [[ "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(local\.([1-9][0-9]*)|rc\.(0|[1-9][0-9]*))$ ]] || {
     echo "Select a local candidate or RC version." >&2; exit 64;
   }
   image="capitonic/$component:$version"
@@ -354,17 +355,33 @@ rollback_release() {
 }
 
 if [[ "$1" == rc ]]; then
-  [[ "$rc_version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.([1-9][0-9]*)$
-    && "${rc_version%%-*}" == "${local_version%%-*}" ]] || {
+  candidate_identity
+  rc_base="${local_version%%-*}"
+  highest_rc=-1
+  while IFS= read -r existing_tag; do
+    rc_number="${existing_tag##*.}"
+    [[ "$rc_number" =~ ^(0|[1-9][0-9]*)$ ]] || continue
+    if (( rc_number > highest_rc )); then highest_rc="$rc_number"; fi
+  done < <(git tag --list "rc/$component/$rc_base-rc.*")
+  next_rc="$rc_base-rc.$((highest_rc + 1))"
+  rc_version="${rc_version:-$next_rc}"
+  [[ "$rc_version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.(0|[1-9][0-9]*)$
+    && "${rc_version%%-*}" == "$rc_base" ]] || {
     echo "RC version must share the candidate's major.minor.patch version." >&2; exit 64;
   }
-  candidate_identity
+  if [[ "$rc_version" != "$next_rc" ]] &&
+     ! git show-ref --verify --quiet "refs/tags/rc/$component/$rc_version"; then
+    echo "The next RC version for a new alias is $next_rc." >&2; exit 69;
+  fi
   rc_image="capitonic/$component:$rc_version"
   if nerdctl --namespace k8s.io image inspect "$rc_image" >/dev/null 2>&1; then
     [[ "$(nerdctl --namespace k8s.io image inspect --format '{{ .Id }}' "$rc_image")" == "$image_id" ]] || {
       echo "RC tag already names different image bytes." >&2; exit 67;
     }
   else
+    [[ "$rc_version" == "$next_rc" ]] || {
+      echo "The next unused RC version is $next_rc." >&2; exit 69;
+    }
     nerdctl --namespace k8s.io image tag "$image" "$rc_image"
   fi
   version="$rc_version"
