@@ -139,7 +139,7 @@ wait_for_process_recovery() {
 check_ingester_capacity() {
   local destination="$1" desired active ready
   desired="$(jq '[.[] | select(.desired_state == "running")] | length' "$destination/profiles.json")"
-  active="$(cut -d '|' -f 1 "$destination/backfills.txt")"
+  active="$(cut -d '|' -f 2 "$destination/backfills.txt")"
   ready="$(kubectl -n "$namespace" get deployment ingester-worker -o json | jq -r '.status.readyReplicas // 0')"
   printf 'Ingester capacity: %s ready workers, %s desired realtime profiles, %s active backfill shards\n' "$ready" "$desired" "$active"
   (( ready >= desired + active )) || {
