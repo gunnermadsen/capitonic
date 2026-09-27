@@ -128,6 +128,9 @@ if [[ "$mode" == "--build" ]]; then
 fi
 
 echo "Checking $component locally"
+if [[ -f scripts/tests/test_local_image_ci.py ]]; then
+  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -p 'test_local_image_ci.py'
+fi
 case "$component" in
   polymarket-bot)
     cargo +1.92.0 test --locked --package polymarket-bot --all-targets
