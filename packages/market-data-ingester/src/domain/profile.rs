@@ -109,3 +109,59 @@ impl IngesterProfile {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Duration, TimeZone, Utc};
+    use serde_json::json;
+    use uuid::Uuid;
+
+    use super::{DesiredState, HealthStatus, IngesterProfile, ObservedState};
+    use crate::domain::IngesterStrategyKey;
+
+    #[test]
+    fn route_lease_requires_a_token_and_future_expiry() {
+        let now = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
+        let mut profile = IngesterProfile {
+            strategy_key: IngesterStrategyKey::BinanceSpotBtcusdtOneSecondOhlcv,
+            config_schema_version: 1,
+            config: json!({}),
+            desired_state: DesiredState::Running,
+            desired_generation: 1,
+            observed_state: ObservedState::Running,
+            health_status: HealthStatus::Healthy,
+            applied_generation: Some(1),
+            checkpoint_schema_version: 1,
+            checkpoint: json!({}),
+            lease_owner: Some("ingester-worker-1".to_owned()),
+            lease_token: Some(Uuid::new_v4()),
+            lease_expires_at: Some(now + Duration::seconds(1)),
+            heartbeat_at: Some(now),
+            started_at: Some(now),
+            stopped_at: None,
+            last_source_event_at: None,
+            last_provider_available_at: None,
+            last_persisted_at: None,
+            source_watermark: None,
+            availability_watermark: None,
+            consecutive_failures: 0,
+            restart_count: 0,
+            last_error_code: None,
+            last_error_message: None,
+            last_error_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        assert!(profile.lease_is_current(now));
+        assert!(!profile.lease_is_current(now + Duration::seconds(1)));
+
+        profile.lease_expires_at = Some(now + Duration::seconds(1));
+        profile.lease_token = None;
+        assert!(!profile.lease_is_current(now));
+
+        profile.lease_token = Some(Uuid::new_v4());
+        profile.lease_expires_at = None;
+        assert!(!profile.lease_is_current(now));
+    }
+}
