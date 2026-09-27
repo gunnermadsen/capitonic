@@ -1,4 +1,4 @@
-image: capitonic/polymarket-bot:v3.2.1-local.6
+image: capitonic/polymarket-bot:v3.2.1-rc.3
 replicaCount: 1
 resources:
   requests: {cpu: 100m, memory: 256Mi}
