@@ -137,4 +137,16 @@ mod tests {
         assert_eq!(request.mode, DrainMode::Reconcile);
         assert!(!request.mode.removes_source_data());
     }
+
+    #[test]
+    fn drain_request_rejects_unknown_fields() {
+        let request: Result<DrainRequest, _> = serde_json::from_value(serde_json::json!({
+            "strategy_key": "dataset",
+            "cutoff": "2026-01-01T00:00:00Z",
+            "mode": "drain",
+            "dry_run": true,
+            "delete_source": true
+        }));
+        assert!(request.is_err());
+    }
 }
