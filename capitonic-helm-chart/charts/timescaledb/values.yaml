@@ -1,5 +1,8 @@
-image: timescale/timescaledb:2.14.2-pg14
-metricsImage: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
+image: timescale/timescaledb:2.14.2-pg14@sha256:ac7d202c770babca3a0c2604aa58f211c54f9bec50bdc852ac861faf8810626e
+metricsImage: quay.io/prometheuscommunity/postgres-exporter:v0.20.1@sha256:ac5ec343104fae0e2d84a27bb8d69b38430a11910c5382cad85d478d2bab713e
+environment: development
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
 storage:
   className: local-path
   size: 20Gi

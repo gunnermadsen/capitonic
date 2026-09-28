@@ -27,7 +27,7 @@ Traefik alone exposes Grafana and the APIs on the Mac host:
 
 | Host route | Internal target | Authentication |
 | --- | --- | --- |
-| `http://localhost/monitor/` | Grafana | Grafana login |
+| `http://localhost/` | Grafana | Grafana login |
 | `http://localhost/api/bot/` | Bot API; prefix stripped | Bot admin bearer token for admin routes |
 | `http://localhost/api/ingester/` | Ingester master API; prefix stripped | Ingester admin bearer token for work routes |
 | `http://localhost/api/metrics/` | Prometheus query API; prefix stripped | Prometheus Basic Auth |
@@ -57,7 +57,7 @@ Schedule and stop realtime profiles and backfills through the ingester master's 
 2. Verify the restored `polymarket` database, expected migration ledger, processes and model references, PgBouncer routes, and bound PVCs. Do not run schema migrations or write administrative SQL during cutover.
 3. Verify exact golden image IDs and embedded revisions, all pod readiness and restart counts, and no resource or disk pressure.
 4. Verify all nine desired realtime profiles have current healthy worker owners; master-controlled capacity covers their leases and active backfills. Test realtime and active-shard reassignment by deleting a disposable worker pod and checking successful replacement and job completion. Choose a backfill range outside already drained source chunks.
-5. Verify Grafana `/monitor`, bot `/api/bot`, and ingester `/api/ingester`; Prometheus targets, fresh Loki logs, 30-day Prometheus and Loki retention, and no new sustained critical Grafana alerts. Source-owned alert rules are baked and provisioned through the Grafana chart.
+5. Verify Grafana at `/`, bot `/api/bot`, and ingester `/api/ingester`; Prometheus targets, fresh Loki logs, 30-day Prometheus and Loki retention, and no new sustained critical Grafana alerts. Source-owned alert rules are baked and provisioned through the Grafana chart.
 6. Verify each previously enabled trading process retains its durable intent and has a fresh heartbeat after bot startup. Confirm model artifact availability, required ingester routes, fresh inputs, gRPC, order reconciliation, settlement, and accounting. Do not force a trade. Start the bot only when the operator accepts that the restored enabled live process may resume real orders.
 7. Keep the Docker Compose services stopped after all checks pass. Compose remains maintained for focused tests and recovery, but do not run it concurrently against the live k3s process state.
 

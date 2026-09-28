@@ -1,4 +1,9 @@
-image: capitonic/polymarket-bot:v3.2.2-rc.0
+image: capitonic/polymarket-bot:v3.2.2-rc.1
+environment: development
+imagePullPolicy: Never
+imagePullSecrets: []
+apiIngress:
+  enabled: true
 replicaCount: 1
 resources:
   requests: {cpu: 100m, memory: 256Mi}

@@ -8,7 +8,7 @@ metadata:
     app.kubernetes.io/component: migration
     app.kubernetes.io/part-of: capitonic-platform
     app.kubernetes.io/managed-by: Helm
-    capitonic.io/environment: dev
+    capitonic.io/environment: {{ $.Values.environment | quote }}
     capitonic.io/rollout-domain: database
 spec:
   backoffLimit: 0
@@ -20,9 +20,10 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: migration
         app.kubernetes.io/part-of: capitonic-platform
-        capitonic.io/environment: dev
+        capitonic.io/environment: {{ $.Values.environment | quote }}
         capitonic.io/rollout-domain: database
     spec:
+      imagePullSecrets: {{ toJson .Values.imagePullSecrets }}
       automountServiceAccountToken: false
       restartPolicy: Never
       securityContext:
@@ -32,7 +33,7 @@ spec:
       containers:
         - name: db-migrate
           image: {{ .Values.image | quote }}
-          imagePullPolicy: Never
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
           env:
             - {name: POSTGRES_HOST, value: timescaledb}
             - {name: POSTGRES_PORT, value: "5432"}

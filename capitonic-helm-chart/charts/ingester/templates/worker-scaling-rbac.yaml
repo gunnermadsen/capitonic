@@ -8,7 +8,7 @@ metadata:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/part-of: capitonic-platform
     app.kubernetes.io/managed-by: Helm
-    capitonic.io/environment: dev
+    capitonic.io/environment: {{ $.Values.environment | quote }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -19,7 +19,7 @@ metadata:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/part-of: capitonic-platform
     app.kubernetes.io/managed-by: Helm
-    capitonic.io/environment: dev
+    capitonic.io/environment: {{ $.Values.environment | quote }}
 rules:
   - apiGroups: [apps]
     resources: [deployments/scale]
@@ -35,7 +35,7 @@ metadata:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/part-of: capitonic-platform
     app.kubernetes.io/managed-by: Helm
-    capitonic.io/environment: dev
+    capitonic.io/environment: {{ $.Values.environment | quote }}
 subjects:
   - kind: ServiceAccount
     name: ingester-master

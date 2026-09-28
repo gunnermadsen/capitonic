@@ -7,7 +7,7 @@ metadata:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/part-of: capitonic-platform
     app.kubernetes.io/managed-by: Helm
-    capitonic.io/environment: dev
+    capitonic.io/environment: {{ $.Values.environment | quote }}
     capitonic.io/rollout-domain: monitoring
 spec:
   serviceName: loki
@@ -23,11 +23,12 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: monitoring
         app.kubernetes.io/part-of: capitonic-platform
-        capitonic.io/environment: dev
+        capitonic.io/environment: {{ $.Values.environment | quote }}
         capitonic.io/rollout-domain: monitoring
       annotations:
         checksum/config: {{ .Files.Get "assets/loki.yml" | sha256sum }}
     spec:
+      imagePullSecrets: {{ toJson .Values.imagePullSecrets }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -36,7 +37,7 @@ spec:
       containers:
         - name: loki
           image: {{ .Values.image | quote }}
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
           args: [-config.file=/etc/loki/loki.yml]
           ports:
             - name: http

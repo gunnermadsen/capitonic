@@ -1,4 +1,7 @@
 image: grafana/loki:3.7.6@sha256:efd47c67f9bac88ca29bcf8cb997d9ab29d1848bd0aff579282295542a745952
+environment: development
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
 storage:
   className: local-path
   size: 2Gi

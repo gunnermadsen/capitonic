@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+set -euo pipefail
+set +x
+
+NAMESPACE="${CAPITONIC_NAMESPACE:-capitonic}"
+APP_DIRECTORY="${APP_DIRECTORY:-/opt/polymarket-bot}"
+BOT_PORT="${BOT_LOCAL_PORT:-18097}"
+INGESTER_PORT="${INGESTER_LOCAL_PORT:-18098}"
+PROMETHEUS_PORT="${PROMETHEUS_LOCAL_PORT:-19090}"
+GRAFANA_PORT="${GRAFANA_LOCAL_PORT:-13000}"
+
+kubectl -n "$NAMESPACE" wait --for=condition=Ready pods --all --timeout=15m
+unhealthy="$(kubectl -n "$NAMESPACE" get pods -o json | jq '[.items[] | select(.status.phase != "Succeeded") | select(any(.status.containerStatuses[]?; .ready != true or .restartCount != 0))] | length')"
+[[ "$unhealthy" == "0" ]]
+kubectl -n "$NAMESPACE" get job db-migrate -o json | jq -e '.status.succeeded == 1 and (.status.failed // 0) == 0' >/dev/null
+
+expected_bot="$(yq -r .image "$APP_DIRECTORY/capitonic-helm-chart/environments/production/polymarket-bot.yaml")"
+expected_ingester="$(yq -r .image "$APP_DIRECTORY/capitonic-helm-chart/environments/production/ingester.yaml")"
+expected_migrate="$(yq -r .image "$APP_DIRECTORY/capitonic-helm-chart/environments/production/db-migrate.yaml")"
+for image in "$expected_bot" "$expected_ingester" "$expected_migrate"; do
+  [[ "$image" =~ ^192200846560\.dkr\.ecr\.eu-west-1\.amazonaws\.com/.+@sha256:[0-9a-f]{64}$ ]]
+  [[ "$image" != *sha256:0000000000000000000000000000000000000000000000000000000000000000 ]]
+done
+[[ "$(kubectl -n "$NAMESPACE" get deployment polymarket-bot -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$expected_bot" ]]
+[[ "$(kubectl -n "$NAMESPACE" get deployment ingester-master -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$expected_ingester" ]]
+[[ "$(kubectl -n "$NAMESPACE" get deployment ingester-worker -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$expected_ingester" ]]
+[[ "$(kubectl -n "$NAMESPACE" get job db-migrate -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$expected_migrate" ]]
+[[ "$(kubectl -n "$NAMESPACE" get deployment ingester-worker -o jsonpath='{.status.readyReplicas}')" == "4" ]]
+
+latest_committed_migration="$(find "$APP_DIRECTORY/packages/db-migrate/src/migrations" -maxdepth 1 -type f -name '[0-9]*.ts' -exec basename {} \; | cut -d- -f1 | sort -n | tail -n1)"
+latest_applied_migration="$(kubectl -n "$NAMESPACE" exec timescaledb-0 -c timescaledb -- \
+  psql -U postgres -d polymarket -Atc 'SELECT coalesce(max(timestamp),0) FROM public.migrations')"
+[[ "$latest_applied_migration" == "$latest_committed_migration" ]]
+
+bot_token="$(kubectl -n "$NAMESPACE" get secret polymarket-bot-auth -o jsonpath='{.data.admin-token}' | base64 -d)"
+ingester_token="$(kubectl -n "$NAMESPACE" get secret ingester-auth -o jsonpath='{.data.admin-token}' | base64 -d)"
+prom_user="$(kubectl -n "$NAMESPACE" get secret prometheus-auth -o jsonpath='{.data.username}' | base64 -d)"
+prom_password="$(kubectl -n "$NAMESPACE" get secret prometheus-auth -o jsonpath='{.data.password}' | base64 -d)"
+
+kubectl -n "$NAMESPACE" port-forward service/polymarket-bot "$BOT_PORT:8097" >/tmp/capitonic-verify-bot.log 2>&1 & bot_forward=$!
+kubectl -n "$NAMESPACE" port-forward service/ingester-master "$INGESTER_PORT:8098" >/tmp/capitonic-verify-ingester.log 2>&1 & ingester_forward=$!
+kubectl -n "$NAMESPACE" port-forward service/prometheus "$PROMETHEUS_PORT:9090" >/tmp/capitonic-verify-prometheus.log 2>&1 & prometheus_forward=$!
+kubectl -n "$NAMESPACE" port-forward service/grafana "$GRAFANA_PORT:3000" >/tmp/capitonic-verify-grafana.log 2>&1 & grafana_forward=$!
+trap 'kill "$bot_forward" "$ingester_forward" "$prometheus_forward" "$grafana_forward" 2>/dev/null || true' EXIT
+for attempt in $(seq 1 90); do
+  curl -fsS "http://127.0.0.1:$BOT_PORT/health/ready" >/dev/null 2>&1 && \
+  curl -fsS "http://127.0.0.1:$INGESTER_PORT/health/ready" >/dev/null 2>&1 && \
+  curl -fsS "http://127.0.0.1:$GRAFANA_PORT/api/health" >/dev/null 2>&1 && break
+  sleep 1
+done
+
+profiles="$(curl -fsS -H "Authorization: Bearer $ingester_token" "http://127.0.0.1:$INGESTER_PORT/ingesters")"
+jq -e '
+  ([.[] | select(.desired_state == "running") | .strategy_key] | sort) == [
+    "binance_spot_btcusdt_one_second_ohlcv",
+    "polymarket_btc_five_minute_market_contracts",
+    "polymarket_btc_five_minute_orderbooks",
+    "polymarket_btc_five_minute_resolutions"
+  ] and all(.[] | select(.desired_state == "running");
+    .observed_state == "running" and .health_status == "healthy" and .lease_owner != null and .source_watermark != null)
+' <<<"$profiles" >/dev/null
+
+processes="$(curl -fsS -H "Authorization: Bearer $bot_token" "http://127.0.0.1:$BOT_PORT/admin/trading-processes?limit=100")"
+paper_id="$(jq -r '.processes[] | select(.process_key == "btc-5m-conservative-selective-paper-20260917") | .process_id' <<<"$processes")"
+live_id="$(jq -r '.processes[] | select(.process_key == "btc-5m-conservative-selective-live-pilot-20260921") | .process_id' <<<"$processes")"
+[[ "$paper_id" =~ ^[0-9a-f-]{36}$ && "$live_id" =~ ^[0-9a-f-]{36}$ ]]
+for process_id in "$paper_id" "$live_id"; do
+  process_status="$(curl -fsS -H "Authorization: Bearer $bot_token" "http://127.0.0.1:$BOT_PORT/admin/trading-processes/$process_id/status")"
+  jq -e '.status.process.enabled == true and .status.process.status == "running" and .status.btc_runtime.runtime.running == true and .status.btc_runtime.runtime.readiness.ready == true' <<<"$process_status" >/dev/null
+done
+live_status="$(curl -fsS -H "Authorization: Bearer $bot_token" "http://127.0.0.1:$BOT_PORT/admin/trading-processes/$live_id/status")"
+jq -e '
+  .status.btc_runtime.live_status.entries_enabled == true and
+  .status.btc_runtime.live_status.order_submit_enabled == true and
+  .status.btc_runtime.live_status.process_accounting_proven == true and
+  .status.btc_runtime.live_status.idempotency_clean == true and
+  .status.btc_runtime.live_status.unresolved_live_order_count == 0 and
+  .status.btc_runtime.live_status.user_ws_enabled == true and
+  .status.btc_runtime.live_status.user_ws_connected == true and
+  (.status.btc_runtime.live_status.last_user_ws_pong_age_secs | type == "number" and . <= 60) and
+  .status.btc_runtime.live_status.max_order_notional_usd == "3" and
+  .status.btc_runtime.live_status.max_open_notional_usd == "3"
+' <<<"$live_status" >/dev/null
+
+live_diagnostics="$(curl -fsS -H "Authorization: Bearer $bot_token" "http://127.0.0.1:$BOT_PORT/admin/live/diagnostics")"
+jq -e '
+  .mode == "live" and .credentials_present == true and .account_identity_valid == true and
+  .api_keys_readable == true and .api_keys_error == null and
+  .balance_allowance_readable == true and .balance_allowance_error == null and
+  .open_orders_readable == true and .open_orders_error == null and
+  .geoblock_readable == true and .geoblock_blocked == false and
+  ((.collateral_balance | tonumber) > 0)
+' <<<"$live_diagnostics" >/dev/null
+
+alerts="$(curl -fsS -u "$prom_user:$prom_password" --get --data-urlencode 'query=ALERTS{alertstate="firing",severity="critical"}' "http://127.0.0.1:$PROMETHEUS_PORT/api/v1/query")"
+jq -e '.status == "success" and (.data.result | length) == 0' <<<"$alerts" >/dev/null
+curl -fsS "http://127.0.0.1:$GRAFANA_PORT/api/health" | jq -e '.database == "ok"' >/dev/null
+kubectl -n "$NAMESPACE" get certificate grafana-tls -o json | jq -e 'any(.status.conditions[]?; .type == "Ready" and .status == "True")' >/dev/null
+kubectl -n "$NAMESPACE" logs deployment/cloudflared --since=10m --tail=300 | grep -q 'Registered tunnel connection'
+
+jq -n --arg paper_process_id "$paper_id" --arg live_process_id "$live_id" \
+  --arg bot_image "$expected_bot" --arg ingester_image "$expected_ingester" --arg migration "$latest_applied_migration" \
+  '{status:"ready",architecture:"arm64",paper_process_id:$paper_process_id,live_process_id:$live_process_id,bot_image:$bot_image,ingester_image:$ingester_image,latest_migration:$migration,realtime_profiles:4,workers:4,critical_alerts:0}'

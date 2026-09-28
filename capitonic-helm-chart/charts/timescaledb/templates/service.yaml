@@ -8,7 +8,7 @@ metadata:
     app.kubernetes.io/component: database
     app.kubernetes.io/part-of: capitonic-platform
     app.kubernetes.io/managed-by: Helm
-    capitonic.io/environment: dev
+    capitonic.io/environment: {{ $.Values.environment | quote }}
     capitonic.io/rollout-domain: database
 spec:
   clusterIP: None
@@ -29,7 +29,7 @@ metadata:
     app.kubernetes.io/component: database
     app.kubernetes.io/part-of: capitonic-platform
     app.kubernetes.io/managed-by: Helm
-    capitonic.io/environment: dev
+    capitonic.io/environment: {{ $.Values.environment | quote }}
     capitonic.io/rollout-domain: database
 spec:
   type: ClusterIP

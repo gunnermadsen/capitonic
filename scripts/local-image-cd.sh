@@ -3,8 +3,8 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/local-image-cd.sh pin <ingester|polymarket-bot> <vMAJOR.MINOR.PATCH-local.N>
-       scripts/local-image-cd.sh rc <ingester|polymarket-bot> <vMAJOR.MINOR.PATCH-local.N> [vMAJOR.MINOR.PATCH-rc.N]
+Usage: scripts/local-image-cd.sh pin <ingester|polymarket-bot|db-migrate> <vMAJOR.MINOR.PATCH-local.N>
+       scripts/local-image-cd.sh rc <ingester|polymarket-bot|db-migrate> <vMAJOR.MINOR.PATCH-local.N> [vMAJOR.MINOR.PATCH-rc.N]
        scripts/local-image-cd.sh prepare-ingester
        scripts/local-image-cd.sh deploy <ingester|polymarket-bot>
 
@@ -25,7 +25,11 @@ case "${1:-}" in
   deploy) [[ $# == 2 ]] || { usage >&2; exit 64; }; component="$2" ;;
   *) usage >&2; exit 64 ;;
 esac
-case "$component" in ingester|polymarket-bot) ;; *) usage >&2; exit 64 ;; esac
+case "$component" in
+  ingester|polymarket-bot) ;;
+  db-migrate) [[ "$1" == pin || "$1" == rc ]] || { usage >&2; exit 64; } ;;
+  *) usage >&2; exit 64 ;;
+esac
 
 root="$(git rev-parse --show-toplevel)"
 cd "$root"

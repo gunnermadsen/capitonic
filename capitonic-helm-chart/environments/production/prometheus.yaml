@@ -1,0 +1,8 @@
+environment: production
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+storage:
+  className: local-path
+  size: 5Gi
+apiIngress:
+  enabled: false

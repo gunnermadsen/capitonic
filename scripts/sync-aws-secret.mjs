@@ -5,13 +5,39 @@ import { basename, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
-const REQUIRED_KEYS = ["POSTGRES_PASSWORD", "GITHUB_USERNAME", "GITHUB_PAT"];
-const KEY_ALIASES = { GHCR_USER: "GITHUB_USERNAME", GHCR_PAT_TOKEN: "GITHUB_PAT" };
-const OPTIONAL_DEFAULTS = {
-  POLYMARKET_HTTP_ADMIN_TOKEN: "", POLYMARKET_CLOB_API_KEY: "",
-  POLYMARKET_CLOB_SECRET: "", POLYMARKET_CLOB_PASSPHRASE: "",
-  POLYMARKET_PRIVATE_KEY: "", POLYMARKET_FUNDER_ADDRESS: "",
-  POLYMARKET_SIGNATURE_TYPE: "",
+const REQUIRED_KEYS = [
+  "POSTGRES_PASSWORD",
+  "CAPITONIC_TRADING_POSTGRES_PASSWORD",
+  "CAPITONIC_INGESTER_MASTER_POSTGRES_PASSWORD",
+  "CAPITONIC_INGESTER_WORKER_POSTGRES_PASSWORD",
+  "CAPITONIC_GRAFANA_POSTGRES_PASSWORD",
+  "GITHUB_USERNAME",
+  "GITHUB_PAT",
+  "POLYMARKET_HTTP_ADMIN_TOKEN",
+  "MARKET_DATA_INGESTER_ADMIN_TOKEN",
+  "POLYMARKET_CLOB_API_KEY",
+  "POLYMARKET_CLOB_SECRET",
+  "POLYMARKET_CLOB_PASSPHRASE",
+  "POLYMARKET_PRIVATE_KEY",
+  "POLYMARKET_FUNDER_ADDRESS",
+  "POLYMARKET_SIGNATURE_TYPE",
+  "GRAFANA_ADMIN_USER",
+  "GRAFANA_ADMIN_PASSWORD",
+  "PROMETHEUS_BASIC_AUTH_USER",
+  "PROMETHEUS_BASIC_AUTH_PASSWORD",
+  "PROMETHEUS_BASIC_AUTH_PASSWORD_HASH",
+  "CLOUDFLARE_ACCOUNT_ID",
+  "CLOUDFLARE_ZONE_ID",
+  "CLOUDFLARE_EMAIL_ADDRESS",
+  "CLOUDFLARE_API_TOKEN",
+  "CLOUDFLARED_PRODUCTION_TUNNEL_ID",
+  "CLOUDFLARED_PRODUCTION_TUNNEL_CREDENTIALS_B64",
+];
+const KEY_ALIASES = {
+  GHCR_USER: "GITHUB_USERNAME",
+  GHCR_PAT_TOKEN: "GITHUB_PAT",
+  COLOUDFLARED_PRODUCTION_TUNNEL_CREDENTIALS_B64:
+    "CLOUDFLARED_PRODUCTION_TUNNEL_CREDENTIALS_B64",
 };
 
 function parseArgs(argv) {
@@ -42,7 +68,7 @@ override duplicate keys.`);
 function envFiles(directory) {
   const absoluteDirectory = resolve(directory);
   return readdirSync(absoluteDirectory, { withFileTypes: true })
-    .filter((entry) => entry.isFile()).map((entry) => entry.name)
+    .filter((entry) => entry.isFile() || entry.isSymbolicLink()).map((entry) => entry.name)
     .filter((name) => name === ".env" || name.startsWith(".env."))
     .filter((name) => !name.startsWith(".env.example") && !name.includes(".example"))
     .sort((left, right) => left === ".env" ? -1 : right === ".env" ? 1 : left.localeCompare(right))
@@ -81,14 +107,14 @@ function runAws(args, options, inherit = false) {
 
 function main() {
   const options = parseArgs(process.argv.slice(2));
+  if (options.region !== "eu-west-1") {
+    throw new Error("Production secrets must be stored in eu-west-1 (Ireland).");
+  }
   const files = envFiles(options.directory);
   if (files.length === 0) throw new Error(`No eligible .env* files found in ${options.directory}`);
   const values = Object.assign({}, ...files.map(parseEnvFile));
   for (const [source, target] of Object.entries(KEY_ALIASES)) {
     if (values[target] == null && values[source] != null) values[target] = values[source];
-  }
-  for (const [key, fallback] of Object.entries(OPTIONAL_DEFAULTS)) {
-    if (values[key] == null) values[key] = fallback;
   }
   const missing = REQUIRED_KEYS.filter((key) => !values[key]);
   if (missing.length > 0) throw new Error(`Missing required keys: ${missing.join(", ")}`);

@@ -1,3 +1,4 @@
+{{- if .Values.apiIngress.enabled }}
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
@@ -7,7 +8,7 @@ metadata:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/part-of: capitonic-platform
     app.kubernetes.io/managed-by: Helm
-    capitonic.io/environment: dev
+    capitonic.io/environment: {{ $.Values.environment | quote }}
 spec:
   stripPrefix:
     prefixes: [/api/metrics]
@@ -23,7 +24,7 @@ metadata:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/part-of: capitonic-platform
     app.kubernetes.io/managed-by: Helm
-    capitonic.io/environment: dev
+    capitonic.io/environment: {{ $.Values.environment | quote }}
 spec:
   ingressClassName: traefik
   rules:
@@ -36,3 +37,4 @@ spec:
               service:
                 name: prometheus
                 port: {name: http}
+{{- end }}

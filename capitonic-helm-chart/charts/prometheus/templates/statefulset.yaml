@@ -7,7 +7,7 @@ metadata:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/part-of: capitonic-platform
     app.kubernetes.io/managed-by: Helm
-    capitonic.io/environment: dev
+    capitonic.io/environment: {{ $.Values.environment | quote }}
     capitonic.io/rollout-domain: monitoring
 spec:
   serviceName: prometheus
@@ -23,11 +23,12 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: monitoring
         app.kubernetes.io/part-of: capitonic-platform
-        capitonic.io/environment: dev
+        capitonic.io/environment: {{ $.Values.environment | quote }}
         capitonic.io/rollout-domain: monitoring
       annotations:
         checksum/config: {{ .Files.Get "assets/prometheus.yml" | sha256sum }}
     spec:
+      imagePullSecrets: {{ toJson .Values.imagePullSecrets }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -36,7 +37,7 @@ spec:
       containers:
         - name: prometheus
           image: {{ .Values.image | quote }}
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
           args:
             - --config.file=/etc/prometheus/prometheus.yml
             - --web.config.file=/etc/prometheus-auth/web.yml

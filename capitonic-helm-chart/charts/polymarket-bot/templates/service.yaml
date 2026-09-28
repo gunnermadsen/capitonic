@@ -8,7 +8,7 @@ metadata:
     app.kubernetes.io/component: trading
     app.kubernetes.io/part-of: capitonic-platform
     app.kubernetes.io/managed-by: Helm
-    capitonic.io/environment: dev
+    capitonic.io/environment: {{ $.Values.environment | quote }}
     capitonic.io/rollout-domain: trading
 spec:
   type: ClusterIP

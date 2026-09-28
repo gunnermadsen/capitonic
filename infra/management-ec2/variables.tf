@@ -10,9 +10,14 @@ variable "aws_region" {
 }
 
 variable "instance_type" {
-  description = "Compute-optimized management host sized for XFCE, Chrome, and MetaMask setup."
+  description = "Ephemeral x86_64 management host sized for XFCE, Chrome, and administrative sessions."
   type        = string
-  default     = "c6a.xlarge"
+  default     = "t3.large"
+
+  validation {
+    condition     = var.instance_type == "t3.large"
+    error_message = "The approved ephemeral management host size is t3.large."
+  }
 }
 
 variable "root_volume_size_gib" {

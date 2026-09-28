@@ -1,104 +1,97 @@
-name: Teardown Full Production Stack
+name: Destroy Production Runtime
 
 on:
   workflow_call:
+    inputs:
+      backup_mode:
+        required: false
+        type: string
+        default: required
   workflow_dispatch:
     inputs:
       confirm_destroy:
-        description: Type destroy-production-ec2 to confirm full teardown
+        description: Type destroy-production-ec2
         required: true
         type: string
+      backup_mode:
+        description: A required backup aborts teardown unless S3 validation succeeds
+        required: true
+        type: choice
+        default: required
+        options: [required, skip]
 
 permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: capitonic-production
+  cancel-in-progress: false
+
 env:
   AWS_REGION: eu-west-1
   AWS_ROLE_ARN: arn:aws:iam::192200846560:role/capitonic-polymarket-bot-github-actions-prod
-  TF_DIR: infra/ec2-compose
+  TF_DIR: infra/production-k3s
   TF_STATE_BUCKET: capitonic-polybot-tfstate-192200846560-euw1
-  APP_SECRET_NAME: capitonic/polymarket-bot/production
   TF_IN_AUTOMATION: "true"
-  TF_VAR_polymarket_bot_image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/polymarket-bot@sha256:0000000000000000000000000000000000000000000000000000000000000000
-  TF_VAR_ingester_image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/ingester@sha256:0000000000000000000000000000000000000000000000000000000000000000
-  TF_VAR_db_migrate_image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/db-migrate@sha256:0000000000000000000000000000000000000000000000000000000000000000
-  TF_VAR_ingester_git_revision: 0000000000000000000000000000000000000000
 
 jobs:
-  teardown-stack:
-    name: Destroy production stack resources
+  destroy:
+    name: Backup and destroy the production runtime
     if: github.event_name != 'workflow_dispatch' || inputs.confirm_destroy == 'destroy-production-ec2'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    concurrency:
-      group: production-ec2-compose
-      cancel-in-progress: false
+    timeout-minutes: 90
     steps:
-      - name: Checkout selected revision
-        uses: actions/checkout@v6
-
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
+      - uses: actions/checkout@v6
+        with:
+          ref: production
+      - uses: hashicorp/setup-terraform@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-
-      - name: Load masked Cloudflare inputs
+      - name: Load Cloudflare inputs
         run: scripts/load-cloudflare-terraform-env.sh
-
-      - name: Initialize Ireland Terraform state
-        shell: bash
+      - name: Initialize production state
         run: |
-          set -euo pipefail
           cat > "$TF_DIR/backend.hcl" <<EOF
           bucket       = "$TF_STATE_BUCKET"
-          key          = "production/ec2-compose/terraform.tfstate"
+          key          = "production/k3s/terraform.tfstate"
           region       = "$AWS_REGION"
           encrypt      = true
           use_lockfile = true
           EOF
           terraform -chdir="$TF_DIR" init -backend-config=backend.hcl
           terraform -chdir="$TF_DIR" validate
-
-      - name: Destroy production stack and dependencies
-        run: terraform -chdir="$TF_DIR" destroy -auto-approve -input=false -lock-timeout=60s
-
-      - name: Verify production stack teardown
-        shell: bash
+      - name: Create and validate optional S3 backup
+        if: inputs.backup_mode != 'skip'
         run: |
           set -euo pipefail
-          set +x
-          active="$(aws ec2 describe-instances \
-            --filters Name=tag:Project,Values=capitonic-polymarket-bot Name=tag:Environment,Values=production \
-              Name=instance-state-name,Values=pending,running,stopping,stopped \
+          instance_id="$(terraform -chdir="$TF_DIR" output -raw instance_id)"
+          scripts/production/run-ssm-command.sh "$instance_id" 3600 'Backup production before teardown' \
+            'cd /opt/polymarket-bot && scripts/production/backup-k3s.sh'
+      - name: Destroy ephemeral production resources
+        run: terraform -chdir="$TF_DIR" destroy -auto-approve -input=false -lock-timeout=5m
+      - name: Verify runtime removal and durable foundation retention
+        run: |
+          set -euo pipefail
+          active="$(aws ec2 describe-instances --region "$AWS_REGION" \
+            --filters Name=tag:Name,Values=capitonic-polymarket-bot Name=tag:Environment,Values=production Name=instance-state-name,Values=pending,running,stopping,stopped \
             --query 'Reservations[].Instances[].InstanceId' --output text)"
-          [ -z "$active" ] || { echo "Production stack instances remain: $active" >&2; exit 1; }
+          [ -z "$active" ]
           ! aws iam get-role --role-name capitonic-polymarket-bot-host >/dev/null 2>&1
           ! aws iam get-instance-profile --instance-profile-name capitonic-polymarket-bot-host >/dev/null 2>&1
-          [ "$(aws ec2 describe-security-groups --filters Name=group-name,Values=capitonic-polymarket-bot-sg \
-            --query 'length(SecurityGroups)' --output text)" = "0" ]
-
-          for hostname in ssh.capitonic.com monitor.capitonic.com; do
-            count="$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-              "https://api.cloudflare.com/client/v4/zones/$TF_VAR_cloudflare_zone_id/dns_records?name=$hostname" \
-              | jq '.result | length')"
-            [ "$count" = "0" ] || { echo "Cloudflare DNS remains for $hostname" >&2; exit 1; }
-          done
+          [ "$(aws ec2 describe-security-groups --region "$AWS_REGION" --filters Name=group-name,Values=capitonic-polymarket-bot-sg --query 'length(SecurityGroups)' --output text)" = 0 ]
+          dns_count="$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/zones/$TF_VAR_cloudflare_zone_id/dns_records?name=monitor.capitonic.com" | jq '.result | length')"
+          [ "$dns_count" = 0 ]
           access_count="$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$TF_VAR_cloudflare_account_id/access/apps" \
-            | jq '[.result[] | select(.domain == "ssh.capitonic.com" or .domain == "monitor.capitonic.com")] | length')"
-          [ "$access_count" = "0" ]
-
-  teardown-management:
-    name: Destroy disposable management host
-    needs: teardown-stack
-    permissions:
-      contents: read
-      id-token: write
-    uses: ./.github/workflows/teardown-management-ec2.yml
-    with:
-      confirm_destroy: teardown-management-ec2
+            | jq '[.result[] | select(.domain == "monitor.capitonic.com")] | length')"
+          [ "$access_count" = 0 ]
+          aws s3api head-bucket --bucket capitonic-polybot-tfstate-192200846560-euw1
+          aws s3api head-bucket --bucket capitonic-polybot-backups-192200846560-euw1
+          aws secretsmanager describe-secret --region "$AWS_REGION" --secret-id capitonic/polymarket-bot/production >/dev/null
+          for repository in polymarket-bot ingester db-migrate; do
+            aws ecr describe-repositories --region "$AWS_REGION" --repository-names "capitonic/$repository" >/dev/null
+          done

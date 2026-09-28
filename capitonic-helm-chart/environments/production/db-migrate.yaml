@@ -1,0 +1,9 @@
+environment: production
+image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/db-migrate@sha256:0000000000000000000000000000000000000000000000000000000000000000
+imagePullPolicy: IfNotPresent
+imagePullSecrets:
+  - name: ecr-registry
+release:
+  version: v0.2.0-rc.1
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  sourceRevision: 61ace8bd58ba479d6bef089e30642aee559298a1

@@ -89,6 +89,9 @@ Migration creation and initial feature or defect validation follow Database Chan
 - Golden status and change detection are component-specific. Shared code or build-input changes affect every image that consumes them.
 - Reuse a selected immutable image when it exists. Do not replace a selected digest with a rebuild without explicit authorization.
 - Golden tags are provenance records. Do not delete or move them to hide a later failure; use a rejected or abandoned tag to exclude a failed artifact or lineage from future admission.
+- Publish an accepted RC's `development`, checkpoint, candidate, image-hash, golden, and `rc/<component>/<version>` refs in one `git push --atomic` operation. Never publish those related refs through separate pushes, and never let GitHub CI allocate a competing RC number. The committed chart pin, RC Git tag, and immutable registry RC tag must identify the same component version and accepted image provenance before production promotion.
+- Registry repositories used by production are immutable. CI may create an absent approved SemVer RC tag or verify an existing approved CI publication on a retry, but it must never move or overwrite an RC tag and must never publish a mutable production tag.
+- Local image CI and CD qualify and deploy the Rancher Desktop k3s candidate only. They may publish the atomic Git provenance required to admit an RC, but they must not build, stage, tag, or push the production ECR image; GitHub CI owns the production ARM64 build and immutable ECR RC publication.
 
 ## Configuration-Only Promotion
 

@@ -8,7 +8,7 @@ metadata:
     app.kubernetes.io/component: trading
     app.kubernetes.io/part-of: capitonic-platform
     app.kubernetes.io/managed-by: Helm
-    capitonic.io/environment: dev
+    capitonic.io/environment: {{ $.Values.environment | quote }}
     capitonic.io/rollout-domain: trading
 spec:
   replicas: {{ .Values.replicaCount }}
@@ -24,9 +24,10 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: trading
         app.kubernetes.io/part-of: capitonic-platform
-        capitonic.io/environment: dev
+        capitonic.io/environment: {{ $.Values.environment | quote }}
         capitonic.io/rollout-domain: trading
     spec:
+      imagePullSecrets: {{ toJson .Values.imagePullSecrets }}
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 60
       securityContext:
@@ -35,7 +36,7 @@ spec:
       containers:
         - name: polymarket-bot
           image: {{ .Values.image | quote }}
-          imagePullPolicy: Never
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
           ports:
             - {name: http, containerPort: 8097}
           env:

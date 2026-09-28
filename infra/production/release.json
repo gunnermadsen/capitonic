@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "region": "eu-west-1",
+  "architecture": "arm64",
+  "components": {
+    "polymarket-bot": {
+      "repository": "capitonic/polymarket-bot",
+      "rcVersion": "v3.2.2-rc.1",
+      "sourceRevision": "61ace8bd58ba479d6bef089e30642aee559298a1"
+    },
+    "ingester": {
+      "repository": "capitonic/ingester",
+      "rcVersion": "v1.2.1-rc.5",
+      "sourceRevision": "dc93c77a80efddb138521bee5679cf2f343a39f5"
+    },
+    "db-migrate": {
+      "repository": "capitonic/db-migrate",
+      "rcVersion": "v0.2.0-rc.1",
+      "sourceRevision": "61ace8bd58ba479d6bef089e30642aee559298a1"
+    }
+  }
+}

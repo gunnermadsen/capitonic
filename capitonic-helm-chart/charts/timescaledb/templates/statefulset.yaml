@@ -8,7 +8,7 @@ metadata:
     app.kubernetes.io/component: database
     app.kubernetes.io/part-of: capitonic-platform
     app.kubernetes.io/managed-by: Helm
-    capitonic.io/environment: dev
+    capitonic.io/environment: {{ $.Values.environment | quote }}
     capitonic.io/rollout-domain: database
 spec:
   serviceName: timescaledb-headless
@@ -27,15 +27,16 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: database
         app.kubernetes.io/part-of: capitonic-platform
-        capitonic.io/environment: dev
+        capitonic.io/environment: {{ $.Values.environment | quote }}
         capitonic.io/rollout-domain: database
     spec:
+      imagePullSecrets: {{ toJson .Values.imagePullSecrets }}
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 60
       containers:
         - name: timescaledb
           image: {{ .Values.image | quote }}
-          imagePullPolicy: Never
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
           ports:
             - {name: postgres, containerPort: 5432}
           env:
@@ -86,7 +87,7 @@ spec:
             - {name: data, mountPath: /var/lib/postgresql/data}
         - name: postgres-exporter
           image: {{ .Values.metricsImage | quote }}
-          imagePullPolicy: Never
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
           ports:
             - {name: metrics, containerPort: 9187}
           env:

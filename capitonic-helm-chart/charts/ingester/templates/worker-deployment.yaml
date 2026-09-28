@@ -7,7 +7,7 @@ metadata:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/part-of: capitonic-platform
     app.kubernetes.io/managed-by: Helm
-    capitonic.io/environment: dev
+    capitonic.io/environment: {{ $.Values.environment | quote }}
     capitonic.io/rollout-domain: ingestion
 spec:
 {{- if not .Values.workerScaling.enabled }}
@@ -27,19 +27,21 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: ingestion
         app.kubernetes.io/part-of: capitonic-platform
-        capitonic.io/environment: dev
+        capitonic.io/environment: {{ $.Values.environment | quote }}
         capitonic.io/rollout-domain: ingestion
     spec:
+      imagePullSecrets: {{ toJson .Values.imagePullSecrets }}
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 120
       securityContext:
         runAsNonRoot: true
         runAsUser: {{ .Values.archiveStorage.runAsUser }}
         runAsGroup: {{ .Values.archiveStorage.runAsGroup }}
+        fsGroup: {{ .Values.archiveStorage.runAsGroup }}
       containers:
         - name: ingester-worker
           image: {{ .Values.image | quote }}
-          imagePullPolicy: Never
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
           ports:
             - {name: http, containerPort: 8099}
             - {name: grpc, containerPort: 50051}

@@ -22,6 +22,8 @@ jobs:
   teardown-verification:
     needs: initial-deployment
     uses: ./.github/workflows/teardown-management-ec2.yml
+    with:
+      confirm_destroy: teardown-management-ec2
 
   final-deployment:
     needs: teardown-verification

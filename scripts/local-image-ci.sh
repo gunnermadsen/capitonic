@@ -7,7 +7,7 @@ usage() {
 Usage: scripts/local-image-ci.sh <polymarket-bot|ingester|db-migrate> --checks-only
        scripts/local-image-ci.sh <polymarket-bot|ingester|db-migrate> --next-version
        scripts/local-image-ci.sh <polymarket-bot|ingester|db-migrate> --build
-       scripts/local-image-ci.sh <polymarket-bot|ingester> --tag-rc
+       scripts/local-image-ci.sh <polymarket-bot|ingester|db-migrate> --tag-rc
 
 Run local checks on working-tree changes, or check a clean commit and build its production image.
 --build selects the next unused local candidate version only for a distinct built image.
@@ -85,9 +85,6 @@ image_inputs_sha256() {
 
 tag_accepted_rc() {
   local accepted checkpoint chart version image id source local_version candidate_tag hash_tag golden_tag rc_tag
-  [[ "$component" == ingester || "$component" == polymarket-bot ]] || {
-    echo "RC chart tagging supports ingester and polymarket-bot only." >&2; exit 64;
-  }
   require_clean_source
   accepted="$(git rev-parse --verify development^{commit})"
   checkpoint="checkpoint/development/git-$accepted"
@@ -135,6 +132,8 @@ tag_accepted_rc() {
       echo "Accepted ingester chart image ID or source revision disagrees." >&2; exit 67;
     }
     deployments=(ingester-master ingester-worker)
+  elif [[ "$component" == db-migrate ]]; then
+    deployments=()
   else
     deployments=(polymarket-bot)
   fi
@@ -152,6 +151,19 @@ tag_accepted_rc() {
       echo "Accepted pods do not all run the selected image ID: $deployment" >&2; exit 70;
     }
   done
+  if [[ "$component" == db-migrate ]]; then
+    kubectl -n capitonic get job db-migrate -o json | jq -e --arg image "$image" '
+      .spec.template.spec.containers[0].image == $image and
+      .status.succeeded == 1 and (.status.failed // 0) == 0' >/dev/null || {
+      echo "Accepted db-migrate Job is not complete with the RC image." >&2; exit 70;
+    }
+    kubectl -n capitonic get pods -l job-name=db-migrate -o json | jq -e --arg id "$id" '
+      [.items[] | select(.metadata.deletionTimestamp == null)] as $pods |
+      ($pods | length) == 1 and all($pods[];
+        .status.phase == "Succeeded" and .status.containerStatuses[0].imageID == $id)' >/dev/null || {
+      echo "Accepted db-migrate pod does not use the selected image ID." >&2; exit 70;
+    }
+  fi
   rc_tag="rc/$component/$version"
   if git show-ref --verify --quiet "refs/tags/$rc_tag"; then
     [[ "$(git cat-file -t "refs/tags/$rc_tag")" == tag

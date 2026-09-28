@@ -1,38 +1,27 @@
-name: Deploy Full Production Stack
+name: Provision Complete Production Environment
 
 on:
   workflow_dispatch:
-    inputs:
-      polymarket_bot_image_revision:
-        description: Git revision for the immutable polymarket-bot image
-        required: true
-        type: string
-        default: 65fc0c357cda1a15e181cbd3d84bb491bd0ec5fd
-      ingester_image_revision:
-        description: Git revision for the immutable ingester image
-        required: true
-        type: string
-        default: 65fc0c357cda1a15e181cbd3d84bb491bd0ec5fd
-      db_migrate_image_revision:
-        description: Git revision for the immutable db-migrate image
-        required: true
-        type: string
-        default: 45aac939c5237bb8490028b043e984a612d77c44
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
-  management:
-    name: Provision management host
-    uses: ./.github/workflows/deploy-management-ec2.yml
-
-  production-stack:
-    name: Provision trading stack
-    needs: management
+  infrastructure:
+    name: Provision the single-node runtime
     uses: ./.github/workflows/deploy-production-ec2.yml
     with:
-      polymarket_bot_image_revision: ${{ inputs.polymarket_bot_image_revision }}
-      ingester_image_revision: ${{ inputs.ingester_image_revision }}
-      db_migrate_image_revision: ${{ inputs.db_migrate_image_revision }}
+      terraform_action: apply
+
+  secrets:
+    name: Bootstrap Kubernetes secrets
+    needs: infrastructure
+    uses: ./.github/workflows/refresh-production-secrets.yml
+    with:
+      restart_scope: none
+
+  deployment:
+    name: Promote, deploy, and verify the complete stack
+    needs: secrets
+    uses: ./.github/workflows/CD.yml

@@ -1,0 +1,15 @@
+environment: production
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+serverRootUrl: https://monitor.capitonic.com/
+ingress:
+  enabled: true
+  host: monitor.capitonic.com
+  path: /
+  tls:
+    enabled: true
+    secretName: grafana-tls
+  clusterIssuer: letsencrypt-production
+storage:
+  className: local-path
+  size: 2Gi

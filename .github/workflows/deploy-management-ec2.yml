@@ -8,6 +8,10 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: capitonic-production
+  cancel-in-progress: false
+
 env:
   AWS_REGION: eu-west-1
   AWS_ROLE_ARN: arn:aws:iam::192200846560:role/capitonic-polymarket-bot-github-actions-prod
@@ -20,13 +24,11 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    concurrency:
-      group: production-management-ec2
-      cancel-in-progress: false
-
     steps:
       - name: Checkout selected revision
         uses: actions/checkout@v6
+        with:
+          ref: production
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v4

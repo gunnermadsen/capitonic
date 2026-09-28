@@ -70,9 +70,9 @@ jobs:
           changed() {
             if git diff --quiet "$BASE_SHA" "$CURRENT_SHA" -- "$@"; then echo false; else echo true; fi
           }
-          echo "polymarket_bot=$(changed Cargo.toml Cargo.lock packages/polymarket-bot packages/btc-directional-model/runtime-models common/proto .github/workflows/CI.yml)" >> "$GITHUB_OUTPUT"
-          echo "ingester=$(changed Cargo.toml Cargo.lock packages/market-data-ingester common/proto .github/workflows/CI.yml)" >> "$GITHUB_OUTPUT"
-          echo "db_migrate=$(changed packages/db-migrate .github/workflows/CI.yml)" >> "$GITHUB_OUTPUT"
+          echo "polymarket_bot=$(changed Cargo.toml Cargo.lock packages/polymarket-bot packages/btc-directional-model/runtime-models common/proto infra/production/release.json)" >> "$GITHUB_OUTPUT"
+          echo "ingester=$(changed Cargo.toml Cargo.lock packages/market-data-ingester common/proto infra/production/release.json)" >> "$GITHUB_OUTPUT"
+          echo "db_migrate=$(changed packages/db-migrate infra/production/release.json)" >> "$GITHUB_OUTPUT"
 
   rust-tests:
     name: Rust tests
@@ -171,10 +171,33 @@ jobs:
           --no-deps
           --all-features
 
+  db-migrate-tests:
+    name: Database migration package tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: packages/db-migrate/package-lock.json
+      - name: Build and test db-migrate
+        run: |
+          npm ci --prefix packages/db-migrate
+          npm run build --prefix packages/db-migrate
+          node --test packages/db-migrate/tests/*.test.js
+
+  outage-recovery-tests:
+    name: Outage recovery integration tests
+    uses: ./.github/workflows/outage-recovery.yml
+
   production-image-validation:
     name: Build and push ${{ matrix.name }} production image
     if: github.ref == 'refs/heads/development'
-    needs: [changes, rust-tests, market-data-ingester-tests]
+    needs: [repository-layout, changes, rust-tests, market-data-ingester-tests, db-migrate-tests, outage-recovery-tests]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -201,6 +224,8 @@ jobs:
             change_key: db_migrate
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: docker/setup-buildx-action@v4
       - name: Configure AWS credentials
         if: needs.changes.outputs[matrix.change_key] == 'true'
@@ -211,21 +236,65 @@ jobs:
       - name: Log in to Amazon ECR
         if: needs.changes.outputs[matrix.change_key] == 'true'
         uses: aws-actions/amazon-ecr-login@v2
-      - name: Build production image
+      - name: Resolve accepted semver RC identity
         if: needs.changes.outputs[matrix.change_key] == 'true'
+        id: release
+        shell: bash
+        env:
+          COMPONENT: ${{ matrix.name }}
+          REPOSITORY: ${{ matrix.repository }}
+        run: |
+          set -euo pipefail
+          rc_version="$(jq -er --arg component "$COMPONENT" '.components[$component].rcVersion' infra/production/release.json)"
+          source_revision="$(jq -er --arg component "$COMPONENT" '.components[$component].sourceRevision' infra/production/release.json)"
+          [[ "$rc_version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.(0|[1-9][0-9]*)$ ]]
+          [[ "$source_revision" =~ ^[0-9a-f]{40}$ ]]
+          git merge-base --is-ancestor "$source_revision" "$GITHUB_SHA"
+          rc_git_tag="rc/$COMPONENT/$rc_version"
+          [[ "$(git rev-list -n1 "$rc_git_tag")" == "$GITHUB_SHA" ]]
+          existing_digest="$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$REPOSITORY" \
+            --image-ids imageTag="$rc_version" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
+          if [[ "$existing_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            manifest="$(aws ecr batch-get-image --region "$AWS_REGION" --repository-name "$REPOSITORY" \
+              --image-ids imageDigest="$existing_digest" \
+              --accepted-media-types application/vnd.oci.image.manifest.v1+json application/vnd.docker.distribution.manifest.v2+json \
+              --query 'images[0].imageManifest' --output text)"
+            config_digest="$(jq -er '.config.digest' <<<"$manifest")"
+            config_url="$(aws ecr get-download-url-for-layer --region "$AWS_REGION" --repository-name "$REPOSITORY" \
+              --layer-digest "$config_digest" --query downloadUrl --output text)"
+            curl -fsSL "$config_url" | jq -e --arg revision "$source_revision" \
+              '.os == "linux" and .architecture == "arm64" and .config.Labels["org.opencontainers.image.revision"] == $revision' >/dev/null
+          fi
+          {
+            echo "rc_version=$rc_version"
+            echo "source_revision=$source_revision"
+            echo "existing_rc=$([[ "$existing_digest" =~ ^sha256:[0-9a-f]{64}$ ]] && echo true || echo false)"
+            echo "tags<<EOF"
+            echo "$ECR_REGISTRY/$REPOSITORY:$source_revision"
+            if [[ ! "$existing_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "$ECR_REGISTRY/$REPOSITORY:$rc_version"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: Checkout accepted component source
+        if: needs.changes.outputs[matrix.change_key] == 'true' && steps.release.outputs.existing_rc != 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.release.outputs.source_revision }}
+          path: build-source
+      - name: Build and publish ARM64 image
+        if: needs.changes.outputs[matrix.change_key] == 'true' && steps.release.outputs.existing_rc != 'true'
         uses: docker/build-push-action@v7
         with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64
+          context: build-source
+          file: build-source/${{ matrix.dockerfile }}
+          platforms: linux/arm64
           push: true
           provenance: mode=max
           sbom: true
           build-args: |
             RUST_VERSION=${{ env.RUST_TOOLCHAIN }}
-            ${{ matrix.revision_arg }}=${{ github.sha }}
-          tags: |
-            ${{ env.ECR_REGISTRY }}/${{ matrix.repository }}:${{ github.sha }}
-            ${{ env.ECR_REGISTRY }}/${{ matrix.repository }}:production
-          cache-from: type=gha,scope=${{ matrix.cache_scope }}
-          cache-to: type=gha,scope=${{ matrix.cache_scope }},mode=max
+            ${{ matrix.revision_arg }}=${{ steps.release.outputs.source_revision }}
+          tags: ${{ steps.release.outputs.tags }}
+          cache-from: type=gha,scope=${{ matrix.cache_scope }}-arm64
+          cache-to: type=gha,scope=${{ matrix.cache_scope }}-arm64,mode=max

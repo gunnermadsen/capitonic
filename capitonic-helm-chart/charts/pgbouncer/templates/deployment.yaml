@@ -8,7 +8,7 @@ metadata:
     app.kubernetes.io/component: database
     app.kubernetes.io/part-of: capitonic-platform
     app.kubernetes.io/managed-by: Helm
-    capitonic.io/environment: dev
+    capitonic.io/environment: {{ $.Values.environment | quote }}
     capitonic.io/rollout-domain: database
 spec:
   replicas: 1
@@ -24,16 +24,17 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: database
         app.kubernetes.io/part-of: capitonic-platform
-        capitonic.io/environment: dev
+        capitonic.io/environment: {{ $.Values.environment | quote }}
         capitonic.io/rollout-domain: database
       annotations:
         checksum/config: {{ (.Files.Glob "assets/*").AsConfig | sha256sum }}
     spec:
+      imagePullSecrets: {{ toJson .Values.imagePullSecrets }}
       automountServiceAccountToken: false
       containers:
         - name: pgbouncer
           image: {{ .Values.image | quote }}
-          imagePullPolicy: Never
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
           command: [/usr/local/bin/capitonic-pgbouncer-entrypoint.sh]
           args: [/usr/bin/pgbouncer, /etc/pgbouncer/pgbouncer.ini]
           ports:
@@ -65,7 +66,7 @@ spec:
             - {name: tmp, mountPath: /tmp}
         - name: pgbouncer-exporter
           image: {{ .Values.metricsImage | quote }}
-          imagePullPolicy: Never
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
           ports:
             - {name: metrics, containerPort: 9127}
           env:

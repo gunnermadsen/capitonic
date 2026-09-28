@@ -1,4 +1,7 @@
-image: capitonic/ingester:v1.2.1-rc.4
+image: capitonic/ingester:v1.2.1-rc.5
+environment: development
+imagePullPolicy: Never
+imagePullSecrets: []
 imageDigest: sha256:2bde65533580db71b65a3e9246d2fc2bc5e79cff308df86d3b4a47f516f0565c
 gitRevision: dc93c77a80efddb138521bee5679cf2f343a39f5
 deploymentId: capitonic-k3s-dev
@@ -18,7 +21,8 @@ workerScaling:
   maxReplicas: 14
 archiveStorage:
   path: /Volumes/docker-data/polymarket-bot
-  nodeName: lima-rancher-desktop
   size: 300Gi
   runAsUser: 501
   runAsGroup: 1000
+apiIngress:
+  enabled: true

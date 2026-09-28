@@ -1,24 +1,18 @@
-name: Deploy Production Images
+name: Deploy Production
 
 on:
+  workflow_call:
   workflow_dispatch:
-    inputs:
-      polymarket_bot_image_revision:
-        description: Git revision for the immutable polymarket-bot image
-        required: true
-        type: string
-      ingester_image_revision:
-        description: Git revision for the immutable ingester image
-        required: true
-        type: string
-      db_migrate_image_revision:
-        description: Git revision for the immutable db-migrate image
-        required: true
-        type: string
+  push:
+    branches: [production]
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
+
+concurrency:
+  group: capitonic-production
+  cancel-in-progress: false
 
 env:
   AWS_REGION: eu-west-1
@@ -27,96 +21,78 @@ env:
 
 jobs:
   deploy:
-    name: Roll out immutable production images
+    name: Promote, pin, deploy, and verify
+    if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[production-pins]')
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    concurrency:
-      group: production-image-deployment
-      cancel-in-progress: false
+    timeout-minutes: 60
     steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: production
+      - uses: docker/setup-buildx-action@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-
-      - name: Resolve immutable image references
-        shell: bash
-        env:
-          POLYMARKET_BOT_IMAGE_REVISION: ${{ inputs.polymarket_bot_image_revision }}
-          INGESTER_IMAGE_REVISION: ${{ inputs.ingester_image_revision }}
-          DB_MIGRATE_IMAGE_REVISION: ${{ inputs.db_migrate_image_revision }}
+      - name: Install pinned yq
         run: |
           set -euo pipefail
-          set +x
-          for revision in "$POLYMARKET_BOT_IMAGE_REVISION" "$INGESTER_IMAGE_REVISION" "$DB_MIGRATE_IMAGE_REVISION"; do
-            [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
-          done
-          resolve_digest() {
-            aws ecr describe-images --repository-name "$1" --image-ids "imageTag=$2" \
-              --query 'imageDetails[0].imageDigest' --output text
-          }
-          bot_digest="$(resolve_digest capitonic/polymarket-bot "$POLYMARKET_BOT_IMAGE_REVISION")"
-          ingester_digest="$(resolve_digest capitonic/ingester "$INGESTER_IMAGE_REVISION")"
-          migrate_digest="$(resolve_digest capitonic/db-migrate "$DB_MIGRATE_IMAGE_REVISION")"
-          for digest in "$bot_digest" "$ingester_digest" "$migrate_digest"; do
-            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          done
-          {
-            echo "BOT_IMAGE=$ECR_REGISTRY/capitonic/polymarket-bot@$bot_digest"
-            echo "INGESTER_IMAGE=$ECR_REGISTRY/capitonic/ingester@$ingester_digest"
-            echo "MIGRATE_IMAGE=$ECR_REGISTRY/capitonic/db-migrate@$migrate_digest"
-            echo "POLYMARKET_BOT_IMAGE_REVISION=$POLYMARKET_BOT_IMAGE_REVISION"
-            echo "INGESTER_IMAGE_REVISION=$INGESTER_IMAGE_REVISION"
-            echo "DB_MIGRATE_IMAGE_REVISION=$DB_MIGRATE_IMAGE_REVISION"
-          } >> "$GITHUB_ENV"
-
-      - name: Deploy through SSM
+          curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.47.2/yq_linux_amd64 -o /tmp/yq
+          curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.47.2/checksums -o /tmp/yq-checksums
+          expected="$(awk '$2 == "yq_linux_amd64" {print $1}' /tmp/yq-checksums)"
+          [ -n "$expected" ]
+          echo "$expected  /tmp/yq" | sha256sum -c -
+          sudo install -m 0755 /tmp/yq /usr/local/bin/yq
+      - name: Promote accepted RC digests and write exact Helm pins
+        run: scripts/production/promote-production-images.sh
+      - name: Commit generated production pins
+        id: pins
         shell: bash
         run: |
           set -euo pipefail
-          set +x
-          instance_id="$(aws ec2 describe-instances \
-            --filters Name=tag:Name,Values=capitonic-polymarket-bot Name=tag:Environment,Values=production \
-              Name=instance-state-name,Values=running \
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add infra/production/release.json capitonic-helm-chart/environments/production capitonic-helm-chart/charts/*/Chart.yaml
+          if git diff --cached --quiet; then
+            echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m 'release: pin promoted production digests [production-pins]'
+            git push origin HEAD:production
+            echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Resolve the single production node
+        id: host
+        shell: bash
+        run: |
+          set -euo pipefail
+          instance_id="$(aws ec2 describe-instances --region "$AWS_REGION" \
+            --filters Name=tag:Name,Values=capitonic-polymarket-bot Name=tag:Environment,Values=production Name=instance-state-name,Values=running \
             --query 'Reservations[].Instances[].InstanceId' --output text)"
-          [ "$(wc -w <<< "$instance_id")" -eq 1 ] || { echo "Expected exactly one running production stack instance." >&2; exit 1; }
-          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
-
-          checkout_command="$(printf \
-            'cd /opt/polymarket-bot; git fetch --no-tags origin %q; git checkout --detach %q' \
-            "$GITHUB_SHA" "$GITHUB_SHA")"
-          update_env_command="$(printf \
-            "cd /opt/polymarket-bot; sed -i -e '/^[A-Z_]*_IMAGE=/d' -e '/^INGESTER_GIT_REVISION=/d' -e '/^INGESTER_IMAGE_DIGEST=/d' .env; printf 'POLYMARKET_BOT_IMAGE=%%s\\nINGESTER_IMAGE=%%s\\nDB_MIGRATE_IMAGE=%%s\\nINGESTER_IMAGE_DIGEST=%%s\\nINGESTER_GIT_REVISION=%%s\\n' %q %q %q %q %q >> .env" \
-            "$BOT_IMAGE" "$INGESTER_IMAGE" "$MIGRATE_IMAGE" "${INGESTER_IMAGE#*@}" "$INGESTER_IMAGE_REVISION")"
-          deployment_script="$(printf \
-            'set -euo pipefail; %s; %s; %s; %s; %s; %s; %s' \
-            "$checkout_command" \
-            "$update_env_command" \
-            '/usr/local/sbin/polymarket-ecr-login' \
-            'cd /opt/polymarket-bot && docker compose -f docker-compose.production.yml pull polymarket-bot ingester-master ingester-worker db-migrate' \
-            'cd /opt/polymarket-bot && docker compose -f docker-compose.production.yml up -d --no-build --scale ingester-worker=8 db-migrate pgbouncer ingester-master ingester-worker polymarket-bot' \
-            'cd /opt/polymarket-bot && docker compose -f docker-compose.production.yml ps' \
-            'curl -fsS http://127.0.0.1:8097/health')"
-          encoded_deployment_script="$(printf '%s' "$deployment_script" | base64 -w 0)"
-          bash_command="printf '%s' '$encoded_deployment_script' | base64 -d | /bin/bash"
-          parameters="$(jq -n \
-            --arg bash_command "$bash_command" \
-            '{commands:[$bash_command]}')"
-          command_id="$(aws ssm send-command --instance-ids "$instance_id" --document-name AWS-RunShellScript \
-            --parameters "$parameters" --comment "Deploy immutable Capitonic production images" \
-            --timeout-seconds 1500 --query 'Command.CommandId' --output text)"
-          aws ssm wait command-executed --command-id "$command_id" --instance-id "$instance_id" || true
-          result="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance_id" \
-            --query '{Status:Status,Output:StandardOutputContent,Error:StandardErrorContent}' --output json)"
-          jq . <<< "$result"
-          [ "$(jq -r .Status <<< "$result")" = "Success" ]
-
-      - name: Publish deployment summary
+          [ "$(wc -w <<< "$instance_id")" -eq 1 ]
+          echo "instance_id=$instance_id" >> "$GITHUB_OUTPUT"
+      - name: Deploy exact revision through SSM
+        env:
+          INSTANCE_ID: ${{ steps.host.outputs.instance_id }}
+          DEPLOY_REVISION: ${{ steps.pins.outputs.revision }}
         run: |
-          echo "### Immutable image deployment complete" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Polymarket bot revision: $POLYMARKET_BOT_IMAGE_REVISION" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Ingester revision: $INGESTER_IMAGE_REVISION" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Database migration revision: $DB_MIGRATE_IMAGE_REVISION" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Deployment transport: AWS Systems Manager" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Image publication was not performed by CD" >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          [[ "$DEPLOY_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          command="cd /opt/polymarket-bot && scripts/production/checkout-revision.sh $DEPLOY_REVISION && scripts/production/deploy-k3s.sh"
+          scripts/production/run-ssm-command.sh "$INSTANCE_ID" 3300 'Deploy and verify Capitonic production' "$command"
+      - name: Record observability provisioning provenance
+        env:
+          DEPLOY_REVISION: ${{ steps.pins.outputs.revision }}
+        run: |
+          set -euo pipefail
+          timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+          config_hash="$(find capitonic-helm-chart/charts/{grafana,prometheus,loki,alloy} capitonic-helm-chart/environments/production -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+          tag="provisioned/observability/production/$timestamp"
+          git tag -a "$tag" "$DEPLOY_REVISION" -m "Target: production
+          Provisioned at: $timestamp
+          Originating ref: ${GITHUB_REF_NAME:-production}
+          Result: success
+          Configuration SHA-256: $config_hash
+          Components: Grafana, Prometheus, Loki, Alloy
+          Paths: capitonic-helm-chart/charts/{grafana,prometheus,loki,alloy}; capitonic-helm-chart/environments/production"
+          git push origin "refs/tags/$tag"

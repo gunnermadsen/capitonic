@@ -1,0 +1,23 @@
+environment: production
+image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/ingester@sha256:0000000000000000000000000000000000000000000000000000000000000000
+imagePullPolicy: IfNotPresent
+imagePullSecrets:
+  - name: ecr-registry
+imageDigest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+gitRevision: dc93c77a80efddb138521bee5679cf2f343a39f5
+deploymentId: capitonic-k3s-production
+release:
+  version: v1.2.1-rc.5
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  sourceRevision: dc93c77a80efddb138521bee5679cf2f343a39f5
+workerScaling:
+  enabled: true
+  minReplicas: 4
+  maxReplicas: 4
+archiveStorage:
+  path: /var/lib/rancher/k3s/storage/capitonic-archives
+  size: 10Gi
+  runAsUser: 10003
+  runAsGroup: 10003
+apiIngress:
+  enabled: false

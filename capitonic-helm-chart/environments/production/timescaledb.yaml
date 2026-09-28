@@ -1,0 +1,9 @@
+environment: production
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+storage:
+  className: local-path
+  size: 30Gi
+resources:
+  requests: {cpu: 500m, memory: 1Gi}
+  limits: {cpu: 2000m, memory: 3Gi}
