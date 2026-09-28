@@ -14,7 +14,7 @@ use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE, Engine as _};
 use chrono::{DateTime, Utc};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{future::try_join_all, SinkExt, StreamExt};
 use hmac::{Hmac, Mac as _};
 use polymarket_client_sdk_v2::{
     auth::{state::Authenticated, Credentials, LocalSigner, Normal, Signer as _},
@@ -109,6 +109,7 @@ const USER_WS_RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
 const USER_WS_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(30);
 const USER_WS_EVENT_QUEUE_CAPACITY: usize = 256;
 const USER_WS_CONTROL_QUEUE_CAPACITY: usize = 16;
+const MAX_REUSABLE_COLLATERAL_EVIDENCE_AGE: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Deserialize)]
 struct RpcResponse {
@@ -137,6 +138,8 @@ pub struct LiveVenue {
     http_fallback_requested: Arc<AtomicBool>,
     post_order_reconciliation_generation: Arc<AtomicU64>,
     post_order_reconciled_generation: Arc<AtomicU64>,
+    collateral_evidence: Arc<Mutex<Option<LiveCollateralEvidence>>>,
+    collateral_evidence_generation: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Clone)]
@@ -163,6 +166,16 @@ struct LiveVenueState {
     reconciled_safety_generation: Option<u64>,
     pending_settlement_count: usize,
     reconciliation_error: Option<String>,
+    order_metadata_market_id: Option<String>,
+    order_metadata_token_ids: HashSet<String>,
+    order_metadata_ready: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LiveCollateralEvidence {
+    available_usdc: Decimal,
+    checked_at: DateTime<Utc>,
+    generation: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -243,6 +256,9 @@ impl LiveVenueState {
             reconciled_safety_generation: None,
             pending_settlement_count: 0,
             reconciliation_error: None,
+            order_metadata_market_id: None,
+            order_metadata_token_ids: HashSet::new(),
+            order_metadata_ready: false,
         }
     }
 }

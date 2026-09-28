@@ -36,7 +36,7 @@ requested_version=""
 case "$mode" in
   --checks-only|--next-version|--build|--tag-rc) ;;
   *)
-    if [[ "$mode" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-local\.([1-9][0-9]*)$ ]]; then
+    if [[ "$mode" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-local\.(0|[1-9][0-9]*)$ ]]; then
       requested_version="$mode"
       mode=--build
     else
@@ -49,7 +49,7 @@ case "$component" in
   polymarket-bot)
     dockerfile="packages/polymarket-bot/Dockerfile.production"
     revision_arg="POLYMARKET_GIT_REVISION"
-    base_version="3.2.1"
+    base_version="3.2.2"
     checks_description="local formatting, Clippy, and component tests passed"
     image_inputs=(.dockerignore Cargo.toml Cargo.lock packages/polymarket-bot/Cargo.toml packages/market-data-ingester/Cargo.toml packages/polymarket-bot/build.rs common/proto packages/polymarket-bot/src packages/btc-directional-model/runtime-models "$dockerfile")
     ;;
@@ -107,7 +107,7 @@ tag_accepted_rc() {
   source="$(nerdctl --namespace k8s.io image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")"
   local_version="v$(nerdctl --namespace k8s.io image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$image")"
   [[ "$id" =~ ^sha256:[0-9a-f]{64}$ && "$source" =~ ^[0-9a-f]{40}$
-    && "$local_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-local\.[1-9][0-9]*$
+    && "$local_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-local\.(0|[1-9][0-9]*)$
     && "${version%%-*}" == "${local_version%%-*}" ]] || {
     echo "RC image ID or embedded source labels are invalid." >&2; exit 67;
   }
@@ -185,16 +185,16 @@ status: accepted local k3s RC; no registry manifest digest claimed"
 }
 
 next_local_version() {
-  local highest=0 tag annotation numbered
+  local highest=-1 tag annotation numbered
   while IFS= read -r tag; do
     numbered="${tag#image/$component/v$base_version-local.}"
-    if [[ "$numbered" =~ ^[1-9][0-9]*$ ]] && (( numbered > highest )); then
+    if [[ "$numbered" =~ ^(0|[1-9][0-9]*)$ ]] && (( numbered > highest )); then
       highest="$numbered"
     fi
   done < <(git tag --list "image/$component/v$base_version-local.*")
   while IFS= read -r tag; do
     annotation="$(git cat-file -p "refs/tags/$tag")"
-    if [[ "$annotation" =~ version:\ v${base_version//./\.}-local\.([1-9][0-9]*) ]]; then
+    if [[ "$annotation" =~ version:\ v${base_version//./\.}-local\.(0|[1-9][0-9]*) ]]; then
       numbered="${BASH_REMATCH[1]}"
       if (( numbered > highest )); then
         highest="$numbered"
@@ -303,7 +303,7 @@ validate_candidate_pair() {
   prior_image="$(tag_field "$version_tag" image)"
   prior_id="$(tag_field "$version_tag" image_id)"
   prior_revision="$(tag_field "$version_tag" source_revision)"
-  [[ "$prior_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-local\.[1-9][0-9]*$ \
+  [[ "$prior_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-local\.(0|[1-9][0-9]*)$ \
     && "$prior_image" == "capitonic/$component:$prior_version" \
     && "$prior_id" =~ ^sha256:[0-9a-f]{64}$ \
     && "$prior_revision" =~ ^[0-9a-f]{40}$ \

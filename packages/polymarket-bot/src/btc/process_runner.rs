@@ -1102,6 +1102,21 @@ impl BtcProcessRunner {
         let Some(market) = observation.state.current_market.as_ref() else {
             return Ok(());
         };
+        if self.execution_lifecycle.mode() == BtcExecutionMode::Live {
+            let token_ids = [market.up_token_id.clone(), market.down_token_id.clone()];
+            if let Err(error) = self
+                .execution_venue
+                .prepare_order_metadata(&market.market_id, &token_ids)
+                .await
+            {
+                warn!(
+                    process_id = %self.config.process_id,
+                    market_id = %market.market_id,
+                    error = %format!("{error:#}"),
+                    "live order metadata warm-up deferred; submission retains its synchronous fallback"
+                );
+            }
+        }
         let started = Instant::now();
         let mut proposals = Vec::new();
         for (index, member) in self.router_members.iter().enumerate() {

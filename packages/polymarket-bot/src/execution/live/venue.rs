@@ -102,6 +102,8 @@ impl LiveVenue {
             http_fallback_requested: Arc::new(AtomicBool::new(true)),
             post_order_reconciliation_generation: Arc::new(AtomicU64::new(0)),
             post_order_reconciled_generation: Arc::new(AtomicU64::new(0)),
+            collateral_evidence: Arc::new(Mutex::new(None)),
+            collateral_evidence_generation: Arc::new(AtomicU64::new(0)),
         };
         venue.spawn_user_ws_task_if_enabled();
         Ok(venue)
@@ -131,6 +133,8 @@ impl LiveVenue {
             http_fallback_requested: Arc::new(AtomicBool::new(true)),
             post_order_reconciliation_generation: Arc::new(AtomicU64::new(0)),
             post_order_reconciled_generation: Arc::new(AtomicU64::new(0)),
+            collateral_evidence: Arc::new(Mutex::new(None)),
+            collateral_evidence_generation: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -175,6 +179,8 @@ impl LiveVenue {
             http_fallback_requested: self.http_fallback_requested.clone(),
             post_order_reconciliation_generation: Arc::new(AtomicU64::new(0)),
             post_order_reconciled_generation: Arc::new(AtomicU64::new(0)),
+            collateral_evidence: self.collateral_evidence.clone(),
+            collateral_evidence_generation: self.collateral_evidence_generation.clone(),
         })
     }
 
@@ -429,11 +435,18 @@ impl LiveVenue {
         let data_api = self.data_api.clone();
         let transport_state = self.transport_state.clone();
         let http_fallback_requested = self.http_fallback_requested.clone();
+        let collateral_evidence_generation = self.collateral_evidence_generation.clone();
         tokio::spawn(async move {
             let mut reconnect_delay = USER_WS_RECONNECT_INITIAL_DELAY;
             loop {
-                let result =
-                    run_user_ws_once(&config, &store, data_api.as_ref(), &transport_state).await;
+                let result = run_user_ws_once(
+                    &config,
+                    &store,
+                    data_api.as_ref(),
+                    &transport_state,
+                    &collateral_evidence_generation,
+                )
+                .await;
                 let fallback_reason = result.as_ref().err().map(|error| {
                     let detail = format!("{error:#}").to_ascii_lowercase();
                     if detail.contains("queue overflow") {
@@ -457,6 +470,7 @@ impl LiveVenue {
                     was_healthy
                 };
                 record_user_ws_reconnect();
+                collateral_evidence_generation.fetch_add(1, Ordering::AcqRel);
                 http_fallback_requested.store(true, Ordering::Release);
                 let retry_delay = if was_healthy {
                     reconnect_delay = USER_WS_RECONNECT_INITIAL_DELAY;
@@ -547,6 +561,148 @@ impl LiveVenue {
         )
         .context("failed to prepare Polymarket CLOB order metadata")?;
         Ok(())
+    }
+
+    pub(super) async fn warm_current_market_order_metadata(
+        &self,
+        market_id: &str,
+        token_ids: &[String],
+    ) -> Result<()> {
+        if market_id.trim().is_empty() || token_ids.is_empty() {
+            bail!("live order metadata warm-up requires a market and outcome tokens");
+        }
+        let requested_tokens = token_ids.iter().cloned().collect::<HashSet<_>>();
+        if requested_tokens.len() != token_ids.len() {
+            bail!("live order metadata warm-up requires distinct outcome tokens");
+        }
+        {
+            let state = self.readiness_state.lock().await;
+            if state.order_metadata_ready
+                && state.order_metadata_market_id.as_deref() == Some(market_id)
+                && state.order_metadata_token_ids == requested_tokens
+            {
+                return Ok(());
+            }
+        }
+        if let Some(metrics) = &self.reconciliation_metrics {
+            metrics.set_order_metadata_cache_ready(false);
+        }
+        tracing::info!(
+            event = "live_order_metadata_cache_warm",
+            process_id = ?self.bound_process_id,
+            market_id,
+            token_count = token_ids.len(),
+            outcome = "warming",
+            "warming current-market order metadata before signal evaluation"
+        );
+        let started = std::time::Instant::now();
+        let result = async {
+            let client = self
+                .clob_operation("authentication", self.authenticated_client())
+                .await
+                .context("failed to prepare authenticated client for metadata warm-up")?;
+            let parsed_tokens = token_ids
+                .iter()
+                .map(|token_id| {
+                    U256::from_str(token_id).context("failed to parse metadata warm-up token_id")
+                })
+                .collect::<Result<Vec<_>>>()?;
+            self.clob_operation("order_metadata_warm", async {
+                client
+                    .version()
+                    .await
+                    .context("failed to warm CLOB version metadata")?;
+                try_join_all(parsed_tokens.iter().copied().map(|token_id| {
+                    let client = &client;
+                    async move {
+                        let _ =
+                            tokio::try_join!(client.tick_size(token_id), client.neg_risk(token_id))
+                                .context("failed to warm outcome-token order metadata")?;
+                        Ok::<(), anyhow::Error>(())
+                    }
+                }))
+                .await?;
+                Ok(())
+            })
+            .await
+        }
+        .await;
+        match result {
+            Ok(()) => {
+                let mut state = self.readiness_state.lock().await;
+                state.order_metadata_market_id = Some(market_id.to_string());
+                state.order_metadata_token_ids = requested_tokens;
+                state.order_metadata_ready = true;
+                if let Some(metrics) = &self.reconciliation_metrics {
+                    metrics.record_order_metadata_cache_warm("ready");
+                }
+                tracing::info!(
+                    event = "live_order_metadata_cache_warm",
+                    process_id = ?self.bound_process_id,
+                    market_id,
+                    token_count = token_ids.len(),
+                    outcome = "ready",
+                    elapsed_seconds = started.elapsed().as_secs_f64(),
+                    "current-market order metadata cache is ready"
+                );
+                Ok(())
+            }
+            Err(error) => {
+                let mut state = self.readiness_state.lock().await;
+                state.order_metadata_market_id = Some(market_id.to_string());
+                state.order_metadata_token_ids = requested_tokens;
+                state.order_metadata_ready = false;
+                if let Some(metrics) = &self.reconciliation_metrics {
+                    metrics.record_order_metadata_cache_warm("error");
+                }
+                tracing::warn!(
+                    event = "live_order_metadata_cache_warm",
+                    process_id = ?self.bound_process_id,
+                    market_id,
+                    token_count = token_ids.len(),
+                    outcome = "error",
+                    elapsed_seconds = started.elapsed().as_secs_f64(),
+                    error = %format!("{error:#}"),
+                    "current-market order metadata warm-up failed; submission fallback remains available"
+                );
+                Err(error)
+            }
+        }
+    }
+
+    pub(super) async fn order_metadata_ready_for(&self, market_id: &str, token_id: &str) -> bool {
+        let state = self.readiness_state.lock().await;
+        state.order_metadata_ready
+            && state.order_metadata_market_id.as_deref() == Some(market_id)
+            && state.order_metadata_token_ids.contains(token_id)
+    }
+
+    pub(super) async fn reusable_collateral_balance(&self) -> Option<Decimal> {
+        let (connected, continuity_uncertain) = {
+            let transport = self.transport_state.lock().await;
+            (transport.user_ws_connected, transport.continuity_uncertain)
+        };
+        if !connected || continuity_uncertain {
+            return None;
+        }
+        let generation = self.collateral_evidence_generation.load(Ordering::Acquire);
+        let evidence = *self.collateral_evidence.lock().await;
+        reusable_collateral_balance(
+            evidence,
+            generation,
+            Utc::now(),
+            self.config
+                .reconcile_interval
+                .min(MAX_REUSABLE_COLLATERAL_EVIDENCE_AGE),
+        )
+    }
+
+    pub(super) fn invalidate_collateral_evidence(&self) {
+        self.collateral_evidence_generation
+            .fetch_add(1, Ordering::AcqRel);
+        if let Some(metrics) = &self.reconciliation_metrics {
+            metrics.set_collateral_evidence_ready(false);
+        }
     }
 
     pub(super) fn authenticated_read_headers(
@@ -1295,7 +1451,8 @@ impl LiveVenue {
                 )
             })?;
         let exposure_read = async {
-            store
+            let started = std::time::Instant::now();
+            let result = store
                 .conservative_live_process_exposure(process_id, ignored_client_order_id)
                 .await
                 .map_err(|error| {
@@ -1303,12 +1460,28 @@ impl LiveVenue {
                         LiveExecutionGateReason::ExposureEvidenceUnavailable,
                         error,
                     )
-                })
+                });
+            if let Some(metrics) = &self.reconciliation_metrics {
+                metrics.record_order_preparation(
+                    "risk_exposure_database",
+                    if result.is_ok() { "ready" } else { "error" },
+                    started.elapsed(),
+                );
+            }
+            result
         };
         let daily_pnl_read = async {
             let Some(_) = max_daily_loss_usd else {
+                if let Some(metrics) = &self.reconciliation_metrics {
+                    metrics.record_order_preparation(
+                        "risk_daily_pnl_database",
+                        "skipped",
+                        std::time::Duration::ZERO,
+                    );
+                }
                 return Ok::<_, LiveSubmissionRiskFailure>(None);
             };
+            let started = std::time::Instant::now();
             let now = Utc::now();
             let day_start = now
                 .date_naive()
@@ -1316,7 +1489,7 @@ impl LiveVenue {
                 .expect("midnight is a valid UTC time")
                 .and_utc();
             let day_end = day_start + chrono::Duration::days(1);
-            store
+            let result = store
                 .recognized_live_process_net_pnl_for_utc_day(process_id, day_start, day_end, now)
                 .await
                 .map(Some)
@@ -1325,13 +1498,29 @@ impl LiveVenue {
                         LiveExecutionGateReason::DailyLossEvidenceUnavailable,
                         error,
                     )
-                })
+                });
+            if let Some(metrics) = &self.reconciliation_metrics {
+                metrics.record_order_preparation(
+                    "risk_daily_pnl_database",
+                    if result.is_ok() { "ready" } else { "error" },
+                    started.elapsed(),
+                );
+            }
+            result
         };
         let account_orders_read = async {
             let Some(account_ref) = account_ref else {
+                if let Some(metrics) = &self.reconciliation_metrics {
+                    metrics.record_order_preparation(
+                        "risk_account_orders_database",
+                        "skipped",
+                        std::time::Duration::ZERO,
+                    );
+                }
                 return Ok::<_, LiveSubmissionRiskFailure>(None);
             };
-            store
+            let started = std::time::Instant::now();
+            let result = store
                 .live_account_nonterminal_orders(
                     account_ref,
                     (MAX_CLOB_RECONCILIATION_ROWS + 1) as i64,
@@ -1343,18 +1532,58 @@ impl LiveVenue {
                         LiveExecutionGateReason::AccountOrderEvidenceUnavailable,
                         error,
                     )
-                })
+                });
+            if let Some(metrics) = &self.reconciliation_metrics {
+                metrics.record_order_preparation(
+                    "risk_account_orders_database",
+                    if result.is_ok() { "ready" } else { "error" },
+                    started.elapsed(),
+                );
+            }
+            result
         };
         let collateral_read = async {
             if request.side != OrderSide::Buy {
+                if let Some(metrics) = &self.reconciliation_metrics {
+                    metrics.record_order_preparation(
+                        "risk_collateral",
+                        "skipped",
+                        std::time::Duration::ZERO,
+                    );
+                }
                 return Ok::<_, LiveSubmissionRiskFailure>(None);
             }
-            self.get_balances().await.map(Some).map_err(|error| {
+            let started = std::time::Instant::now();
+            if let Some(available_usdc) = self.reusable_collateral_balance().await {
+                if let Some(metrics) = &self.reconciliation_metrics {
+                    metrics.record_collateral_evidence_use("cache_hit");
+                    metrics.record_order_preparation(
+                        "risk_collateral",
+                        "cache_hit",
+                        started.elapsed(),
+                    );
+                }
+                return Ok(Some(vec![("USDC".to_string(), available_usdc)]));
+            }
+            let result = self.get_balances().await.map(Some).map_err(|error| {
                 LiveSubmissionRiskFailure::new(
                     LiveExecutionGateReason::CollateralEvidenceUnavailable,
                     error,
                 )
-            })
+            });
+            if let Some(metrics) = &self.reconciliation_metrics {
+                metrics.record_collateral_evidence_use("live_fetch");
+                metrics.record_order_preparation(
+                    "risk_collateral",
+                    if result.is_ok() {
+                        "live_fetch"
+                    } else {
+                        "error"
+                    },
+                    started.elapsed(),
+                );
+            }
+            result
         };
         let (exposure, recognized_net_pnl, account_orders, balances) = tokio::try_join!(
             exposure_read,
@@ -1536,4 +1765,21 @@ impl LiveVenue {
     pub(super) async fn mark_idempotency_dirty(&self) {
         self.readiness_state.lock().await.idempotency_clean = false;
     }
+}
+
+pub(super) fn reusable_collateral_balance(
+    evidence: Option<LiveCollateralEvidence>,
+    current_generation: u64,
+    now: DateTime<Utc>,
+    max_age: Duration,
+) -> Option<Decimal> {
+    let evidence = evidence?;
+    if evidence.generation != current_generation {
+        return None;
+    }
+    let age = now
+        .signed_duration_since(evidence.checked_at)
+        .to_std()
+        .ok()?;
+    (age <= max_age).then_some(evidence.available_usdc)
 }
