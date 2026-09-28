@@ -3,4 +3,4 @@ name: ingester
 description: Capitonic ingester master and worker for local Kubernetes
 type: application
 version: 0.3.0
-appVersion: "v1.2.1-rc.3"
+appVersion: "v1.2.1-local.6"
