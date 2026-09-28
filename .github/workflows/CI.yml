@@ -51,6 +51,12 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      - name: Configure AWS credentials for accepted RC discovery
+        if: github.ref == 'refs/heads/development' && github.event_name != 'pull_request'
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
       - name: Detect affected images
         id: filter
         shell: bash
@@ -67,12 +73,28 @@ jobs:
             echo "db_migrate=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          changed() {
-            if git diff --quiet "$BASE_SHA" "$CURRENT_SHA" -- "$@"; then echo false; else echo true; fi
+          changed_or_missing() {
+            local component="$1"
+            shift
+            if ! git diff --quiet "$BASE_SHA" "$CURRENT_SHA" -- "$@"; then
+              echo true
+              return
+            fi
+            if [ "$GITHUB_REF" = 'refs/heads/development' ]; then
+              local repository rc_version
+              repository="$(jq -er --arg component "$component" '.components[$component].repository' infra/production/release.json)"
+              rc_version="$(jq -er --arg component "$component" '.components[$component].rcVersion' infra/production/release.json)"
+              if ! aws ecr describe-images --region "$AWS_REGION" --repository-name "$repository" \
+                --image-ids imageTag="$rc_version" >/dev/null 2>&1; then
+                echo true
+                return
+              fi
+            fi
+            echo false
           }
-          echo "polymarket_bot=$(changed Cargo.toml Cargo.lock packages/polymarket-bot packages/btc-directional-model/runtime-models common/proto infra/production/release.json)" >> "$GITHUB_OUTPUT"
-          echo "ingester=$(changed Cargo.toml Cargo.lock packages/market-data-ingester common/proto infra/production/release.json)" >> "$GITHUB_OUTPUT"
-          echo "db_migrate=$(changed packages/db-migrate infra/production/release.json)" >> "$GITHUB_OUTPUT"
+          echo "polymarket_bot=$(changed_or_missing polymarket-bot Cargo.toml Cargo.lock packages/polymarket-bot packages/btc-directional-model/runtime-models common/proto infra/production/release.json)" >> "$GITHUB_OUTPUT"
+          echo "ingester=$(changed_or_missing ingester Cargo.toml Cargo.lock packages/market-data-ingester common/proto infra/production/release.json)" >> "$GITHUB_OUTPUT"
+          echo "db_migrate=$(changed_or_missing db-migrate packages/db-migrate infra/production/release.json)" >> "$GITHUB_OUTPUT"
 
   rust-tests:
     name: Rust tests
@@ -198,7 +220,7 @@ jobs:
     name: Build and push ${{ matrix.name }} production image
     if: github.ref == 'refs/heads/development'
     needs: [repository-layout, changes, rust-tests, market-data-ingester-tests, db-migrate-tests, outage-recovery-tests]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -251,7 +273,12 @@ jobs:
           [[ "$source_revision" =~ ^[0-9a-f]{40}$ ]]
           git merge-base --is-ancestor "$source_revision" "$GITHUB_SHA"
           rc_git_tag="rc/$COMPONENT/$rc_version"
-          [[ "$(git rev-list -n1 "$rc_git_tag")" == "$GITHUB_SHA" ]]
+          [[ "$(git cat-file -t "refs/tags/$rc_git_tag")" == tag ]]
+          rc_checkpoint="$(git rev-list -n1 "$rc_git_tag")"
+          git merge-base --is-ancestor "$rc_checkpoint" "$GITHUB_SHA"
+          accepted_release="$(git show "$rc_checkpoint:infra/production/release.json" | jq -cer --arg component "$COMPONENT" '.components[$component]')"
+          current_release="$(jq -cer --arg component "$COMPONENT" '.components[$component]' infra/production/release.json)"
+          [[ "$accepted_release" == "$current_release" ]]
           existing_digest="$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$REPOSITORY" \
             --image-ids imageTag="$rc_version" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
           if [[ "$existing_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
