@@ -85,6 +85,7 @@ image_inputs_sha256() {
 
 tag_accepted_rc() {
   local accepted checkpoint chart version image id source local_version candidate_tag hash_tag golden_tag rc_tag
+  local -a deployments=()
   require_clean_source
   accepted="$(git rev-parse --verify development^{commit})"
   checkpoint="checkpoint/development/git-$accepted"
