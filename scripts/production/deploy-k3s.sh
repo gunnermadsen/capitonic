@@ -56,7 +56,18 @@ deploy_chart() {
     --atomic --wait "${wait_for_jobs[@]}" --timeout 15m
 }
 
-deploy_chart timescaledb
+helm lint capitonic-helm-chart/charts/timescaledb \
+  -f capitonic-helm-chart/environments/production/timescaledb.yaml
+helm upgrade --install timescaledb capitonic-helm-chart/charts/timescaledb \
+  --namespace "$NAMESPACE" --create-namespace \
+  -f capitonic-helm-chart/environments/production/timescaledb.yaml --timeout 15m
+for attempt in $(seq 1 180); do
+  database_ready="$(kubectl -n "$NAMESPACE" get pod timescaledb-0 \
+    -o jsonpath='{.status.containerStatuses[?(@.name=="timescaledb")].ready}' 2>/dev/null || true)"
+  [[ "$database_ready" == "true" ]] && break
+  sleep 5
+done
+[[ "${database_ready:-}" == "true" ]]
 
 source_migrations="$(find packages/db-migrate/src/migrations -maxdepth 1 -type f -name '[0-9]*.ts' -exec basename {} \; | cut -d- -f1 | sort -n)"
 applied_migrations="$(kubectl -n "$NAMESPACE" exec timescaledb-0 -c timescaledb -- psql -U postgres -d polymarket -Atc \
@@ -73,6 +84,7 @@ latest_applied="$(kubectl -n "$NAMESPACE" exec timescaledb-0 -c timescaledb -- p
   'SELECT coalesce(max(timestamp),0) FROM public.migrations')"
 [[ "$latest_applied" == "$latest_expected" ]]
 
+deploy_chart timescaledb
 deploy_chart pgbouncer
 deploy_chart ingester
 deploy_chart prometheus
