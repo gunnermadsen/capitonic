@@ -23,7 +23,9 @@ done
 
 scripts/production/refresh-ecr-pull-secret.sh
 RESTART_SCOPE=none scripts/production/sync-kubernetes-secrets.sh
-python3 scripts/helm/bake-assets.py
+prometheus_user="$(kubectl -n "$NAMESPACE" get secret prometheus-auth -o jsonpath='{.data.username}' | base64 -d)"
+PROMETHEUS_BASIC_AUTH_USER="$prometheus_user" python3 scripts/helm/bake-assets.py
+unset prometheus_user
 trap 'python3 scripts/helm/bake-assets.py --clean >/dev/null 2>&1 || true' EXIT
 
 helm upgrade --install cert-manager oci://quay.io/jetstack/charts/cert-manager \

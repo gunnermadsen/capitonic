@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 from pathlib import Path
@@ -45,11 +46,13 @@ def clean() -> None:
 
 
 def bake() -> None:
-    prometheus_env = env_values(
-        ROOT / ".env.prometheus",
-        ("PROMETHEUS_BASIC_AUTH_USER",),
-    )
-    if not re.fullmatch(r"[A-Za-z0-9._-]+", prometheus_env["PROMETHEUS_BASIC_AUTH_USER"]):
+    prometheus_user = os.environ.get("PROMETHEUS_BASIC_AUTH_USER")
+    if not prometheus_user:
+        prometheus_user = env_values(
+            ROOT / ".env.prometheus",
+            ("PROMETHEUS_BASIC_AUTH_USER",),
+        )["PROMETHEUS_BASIC_AUTH_USER"]
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", prometheus_user):
         raise ValueError("PROMETHEUS_BASIC_AUTH_USER contains unsupported characters")
 
     source = (ROOT / "common/configs/prometheus/prometheus.yml").read_text()
@@ -76,7 +79,7 @@ def bake() -> None:
         jobs[0]
         + "  - job_name: prometheus\n"
         + "    basic_auth:\n"
-        + f"      username: {prometheus_env['PROMETHEUS_BASIC_AUTH_USER']}\n"
+        + f"      username: {prometheus_user}\n"
         + "      password_file: /etc/prometheus-auth/password\n"
         + "    static_configs:\n"
         + "      - targets: [127.0.0.1:9090]\n"
