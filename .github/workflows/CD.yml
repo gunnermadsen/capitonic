@@ -40,7 +40,7 @@ jobs:
           set -euo pipefail
           curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.47.2/yq_linux_amd64 -o /tmp/yq
           curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.47.2/checksums -o /tmp/yq-checksums
-          expected="$(awk '$2 == "yq_linux_amd64" {print $1}' /tmp/yq-checksums)"
+          expected="$(awk '$1 == "yq_linux_amd64" {print $19}' /tmp/yq-checksums)"
           [ -n "$expected" ]
           echo "$expected  /tmp/yq" | sha256sum -c -
           sudo install -m 0755 /tmp/yq /usr/local/bin/yq
