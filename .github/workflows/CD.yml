@@ -78,7 +78,8 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$DEPLOY_REVISION" =~ ^[0-9a-f]{40}$ ]]
-          command="cd /opt/polymarket-bot && scripts/production/checkout-revision.sh $DEPLOY_REVISION && scripts/production/deploy-k3s.sh"
+          checkout_payload="$(base64 -w0 scripts/production/checkout-revision.sh)"
+          command="install -d -m 0700 /run/capitonic && printf '%s' '$checkout_payload' | base64 -d > /run/capitonic/checkout-revision.sh && chmod 0700 /run/capitonic/checkout-revision.sh && /run/capitonic/checkout-revision.sh $DEPLOY_REVISION && rm -f /run/capitonic/checkout-revision.sh && cd /opt/polymarket-bot && scripts/production/deploy-k3s.sh"
           scripts/production/run-ssm-command.sh "$INSTANCE_ID" 3300 'Deploy and verify Capitonic production' "$command"
       - name: Record observability provisioning provenance
         env:
