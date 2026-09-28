@@ -62,7 +62,7 @@ validate_candidate_tag() {
 }
 
 candidate_identity() {
-  [[ "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(local\.([1-9][0-9]*)|rc\.(0|[1-9][0-9]*))$ ]] || {
+  [[ "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(local\.(0|[1-9][0-9]*)|rc\.(0|[1-9][0-9]*))$ ]] || {
     echo "Select a local candidate or RC version." >&2; exit 64;
   }
   image="capitonic/$component:$version"
@@ -74,7 +74,7 @@ candidate_identity() {
   image_version="$(nerdctl --namespace k8s.io image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$image")"
   provenance_version="v$image_version"
   [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ && "$image_revision" =~ ^[0-9a-f]{40}$
-    && "$provenance_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-local\.[1-9][0-9]*$
+    && "$provenance_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-local\.(0|[1-9][0-9]*)$
     && "${version%%-*}" == "${provenance_version%%-*}" ]] || {
     echo "Candidate image labels or identity are invalid." >&2; exit 67;
   }

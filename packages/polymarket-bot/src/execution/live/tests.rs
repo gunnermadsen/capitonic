@@ -7,7 +7,7 @@ mod tests {
 
     use crate::config::LiveExecutionConfig;
 
-    use super::super::venue::submit_unknown_candidate_ids;
+    use super::super::venue::{reusable_collateral_balance, submit_unknown_candidate_ids};
     use super::*;
 
     #[test]
@@ -94,6 +94,14 @@ mod tests {
             &second.authenticated_client_cache
         ));
         assert!(Arc::ptr_eq(
+            &first.collateral_evidence,
+            &second.collateral_evidence
+        ));
+        assert!(Arc::ptr_eq(
+            &first.collateral_evidence_generation,
+            &second.collateral_evidence_generation
+        ));
+        assert!(Arc::ptr_eq(
             first.signer.as_ref().unwrap(),
             second.signer.as_ref().unwrap()
         ));
@@ -103,6 +111,49 @@ mod tests {
 
         assert!(root.authenticated_client_cache.get().is_some());
         assert!(second.authenticated_client_cache.get().is_some());
+    }
+
+    #[test]
+    fn reusable_collateral_requires_fresh_matching_generation() {
+        let now = Utc::now();
+        let evidence = LiveCollateralEvidence {
+            available_usdc: dec!(12.34),
+            checked_at: now - chrono::Duration::seconds(2),
+            generation: 7,
+        };
+
+        assert_eq!(
+            reusable_collateral_balance(Some(evidence), 7, now, std::time::Duration::from_secs(5),),
+            Some(dec!(12.34))
+        );
+        assert_eq!(
+            reusable_collateral_balance(Some(evidence), 8, now, std::time::Duration::from_secs(5),),
+            None
+        );
+        assert_eq!(
+            reusable_collateral_balance(
+                Some(LiveCollateralEvidence {
+                    checked_at: now - chrono::Duration::seconds(6),
+                    ..evidence
+                }),
+                7,
+                now,
+                std::time::Duration::from_secs(5),
+            ),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn restarted_live_venue_begins_with_cold_metadata_and_collateral_evidence() {
+        let venue = LiveVenue::new_for_test(live_config())
+            .unwrap()
+            .bind_process(Uuid::new_v4(), &live_execution())
+            .unwrap();
+
+        assert!(!venue.order_metadata_ready_for("market", "1").await);
+        assert_eq!(venue.reusable_collateral_balance().await, None);
+        assert!(venue.collateral_evidence.lock().await.is_none());
     }
 
     fn live_execution() -> EffectiveProcessExecutionConfig {

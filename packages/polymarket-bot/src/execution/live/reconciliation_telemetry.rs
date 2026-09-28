@@ -364,6 +364,12 @@ struct MetricsState {
     transport_runtime_outcomes: BTreeMap<&'static str, u64>,
     unresolved_submit_unknown: usize,
     oldest_submit_unknown_age_seconds: f64,
+    order_metadata_cache_ready: bool,
+    order_metadata_cache_warm_attempts: BTreeMap<&'static str, u64>,
+    order_metadata_cache_uses: BTreeMap<&'static str, u64>,
+    order_metadata_cache_last_success_timestamp: i64,
+    collateral_evidence_ready: bool,
+    collateral_evidence_uses: BTreeMap<&'static str, u64>,
 }
 
 pub(super) struct LiveReconciliationMetrics {
@@ -530,6 +536,67 @@ impl LiveReconciliationMetrics {
             .or_default() += 1;
     }
 
+    pub(super) fn record_order_preparation(
+        &self,
+        stage: &'static str,
+        outcome: &'static str,
+        elapsed: std::time::Duration,
+    ) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.order_path_last_activity_timestamp = chrono::Utc::now().timestamp();
+        *state
+            .order_path_events
+            .entry((stage, outcome, outcome))
+            .or_default() += 1;
+        state
+            .order_path_durations
+            .entry(stage)
+            .or_default()
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub(super) fn record_order_metadata_cache_warm(&self, outcome: &'static str) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.order_metadata_cache_ready = outcome == "ready";
+        *state
+            .order_metadata_cache_warm_attempts
+            .entry(outcome)
+            .or_default() += 1;
+        if outcome == "ready" {
+            state.order_metadata_cache_last_success_timestamp = chrono::Utc::now().timestamp();
+        }
+    }
+
+    pub(super) fn set_order_metadata_cache_ready(&self, ready: bool) {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .order_metadata_cache_ready = ready;
+    }
+
+    pub(super) fn record_order_metadata_cache_use(&self, outcome: &'static str) {
+        *self
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .order_metadata_cache_uses
+            .entry(outcome)
+            .or_default() += 1;
+    }
+
+    pub(super) fn record_collateral_evidence_use(&self, outcome: &'static str) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.collateral_evidence_ready = outcome == "cache_hit";
+        *state.collateral_evidence_uses.entry(outcome).or_default() += 1;
+    }
+
+    pub(super) fn set_collateral_evidence_ready(&self, ready: bool) {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .collateral_evidence_ready = ready;
+    }
+
     pub(super) fn record_submit_unknown_state(
         &self,
         count: usize,
@@ -686,6 +753,30 @@ impl LiveReconciliationMetrics {
         }
         let _ = writeln!(
             output,
+            "polymarket_live_order_metadata_cache_ready{{{labels}}} {}",
+            i64::from(state.order_metadata_cache_ready)
+        );
+        let _ = writeln!(
+            output,
+            "polymarket_live_order_metadata_cache_last_success_timestamp_seconds{{{labels}}} {}",
+            state.order_metadata_cache_last_success_timestamp
+        );
+        for (outcome, count) in &state.order_metadata_cache_warm_attempts {
+            let _ = writeln!(output, "polymarket_live_order_metadata_cache_warm_attempts_total{{{labels},outcome=\"{outcome}\"}} {count}");
+        }
+        for (outcome, count) in &state.order_metadata_cache_uses {
+            let _ = writeln!(output, "polymarket_live_order_metadata_cache_uses_total{{{labels},outcome=\"{outcome}\"}} {count}");
+        }
+        let _ = writeln!(
+            output,
+            "polymarket_live_collateral_evidence_ready{{{labels}}} {}",
+            i64::from(state.collateral_evidence_ready)
+        );
+        for (outcome, count) in &state.collateral_evidence_uses {
+            let _ = writeln!(output, "polymarket_live_collateral_evidence_uses_total{{{labels},outcome=\"{outcome}\"}} {count}");
+        }
+        let _ = writeln!(
+            output,
             "polymarket_live_submit_unknown_orders{{{labels}}} {}",
             state.unresolved_submit_unknown
         );
@@ -794,6 +885,12 @@ pub fn prometheus_metrics() -> String {
     output.push_str("# HELP polymarket_live_clob_operation_timeouts_total Guarded CLOB operation deadline expirations by bounded stage.\n# TYPE polymarket_live_clob_operation_timeouts_total counter\n");
     output.push_str("# HELP polymarket_live_submission_guard_wait_seconds Time spent waiting for process-safe live submission ownership.\n# TYPE polymarket_live_submission_guard_wait_seconds histogram\n");
     output.push_str("# HELP polymarket_live_transport_runtime_outcomes_total Runtime disposition after a live transport-class submission failure.\n# TYPE polymarket_live_transport_runtime_outcomes_total counter\n");
+    output.push_str("# HELP polymarket_live_order_metadata_cache_ready Whether current-market order metadata was warmed before signal evaluation.\n# TYPE polymarket_live_order_metadata_cache_ready gauge\n");
+    output.push_str("# HELP polymarket_live_order_metadata_cache_last_success_timestamp_seconds Unix timestamp of the latest successful current-market metadata warm-up.\n# TYPE polymarket_live_order_metadata_cache_last_success_timestamp_seconds gauge\n");
+    output.push_str("# HELP polymarket_live_order_metadata_cache_warm_attempts_total Current-market metadata warm-up attempts by bounded outcome.\n# TYPE polymarket_live_order_metadata_cache_warm_attempts_total counter\n");
+    output.push_str("# HELP polymarket_live_order_metadata_cache_uses_total Live submission metadata preparation by cache readiness.\n# TYPE polymarket_live_order_metadata_cache_uses_total counter\n");
+    output.push_str("# HELP polymarket_live_collateral_evidence_ready Whether reconciliation has supplied reusable fresh collateral evidence.\n# TYPE polymarket_live_collateral_evidence_ready gauge\n");
+    output.push_str("# HELP polymarket_live_collateral_evidence_uses_total Live submission collateral checks by reusable-evidence outcome.\n# TYPE polymarket_live_collateral_evidence_uses_total counter\n");
     output.push_str("# HELP polymarket_live_submit_unknown_orders Durable unresolved submissions whose POST outcome remains unknown.\n# TYPE polymarket_live_submit_unknown_orders gauge\n");
     output.push_str("# HELP polymarket_live_submit_unknown_oldest_age_seconds Age of the oldest durable unresolved submission.\n# TYPE polymarket_live_submit_unknown_oldest_age_seconds gauge\n");
     let _ = writeln!(
@@ -971,6 +1068,31 @@ mod tests {
         )));
         assert!(rendered.contains("stage=\"open_orders\",failure_class=\"timeout\""));
         assert!(!rendered.contains("secret upstream detail"));
+    }
+
+    #[test]
+    fn order_preparation_and_cache_health_metrics_are_process_scoped() {
+        let process_id = Uuid::new_v4();
+        let metrics = LiveReconciliationMetrics::new(process_id);
+        metrics.record_order_preparation(
+            "risk_collateral",
+            "cache_hit",
+            std::time::Duration::from_millis(2),
+        );
+        metrics.record_order_metadata_cache_warm("ready");
+        metrics.record_order_metadata_cache_use("cache_ready");
+        metrics.set_collateral_evidence_ready(true);
+        metrics.record_collateral_evidence_use("cache_hit");
+
+        let rendered = prometheus_metrics();
+        assert!(rendered.contains(&format!(
+            "polymarket_live_order_metadata_cache_ready{{process_id=\"{process_id}\"}} 1"
+        )));
+        assert!(rendered.contains(&format!(
+            "polymarket_live_collateral_evidence_ready{{process_id=\"{process_id}\"}} 1"
+        )));
+        assert!(rendered
+            .contains("stage=\"risk_collateral\",outcome=\"cache_hit\",reason=\"cache_hit\""));
     }
 
     #[test]

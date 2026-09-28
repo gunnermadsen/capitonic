@@ -481,6 +481,12 @@ impl ExecutionVenue for BtcLiveExecutionAdapter {
         self.delegate.find_existing_order(request).await
     }
 
+    async fn prepare_order_metadata(&self, market_id: &str, token_ids: &[String]) -> Result<()> {
+        self.delegate
+            .prepare_order_metadata(market_id, token_ids)
+            .await
+    }
+
     async fn submit_order(&self, request: OrderRequest) -> Result<OrderRecord> {
         let _submit_guard = self.submit_guard.lock().await;
         if let Some(existing) = self.delegate.find_existing_order(&request).await? {

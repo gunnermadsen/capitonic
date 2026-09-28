@@ -5,6 +5,7 @@ pub(super) async fn run_user_ws_once(
     store: &Store,
     data_api: Option<&DataApiClient>,
     state: &Arc<Mutex<LiveTransportState>>,
+    collateral_evidence_generation: &Arc<AtomicU64>,
 ) -> Result<()> {
     let subscription = user_ws_subscription_payload(config)?;
     {
@@ -106,6 +107,7 @@ pub(super) async fn run_user_ws_once(
             let UserWsText::UserEvent(payload) = classify_user_ws_text(&text, &[])? else {
                 continue;
             };
+            collateral_evidence_generation.fetch_add(1, Ordering::AcqRel);
             let event = LiveVenue::parse_user_event(payload);
             let inserted = store.insert_live_venue_event(&event).await?;
             let bot_fill_persisted = match LiveVenue::persist_fill_from_live_event(

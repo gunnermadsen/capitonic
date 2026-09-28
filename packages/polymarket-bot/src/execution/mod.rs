@@ -444,6 +444,9 @@ pub trait ExecutionVenue: Send + Sync {
     async fn find_existing_order(&self, _request: &OrderRequest) -> Result<Option<OrderRecord>> {
         Ok(None)
     }
+    async fn prepare_order_metadata(&self, _market_id: &str, _token_ids: &[String]) -> Result<()> {
+        Ok(())
+    }
     async fn submit_order(&self, request: OrderRequest) -> Result<OrderRecord>;
     async fn submit_order_with_pre_post_guard(
         &self,

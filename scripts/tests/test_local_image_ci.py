@@ -134,6 +134,10 @@ state_file.write_text(json.dumps(state))
                 prior_builds = int(self.count.read_text())
                 first = self.run_ci(component)
                 self.assertEqual(first.returncode, 0, first.stderr)
+                expected_base = {"polymarket-bot": "3.2.2", "ingester": "1.2.1",
+                                 "db-migrate": "0.2.0"}[component]
+                self.assertIn(f"image/{component}/v{expected_base}-local.0",
+                              self.tags(component))
                 if component == "polymarket-bot":
                     self.assertIn("cargo +1.92.0 clippy --locked --package polymarket-bot --all-targets -- -D warnings",
                                   self.check_log.read_text())
@@ -170,7 +174,7 @@ state_file.write_text(json.dumps(state))
         self.assertEqual(self.run_ci("ingester").returncode, 0)
         tags = self.tags("ingester")
         state = json.loads(self.state.read_text())
-        state.pop("capitonic/ingester:v1.2.1-local.1")
+        state.pop("capitonic/ingester:v1.2.1-local.0")
         self.state.write_text(json.dumps(state))
         missing = self.run_ci("ingester")
         self.assertNotEqual(missing.returncode, 0)

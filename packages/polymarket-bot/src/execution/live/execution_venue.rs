@@ -53,6 +53,11 @@ impl ExecutionVenue for LiveVenue {
         Ok(Some(existing))
     }
 
+    async fn prepare_order_metadata(&self, market_id: &str, token_ids: &[String]) -> Result<()> {
+        self.warm_current_market_order_metadata(market_id, token_ids)
+            .await
+    }
+
     async fn submit_order(&self, request: OrderRequest) -> Result<OrderRecord> {
         self.validate_request_process(&request)?;
         bail!("process-bound live venue submission requires an adjacent pre-POST guard")
@@ -171,13 +176,70 @@ impl ExecutionVenue for LiveVenue {
                     return Err(error);
                 }
             };
+        let metadata_cache_ready = self
+            .order_metadata_ready_for(&request.market_id, &request.token_id)
+            .await;
+        if let Some(metrics) = &self.reconciliation_metrics {
+            metrics.record_order_metadata_cache_use(if metadata_cache_ready {
+                "cache_ready"
+            } else {
+                "fallback"
+            });
+        }
         let stage_started = std::time::Instant::now();
-        let (risk_result, metadata_result) = tokio::join!(
-            self.enforce_submission_risk(process_id, &request, None),
-            self.clob_operation(
-                "order_metadata",
-                self.prewarm_order_metadata(&client, token_id),
+        let ((risk_result, risk_elapsed), (metadata_result, metadata_elapsed)) = tokio::join!(
+            async {
+                let started = std::time::Instant::now();
+                let result = self
+                    .enforce_submission_risk(process_id, &request, None)
+                    .await;
+                (result, started.elapsed())
+            },
+            async {
+                let started = std::time::Instant::now();
+                let result = self
+                    .clob_operation(
+                        "order_metadata",
+                        self.prewarm_order_metadata(&client, token_id),
+                    )
+                    .await;
+                (result, started.elapsed())
+            },
+        );
+        match &risk_result {
+            Ok(result) => order_path.stage(
+                "submission_risk",
+                if result.gate_reason.is_some() {
+                    "rejected"
+                } else {
+                    "allowed"
+                },
+                result
+                    .gate_reason
+                    .map(LiveExecutionGateReason::as_str)
+                    .unwrap_or("allowed"),
+                risk_elapsed,
             ),
+            Err(failure) => order_path.stage(
+                "submission_risk",
+                "evidence_error",
+                failure.gate_reason.as_str(),
+                risk_elapsed,
+            ),
+        }
+        order_path.stage(
+            "order_metadata",
+            if metadata_result.is_ok() {
+                "ready"
+            } else {
+                "unavailable"
+            },
+            if metadata_cache_ready {
+                "cache_ready"
+            } else {
+                "fallback"
+            },
+            metadata_elapsed,
         );
         let risk_result = match risk_result {
             Ok(result) => result,
@@ -535,6 +597,7 @@ impl ExecutionVenue for LiveVenue {
             )
             .await;
         }
+        self.invalidate_collateral_evidence();
         pre_post_guard.observe_post_attempt(&request);
         let post_started = std::time::Instant::now();
         if let (Some(member_id), Some(model_key)) = (
@@ -989,6 +1052,9 @@ impl ExecutionVenue for LiveVenue {
                     );
                 }
             }
+            let collateral_generation = self
+                .collateral_evidence_generation
+                .load(Ordering::Acquire);
             let balances = at_stage(
                 ReconciliationStage::Balances,
                 self.get_balances().await,
@@ -1001,6 +1067,13 @@ impl ExecutionVenue for LiveVenue {
                     )),
                 );
             }
+            let available_usdc = at_stage(
+                ReconciliationStage::Balances,
+                balances
+                    .iter()
+                    .find_map(|(asset, balance)| (asset == "USDC").then_some(*balance))
+                    .context("Polymarket CLOB balance reconciliation returned no USDC collateral"),
+            )?;
             let owned_orders = if self.bound_process_id.is_some() {
                 let mut venue_order_ids = open_orders
                     .iter()
@@ -1174,6 +1247,8 @@ impl ExecutionVenue for LiveVenue {
                 http_fills_recovered,
                 submit_unknown_count,
                 oldest_submit_unknown_age_seconds,
+                available_usdc,
+                collateral_generation,
             ))
         }
         .await;
@@ -1189,6 +1264,8 @@ impl ExecutionVenue for LiveVenue {
             http_fills_recovered,
             submit_unknown_count,
             oldest_submit_unknown_age_seconds,
+            available_usdc,
+            collateral_generation,
         ) = match reconcile_result {
             Ok(result) => result,
             Err(failure) => {
@@ -1303,7 +1380,18 @@ impl ExecutionVenue for LiveVenue {
                 self.http_fallback_requested.store(false, Ordering::Release);
             }
         }
+        let reusable_collateral_ready = idempotency_clean
+            && account_reconcile.process_accounting_entry_safe
+            && self.collateral_evidence_generation.load(Ordering::Acquire) == collateral_generation;
+        if reusable_collateral_ready {
+            *self.collateral_evidence.lock().await = Some(LiveCollateralEvidence {
+                available_usdc,
+                checked_at,
+                generation: collateral_generation,
+            });
+        }
         if let Some(metrics) = &self.reconciliation_metrics {
+            metrics.set_collateral_evidence_ready(reusable_collateral_ready);
             metrics.record_report(&report, http_fills_recovered);
             if metrics.record_submit_unknown_state(
                 submit_unknown_count,
