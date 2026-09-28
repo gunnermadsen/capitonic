@@ -6,17 +6,23 @@
     "polymarket-bot": {
       "repository": "capitonic/polymarket-bot",
       "rcVersion": "v3.2.2-rc.1",
-      "sourceRevision": "61ace8bd58ba479d6bef089e30642aee559298a1"
+      "sourceRevision": "61ace8bd58ba479d6bef089e30642aee559298a1",
+      "finalVersion": "v3.2.2",
+      "digest": "sha256:464befc64028760c8bc34800a1c8e152f94ec29eca2f1f658addfeab4902ea54"
     },
     "ingester": {
       "repository": "capitonic/ingester",
       "rcVersion": "v1.2.1-rc.5",
-      "sourceRevision": "dc93c77a80efddb138521bee5679cf2f343a39f5"
+      "sourceRevision": "dc93c77a80efddb138521bee5679cf2f343a39f5",
+      "finalVersion": "v1.2.1",
+      "digest": "sha256:126e1409904cd20396fb20b4cc8daf4ba53aae6174a053184ff279cba75c28a5"
     },
     "db-migrate": {
       "repository": "capitonic/db-migrate",
       "rcVersion": "v0.2.0-rc.1",
-      "sourceRevision": "61ace8bd58ba479d6bef089e30642aee559298a1"
+      "sourceRevision": "61ace8bd58ba479d6bef089e30642aee559298a1",
+      "finalVersion": "v0.2.0",
+      "digest": "sha256:6b1fe310d1e67481695623adeb5bbc6f6efa2d6b36aa7aaed9d465e986c08188"
     }
   }
 }
