@@ -777,14 +777,6 @@ impl MarketDataStreamRuntime {
             }
             PRODUCT_BOOKS => {
                 let payload: BookPayload = serde_json::from_slice(&event.payload_json)?;
-                // The streamed product is the ingester's canonical aligned
-                // snapshot, so runtime freshness follows the envelope's
-                // sample and publish clocks. The payload retains the original
-                // provider-change clocks for persistence provenance.
-                let sampled_at =
-                    stream_timestamp(event.source_timestamp_micros, "orderbook source timestamp")?;
-                let published_at =
-                    stream_timestamp(event.published_at_micros, "orderbook publish timestamp")?;
                 let outcome = match payload.outcome.as_str() {
                     "Up" | "up" => BtcOutcome::Up,
                     "Down" | "down" => BtcOutcome::Down,
@@ -803,8 +795,8 @@ impl MarketDataStreamRuntime {
                     &payload.token_id,
                     outcome,
                     payload.tick_size,
-                    sampled_at,
-                    published_at,
+                    payload.source_timestamp,
+                    payload.received_at,
                     u64::try_from(payload.ingest_sequence)?,
                     payload.source_hash,
                     bids,
@@ -1086,10 +1078,6 @@ fn apply_binance_one_second_kline(
     }
 }
 
-fn stream_timestamp(micros: i64, field: &'static str) -> Result<DateTime<Utc>> {
-    DateTime::from_timestamp_micros(micros).with_context(|| format!("invalid {field}"))
-}
-
 #[derive(Debug, Clone, PartialEq)]
 struct MarketWindowSelection {
     tradable: Option<BtcIntervalMarket>,
@@ -1178,10 +1166,8 @@ struct BookPayload {
     token_id: String,
     outcome: String,
     tick_size: Decimal,
-    #[serde(rename = "source_timestamp")]
-    _provider_source_timestamp: DateTime<Utc>,
-    #[serde(rename = "received_at")]
-    _ingester_received_at: DateTime<Utc>,
+    source_timestamp: DateTime<Utc>,
+    received_at: DateTime<Utc>,
     source_hash: Option<String>,
     ingest_sequence: i64,
     bids: Vec<[String; 2]>,
@@ -1805,6 +1791,95 @@ mod tests {
         assert_eq!(payload.market.market_id, "market-1");
         assert_eq!(payload.market.condition_id, "condition-1");
         assert_eq!(payload.tick_size, Decimal::new(1, 2));
+        assert_eq!(
+            payload.source_timestamp,
+            Utc.with_ymd_and_hms(2026, 9, 3, 17, 30, 1).unwrap()
+        );
+        assert_eq!(
+            payload.received_at,
+            Utc.with_ymd_and_hms(2026, 9, 3, 17, 30, 1).unwrap()
+                + chrono::Duration::milliseconds(50)
+        );
+    }
+
+    #[tokio::test]
+    async fn aligned_orderbook_samples_do_not_refresh_provider_freshness() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://test:test@127.0.0.1/test")
+            .unwrap();
+        let epoch = Uuid::new_v4();
+        let books = Arc::new(RwLock::new(BookRegistry::new(epoch)));
+        let runtime = MarketDataStreamRuntime::new(
+            "http://127.0.0.1:1".to_owned(),
+            "test".to_owned(),
+            "test".to_owned(),
+            BtcRepository::from_pool(pool),
+            Arc::new(RwLock::new(RealtimeState::default())),
+            books.clone(),
+            Arc::new(StreamMetrics::default()),
+        )
+        .unwrap();
+        let window_start = Utc.with_ymd_and_hms(2026, 9, 3, 17, 30, 0).unwrap();
+        let market = market("market-1", window_start, true, false, true);
+        books.write().await.try_register_market(&market).unwrap();
+        let provider_source_timestamp = window_start + chrono::Duration::seconds(1);
+        let ingester_received_at = provider_source_timestamp + chrono::Duration::milliseconds(50);
+        let payload_json = serde_json::to_vec(&serde_json::json!({
+            "market": {
+                "market_id": market.market_id,
+                "condition_id": market.condition_id,
+                "up_token_id": market.up_token_id,
+                "down_token_id": market.down_token_id
+            },
+            "token_id": market.up_token_id,
+            "outcome": "Up",
+            "tick_size": "0.01",
+            "source_timestamp": provider_source_timestamp,
+            "received_at": ingester_received_at,
+            "source_hash": "sha256:quiet-book",
+            "ingest_sequence": 7,
+            "bids": [["0.49", "100"]],
+            "asks": [["0.51", "100"]]
+        }))
+        .unwrap();
+
+        for (sequence, sampled_at) in [
+            (1, window_start + chrono::Duration::seconds(10)),
+            (2, window_start + chrono::Duration::seconds(20)),
+        ] {
+            runtime
+                .apply_payload(
+                    &MarketDataEvent {
+                        product_key: PRODUCT_BOOKS.to_owned(),
+                        contract_version: CONTRACT_VERSION,
+                        worker_id: "worker-1".to_owned(),
+                        publisher_epoch: epoch.to_string(),
+                        sequence,
+                        source_event_id: format!("sample-{sequence}"),
+                        source_timestamp_micros: sampled_at.timestamp_micros(),
+                        provider_available_at_micros: sampled_at.timestamp_micros(),
+                        received_at_micros: sampled_at.timestamp_micros(),
+                        published_at_micros: (sampled_at + chrono::Duration::milliseconds(5))
+                            .timestamp_micros(),
+                        payload_sha256: "sha256:quiet-book".to_owned(),
+                        integrity: "ok".to_owned(),
+                        persistence_healthy: true,
+                        payload_json: payload_json.clone(),
+                    },
+                    false,
+                )
+                .await
+                .unwrap();
+        }
+
+        let checkpoint = books
+            .read()
+            .await
+            .checkpoint(&market.up_token_id)
+            .expect("Up checkpoint");
+        assert_eq!(checkpoint.source_timestamp, provider_source_timestamp);
+        assert_eq!(checkpoint.received_at, ingester_received_at);
+        assert_eq!(checkpoint.ingest_sequence, 7);
     }
 
     #[test]
@@ -1900,18 +1975,6 @@ mod tests {
                 .market_id,
             market.market_id
         );
-    }
-
-    #[test]
-    fn canonical_stream_timestamp_preserves_subsecond_sample_time() {
-        let sampled_at = Utc.with_ymd_and_hms(2026, 9, 3, 18, 30, 1).unwrap()
-            + chrono::Duration::microseconds(234_567);
-
-        assert_eq!(
-            stream_timestamp(sampled_at.timestamp_micros(), "sample").expect("timestamp"),
-            sampled_at
-        );
-        assert!(stream_timestamp(i64::MAX, "sample").is_err());
     }
 
     #[test]
