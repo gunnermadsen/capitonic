@@ -7,6 +7,7 @@ NAMESPACE="${CAPITONIC_NAMESPACE:-capitonic}"
 AWS_REGION="${AWS_REGION:-eu-west-1}"
 APP_SECRET_NAME="${APP_SECRET_NAME:-capitonic/polymarket-bot/production}"
 CERT_MANAGER_VERSION="${CERT_MANAGER_VERSION:-v1.18.2}"
+export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 cd "$APP_DIRECTORY"
 
 [[ "$AWS_REGION" == "eu-west-1" ]]
