@@ -15,6 +15,7 @@ workerScaling:
   minReplicas: 4
   maxReplicas: 4
 archiveStorage:
+  type: hostPath
   path: /var/lib/rancher/k3s/storage/capitonic-archives
   size: 10Gi
   runAsUser: 10003

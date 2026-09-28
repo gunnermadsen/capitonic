@@ -15,9 +15,21 @@ spec:
   accessModes: [ReadWriteOnce]
   persistentVolumeReclaimPolicy: Retain
   storageClassName: ""
+{{- if eq .Values.archiveStorage.type "hostPath" }}
   hostPath:
     path: {{ .Values.archiveStorage.path | quote }}
     type: DirectoryOrCreate
+{{- else }}
+  local:
+    path: {{ .Values.archiveStorage.path | quote }}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: [{{ .Values.archiveStorage.nodeName | quote }}]
+{{- end }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

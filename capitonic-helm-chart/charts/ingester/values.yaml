@@ -20,7 +20,9 @@ workerScaling:
   minReplicas: 1
   maxReplicas: 14
 archiveStorage:
+  type: local
   path: /Volumes/docker-data/polymarket-bot
+  nodeName: lima-rancher-desktop
   size: 300Gi
   runAsUser: 501
   runAsGroup: 1000
