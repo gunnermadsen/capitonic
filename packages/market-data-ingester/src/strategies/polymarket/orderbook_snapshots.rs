@@ -2019,7 +2019,9 @@ struct BookSample {
 #[derive(Debug, PartialEq, Eq)]
 struct SampledBookStreamMetadata {
     source_event_id: String,
-    observed_at: DateTime<Utc>,
+    source_timestamp: DateTime<Utc>,
+    provider_available_at: DateTime<Utc>,
+    received_at: DateTime<Utc>,
     payload_sha256: String,
 }
 
@@ -2041,7 +2043,9 @@ fn sampled_book_stream_metadata(
             sample.token_id,
             sample.ingest_sequence
         ),
-        observed_at,
+        source_timestamp: sample.source_timestamp,
+        provider_available_at: sample.source_timestamp,
+        received_at: sample.received_at,
         payload_sha256: hash_json(&payload)?,
     })
 }
@@ -2085,9 +2089,9 @@ impl PublicationWorker {
                         sampled_book_stream_metadata(&command.sample, sampled_at).map(|metadata| {
                             (
                                 metadata.source_event_id,
-                                metadata.observed_at,
-                                metadata.observed_at,
-                                metadata.observed_at,
+                                metadata.source_timestamp,
+                                metadata.provider_available_at,
+                                metadata.received_at,
                                 metadata.payload_sha256,
                             )
                         })
@@ -6200,7 +6204,7 @@ mod tests {
     }
 
     #[test]
-    fn sampled_book_stream_identity_advances_on_quiet_sampling_ticks() {
+    fn sampled_book_stream_identity_advances_without_refreshing_causal_clocks() {
         let sample = bootstrapped_registry()
             .samples(1)
             .into_iter()
@@ -6211,11 +6215,14 @@ mod tests {
         let second = sampled_book_stream_metadata(&sample, at(1_783_902_603_001))
             .expect("second stream metadata");
 
-        assert_eq!(first.observed_at, at(1_783_902_602_001));
-        assert_eq!(second.observed_at, at(1_783_902_603_001));
         assert_ne!(first.source_event_id, second.source_event_id);
         assert_eq!(first.payload_sha256, second.payload_sha256);
         assert!(first.source_event_id.contains(&sample.token_id));
+        for metadata in [&first, &second] {
+            assert_eq!(metadata.source_timestamp, sample.source_timestamp);
+            assert_eq!(metadata.provider_available_at, sample.source_timestamp);
+            assert_eq!(metadata.received_at, sample.received_at);
+        }
     }
 
     #[test]
