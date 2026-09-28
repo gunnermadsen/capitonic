@@ -18,19 +18,13 @@ for component in polymarket-bot ingester db-migrate; do
   final_version="${rc_version%-rc.*}"
   [[ "$final_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
 
-  digest="$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$repository" \
-    --image-ids imageTag="$rc_version" --query 'imageDetails[0].imageDigest' --output text)"
+  digest="$(scripts/production/verify-ecr-arm64-image.sh "$repository" "$rc_version" "$source_revision")"
   [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
   reference="$ECR_REGISTRY/$repository@$digest"
   manifest="$(aws ecr batch-get-image --region "$AWS_REGION" --repository-name "$repository" \
     --image-ids imageDigest="$digest" \
-    --accepted-media-types application/vnd.oci.image.manifest.v1+json application/vnd.docker.distribution.manifest.v2+json \
+    --accepted-media-types application/vnd.oci.image.index.v1+json application/vnd.docker.distribution.manifest.list.v2+json application/vnd.oci.image.manifest.v1+json application/vnd.docker.distribution.manifest.v2+json \
     --query 'images[0].imageManifest' --output text)"
-  config_digest="$(jq -er '.config.digest' <<<"$manifest")"
-  config_url="$(aws ecr get-download-url-for-layer --region "$AWS_REGION" --repository-name "$repository" \
-    --layer-digest "$config_digest" --query downloadUrl --output text)"
-  curl -fsSL "$config_url" | jq -e --arg revision "$source_revision" \
-    '.os == "linux" and .architecture == "arm64" and .config.Labels["org.opencontainers.image.revision"] == $revision' >/dev/null
 
   existing_final="$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$repository" \
     --image-ids imageTag="$final_version" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"

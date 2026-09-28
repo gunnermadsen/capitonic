@@ -58,6 +58,15 @@
       "Effect": "Allow",
       "Action": "ssm:GetParameter",
       "Resource": "arn:aws:ssm:eu-west-1::parameter/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id"
+    },
+    {
+      "Sid": "ProductionInstanceProfileTags",
+      "Effect": "Allow",
+      "Action": [
+        "iam:TagInstanceProfile",
+        "iam:UntagInstanceProfile"
+      ],
+      "Resource": "arn:aws:iam::192200846560:instance-profile/capitonic-polymarket-bot-host"
     }
   ]
 }

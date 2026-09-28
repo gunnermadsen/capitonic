@@ -281,17 +281,6 @@ jobs:
           [[ "$accepted_release" == "$current_release" ]]
           existing_digest="$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$REPOSITORY" \
             --image-ids imageTag="$rc_version" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
-          if [[ "$existing_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            manifest="$(aws ecr batch-get-image --region "$AWS_REGION" --repository-name "$REPOSITORY" \
-              --image-ids imageDigest="$existing_digest" \
-              --accepted-media-types application/vnd.oci.image.manifest.v1+json application/vnd.docker.distribution.manifest.v2+json \
-              --query 'images[0].imageManifest' --output text)"
-            config_digest="$(jq -er '.config.digest' <<<"$manifest")"
-            config_url="$(aws ecr get-download-url-for-layer --region "$AWS_REGION" --repository-name "$REPOSITORY" \
-              --layer-digest "$config_digest" --query downloadUrl --output text)"
-            curl -fsSL "$config_url" | jq -e --arg revision "$source_revision" \
-              '.os == "linux" and .architecture == "arm64" and .config.Labels["org.opencontainers.image.revision"] == $revision' >/dev/null
-          fi
           {
             echo "rc_version=$rc_version"
             echo "source_revision=$source_revision"
@@ -325,3 +314,11 @@ jobs:
           tags: ${{ steps.release.outputs.tags }}
           cache-from: type=gha,scope=${{ matrix.cache_scope }}-arm64
           cache-to: type=gha,scope=${{ matrix.cache_scope }}-arm64,mode=max
+      - name: Verify published ARM64 image and embedded revision
+        if: needs.changes.outputs[matrix.change_key] == 'true'
+        env:
+          COMPONENT: ${{ matrix.name }}
+          REPOSITORY: ${{ matrix.repository }}
+          RC_VERSION: ${{ steps.release.outputs.rc_version }}
+          SOURCE_REVISION: ${{ steps.release.outputs.source_revision }}
+        run: scripts/production/verify-ecr-arm64-image.sh "$REPOSITORY" "$RC_VERSION" "$SOURCE_REVISION" >/dev/null

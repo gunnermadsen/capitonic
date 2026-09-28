@@ -88,6 +88,15 @@ jobs:
           INSTANCE_ID: ${{ steps.apply.outputs.instance_id }}
         run: |
           set -euo pipefail
-          aws ssm wait instance-online --region "$AWS_REGION" --instance-ids "$INSTANCE_ID"
+          deadline=$((SECONDS + 900))
+          until [[ "$(aws ssm describe-instance-information --region "$AWS_REGION" \
+            --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
+            --query 'InstanceInformationList[0].PingStatus' --output text)" == "Online" ]]; do
+            if (( SECONDS >= deadline )); then
+              echo "SSM did not report $INSTANCE_ID online within 15 minutes." >&2
+              exit 1
+            fi
+            sleep 10
+          done
           scripts/production/run-ssm-command.sh "$INSTANCE_ID" 1800 'Verify k3s bootstrap' \
             'set -euo pipefail; cloud-init status --wait; test -f /var/lib/capitonic-bootstrap-complete; test "$(uname -m)" = aarch64; systemctl is-active --quiet k3s; kubectl wait --for=condition=Ready node --all --timeout=5m; test "$(kubectl get nodes --no-headers | wc -l)" -eq 1'
