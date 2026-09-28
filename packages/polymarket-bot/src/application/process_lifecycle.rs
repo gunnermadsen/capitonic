@@ -291,7 +291,7 @@ impl BtcProcessManager {
         })?;
         let venue = Arc::new(
             global
-                .bind_process(process_id, &execution)
+                .bind_process(process_id, process.created_at, &execution)
                 .map_err(|error| HttpError::bad_request(error.to_string()))?,
         );
         let identity = venue
@@ -778,7 +778,7 @@ impl BtcProcessManager {
             let components = self.execution_components(
                 execution_mode,
                 &execution,
-                process_id,
+                (process_id, process.created_at),
                 books.clone(),
                 paper_venue_config,
                 &strategy,
@@ -959,7 +959,7 @@ impl BtcProcessManager {
             let components = self.execution_components(
                 execution_mode,
                 &execution,
-                process_id,
+                (process_id, process.created_at),
                 books.clone(),
                 paper_venue_config,
                 &strategy,

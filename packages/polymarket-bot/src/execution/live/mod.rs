@@ -127,6 +127,7 @@ pub struct LiveVenue {
     store: Option<Store>,
     data_api: Option<DataApiClient>,
     bound_process_id: Option<Uuid>,
+    bound_process_created_at: Option<DateTime<Utc>>,
     bound_account_ref: Option<String>,
     bound_execution: Option<EffectiveProcessExecutionConfig>,
     transport_state: Arc<Mutex<LiveTransportState>>,
@@ -140,6 +141,7 @@ pub struct LiveVenue {
     post_order_reconciled_generation: Arc<AtomicU64>,
     collateral_evidence: Arc<Mutex<Option<LiveCollateralEvidence>>>,
     collateral_evidence_generation: Arc<AtomicU64>,
+    process_fill_boundary_validated: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone)]

@@ -966,6 +966,31 @@ impl ExecutionVenue for LiveVenue {
             }
         };
         let reconcile_result = async {
+            if !self
+                .process_fill_boundary_validated
+                .load(Ordering::Acquire)
+            {
+                let process_id = at_stage(
+                    ReconciliationStage::Persistence,
+                    self.bound_process_id.context(
+                        "live process fill boundary validation requires a bound process",
+                    ),
+                )?;
+                let process_created_at = at_stage(
+                    ReconciliationStage::Persistence,
+                    self.bound_process_created_at.context(
+                        "live process fill boundary validation requires its creation time",
+                    ),
+                )?;
+                at_stage(
+                    ReconciliationStage::Persistence,
+                    store
+                        .validate_live_process_fill_boundary(process_id, process_created_at)
+                        .await,
+                )?;
+                self.process_fill_boundary_validated
+                    .store(true, Ordering::Release);
+            }
             let mut fills_backfilled = at_stage(
                 ReconciliationStage::UserEventBackfill,
                 self.backfill_fills_from_live_events()

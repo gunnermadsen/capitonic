@@ -79,10 +79,10 @@ mod tests {
     async fn process_bound_venues_share_the_initialized_live_authentication_cache() {
         let root = LiveVenue::new_for_test(live_config()).unwrap();
         let first = root
-            .bind_process(Uuid::new_v4(), &live_execution())
+            .bind_process(Uuid::new_v4(), Utc::now(), &live_execution())
             .unwrap();
         let second = root
-            .bind_process(Uuid::new_v4(), &live_execution())
+            .bind_process(Uuid::new_v4(), Utc::now(), &live_execution())
             .unwrap();
 
         assert!(Arc::ptr_eq(
@@ -148,7 +148,7 @@ mod tests {
     async fn restarted_live_venue_begins_with_cold_metadata_and_collateral_evidence() {
         let venue = LiveVenue::new_for_test(live_config())
             .unwrap()
-            .bind_process(Uuid::new_v4(), &live_execution())
+            .bind_process(Uuid::new_v4(), Utc::now(), &live_execution())
             .unwrap();
 
         assert!(!venue.order_metadata_ready_for("market", "1").await);
@@ -176,7 +176,7 @@ mod tests {
         let venue = Arc::new(
             LiveVenue::new_for_test(live_config())
                 .unwrap()
-                .bind_process(Uuid::new_v4(), &live_execution())
+                .bind_process(Uuid::new_v4(), Utc::now(), &live_execution())
                 .unwrap(),
         );
         let transport = venue.transport_state.lock().await;
@@ -214,7 +214,7 @@ mod tests {
         let venue = Arc::new(
             LiveVenue::new_for_test(live_config())
                 .unwrap()
-                .bind_process(Uuid::new_v4(), &live_execution())
+                .bind_process(Uuid::new_v4(), Utc::now(), &live_execution())
                 .unwrap(),
         );
         let readiness = venue.readiness_state.lock().await;
@@ -689,7 +689,7 @@ mod tests {
     async fn user_ws_health_is_diagnostic_and_rest_freshness_controls_backup_readiness() {
         let venue = LiveVenue::new_for_test(live_config())
             .unwrap()
-            .bind_process(Uuid::new_v4(), &live_execution())
+            .bind_process(Uuid::new_v4(), Utc::now(), &live_execution())
             .unwrap();
         {
             let mut transport = venue.transport_state.lock().await;
@@ -746,7 +746,7 @@ mod tests {
         let process_id = Uuid::new_v4();
         let venue = LiveVenue::new_for_test(live_config())
             .unwrap()
-            .bind_process(process_id, &live_execution())
+            .bind_process(process_id, Utc::now(), &live_execution())
             .unwrap();
         {
             let mut state = venue.readiness_state.lock().await;
@@ -803,7 +803,7 @@ mod tests {
     async fn transient_reconciliation_failure_preserves_current_entry_gate() {
         let venue = LiveVenue::new_for_test(live_config())
             .unwrap()
-            .bind_process(Uuid::new_v4(), &live_execution())
+            .bind_process(Uuid::new_v4(), Utc::now(), &live_execution())
             .unwrap();
         {
             let mut state = venue.readiness_state.lock().await;
@@ -845,7 +845,7 @@ mod tests {
     async fn clean_reconciliation_restores_readiness_without_manual_reenable() {
         let venue = LiveVenue::new_for_test(live_config())
             .unwrap()
-            .bind_process(Uuid::new_v4(), &live_execution())
+            .bind_process(Uuid::new_v4(), Utc::now(), &live_execution())
             .unwrap();
         {
             let mut state = venue.readiness_state.lock().await;
@@ -1109,7 +1109,7 @@ mod tests {
         let process_id = uuid::Uuid::new_v4();
         let venue = LiveVenue::new_for_test(live_config())
             .unwrap()
-            .bind_process(process_id, &live_execution())
+            .bind_process(process_id, Utc::now(), &live_execution())
             .unwrap();
         venue.global_entry_gate.lock().await.halted = false;
         let base = OrderRequest {
@@ -1138,7 +1138,7 @@ mod tests {
         let process_id = uuid::Uuid::new_v4();
         let venue = LiveVenue::new_for_test(live_config())
             .unwrap()
-            .bind_process(process_id, &live_execution())
+            .bind_process(process_id, Utc::now(), &live_execution())
             .unwrap();
         venue.global_entry_gate.lock().await.halted = false;
         let mut request = OrderRequest {
@@ -1168,7 +1168,7 @@ mod tests {
         let process_id = Uuid::new_v4();
         let venue = LiveVenue::new_for_test(live_config())
             .unwrap()
-            .bind_process(process_id, &live_execution())
+            .bind_process(process_id, Utc::now(), &live_execution())
             .unwrap();
         let request = OrderRequest {
             client_order_id: Uuid::new_v4(),
@@ -1201,7 +1201,7 @@ mod tests {
         execution.max_order_notional_usd = None;
         let venue = LiveVenue::new_for_test(live_config())
             .unwrap()
-            .bind_process(process_id, &execution)
+            .bind_process(process_id, Utc::now(), &execution)
             .unwrap();
         let request = OrderRequest {
             client_order_id: Uuid::new_v4(),
@@ -1225,7 +1225,7 @@ mod tests {
         let process_id = uuid::Uuid::new_v4();
         let venue = LiveVenue::new_for_test(live_config())
             .unwrap()
-            .bind_process(process_id, &live_execution())
+            .bind_process(process_id, Utc::now(), &live_execution())
             .unwrap();
         let request = OrderRequest {
             client_order_id: uuid::Uuid::new_v4(),
@@ -1246,7 +1246,7 @@ mod tests {
     async fn manual_enable_remains_fail_closed_before_first_successful_reconcile() {
         let venue = LiveVenue::new_for_test(live_config())
             .unwrap()
-            .bind_process(uuid::Uuid::new_v4(), &live_execution())
+            .bind_process(uuid::Uuid::new_v4(), Utc::now(), &live_execution())
             .unwrap();
         let error = venue
             .set_live_entries_enabled(true, None)
@@ -1268,7 +1268,7 @@ mod tests {
     async fn configured_restart_authorization_does_not_bypass_reconciliation_readiness() {
         let venue = LiveVenue::new_for_test(live_config())
             .unwrap()
-            .bind_process(uuid::Uuid::new_v4(), &live_execution())
+            .bind_process(uuid::Uuid::new_v4(), Utc::now(), &live_execution())
             .unwrap();
 
         venue
@@ -1292,7 +1292,9 @@ mod tests {
     async fn wallet_wide_halt_closes_every_bound_submit_path() {
         let root = LiveVenue::new_for_test(live_config()).unwrap();
         let process_id = Uuid::new_v4();
-        let bound = root.bind_process(process_id, &live_execution()).unwrap();
+        let bound = root
+            .bind_process(process_id, Utc::now(), &live_execution())
+            .unwrap();
         let identity =
             canonical_configured_account_identity(&bound.config, "polymarket-test").unwrap();
         {
@@ -1350,7 +1352,7 @@ mod tests {
         let process_id = Uuid::new_v4();
         let venue = LiveVenue::new_for_test(live_config())
             .unwrap()
-            .bind_process(process_id, &live_execution())
+            .bind_process(process_id, Utc::now(), &live_execution())
             .unwrap();
         let request = OrderRequest {
             client_order_id: Uuid::new_v4(),
@@ -1374,7 +1376,7 @@ mod tests {
         let process_id = Uuid::new_v4();
         let venue = LiveVenue::new_for_test(live_config())
             .unwrap()
-            .bind_process(process_id, &live_execution())
+            .bind_process(process_id, Utc::now(), &live_execution())
             .unwrap();
         let request = OrderRequest {
             client_order_id: Uuid::new_v4(),
@@ -1402,7 +1404,7 @@ mod tests {
         let process_id = Uuid::new_v4();
         let venue = LiveVenue::new_for_test(live_config())
             .unwrap()
-            .bind_process(process_id, &live_execution())
+            .bind_process(process_id, Utc::now(), &live_execution())
             .unwrap();
         let request = OrderRequest {
             client_order_id: Uuid::new_v4(),
@@ -1651,16 +1653,27 @@ mod tests {
     #[test]
     fn process_binding_rejects_nil_identity() {
         let venue = LiveVenue::new_for_test(live_config()).unwrap();
-        assert!(venue.bind_process(Uuid::nil(), &live_execution()).is_err());
+        assert!(venue
+            .bind_process(Uuid::nil(), Utc::now(), &live_execution())
+            .is_err());
         let mut blank_account = live_execution();
         blank_account.account_ref = Some("   ".to_string());
-        assert!(venue.bind_process(Uuid::new_v4(), &blank_account).is_err());
+        assert!(venue
+            .bind_process(Uuid::new_v4(), Utc::now(), &blank_account)
+            .is_err());
 
         let process_id = Uuid::new_v4();
+        let process_created_at = Utc::now() - chrono::Duration::days(7);
         let mut padded_account = live_execution();
         padded_account.account_ref = Some("  polymarket-test  ".to_string());
-        let bound = venue.bind_process(process_id, &padded_account).unwrap();
+        let bound = venue
+            .bind_process(process_id, process_created_at, &padded_account)
+            .unwrap();
         assert_eq!(bound.bound_process_id(), Some(process_id));
+        assert_eq!(bound.bound_process_created_at, Some(process_created_at));
+        assert!(!bound
+            .process_fill_boundary_validated
+            .load(Ordering::Acquire));
         assert_eq!(bound.bound_account_ref(), Some("polymarket-test"));
     }
 

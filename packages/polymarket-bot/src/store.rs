@@ -138,6 +138,7 @@ LEFT JOIN polymarket.fill_identities i
 LEFT JOIN polymarket.orders o
   ON o.order_id = f.order_id
 WHERE f.process_id = $1
+  AND f.timestamp_utc >= $2
   AND NOT EXISTS (
     SELECT 1
     FROM polymarket.btc_paper_settlement_ledger settlement
@@ -161,6 +162,7 @@ WHERE f.process_id = $1
         SELECT round(SUM(entry_fill.size), 10)::numeric
         FROM polymarket.fills entry_fill
         WHERE entry_fill.process_id = $1
+          AND entry_fill.timestamp_utc >= $2
           AND entry_fill.order_id = f.order_id
           AND entry_fill.token_id = f.token_id
           AND entry_fill.source = 'live'
@@ -173,10 +175,32 @@ WHERE f.process_id = $1
       AND (account_exit.raw_payload #>> '{reconciliation,net_proceeds}')::numeric > 0
   )
 ORDER BY f.timestamp_utc, f.fill_id
-LIMIT $2
+LIMIT $3
+"#;
+
+const SELECT_LIVE_PROCESS_FILL_BEFORE_CREATION_EXISTS_SQL: &str = r#"
+SELECT EXISTS (
+  SELECT 1
+  FROM polymarket.fills
+  WHERE process_id = $1
+    AND timestamp_utc < $2
+  LIMIT 1
+)
 "#;
 
 const SELECT_LIVE_PROCESS_CROSS_OWNED_FILL_EXISTS_SQL: &str = r#"
+SELECT EXISTS (
+  SELECT 1
+  FROM polymarket.orders o
+  JOIN polymarket.fills f ON f.order_id = o.order_id
+  WHERE o.process_id = $1
+    AND f.timestamp_utc >= $2
+    AND f.process_id IS DISTINCT FROM $1
+  LIMIT 1
+)
+"#;
+
+const SELECT_LIVE_PROCESS_ANY_CROSS_OWNED_FILL_EXISTS_SQL: &str = r#"
 SELECT EXISTS (
   SELECT 1
   FROM polymarket.orders o
@@ -198,6 +222,7 @@ SELECT EXISTS (
       FROM polymarket.fills f
       WHERE f.order_id = o.order_id
         AND f.process_id = $1
+        AND f.timestamp_utc >= $2
         AND f.source = 'live'
     )
   LIMIT 1
@@ -240,6 +265,7 @@ JOIN polymarket.fills f
   ON f.fill_id = i.fill_id
  AND f.timestamp_utc = i.timestamp_utc
 WHERE i.fill_id = ANY($1::uuid[])
+  AND f.timestamp_utc >= $2
 ORDER BY i.fill_id
 "#;
 
@@ -1127,6 +1153,7 @@ impl Store {
     pub async fn conservative_live_process_exposure(
         &self,
         process_id: Uuid,
+        process_created_at: DateTime<Utc>,
         ignored_client_order_id: Option<Uuid>,
     ) -> Result<LiveProcessExposureSnapshot> {
         if process_id.is_nil() {
@@ -1134,6 +1161,11 @@ impl Store {
         }
         let order_limit = (MAX_LIVE_PROCESS_EXPOSURE_ORDERS + 1) as i64;
         let fill_limit = (MAX_LIVE_PROCESS_EXPOSURE_FILLS + 1) as i64;
+        let mut connection = self
+            .pool
+            .acquire()
+            .await
+            .context("failed to acquire live process exposure connection")?;
 
         // Read reservations before fills. The live writer persists a fill before advancing its
         // order state, so this ordering cannot observe neither side of a concurrent transition:
@@ -1142,36 +1174,39 @@ impl Store {
             sqlx::query_as::<_, LiveExposureOrderRow>(SELECT_LIVE_PROCESS_EXPOSURE_ORDERS_SQL)
                 .bind(process_id)
                 .bind(order_limit)
-                .fetch_all(&self.pool)
+                .fetch_all(&mut *connection)
                 .await
                 .context("failed to load bounded live process exposure orders")?;
         let fills =
             sqlx::query_as::<_, LiveExposureFillRow>(SELECT_LIVE_PROCESS_EXPOSURE_FILLS_SQL)
                 .bind(process_id)
+                .bind(process_created_at)
                 .bind(fill_limit)
-                .fetch_all(&self.pool)
+                .fetch_all(&mut *connection)
                 .await
                 .context("failed to load bounded live process exposure fills")?;
         let cross_owned_fill =
             sqlx::query_scalar::<_, bool>(SELECT_LIVE_PROCESS_CROSS_OWNED_FILL_EXISTS_SQL)
                 .bind(process_id)
-                .fetch_one(&self.pool)
+                .bind(process_created_at)
+                .fetch_one(&mut *connection)
                 .await
                 .context("failed to inspect cross-owned live process fills")?;
         let unproven_filled_order =
             sqlx::query_scalar::<_, bool>(SELECT_LIVE_PROCESS_UNPROVEN_FILLED_ORDER_EXISTS_SQL)
                 .bind(process_id)
-                .fetch_one(&self.pool)
+                .bind(process_created_at)
+                .fetch_one(&mut *connection)
                 .await
                 .context("failed to inspect unproven live process fill states")?;
         let has_unredeemed_settlement =
             sqlx::query_scalar::<_, bool>(SELECT_PENDING_LIVE_PROCESS_SETTLEMENT_EXISTS_SQL)
                 .bind(process_id)
-                .fetch_one(&self.pool)
+                .fetch_one(&mut *connection)
                 .await
                 .context("failed to inspect pending live process redemption evidence")?;
         let as_of = sqlx::query_scalar::<_, DateTime<Utc>>("SELECT clock_timestamp()")
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *connection)
             .await
             .context("failed to read database clock for live process exposure")?;
 
@@ -1206,6 +1241,36 @@ impl Store {
         )
     }
 
+    pub async fn validate_live_process_fill_boundary(
+        &self,
+        process_id: Uuid,
+        process_created_at: DateTime<Utc>,
+    ) -> Result<()> {
+        if process_id.is_nil() {
+            bail!("live fill boundary validation requires a non-nil process_id");
+        }
+        let has_pre_process_fill =
+            sqlx::query_scalar::<_, bool>(SELECT_LIVE_PROCESS_FILL_BEFORE_CREATION_EXISTS_SQL)
+                .bind(process_id)
+                .bind(process_created_at)
+                .fetch_one(&self.pool)
+                .await
+                .context("failed to validate live process fill creation boundary")?;
+        if has_pre_process_fill {
+            bail!("live process has persisted fill evidence before its creation time");
+        }
+        let has_cross_owned_fill =
+            sqlx::query_scalar::<_, bool>(SELECT_LIVE_PROCESS_ANY_CROSS_OWNED_FILL_EXISTS_SQL)
+                .bind(process_id)
+                .fetch_one(&self.pool)
+                .await
+                .context("failed to validate live process fill ownership boundary")?;
+        if has_cross_owned_fill {
+            bail!("live process exposure contains cross-process fill ownership");
+        }
+        Ok(())
+    }
+
     /// Computes the same deterministic full reservation for an adjacent incoming request that the
     /// durable exposure replay applies to persisted nonterminal orders.
     pub fn conservative_live_request_exposure(
@@ -1231,6 +1296,7 @@ impl Store {
     pub async fn recognized_live_process_net_pnl_for_utc_day(
         &self,
         process_id: Uuid,
+        process_created_at: DateTime<Utc>,
         day_start: DateTime<Utc>,
         day_end: DateTime<Utc>,
         as_of: DateTime<Utc>,
@@ -1247,6 +1313,12 @@ impl Store {
             bail!("live daily loss evidence interval must be exactly one UTC day");
         }
 
+        let mut connection = self
+            .pool
+            .acquire()
+            .await
+            .context("failed to acquire live daily loss evidence connection")?;
+
         let settlements = sqlx::query_as::<_, LiveDailySettlementRow>(
             SELECT_RESOLVED_LIVE_PROCESS_SETTLEMENTS_SQL,
         )
@@ -1254,11 +1326,11 @@ impl Store {
         .bind(day_start)
         .bind(day_end)
         .bind(MAX_LIVE_DAILY_SETTLEMENTS + 1)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *connection)
         .await
         .context("failed to load resolved live process settlements for UTC day")?;
         let validation_as_of = sqlx::query_scalar::<_, DateTime<Utc>>("SELECT clock_timestamp()")
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *connection)
             .await
             .context("failed to read database clock for live daily loss evidence")?;
         if settlements.len() > MAX_LIVE_DAILY_SETTLEMENTS as usize {
@@ -1305,7 +1377,8 @@ impl Store {
         } else {
             sqlx::query_as::<_, LiveSettlementFillRow>(SELECT_LIVE_SETTLEMENT_FILLS_SQL)
                 .bind(&all_fill_ids)
-                .fetch_all(&self.pool)
+                .bind(process_created_at)
+                .fetch_all(&mut *connection)
                 .await
                 .context("failed to load exact live settlement fill lineage")?
         };
@@ -1387,6 +1460,7 @@ impl Store {
               ON fill.process_id = orders.process_id
              AND fill.order_id = orders.order_id
              AND fill.source = 'live'
+             AND fill.timestamp_utc >= $5
             WHERE orders.process_id = $1
               AND account_exit.side = 'sell'
               AND account_exit.applied_exit_size = account_exit.size
@@ -1403,7 +1477,8 @@ impl Store {
         .bind(day_start)
         .bind(day_end)
         .bind(MAX_LIVE_DAILY_SETTLEMENTS + 1)
-        .fetch_all(&self.pool)
+        .bind(process_created_at)
+        .fetch_all(&mut *connection)
         .await
         .context("failed to load recognized manual live exits for UTC day")?;
         if account_exits.len() > MAX_LIVE_DAILY_SETTLEMENTS as usize {
@@ -2879,6 +2954,28 @@ impl Store {
             .begin()
             .await
             .context("failed to begin fill identity transaction")?;
+        let valid_process_order_boundary = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT process.created_at <= $3 AND orders.process_id = process.process_id
+            FROM polymarket.trading_processes process
+            JOIN polymarket.orders orders ON orders.order_id = $2
+            WHERE process.process_id = $1
+            "#,
+        )
+        .bind(process_id)
+        .bind(&fill.order_id)
+        .bind(fill.filled_at)
+        .fetch_optional(&mut *transaction)
+        .await
+        .context("failed to validate fill process creation boundary")?
+        .context("fill references an unknown trading process or order")?;
+        if !valid_process_order_boundary {
+            transaction
+                .rollback()
+                .await
+                .context("failed to release pre-process fill transaction")?;
+            bail!("fill does not match its order owner or predates its trading process");
+        }
         // The Timescale hypertable key includes timestamp_utc. Claim the deterministic fill_id in
         // a small canonical table first so different timestamps cannot become separate fills.
         let identity = sqlx::query(INSERT_FILL_IDENTITY_SQL)
@@ -4323,8 +4420,10 @@ mod tests {
             LiveExposureOrderRow, HEARTBEAT_ACTIVE_TRADING_PROCESS_SQL, INSERT_FILL_IDENTITY_SQL,
             INSERT_FILL_SQL, INSERT_ORDER_SQL, RECORD_IDEMPOTENT_TRADING_PROCESS_EVENT_SQL,
             SELECT_FILL_IDENTITY_SQL, SELECT_FILL_SQL,
+            SELECT_LIVE_PROCESS_ANY_CROSS_OWNED_FILL_EXISTS_SQL,
             SELECT_LIVE_PROCESS_CROSS_OWNED_FILL_EXISTS_SQL,
             SELECT_LIVE_PROCESS_EXPOSURE_FILLS_SQL, SELECT_LIVE_PROCESS_EXPOSURE_ORDERS_SQL,
+            SELECT_LIVE_PROCESS_FILL_BEFORE_CREATION_EXISTS_SQL,
             SELECT_LIVE_PROCESS_UNPROVEN_FILLED_ORDER_EXISTS_SQL, SELECT_LIVE_SETTLEMENT_FILLS_SQL,
             SELECT_PENDING_LIVE_PROCESS_SETTLEMENT_EXISTS_SQL,
             SELECT_RESOLVED_LIVE_PROCESS_SETTLEMENTS_SQL,
@@ -4740,6 +4839,7 @@ mod tests {
         assert!(SELECT_RESOLVED_LIVE_PROCESS_SETTLEMENTS_SQL.contains("LIMIT $4"));
         assert!(SELECT_LIVE_SETTLEMENT_FILLS_SQL.contains("i.fill_id = ANY($1::uuid[])"));
         assert!(SELECT_LIVE_SETTLEMENT_FILLS_SQL.contains("f.timestamp_utc = i.timestamp_utc"));
+        assert!(SELECT_LIVE_SETTLEMENT_FILLS_SQL.contains("f.timestamp_utc >= $2"));
     }
 
     #[test]
@@ -4749,13 +4849,23 @@ mod tests {
         assert!(SELECT_LIVE_PROCESS_EXPOSURE_ORDERS_SQL
             .contains("state NOT IN ('filled', 'cancelled', 'rejected', 'expired')"));
         assert!(SELECT_LIVE_PROCESS_EXPOSURE_FILLS_SQL.contains("f.process_id = $1"));
-        assert!(SELECT_LIVE_PROCESS_EXPOSURE_FILLS_SQL.contains("LIMIT $2"));
+        assert!(SELECT_LIVE_PROCESS_EXPOSURE_FILLS_SQL.contains("f.timestamp_utc >= $2"));
+        assert!(SELECT_LIVE_PROCESS_EXPOSURE_FILLS_SQL.contains("LIMIT $3"));
         assert!(SELECT_LIVE_PROCESS_EXPOSURE_FILLS_SQL.contains("polymarket.fill_identities"));
         assert!(SELECT_LIVE_PROCESS_CROSS_OWNED_FILL_EXISTS_SQL.contains("o.process_id = $1"));
+        assert!(SELECT_LIVE_PROCESS_CROSS_OWNED_FILL_EXISTS_SQL.contains("f.timestamp_utc >= $2"));
         assert!(SELECT_LIVE_PROCESS_CROSS_OWNED_FILL_EXISTS_SQL
             .contains("f.process_id IS DISTINCT FROM $1"));
+        assert!(SELECT_LIVE_PROCESS_ANY_CROSS_OWNED_FILL_EXISTS_SQL
+            .contains("f.process_id IS DISTINCT FROM $1"));
+        assert!(
+            !SELECT_LIVE_PROCESS_ANY_CROSS_OWNED_FILL_EXISTS_SQL.contains("f.timestamp_utc >= $2")
+        );
         assert!(SELECT_LIVE_PROCESS_UNPROVEN_FILLED_ORDER_EXISTS_SQL
             .contains("o.state IN ('filled', 'partially_filled')"));
+        assert!(
+            SELECT_LIVE_PROCESS_UNPROVEN_FILLED_ORDER_EXISTS_SQL.contains("f.timestamp_utc >= $2")
+        );
         assert!(
             SELECT_LIVE_PROCESS_EXPOSURE_FILLS_SQL.contains("settlement.execution_mode = 'live'")
         );
@@ -4768,6 +4878,8 @@ mod tests {
             SELECT_LIVE_PROCESS_EXPOSURE_FILLS_SQL.contains("account_exit.applied_exit_size = (")
         );
         assert!(SELECT_LIVE_PROCESS_EXPOSURE_FILLS_SQL.contains("entry_fill.process_id = $1"));
+        assert!(SELECT_LIVE_PROCESS_EXPOSURE_FILLS_SQL.contains("entry_fill.timestamp_utc >= $2"));
+        assert!(SELECT_LIVE_PROCESS_FILL_BEFORE_CREATION_EXISTS_SQL.contains("timestamp_utc < $2"));
         assert!(SELECT_LIVE_PROCESS_EXPOSURE_FILLS_SQL.contains("manual_live_full_exit"));
         assert!(SELECT_LIVE_PROCESS_EXPOSURE_FILLS_SQL.contains("{reconciliation,net_proceeds}"));
         assert!(!SELECT_LIVE_PROCESS_EXPOSURE_FILLS_SQL.contains("resolution"));

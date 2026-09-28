@@ -91,6 +91,7 @@ impl LiveVenue {
             store: Some(store),
             data_api: Some(data_api),
             bound_process_id: None,
+            bound_process_created_at: None,
             bound_account_ref: None,
             bound_execution: None,
             transport_state: Arc::new(Mutex::new(LiveTransportState::initial())),
@@ -104,6 +105,7 @@ impl LiveVenue {
             post_order_reconciled_generation: Arc::new(AtomicU64::new(0)),
             collateral_evidence: Arc::new(Mutex::new(None)),
             collateral_evidence_generation: Arc::new(AtomicU64::new(0)),
+            process_fill_boundary_validated: Arc::new(AtomicBool::new(false)),
         };
         venue.spawn_user_ws_task_if_enabled();
         Ok(venue)
@@ -122,6 +124,7 @@ impl LiveVenue {
             store: None,
             data_api: None,
             bound_process_id: None,
+            bound_process_created_at: None,
             bound_account_ref: None,
             bound_execution: None,
             transport_state: Arc::new(Mutex::new(LiveTransportState::initial())),
@@ -135,6 +138,7 @@ impl LiveVenue {
             post_order_reconciled_generation: Arc::new(AtomicU64::new(0)),
             collateral_evidence: Arc::new(Mutex::new(None)),
             collateral_evidence_generation: Arc::new(AtomicU64::new(0)),
+            process_fill_boundary_validated: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -144,6 +148,7 @@ impl LiveVenue {
     pub fn bind_process(
         &self,
         process_id: Uuid,
+        process_created_at: DateTime<Utc>,
         execution: &EffectiveProcessExecutionConfig,
     ) -> Result<Self> {
         if process_id.is_nil() {
@@ -168,6 +173,7 @@ impl LiveVenue {
             store: self.store.clone(),
             data_api: self.data_api.clone(),
             bound_process_id: Some(process_id),
+            bound_process_created_at: Some(process_created_at),
             bound_account_ref: Some(account_ref.to_string()),
             bound_execution: Some(execution.clone()),
             transport_state: self.transport_state.clone(),
@@ -181,6 +187,7 @@ impl LiveVenue {
             post_order_reconciled_generation: Arc::new(AtomicU64::new(0)),
             collateral_evidence: self.collateral_evidence.clone(),
             collateral_evidence_generation: self.collateral_evidence_generation.clone(),
+            process_fill_boundary_validated: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -1438,6 +1445,12 @@ impl LiveVenue {
                 error,
             )
         })?;
+        let process_created_at = self.bound_process_created_at.ok_or_else(|| {
+            LiveSubmissionRiskFailure::new(
+                LiveExecutionGateReason::ExposureEvidenceUnavailable,
+                anyhow::anyhow!("live process exposure requires its creation boundary"),
+            )
+        })?;
         let account_ref = (request.side == OrderSide::Buy)
             .then(|| {
                 self.bound_account_ref()
@@ -1453,7 +1466,11 @@ impl LiveVenue {
         let exposure_read = async {
             let started = std::time::Instant::now();
             let result = store
-                .conservative_live_process_exposure(process_id, ignored_client_order_id)
+                .conservative_live_process_exposure(
+                    process_id,
+                    process_created_at,
+                    ignored_client_order_id,
+                )
                 .await
                 .map_err(|error| {
                     LiveSubmissionRiskFailure::new(
@@ -1490,7 +1507,13 @@ impl LiveVenue {
                 .and_utc();
             let day_end = day_start + chrono::Duration::days(1);
             let result = store
-                .recognized_live_process_net_pnl_for_utc_day(process_id, day_start, day_end, now)
+                .recognized_live_process_net_pnl_for_utc_day(
+                    process_id,
+                    process_created_at,
+                    day_start,
+                    day_end,
+                    now,
+                )
                 .await
                 .map(Some)
                 .map_err(|error| {

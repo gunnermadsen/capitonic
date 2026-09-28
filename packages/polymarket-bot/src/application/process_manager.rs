@@ -75,11 +75,12 @@ impl BtcProcessManager {
         &self,
         execution_mode: BtcExecutionMode,
         execution: &EffectiveProcessExecutionConfig,
-        process_id: uuid::Uuid,
+        process_identity: (uuid::Uuid, chrono::DateTime<chrono::Utc>),
         books: Arc<tokio::sync::RwLock<BookRegistry>>,
         paper_venue_config: PaperVenueConfig,
         strategy: &BtcStrategyConfig,
     ) -> Result<BtcExecutionComponents> {
+        let (process_id, process_created_at) = process_identity;
         let max_directional_feature_age = strategy
             .effective_max_directional_feature_age_ms()?
             .map(chrono::Duration::milliseconds);
@@ -115,7 +116,8 @@ impl BtcProcessManager {
                     .live_venue
                     .as_ref()
                     .context("live BTC execution credentials are not configured")?;
-                let live_venue = Arc::new(global.bind_process(process_id, execution)?);
+                let live_venue =
+                    Arc::new(global.bind_process(process_id, process_created_at, execution)?);
                 let delegate: Arc<dyn ExecutionVenue> = live_venue.clone();
                 let venue: Arc<dyn ExecutionVenue> = Arc::new(BtcLiveExecutionAdapter::new(
                     delegate,
