@@ -138,20 +138,22 @@ tag_accepted_rc() {
   else
     deployments=(polymarket-bot)
   fi
-  for deployment in "${deployments[@]}"; do
-    kubectl -n capitonic get deployment "$deployment" -o json | jq -e --arg image "$image" --arg id "$id" '
-      .spec.template.spec.containers[0].image == $image and
-      .status.readyReplicas == .spec.replicas' >/dev/null || {
-      echo "Accepted deployment is not ready with the RC image: $deployment" >&2; exit 70;
-    }
-    kubectl -n capitonic get pods -l "app.kubernetes.io/name=$deployment" -o json | jq -e --arg id "$id" '
-      [.items[] | select(.metadata.deletionTimestamp == null)] as $pods |
-      ($pods | length) > 0 and all($pods[];
-        .status.containerStatuses[0].ready == true and
-        .status.containerStatuses[0].imageID == $id)' >/dev/null || {
-      echo "Accepted pods do not all run the selected image ID: $deployment" >&2; exit 70;
-    }
-  done
+  if [[ "$component" != db-migrate ]]; then
+    for deployment in "${deployments[@]}"; do
+      kubectl -n capitonic get deployment "$deployment" -o json | jq -e --arg image "$image" --arg id "$id" '
+        .spec.template.spec.containers[0].image == $image and
+        .status.readyReplicas == .spec.replicas' >/dev/null || {
+        echo "Accepted deployment is not ready with the RC image: $deployment" >&2; exit 70;
+      }
+      kubectl -n capitonic get pods -l "app.kubernetes.io/name=$deployment" -o json | jq -e --arg id "$id" '
+        [.items[] | select(.metadata.deletionTimestamp == null)] as $pods |
+        ($pods | length) > 0 and all($pods[];
+          .status.containerStatuses[0].ready == true and
+          .status.containerStatuses[0].imageID == $id)' >/dev/null || {
+        echo "Accepted pods do not all run the selected image ID: $deployment" >&2; exit 70;
+      }
+    done
+  fi
   if [[ "$component" == db-migrate ]]; then
     kubectl -n capitonic get job db-migrate -o json | jq -e --arg image "$image" '
       .spec.template.spec.containers[0].image == $image and
