@@ -92,6 +92,7 @@ git -c credential.helper="store --file=$credential_file" clone --branch "$REPO_B
 rm -f "$credential_file" "$secret_file"
 chown -R root:root "$APP_DIRECTORY"
 chmod -R go-w "$APP_DIRECTORY"
+"$APP_DIRECTORY/scripts/production/install-yq.sh"
 
 cat >/etc/systemd/system/capitonic-ecr-secret.service <<UNIT
 [Unit]
