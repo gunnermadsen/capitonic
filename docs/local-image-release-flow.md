@@ -8,7 +8,8 @@ This is the operator runbook for the bot and ingester image path in local k3s. E
 | Check image inputs, select `local.N`, build the image, and create `image/...` provenance tags | `scripts/local-image-ci.sh` |
 | Validate the candidate, pin the chart image and `appVersion`, and deploy the committed pin | `scripts/local-image-cd.sh` |
 | Record accepted checkpoint and first-use `golden/...` provenance | Operator or agent under `AGENTS.md` |
-| Validate the accepted RC and atomically push its Git refs with `development` | `scripts/local-image-ci.sh <component> --tag-rc` |
+| Validate one accepted RC and atomically push its Git refs with `development` | `scripts/local-image-ci.sh <component> --tag-rc` |
+| Validate and atomically push every RC selected by the production release manifest | `scripts/tag-accepted-rc-set.sh` |
 
 ## Feature or defect branch: local candidate
 
@@ -43,13 +44,13 @@ scripts/local-image-cd.sh rc <component> <vMAJOR.MINOR.PATCH-local.N>
 scripts/local-image-cd.sh deploy <component>
 ```
 
-Record the predeployment rollback tuple and perform Development Checkpoint Verification from `AGENTS.md`. If accepted, fast-forward `development`, record its annotated checkpoint tag, and create a `golden/...` tag only when each image is first accepted. Then run the accepted RC tagging command for each component independently:
+Record the predeployment rollback tuple and perform Development Checkpoint Verification from `AGENTS.md`. If accepted, fast-forward `development`, record its annotated checkpoint tag, and create a `golden/...` tag only when each image is first accepted. When `infra/production/release.json` selects more than one component, validate and publish the complete release set together:
 
 ```sh
-scripts/local-image-ci.sh <component> --tag-rc
+scripts/tag-accepted-rc-set.sh
 ```
 
-That command checks the accepted chart, running image ID, and provenance before publishing `development`, checkpoint, candidate, image-hash, golden, and RC refs in one `git push --atomic` operation. Never push those related refs separately. Align the current integration branch with `development`. A golden image remains identified by its immutable image ID and embedded source revision; an RC alias does not change its bytes.
+The command checks every accepted chart, running image ID, and provenance before publishing `development`, the aligned integration branch, checkpoint, candidate, image-hash, golden, and RC refs in one `git push --atomic` operation. This prevents CI from observing a partially tagged release manifest. Use `scripts/local-image-ci.sh <component> --tag-rc` only when the release manifest selects a single component. Never push those related refs separately. A golden image remains identified by its immutable image ID and embedded source revision; an RC alias does not change its bytes.
 
 ## Separate production boundary
 

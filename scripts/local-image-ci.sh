@@ -186,6 +186,10 @@ checkpoint_tag: $checkpoint
 status: accepted local k3s RC; no registry manifest digest claimed"
     echo "Tagged accepted checkpoint $accepted with $rc_tag ($id)."
   fi
+  if [[ "${CAPITONIC_DEFER_RC_PUSH:-false}" == true ]]; then
+    echo "Validated $rc_tag; deferring its push to the release-set transaction."
+    return
+  fi
   git push --atomic origin \
     refs/heads/development \
     "refs/tags/$checkpoint" \
