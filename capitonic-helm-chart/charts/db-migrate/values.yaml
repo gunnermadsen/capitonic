@@ -1,4 +1,4 @@
-image: capitonic/db-migrate:defect-6d6e7b9-exact
+image: capitonic/db-migrate:v0.2.0-local.2
 resources:
   requests: {cpu: 100m, memory: 128Mi}
   limits: {cpu: 500m, memory: 512Mi}

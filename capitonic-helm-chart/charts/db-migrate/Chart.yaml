@@ -3,4 +3,4 @@ name: db-migrate
 description: Capitonic one-shot database migration Job for local Kubernetes
 type: application
 version: 0.1.0
-appVersion: "6d6e7b9"
+appVersion: "v0.2.0-local.2"
