@@ -27,7 +27,7 @@ trap 'python3 scripts/helm/bake-assets.py --clean >/dev/null 2>&1 || true' EXIT
 
 helm upgrade --install cert-manager oci://quay.io/jetstack/charts/cert-manager \
   --version "$CERT_MANAGER_VERSION" --namespace cert-manager --create-namespace \
-  --set crds.enabled=true --wait --timeout 10m
+  --set crds.enabled=true --atomic --wait --timeout 10m
 
 secret_file="$(mktemp /run/capitonic-deploy-secret.XXXXXX)"
 trap 'rm -f "$secret_file"; python3 scripts/helm/bake-assets.py --clean >/dev/null 2>&1 || true' EXIT
@@ -42,12 +42,14 @@ helm upgrade --install cert-manager-config capitonic-helm-chart/charts/cert-mana
   --namespace "$NAMESPACE" --create-namespace --set-string email="$acme_email" --wait --timeout 5m
 
 deploy_chart() {
-  local chart="$1"
+  local chart="$1" wait_for_jobs=()
+  [[ "$chart" == "db-migrate" ]] && wait_for_jobs=(--wait-for-jobs)
   helm lint "capitonic-helm-chart/charts/$chart" \
     -f "capitonic-helm-chart/environments/production/$chart.yaml"
   helm upgrade --install "$chart" "capitonic-helm-chart/charts/$chart" \
     --namespace "$NAMESPACE" --create-namespace \
-    -f "capitonic-helm-chart/environments/production/$chart.yaml" --wait --timeout 15m
+    -f "capitonic-helm-chart/environments/production/$chart.yaml" \
+    --atomic --wait "${wait_for_jobs[@]}" --timeout 15m
 }
 
 deploy_chart timescaledb
@@ -76,7 +78,7 @@ deploy_chart alloy
 
 helm lint capitonic-helm-chart/charts/cloudflared
 helm upgrade --install cloudflared capitonic-helm-chart/charts/cloudflared \
-  --namespace "$NAMESPACE" --set-string tunnelId="$tunnel_id" --wait --timeout 10m
+  --namespace "$NAMESPACE" --set-string tunnelId="$tunnel_id" --atomic --wait --timeout 10m
 
 deploy_chart polymarket-bot
 scripts/production/reconcile-production-profiles.sh
