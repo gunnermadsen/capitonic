@@ -13,6 +13,7 @@ cd "$APP_DIRECTORY"
 [[ -z "$(git status --porcelain --untracked-files=no)" ]]
 deployment_revision="$(git rev-parse HEAD)"
 [[ "$deployment_revision" =~ ^[0-9a-f]{40}$ ]]
+scripts/production/install-yq.sh
 
 for component in polymarket-bot ingester db-migrate; do
   image="$(yq -r .image "capitonic-helm-chart/environments/production/$component.yaml")"
