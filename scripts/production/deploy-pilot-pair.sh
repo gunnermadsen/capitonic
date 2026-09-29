@@ -68,6 +68,22 @@ wait_running() {
   echo "Process $process_id did not become ready." >&2
   return 1
 }
+wait_live_preflight() {
+  local process_id="$1" preflight='{}'
+  for attempt in $(seq 1 60); do
+    if preflight="$(api POST "/admin/trading-processes/$process_id/live-preflight")" \
+      && jq -e '.ready == true and .credential_connectivity_ready == true and .reconciliation_ready == true and .trading_disabled == true' \
+        <<<"$preflight" >/dev/null; then
+      printf '%s' "$preflight"
+      return 0
+    fi
+    sleep 5
+  done
+  jq '{ready,credential_connectivity_ready,reconciliation_ready,trading_disabled,reasons,reconciliation_error}' \
+    <<<"$preflight" >&2
+  echo "Live preflight did not become ready for process $process_id." >&2
+  return 1
+}
 
 paper_id="$(upsert_if_missing "$PAPER_DEFINITION")"
 ensure_started "$paper_id"
@@ -79,8 +95,7 @@ jq -e --arg sha "$paper_expected_sha" '.process.metadata.model_artifact_sha256 =
 live_id="$(upsert_if_missing "$LIVE_DEFINITION")"
 live_process="$(api GET "/admin/trading-processes/$live_id")"
 if [[ "$(jq -r '.process.enabled' <<<"$live_process")" != "true" ]]; then
-  preflight="$(api POST "/admin/trading-processes/$live_id/live-preflight")"
-  jq -e '.ready == true and .credential_connectivity_ready == true and .reconciliation_ready == true and .trading_disabled == true' <<<"$preflight" >/dev/null
+  preflight="$(wait_live_preflight "$live_id")"
 
   authorization_patch="$(jq '{
     config: (.config | .execution.execute_signals = true | .execution.live_capital = true),

@@ -12,7 +12,7 @@ AWS_REGION="${AWS_REGION:-eu-west-1}"
 [[ "$instance_id" =~ ^i-[0-9a-f]+$ ]]
 [[ "$timeout_seconds" =~ ^[0-9]+$ ]]
 
-encoded="$(printf '%s' "$remote_command" | base64 -w0)"
+encoded="$(printf '%s' "$remote_command" | base64 | tr -d '\n')"
 parameters="$(jq -n --arg encoded "$encoded" \
   '{commands:["printf %s " + ($encoded|@sh) + " | base64 -d | /bin/bash"]}')"
 command_id="$(aws ssm send-command --region "$AWS_REGION" --instance-ids "$instance_id" \
