@@ -56,11 +56,16 @@ curl -sfL https://get.k3s.io | \
   INSTALL_K3S_EXEC='server --secrets-encryption --write-kubeconfig-mode=0600 --kubelet-arg=image-gc-high-threshold=75 --kubelet-arg=image-gc-low-threshold=65' \
   sh -
 
+current_node="$(hostname)"
 for attempt in $(seq 1 120); do
-  /usr/local/bin/kubectl get node >/dev/null 2>&1 && break
+  /usr/local/bin/kubectl get "node/$current_node" >/dev/null 2>&1 && break
+  if [ "$attempt" -eq 120 ]; then
+    echo "k3s node $current_node was not registered within four minutes." >&2
+    exit 1
+  fi
   sleep 2
 done
-/usr/local/bin/kubectl wait --for=condition=Ready node --all --timeout=5m
+/usr/local/bin/kubectl wait --for=condition=Ready "node/$current_node" --timeout=5m
 
 helm_version='v3.18.6'
 curl -fsSL "https://get.helm.sh/helm-$helm_version-linux-arm64.tar.gz" -o /tmp/helm.tar.gz
