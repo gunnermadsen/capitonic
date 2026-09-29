@@ -9,7 +9,10 @@ RELEASE_FILE="${RELEASE_FILE:-infra/production/release.json}"
 jq -e '.schemaVersion == 1 and .region == "eu-west-1" and .architecture == "arm64"' "$RELEASE_FILE" >/dev/null
 
 case "${DEPLOYMENT_SCOPE:-full-stack}" in
-  selected) IFS=, read -ra components <<< "${PROMOTE_COMPONENTS:-}" ;;
+  selected)
+    [[ -n "${PROMOTE_COMPONENTS:-}" ]] || exit 0
+    IFS=, read -ra components <<< "$PROMOTE_COMPONENTS"
+    ;;
   full-stack) components=(polymarket-bot ingester db-migrate) ;;
   *) echo "Unsupported deployment scope: $DEPLOYMENT_SCOPE" >&2; exit 64 ;;
 esac

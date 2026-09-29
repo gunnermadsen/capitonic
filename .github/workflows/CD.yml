@@ -76,7 +76,6 @@ jobs:
             [[ "$DEPLOY_COMPONENTS" =~ ^[a-z0-9,-]+$ ]]
             [[ "$PROMOTE_COMPONENTS" =~ ^[a-z0-9,-]*$ ]]
           fi
-      - uses: docker/setup-buildx-action@v4
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}

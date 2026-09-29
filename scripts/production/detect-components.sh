@@ -7,7 +7,12 @@ git merge-base --is-ancestor "$base" "$candidate"
 
 images=("") charts=("")
 image() { images+=("$1"); charts+=("$1"); }
-chart() { charts+=("$1"); }
+chart() {
+  case "$1" in
+    polymarket-bot|ingester|db-migrate|grafana|prometheus|loki|alloy) charts+=("$1") ;;
+    *) echo "No automatic deployment owner for chart $1; leaving it unchanged." >&2 ;;
+  esac
+}
 
 while IFS= read -r path; do
   case "$path" in
@@ -36,16 +41,6 @@ for component in polymarket-bot ingester db-migrate; do
   previous="$(git show "$base:infra/production/release.json" | jq -c --arg component "$component" '.components[$component] | {rcVersion,sourceRevision}')"
   current="$(git show "$candidate:infra/production/release.json" | jq -c --arg component "$component" '.components[$component] | {rcVersion,sourceRevision}')"
   [[ "$previous" == "$current" ]] || image "$component"
-done
-
-# The selective deployment path currently owns application images and the
-# provisioned observability releases. Infrastructure stays with its own owner.
-for component in "${charts[@]}"; do
-  case "$component" in
-    '') ;;
-    polymarket-bot|ingester|db-migrate|grafana|prometheus|loki|alloy) ;;
-    *) echo "No selective deployment contract for changed chart: $component" >&2; exit 64 ;;
-  esac
 done
 
 image_list="$(printf '%s\n' "${images[@]}" | sed '/^$/d' | sort -u | paste -sd, -)"
