@@ -9,7 +9,13 @@ INGESTER_PORT="${INGESTER_LOCAL_PORT:-18098}"
 PROMETHEUS_PORT="${PROMETHEUS_LOCAL_PORT:-19090}"
 GRAFANA_PORT="${GRAFANA_LOCAL_PORT:-13000}"
 
-kubectl -n "$NAMESPACE" wait --for=condition=Ready pods --all --timeout=15m
+workload_pods=()
+while IFS= read -r pod_name; do
+  workload_pods+=("pod/$pod_name")
+done < <(kubectl -n "$NAMESPACE" get pods -o json \
+  | jq -r '.items[] | select(.status.phase != "Succeeded") | .metadata.name')
+(( ${#workload_pods[@]} > 0 ))
+kubectl -n "$NAMESPACE" wait --for=condition=Ready --timeout=15m "${workload_pods[@]}"
 unhealthy="$(kubectl -n "$NAMESPACE" get pods -o json | jq '[.items[] | select(.status.phase != "Succeeded") | select(any(.status.containerStatuses[]?; .ready != true or .restartCount != 0))] | length')"
 [[ "$unhealthy" == "0" ]]
 kubectl -n "$NAMESPACE" get job db-migrate -o json | jq -e '.status.succeeded == 1 and (.status.failed // 0) == 0' >/dev/null
