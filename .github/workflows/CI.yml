@@ -45,6 +45,9 @@ jobs:
       polymarket_bot: ${{ steps.filter.outputs.polymarket_bot }}
       ingester: ${{ steps.filter.outputs.ingester }}
       db_migrate: ${{ steps.filter.outputs.db_migrate }}
+      polymarket_bot_tests: ${{ steps.filter.outputs.polymarket_bot_tests }}
+      ingester_tests: ${{ steps.filter.outputs.ingester_tests }}
+      db_migrate_tests: ${{ steps.filter.outputs.db_migrate_tests }}
       any_image: ${{ steps.filter.outputs.any_image }}
     steps:
       - uses: actions/checkout@v6
@@ -70,9 +73,19 @@ jobs:
             echo "polymarket_bot=true" >> "$GITHUB_OUTPUT"
             echo "ingester=true" >> "$GITHUB_OUTPUT"
             echo "db_migrate=true" >> "$GITHUB_OUTPUT"
+            echo "polymarket_bot_tests=true" >> "$GITHUB_OUTPUT"
+            echo "ingester_tests=true" >> "$GITHUB_OUTPUT"
+            echo "db_migrate_tests=true" >> "$GITHUB_OUTPUT"
             echo "any_image=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          changed() {
+            if git diff --quiet "$BASE_SHA" "$CURRENT_SHA" -- "$@"; then
+              echo false
+            else
+              echo true
+            fi
+          }
           changed_or_missing() {
             local component="$1"
             shift
@@ -95,10 +108,16 @@ jobs:
           polymarket_bot="$(changed_or_missing polymarket-bot Cargo.toml Cargo.lock packages/polymarket-bot packages/btc-directional-model/runtime-models common/proto infra/production/release.json)"
           ingester="$(changed_or_missing ingester Cargo.toml Cargo.lock packages/market-data-ingester common/proto infra/production/release.json)"
           db_migrate="$(changed_or_missing db-migrate packages/db-migrate infra/production/release.json)"
+          polymarket_bot_tests="$(changed Cargo.toml Cargo.lock packages/polymarket-bot packages/btc-directional-model/runtime-models common/proto)"
+          ingester_tests="$(changed Cargo.toml Cargo.lock packages/market-data-ingester common/proto)"
+          db_migrate_tests="$(changed packages/db-migrate)"
           {
             echo "polymarket_bot=$polymarket_bot"
             echo "ingester=$ingester"
             echo "db_migrate=$db_migrate"
+            echo "polymarket_bot_tests=$polymarket_bot_tests"
+            echo "ingester_tests=$ingester_tests"
+            echo "db_migrate_tests=$db_migrate_tests"
             if [ "$polymarket_bot" = true ] || [ "$ingester" = true ] || [ "$db_migrate" = true ]; then
               echo "any_image=true"
             else
@@ -108,6 +127,8 @@ jobs:
 
   rust-tests:
     name: Rust tests
+    needs: changes
+    if: needs.changes.outputs.polymarket_bot_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -144,6 +165,8 @@ jobs:
 
   market-data-ingester-tests:
     name: Market data ingester tests
+    needs: changes
+    if: needs.changes.outputs.ingester_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -205,6 +228,8 @@ jobs:
 
   db-migrate-tests:
     name: Database migration package tests
+    needs: changes
+    if: needs.changes.outputs.db_migrate_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -224,7 +249,14 @@ jobs:
 
   production-image-validation:
     name: Build and push ${{ matrix.name }} production image
-    if: github.ref == 'refs/heads/development' && needs.changes.outputs.any_image == 'true'
+    if: >-
+      always() &&
+      github.ref == 'refs/heads/development' &&
+      needs.changes.outputs.any_image == 'true' &&
+      needs.repository-layout.result == 'success' &&
+      (needs.rust-tests.result == 'success' || needs.rust-tests.result == 'skipped') &&
+      (needs.market-data-ingester-tests.result == 'success' || needs.market-data-ingester-tests.result == 'skipped') &&
+      (needs.db-migrate-tests.result == 'success' || needs.db-migrate-tests.result == 'skipped')
     needs: [repository-layout, changes, rust-tests, market-data-ingester-tests, db-migrate-tests]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
