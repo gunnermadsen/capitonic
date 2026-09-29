@@ -6,7 +6,7 @@ on:
       backup_mode:
         required: false
         type: string
-        default: required
+        default: skip
   workflow_dispatch:
     inputs:
       confirm_destroy:
@@ -14,11 +14,11 @@ on:
         required: true
         type: string
       backup_mode:
-        description: A required backup aborts teardown unless S3 validation succeeds
+        description: Opt in to a validated PostgreSQL, Prometheus, and Grafana data backup
         required: true
         type: choice
-        default: required
-        options: [required, skip]
+        default: skip
+        options: [skip, required]
 
 permissions:
   contents: read
@@ -37,7 +37,7 @@ env:
 
 jobs:
   destroy:
-    name: Backup and destroy the production runtime
+    name: Destroy the production runtime with optional data backup
     if: github.event_name != 'workflow_dispatch' || inputs.confirm_destroy == 'destroy-production-ec2'
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -52,6 +52,14 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
       - name: Load Cloudflare inputs
         run: scripts/load-cloudflare-terraform-env.sh
+      - name: Validate backup mode
+        env:
+          BACKUP_MODE: ${{ inputs.backup_mode }}
+        run: |
+          case "$BACKUP_MODE" in
+            skip|required) ;;
+            *) echo "Unsupported backup mode: $BACKUP_MODE" >&2; exit 1 ;;
+          esac
       - name: Initialize production state
         run: |
           cat > "$TF_DIR/backend.hcl" <<EOF
@@ -63,8 +71,8 @@ jobs:
           EOF
           terraform -chdir="$TF_DIR" init -backend-config=backend.hcl
           terraform -chdir="$TF_DIR" validate
-      - name: Create and validate optional S3 backup
-        if: inputs.backup_mode != 'skip'
+      - name: Create and validate optional data backup in S3
+        if: inputs.backup_mode == 'required'
         run: |
           set -euo pipefail
           instance_id="$(terraform -chdir="$TF_DIR" output -raw instance_id)"
