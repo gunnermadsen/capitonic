@@ -12,8 +12,8 @@ release:
   sourceRevision: dc93c77a80efddb138521bee5679cf2f343a39f5
 workerScaling:
   enabled: true
-  minReplicas: 4
-  maxReplicas: 4
+  minReplicas: 5
+  maxReplicas: 5
 archiveStorage:
   type: hostPath
   path: /var/lib/rancher/k3s/storage/capitonic-archives

@@ -8,6 +8,7 @@ allowed=(
   polymarket_btc_five_minute_market_contracts
   polymarket_btc_five_minute_orderbooks
   polymarket_btc_five_minute_resolutions
+  polymarket_chainlink_btcusd_twap
   binance_spot_btcusdt_one_second_ohlcv
 )
 
@@ -49,9 +50,9 @@ for attempt in $(seq 1 180); do
       .observed_state == "running" and .health_status == "healthy" and .lease_owner != null)
   ' <<<"$profiles" >/dev/null; then
     ready_workers="$(kubectl -n "$NAMESPACE" get deployment ingester-worker -o jsonpath='{.status.readyReplicas}')"
-    [[ "$ready_workers" == "4" ]] && {
+    [[ "$ready_workers" == "5" ]] && {
       jq -c '[.[] | select(.desired_state == "running") | {strategy_key,lease_owner,health_status,source_watermark}]' <<<"$profiles"
-      echo "Production ingestion allowlist converged with four healthy owners and no extra realtime profiles."
+      echo "Production ingestion allowlist converged with five healthy owners and no extra realtime profiles."
       exit 0
     }
   fi

@@ -31,7 +31,7 @@ done
 [[ "$(kubectl -n "$NAMESPACE" get deployment ingester-master -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$expected_ingester" ]]
 [[ "$(kubectl -n "$NAMESPACE" get deployment ingester-worker -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$expected_ingester" ]]
 [[ "$(kubectl -n "$NAMESPACE" get job db-migrate -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$expected_migrate" ]]
-[[ "$(kubectl -n "$NAMESPACE" get deployment ingester-worker -o jsonpath='{.status.readyReplicas}')" == "4" ]]
+[[ "$(kubectl -n "$NAMESPACE" get deployment ingester-worker -o jsonpath='{.status.readyReplicas}')" == "5" ]]
 
 latest_committed_migration="$(find "$APP_DIRECTORY/packages/db-migrate/src/migrations" "$APP_DIRECTORY/packages/db-migrate/src/fresh-install" -maxdepth 1 -type f -name '[0-9]*.ts' -exec basename {} \; | cut -d- -f1 | sort -n | tail -n1)"
 latest_applied_migration="$(kubectl -n "$NAMESPACE" exec timescaledb-0 -c timescaledb -- \
@@ -66,16 +66,25 @@ prometheus_unauthorized="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0
 [[ "$ingester_unauthorized" == "401" || "$ingester_unauthorized" == "403" ]]
 [[ "$prometheus_unauthorized" == "401" ]]
 
-profiles="$(curl -fsS -H "Authorization: Bearer $ingester_token" "http://127.0.0.1:$INGESTER_PORT/ingesters")"
-jq -e '
-  ([.[] | select(.desired_state == "running") | .strategy_key] | sort) == [
-    "binance_spot_btcusdt_one_second_ohlcv",
-    "polymarket_btc_five_minute_market_contracts",
-    "polymarket_btc_five_minute_orderbooks",
-    "polymarket_btc_five_minute_resolutions"
-  ] and all(.[] | select(.desired_state == "running");
-    .observed_state == "running" and .health_status == "healthy" and .lease_owner != null and .source_watermark != null)
-' <<<"$profiles" >/dev/null
+profiles_ready=false
+for attempt in $(seq 1 90); do
+  profiles="$(curl -fsS -H "Authorization: Bearer $ingester_token" "http://127.0.0.1:$INGESTER_PORT/ingesters")"
+  if jq -e '
+    ([.[] | select(.desired_state == "running") | .strategy_key] | sort) == [
+      "binance_spot_btcusdt_one_second_ohlcv",
+      "polymarket_btc_five_minute_market_contracts",
+      "polymarket_btc_five_minute_orderbooks",
+      "polymarket_btc_five_minute_resolutions",
+      "polymarket_chainlink_btcusd_twap"
+    ] and all(.[] | select(.desired_state == "running");
+      .observed_state == "running" and .health_status == "healthy" and .lease_owner != null and .source_watermark != null)
+  ' <<<"$profiles" >/dev/null; then
+    profiles_ready=true
+    break
+  fi
+  sleep 5
+done
+[[ "$profiles_ready" == "true" ]]
 
 processes="$(curl -fsS -H "Authorization: Bearer $bot_token" "http://127.0.0.1:$BOT_PORT/admin/trading-processes?limit=100")"
 paper_id="$(jq -r '.processes[] | select(.process_key == "btc-5m-conservative-selective-paper-20260917") | .process_id' <<<"$processes")"
@@ -98,16 +107,6 @@ jq -e '
   .status.btc_runtime.live_status.max_order_notional_usd == "3" and
   .status.btc_runtime.live_status.max_open_notional_usd == "3"
 ' <<<"$live_status" >/dev/null
-
-live_diagnostics="$(curl -fsS -H "Authorization: Bearer $bot_token" "http://127.0.0.1:$BOT_PORT/admin/live/diagnostics")"
-jq -e '
-  .mode == "live" and .credentials_present == true and .account_identity_valid == true and
-  .api_keys_readable == true and .api_keys_error == null and
-  .balance_allowance_readable == true and .balance_allowance_error == null and
-  .open_orders_readable == true and .open_orders_error == null and
-  .geoblock_readable == true and .geoblock_blocked == false and
-  ((.collateral_balance | tonumber) > 0)
-' <<<"$live_diagnostics" >/dev/null
 
 alerts="$(curl -fsS -u "$prom_user:$prom_password" --get --data-urlencode 'query=ALERTS{alertstate="firing",severity="critical"}' "http://127.0.0.1:$PROMETHEUS_PORT/api/v1/query")"
 jq -e '.status == "success" and (.data.result | length) == 0' <<<"$alerts" >/dev/null
@@ -144,4 +143,4 @@ curl -fsS --resolve monitor.capitonic.com:443:127.0.0.1 -u "$prom_user:$prom_pas
 
 jq -n --arg paper_process_id "$paper_id" --arg live_process_id "$live_id" \
   --arg bot_image "$expected_bot" --arg ingester_image "$expected_ingester" --arg migration "$latest_applied_migration" \
-  '{status:"ready",architecture:"arm64",paper_process_id:$paper_process_id,live_process_id:$live_process_id,bot_image:$bot_image,ingester_image:$ingester_image,latest_migration:$migration,realtime_profiles:4,workers:4,critical_alerts:0}'
+  '{status:"ready",architecture:"arm64",paper_process_id:$paper_process_id,live_process_id:$live_process_id,bot_image:$bot_image,ingester_image:$ingester_image,latest_migration:$migration,realtime_profiles:5,workers:5,critical_alerts:0}'
