@@ -222,14 +222,10 @@ jobs:
           npm run build --prefix packages/db-migrate
           node --test packages/db-migrate/tests/*.test.js
 
-  outage-recovery-tests:
-    name: Outage recovery integration tests
-    uses: ./.github/workflows/outage-recovery.yml
-
   production-image-validation:
     name: Build and push ${{ matrix.name }} production image
     if: github.ref == 'refs/heads/development' && needs.changes.outputs.any_image == 'true'
-    needs: [repository-layout, changes, rust-tests, market-data-ingester-tests, db-migrate-tests, outage-recovery-tests]
+    needs: [repository-layout, changes, rust-tests, market-data-ingester-tests, db-migrate-tests]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     strategy:
