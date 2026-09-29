@@ -15,13 +15,18 @@ cd "$APP_DIRECTORY"
 deployment_revision="$(git rev-parse HEAD)"
 [[ "$deployment_revision" =~ ^[0-9a-f]{40}$ ]]
 case "${DEPLOYMENT_SCOPE:-full-stack}" in
-  bot-grafana) components=(polymarket-bot) ;;
+  selected) IFS=, read -ra components <<< "${DEPLOY_COMPONENTS:-}" ;;
   full-stack) components=(polymarket-bot ingester db-migrate) ;;
   *) echo "Unsupported deployment scope: $DEPLOYMENT_SCOPE" >&2; exit 64 ;;
 esac
 scripts/production/install-yq.sh
 
 for component in "${components[@]}"; do
+  case "$component" in
+    polymarket-bot|ingester|db-migrate) ;;
+    grafana|prometheus|loki|alloy) continue ;;
+    *) echo "Unsupported deployment component: $component" >&2; exit 64 ;;
+  esac
   image="$(yq -r .image "capitonic-helm-chart/environments/production/$component.yaml")"
   [[ "$image" =~ ^192200846560\.dkr\.ecr\.eu-west-1\.amazonaws\.com/capitonic/$component@sha256:[0-9a-f]{64}$ ]]
   [[ "$image" != *sha256:0000000000000000000000000000000000000000000000000000000000000000 ]]
@@ -38,9 +43,9 @@ deploy_chart() {
     --atomic --wait "${wait_for_jobs[@]}" --timeout 15m
 }
 
-if [[ "${DEPLOYMENT_SCOPE:-full-stack}" == bot-grafana ]]; then
-  source scripts/production/bot-grafana-deployment.sh
-  deploy_bot_grafana
+if [[ "${DEPLOYMENT_SCOPE:-full-stack}" == selected ]]; then
+  source scripts/production/deploy-selected-components.sh
+  deploy_selected_components
   exit 0
 fi
 

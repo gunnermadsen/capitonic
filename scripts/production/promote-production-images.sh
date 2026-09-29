@@ -9,12 +9,16 @@ RELEASE_FILE="${RELEASE_FILE:-infra/production/release.json}"
 jq -e '.schemaVersion == 1 and .region == "eu-west-1" and .architecture == "arm64"' "$RELEASE_FILE" >/dev/null
 
 case "${DEPLOYMENT_SCOPE:-full-stack}" in
-  bot-grafana) components=(polymarket-bot) ;;
+  selected) IFS=, read -ra components <<< "${PROMOTE_COMPONENTS:-}" ;;
   full-stack) components=(polymarket-bot ingester db-migrate) ;;
   *) echo "Unsupported deployment scope: $DEPLOYMENT_SCOPE" >&2; exit 64 ;;
 esac
 
 for component in "${components[@]}"; do
+  case "$component" in
+    polymarket-bot|ingester|db-migrate) ;;
+    *) echo "Unsupported image component: $component" >&2; exit 64 ;;
+  esac
   repository="$(jq -r --arg component "$component" '.components[$component].repository' "$RELEASE_FILE")"
   rc_version="$(jq -r --arg component "$component" '.components[$component].rcVersion' "$RELEASE_FILE")"
   source_revision="$(jq -r --arg component "$component" '.components[$component].sourceRevision' "$RELEASE_FILE")"
