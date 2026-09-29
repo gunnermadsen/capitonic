@@ -12,7 +12,7 @@ output "architecture" {
 }
 
 output "public_ip" {
-  value = aws_eip.k3s_host.public_ip
+  value = aws_instance.k3s_host.public_ip
 }
 
 output "root_volume_id" {

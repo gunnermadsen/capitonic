@@ -223,13 +223,6 @@ resource "aws_instance" "k3s_host" {
   depends_on = [aws_iam_role_policy.k3s_host, aws_iam_role_policy_attachment.ssm_core]
 }
 
-resource "aws_eip" "k3s_host" {
-  domain   = "vpc"
-  instance = aws_instance.k3s_host.id
-
-  tags = { Name = "${local.name_prefix}-public" }
-}
-
 resource "aws_volume_attachment" "k3s_data" {
   device_name = "/dev/sdf"
   volume_id   = aws_ebs_volume.k3s_data.id

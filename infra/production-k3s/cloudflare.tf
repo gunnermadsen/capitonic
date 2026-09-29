@@ -7,7 +7,7 @@ locals {
 resource "cloudflare_dns_record" "monitor" {
   zone_id = var.cloudflare_zone_id
   name    = var.cloudflare_monitor_hostname
-  content = aws_eip.k3s_host.public_ip
+  content = aws_instance.k3s_host.public_ip
   type    = "A"
   ttl     = 1
   proxied = true
