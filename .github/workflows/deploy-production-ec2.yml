@@ -99,7 +99,7 @@ jobs:
             sleep 10
           done
           scripts/production/run-ssm-command.sh "$INSTANCE_ID" 1800 'Verify k3s bootstrap' \
-            'set -euo pipefail; cloud-init status --wait; test -f /var/lib/capitonic-bootstrap-complete; test "$(uname -m)" = aarch64; systemctl is-active --quiet k3s; kubectl wait --for=condition=Ready node --all --timeout=5m; test "$(kubectl get nodes --no-headers | wc -l)" -eq 1'
+            'set -euo pipefail; cloud-init status --wait; test -f /var/lib/capitonic-bootstrap-complete; test "$(uname -m)" = aarch64; systemctl is-active --quiet k3s; current_node="$(hostname)"; kubectl wait --for=condition=Ready "node/$current_node" --timeout=5m; for node in $(kubectl get nodes -o name); do [ "$node" = "node/$current_node" ] || kubectl delete "$node"; done; test "$(kubectl get nodes --no-headers | wc -l)" -eq 1'
           security_group_id="$(terraform -chdir="$TF_DIR" output -raw security_group_id)"
           ingress_rules="$(aws ec2 describe-security-groups --region "$AWS_REGION" \
             --group-ids "$security_group_id" --query 'SecurityGroups[0].IpPermissions' --output json)"
