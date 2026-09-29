@@ -2,9 +2,18 @@ name: Deploy Production
 
 on:
   workflow_call:
+    inputs:
+      deployment_scope:
+        description: Charts explicitly authorized for deployment
+        type: string
+        default: full-stack
   workflow_dispatch:
-  push:
-    branches: [production]
+    inputs:
+      deployment_scope:
+        description: Charts explicitly authorized for deployment
+        type: choice
+        default: bot-grafana
+        options: [bot-grafana, full-stack]
 
 permissions:
   contents: write
@@ -22,14 +31,21 @@ env:
 jobs:
   deploy:
     name: Promote, pin, deploy, and verify
-    if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[production-pins]')
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      DEPLOYMENT_SCOPE: ${{ inputs.deployment_scope || 'full-stack' }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: production
+      - name: Validate explicit deployment scope
+        run: |
+          case "$DEPLOYMENT_SCOPE" in
+            bot-grafana|full-stack) ;;
+            *) echo "Unsupported deployment scope: $DEPLOYMENT_SCOPE" >&2; exit 64 ;;
+          esac
       - uses: docker/setup-buildx-action@v4
       - uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -53,7 +69,11 @@ jobs:
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add infra/production/release.json capitonic-helm-chart/environments/production capitonic-helm-chart/charts/*/Chart.yaml
+          if [[ "$DEPLOYMENT_SCOPE" == bot-grafana ]]; then
+            git add infra/production/release.json capitonic-helm-chart/environments/production/polymarket-bot.yaml capitonic-helm-chart/charts/polymarket-bot/Chart.yaml
+          else
+            git add infra/production/release.json capitonic-helm-chart/environments/production capitonic-helm-chart/charts/*/Chart.yaml
+          fi
           if git diff --cached --quiet; then
             echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           else
@@ -79,7 +99,7 @@ jobs:
           set -euo pipefail
           [[ "$DEPLOY_REVISION" =~ ^[0-9a-f]{40}$ ]]
           checkout_payload="$(base64 -w0 scripts/production/checkout-revision.sh)"
-          command="install -d -m 0700 /run/capitonic && printf '%s' '$checkout_payload' | base64 -d > /run/capitonic/checkout-revision.sh && chmod 0700 /run/capitonic/checkout-revision.sh && /run/capitonic/checkout-revision.sh $DEPLOY_REVISION && rm -f /run/capitonic/checkout-revision.sh && cd /opt/polymarket-bot && scripts/production/deploy-k3s.sh"
+          command="install -d -m 0700 /run/capitonic && printf '%s' '$checkout_payload' | base64 -d > /run/capitonic/checkout-revision.sh && chmod 0700 /run/capitonic/checkout-revision.sh && /run/capitonic/checkout-revision.sh $DEPLOY_REVISION && rm -f /run/capitonic/checkout-revision.sh && cd /opt/polymarket-bot && DEPLOYMENT_SCOPE=$DEPLOYMENT_SCOPE scripts/production/deploy-k3s.sh"
           scripts/production/run-ssm-command.sh "$INSTANCE_ID" 3300 'Deploy and verify Capitonic production' "$command"
       - name: Record observability provisioning provenance
         env:
@@ -87,13 +107,21 @@ jobs:
         run: |
           set -euo pipefail
           timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-          config_hash="$(find capitonic-helm-chart/charts/{grafana,prometheus,loki,alloy} capitonic-helm-chart/environments/production -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+          if [[ "$DEPLOYMENT_SCOPE" == bot-grafana ]]; then
+            components=Grafana
+            paths='common/configs/grafana; capitonic-helm-chart/charts/grafana; capitonic-helm-chart/environments/production/grafana.yaml'
+            config_hash="$(find common/configs/grafana capitonic-helm-chart/charts/grafana capitonic-helm-chart/environments/production/grafana.yaml -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+          else
+            components='Grafana, Prometheus, Loki, Alloy'
+            paths='capitonic-helm-chart/charts/{grafana,prometheus,loki,alloy}; capitonic-helm-chart/environments/production'
+            config_hash="$(find capitonic-helm-chart/charts/{grafana,prometheus,loki,alloy} capitonic-helm-chart/environments/production -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+          fi
           tag="provisioned/observability/production/$timestamp"
           git tag -a "$tag" "$DEPLOY_REVISION" -m "Target: production
           Provisioned at: $timestamp
           Originating ref: ${GITHUB_REF_NAME:-production}
           Result: success
           Configuration SHA-256: $config_hash
-          Components: Grafana, Prometheus, Loki, Alloy
-          Paths: capitonic-helm-chart/charts/{grafana,prometheus,loki,alloy}; capitonic-helm-chart/environments/production"
+          Components: $components
+          Paths: $paths"
           git push origin "refs/tags/$tag"

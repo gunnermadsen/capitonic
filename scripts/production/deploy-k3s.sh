@@ -14,13 +14,35 @@ cd "$APP_DIRECTORY"
 [[ -z "$(git status --porcelain --untracked-files=no)" ]]
 deployment_revision="$(git rev-parse HEAD)"
 [[ "$deployment_revision" =~ ^[0-9a-f]{40}$ ]]
+case "${DEPLOYMENT_SCOPE:-full-stack}" in
+  bot-grafana) components=(polymarket-bot) ;;
+  full-stack) components=(polymarket-bot ingester db-migrate) ;;
+  *) echo "Unsupported deployment scope: $DEPLOYMENT_SCOPE" >&2; exit 64 ;;
+esac
 scripts/production/install-yq.sh
 
-for component in polymarket-bot ingester db-migrate; do
+for component in "${components[@]}"; do
   image="$(yq -r .image "capitonic-helm-chart/environments/production/$component.yaml")"
   [[ "$image" =~ ^192200846560\.dkr\.ecr\.eu-west-1\.amazonaws\.com/capitonic/$component@sha256:[0-9a-f]{64}$ ]]
   [[ "$image" != *sha256:0000000000000000000000000000000000000000000000000000000000000000 ]]
 done
+
+deploy_chart() {
+  local chart="$1" wait_for_jobs=()
+  [[ "$chart" == "db-migrate" ]] && wait_for_jobs=(--wait-for-jobs)
+  helm lint "capitonic-helm-chart/charts/$chart" \
+    -f "capitonic-helm-chart/environments/production/$chart.yaml"
+  helm upgrade --install "$chart" "capitonic-helm-chart/charts/$chart" \
+    --namespace "$NAMESPACE" --create-namespace \
+    -f "capitonic-helm-chart/environments/production/$chart.yaml" \
+    --atomic --wait "${wait_for_jobs[@]}" --timeout 15m
+}
+
+if [[ "${DEPLOYMENT_SCOPE:-full-stack}" == bot-grafana ]]; then
+  source scripts/production/bot-grafana-deployment.sh
+  deploy_bot_grafana
+  exit 0
+fi
 
 scripts/production/refresh-ecr-pull-secret.sh
 RESTART_SCOPE=none scripts/production/sync-kubernetes-secrets.sh
@@ -45,16 +67,6 @@ tunnel_id="$(kubectl -n "$NAMESPACE" get secret cloudflare-tunnel -o jsonpath='{
 helm upgrade --install cert-manager-config capitonic-helm-chart/charts/cert-manager-config \
   --namespace "$NAMESPACE" --create-namespace --set-string email="$acme_email" --wait --timeout 5m
 
-deploy_chart() {
-  local chart="$1" wait_for_jobs=()
-  [[ "$chart" == "db-migrate" ]] && wait_for_jobs=(--wait-for-jobs)
-  helm lint "capitonic-helm-chart/charts/$chart" \
-    -f "capitonic-helm-chart/environments/production/$chart.yaml"
-  helm upgrade --install "$chart" "capitonic-helm-chart/charts/$chart" \
-    --namespace "$NAMESPACE" --create-namespace \
-    -f "capitonic-helm-chart/environments/production/$chart.yaml" \
-    --atomic --wait "${wait_for_jobs[@]}" --timeout 15m
-}
 
 helm lint capitonic-helm-chart/charts/timescaledb \
   -f capitonic-helm-chart/environments/production/timescaledb.yaml
