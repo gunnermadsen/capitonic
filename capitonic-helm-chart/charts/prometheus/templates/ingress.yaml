@@ -19,6 +19,11 @@ metadata:
   name: prometheus
   annotations:
     traefik.ingress.kubernetes.io/router.middlewares: {{ .Release.Namespace }}-prometheus-strip-api-metrics@kubernetescrd
+{{- if .Values.apiIngress.tls.enabled }}
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+{{- else }}
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+{{- end }}
   labels:
     app.kubernetes.io/name: prometheus
     app.kubernetes.io/instance: {{ .Release.Name }}
@@ -27,8 +32,13 @@ metadata:
     capitonic.io/environment: {{ $.Values.environment | quote }}
 spec:
   ingressClassName: traefik
+{{- if .Values.apiIngress.tls.enabled }}
+  tls:
+    - hosts: [{{ .Values.apiIngress.host | quote }}]
+      secretName: {{ .Values.apiIngress.tls.secretName | quote }}
+{{- end }}
   rules:
-    - host: localhost
+    - host: {{ .Values.apiIngress.host | quote }}
       http:
         paths:
           - path: /api/metrics

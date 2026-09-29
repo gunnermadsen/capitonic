@@ -100,3 +100,12 @@ jobs:
           done
           scripts/production/run-ssm-command.sh "$INSTANCE_ID" 1800 'Verify k3s bootstrap' \
             'set -euo pipefail; cloud-init status --wait; test -f /var/lib/capitonic-bootstrap-complete; test "$(uname -m)" = aarch64; systemctl is-active --quiet k3s; kubectl wait --for=condition=Ready node --all --timeout=5m; test "$(kubectl get nodes --no-headers | wc -l)" -eq 1'
+          security_group_id="$(terraform -chdir="$TF_DIR" output -raw security_group_id)"
+          ingress_rules="$(aws ec2 describe-security-groups --region "$AWS_REGION" \
+            --group-ids "$security_group_id" --query 'SecurityGroups[0].IpPermissions' --output json)"
+          jq -e '
+            length == 1 and
+            .[0].IpProtocol == "tcp" and .[0].FromPort == 443 and .[0].ToPort == 443 and
+            .[0].Ipv6Ranges == [] and .[0].PrefixListIds == [] and .[0].UserIdGroupPairs == [] and
+            ([.[0].IpRanges[].CidrIp] == ["0.0.0.0/0"])
+          ' <<<"$ingress_rules" >/dev/null

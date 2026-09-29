@@ -5,4 +5,8 @@ storage:
   className: local-path
   size: 5Gi
 apiIngress:
-  enabled: false
+  enabled: true
+  host: monitor.capitonic.com
+  tls:
+    enabled: true
+    secretName: grafana-tls

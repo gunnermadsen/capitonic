@@ -69,7 +69,8 @@ for attempt in $(seq 1 180); do
 done
 [[ "${database_ready:-}" == "true" ]]
 
-source_migrations="$(find packages/db-migrate/src/migrations -maxdepth 1 -type f -name '[0-9]*.ts' -exec basename {} \; | cut -d- -f1 | sort -n)"
+source_migrations="$(find packages/db-migrate/src/migrations packages/db-migrate/src/fresh-install \
+  -maxdepth 1 -type f -name '[0-9]*.ts' -exec basename {} \; | cut -d- -f1 | sort -n)"
 applied_migrations="$(kubectl -n "$NAMESPACE" exec timescaledb-0 -c timescaledb -- psql -U postgres -d polymarket -Atc \
   "SELECT timestamp FROM public.migrations ORDER BY timestamp" 2>/dev/null || true)"
 unexpected_applied="$(comm -23 <(printf '%s\n' "$applied_migrations" | sed '/^$/d' | sort -n) <(printf '%s\n' "$source_migrations" | sort -n))"
@@ -77,7 +78,37 @@ unexpected_applied="$(comm -23 <(printf '%s\n' "$applied_migrations" | sed '/^$/
 pending_migrations="$(comm -13 <(printf '%s\n' "$applied_migrations" | sed '/^$/d' | sort -n) <(printf '%s\n' "$source_migrations" | sort -n))"
 printf 'Approved committed pending migrations:\n%s\n' "${pending_migrations:-none}"
 
-kubectl -n "$NAMESPACE" delete job db-migrate --ignore-not-found --wait=true >/dev/null
+source_weather_migrations="$(find packages/db-migrate/src/migrations/weather \
+  -maxdepth 1 -type f -name '[0-9]*.ts' -exec basename {} \; | cut -d- -f1 | sort -n)"
+applied_weather_migrations="$(kubectl -n "$NAMESPACE" exec timescaledb-0 -c timescaledb -- psql -U postgres -d polymarket -Atc \
+  "SELECT timestamp FROM public.weather_migrations ORDER BY timestamp" 2>/dev/null || true)"
+unexpected_weather_applied="$(comm -23 <(printf '%s\n' "$applied_weather_migrations" | sed '/^$/d' | sort -n) <(printf '%s\n' "$source_weather_migrations" | sort -n))"
+[[ -z "$unexpected_weather_applied" ]] || { echo "Weather migration ledger contains migrations outside this release: $unexpected_weather_applied" >&2; exit 1; }
+pending_weather_migrations="$(comm -13 <(printf '%s\n' "$applied_weather_migrations" | sed '/^$/d' | sort -n) <(printf '%s\n' "$source_weather_migrations" | sort -n))"
+printf 'Approved committed pending weather migrations:\n%s\n' "${pending_weather_migrations:-none}"
+
+for migration_job in db-migrate-baseline db-migrate-weather db-migrate; do
+  kubectl -n "$NAMESPACE" delete job "$migration_job" --ignore-not-found --wait=true >/dev/null
+done
+
+helm upgrade --install db-migrate-baseline capitonic-helm-chart/charts/db-migrate \
+  --namespace "$NAMESPACE" --create-namespace \
+  -f capitonic-helm-chart/environments/production/db-migrate.yaml \
+  --set-string jobName=db-migrate-baseline \
+  --set-string 'migrationsPattern=migrations/baseline-only/*.js' \
+  --atomic --wait --wait-for-jobs --timeout 15m
+
+helm upgrade --install db-migrate-weather capitonic-helm-chart/charts/db-migrate \
+  --namespace "$NAMESPACE" --create-namespace \
+  -f capitonic-helm-chart/environments/production/db-migrate.yaml \
+  --set-string jobName=db-migrate-weather \
+  --set-json 'command=["node","dist/weather-main.js"]' \
+  --atomic --wait --wait-for-jobs --timeout 15m
+latest_weather_expected="$(tail -n1 <<<"$source_weather_migrations")"
+latest_weather_applied="$(kubectl -n "$NAMESPACE" exec timescaledb-0 -c timescaledb -- psql -U postgres -d polymarket -Atc \
+  'SELECT coalesce(max(timestamp),0) FROM public.weather_migrations')"
+[[ "$latest_weather_applied" == "$latest_weather_expected" ]]
+
 deploy_chart db-migrate
 latest_expected="$(tail -n1 <<<"$source_migrations")"
 latest_applied="$(kubectl -n "$NAMESPACE" exec timescaledb-0 -c timescaledb -- psql -U postgres -d polymarket -Atc \
@@ -92,9 +123,13 @@ deploy_chart loki
 deploy_chart grafana
 deploy_chart alloy
 
-helm lint capitonic-helm-chart/charts/cloudflared
+scripts/production/configure-tunnel-ssh.sh
+helm lint capitonic-helm-chart/charts/cloudflared \
+  -f capitonic-helm-chart/environments/production/cloudflared.yaml
 helm upgrade --install cloudflared capitonic-helm-chart/charts/cloudflared \
-  --namespace "$NAMESPACE" --set-string tunnelId="$tunnel_id" --atomic --wait --timeout 10m
+  --namespace "$NAMESPACE" \
+  -f capitonic-helm-chart/environments/production/cloudflared.yaml \
+  --set-string tunnelId="$tunnel_id" --atomic --wait --timeout 10m
 
 deploy_chart polymarket-bot
 scripts/production/reconcile-production-profiles.sh

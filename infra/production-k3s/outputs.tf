@@ -12,7 +12,7 @@ output "architecture" {
 }
 
 output "public_ip" {
-  value = aws_instance.k3s_host.public_ip
+  value = aws_eip.k3s_host.public_ip
 }
 
 output "root_volume_id" {
@@ -33,6 +33,14 @@ output "backup_bucket_name" {
 
 output "monitor_hostname" {
   value = var.cloudflare_monitor_hostname
+}
+
+output "ssh_hostname" {
+  value = var.cloudflare_ssh_hostname
+}
+
+output "security_group_id" {
+  value = aws_security_group.k3s_host.id
 }
 
 output "ssm_start_session_command" {

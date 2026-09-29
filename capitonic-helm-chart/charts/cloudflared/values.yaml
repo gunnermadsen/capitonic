@@ -3,7 +3,7 @@ image: cloudflare/cloudflared:2025.8.1@sha256:b77d84e8704db38db22c22661cf7e56468
 imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 tunnelId: ""
-hostname: monitor.capitonic.com
+sshHostname: ssh.capitonic.com
 replicaCount: 1
 resources:
   requests: {cpu: 25m, memory: 64Mi}

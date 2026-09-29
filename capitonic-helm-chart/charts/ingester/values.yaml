@@ -28,3 +28,7 @@ archiveStorage:
   runAsGroup: 1000
 apiIngress:
   enabled: true
+  host: localhost
+  tls:
+    enabled: false
+    secretName: grafana-tls

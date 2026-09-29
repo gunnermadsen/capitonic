@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: db-migrate
+  name: {{ .Values.jobName }}
   labels:
     app.kubernetes.io/name: db-migrate
     app.kubernetes.io/instance: {{ .Release.Name }}
@@ -34,6 +34,9 @@ spec:
         - name: db-migrate
           image: {{ .Values.image | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
+{{- with .Values.command }}
+          command: {{ toJson . }}
+{{- end }}
           env:
             - {name: POSTGRES_HOST, value: {{ .Values.postgresHost | quote }}}
             - {name: POSTGRES_PORT, value: "5432"}
@@ -41,6 +44,9 @@ spec:
             - {name: POSTGRES_DB, value: polymarket}
             - {name: POSTGRES_SSL_MODE, value: disable}
             - {name: NODE_ENV, value: production}
+{{- if .Values.migrationsPattern }}
+            - {name: DB_MIGRATIONS_PATTERN, value: {{ .Values.migrationsPattern | quote }}}
+{{- end }}
             - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_PASSWORD}}}
             - {name: CAPITONIC_TRADING_POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: postgres-credentials, key: CAPITONIC_TRADING_POSTGRES_PASSWORD}}}
             - {name: CAPITONIC_INGESTER_MASTER_POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: postgres-credentials, key: CAPITONIC_INGESTER_MASTER_POSTGRES_PASSWORD}}}
