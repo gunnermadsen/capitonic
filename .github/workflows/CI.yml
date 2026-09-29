@@ -49,6 +49,7 @@ jobs:
       polymarket_bot: ${{ steps.filter.outputs.polymarket_bot }}
       ingester: ${{ steps.filter.outputs.ingester }}
       db_migrate: ${{ steps.filter.outputs.db_migrate }}
+      any_image: ${{ steps.filter.outputs.any_image }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -73,6 +74,7 @@ jobs:
             echo "polymarket_bot=true" >> "$GITHUB_OUTPUT"
             echo "ingester=true" >> "$GITHUB_OUTPUT"
             echo "db_migrate=true" >> "$GITHUB_OUTPUT"
+            echo "any_image=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           changed_or_missing() {
@@ -94,9 +96,19 @@ jobs:
             fi
             echo false
           }
-          echo "polymarket_bot=$(changed_or_missing polymarket-bot Cargo.toml Cargo.lock packages/polymarket-bot packages/btc-directional-model/runtime-models common/proto infra/production/release.json)" >> "$GITHUB_OUTPUT"
-          echo "ingester=$(changed_or_missing ingester Cargo.toml Cargo.lock packages/market-data-ingester common/proto infra/production/release.json)" >> "$GITHUB_OUTPUT"
-          echo "db_migrate=$(changed_or_missing db-migrate packages/db-migrate infra/production/release.json)" >> "$GITHUB_OUTPUT"
+          polymarket_bot="$(changed_or_missing polymarket-bot Cargo.toml Cargo.lock packages/polymarket-bot packages/btc-directional-model/runtime-models common/proto infra/production/release.json)"
+          ingester="$(changed_or_missing ingester Cargo.toml Cargo.lock packages/market-data-ingester common/proto infra/production/release.json)"
+          db_migrate="$(changed_or_missing db-migrate packages/db-migrate infra/production/release.json)"
+          {
+            echo "polymarket_bot=$polymarket_bot"
+            echo "ingester=$ingester"
+            echo "db_migrate=$db_migrate"
+            if [ "$polymarket_bot" = true ] || [ "$ingester" = true ] || [ "$db_migrate" = true ]; then
+              echo "any_image=true"
+            else
+              echo "any_image=false"
+            fi
+          } >> "$GITHUB_OUTPUT"
 
   rust-tests:
     name: Rust tests
@@ -220,7 +232,7 @@ jobs:
 
   production-image-validation:
     name: Build and push ${{ matrix.name }} production image
-    if: github.ref == 'refs/heads/development'
+    if: github.ref == 'refs/heads/development' && needs.changes.outputs.any_image == 'true'
     needs: [repository-layout, changes, rust-tests, market-data-ingester-tests, db-migrate-tests, outage-recovery-tests]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
