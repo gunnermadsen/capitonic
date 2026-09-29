@@ -25,6 +25,7 @@ env:
 jobs:
   repository-layout:
     name: Repository layout
+    needs: changes
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -51,16 +52,11 @@ jobs:
       helm_lint: ${{ steps.filter.outputs.helm_lint }}
       helm_chart_sha: ${{ steps.filter.outputs.helm_chart_sha }}
       any_image: ${{ steps.filter.outputs.any_image }}
+      image_matrix: ${{ steps.filter.outputs.image_matrix }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Configure AWS credentials for accepted RC discovery
-        if: github.ref == 'refs/heads/development' && github.event_name != 'pull_request'
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
       - name: Detect affected images
         id: filter
         shell: bash
@@ -85,28 +81,9 @@ jobs:
               echo true
             fi
           }
-          changed_or_missing() {
-            local component="$1"
-            shift
-            if ! git diff --quiet "$BASE_SHA" "$CURRENT_SHA" -- "$@"; then
-              echo true
-              return
-            fi
-            if [ "$GITHUB_REF" = 'refs/heads/development' ]; then
-              local repository rc_version
-              repository="$(jq -er --arg component "$component" '.components[$component].repository' infra/production/release.json)"
-              rc_version="$(jq -er --arg component "$component" '.components[$component].rcVersion' infra/production/release.json)"
-              if ! aws ecr describe-images --region "$AWS_REGION" --repository-name "$repository" \
-                --image-ids imageTag="$rc_version" >/dev/null 2>&1; then
-                echo true
-                return
-              fi
-            fi
-            echo false
-          }
-          polymarket_bot="$(changed_or_missing polymarket-bot Cargo.toml Cargo.lock packages/polymarket-bot packages/btc-directional-model/runtime-models common/proto infra/production/release.json)"
-          ingester="$(changed_or_missing ingester Cargo.toml Cargo.lock packages/market-data-ingester common/proto infra/production/release.json)"
-          db_migrate="$(changed_or_missing db-migrate packages/db-migrate infra/production/release.json)"
+          polymarket_bot="$(changed Cargo.toml Cargo.lock packages/polymarket-bot packages/btc-directional-model/runtime-models common/proto)"
+          ingester="$(changed Cargo.toml Cargo.lock packages/market-data-ingester common/proto)"
+          db_migrate="$(changed packages/db-migrate)"
           polymarket_bot_tests="$(changed Cargo.toml Cargo.lock packages/polymarket-bot packages/btc-directional-model/runtime-models common/proto)"
           ingester_tests="$(changed Cargo.toml Cargo.lock packages/market-data-ingester common/proto)"
           db_migrate_tests="$(changed packages/db-migrate)"
@@ -127,6 +104,36 @@ jobs:
             | sha256sum \
             | cut -d' ' -f1)"
           [[ "$helm_chart_sha" =~ ^[0-9a-f]{64}$ ]]
+          image_matrix='[]'
+          for component in polymarket-bot ingester db-migrate; do
+            case "$component" in
+              polymarket-bot)
+                affected="$polymarket_bot"
+                dockerfile=packages/polymarket-bot/Dockerfile.production
+                revision_arg=POLYMARKET_GIT_REVISION
+                cache_scope=polymarket-bot-production
+                ;;
+              ingester)
+                affected="$ingester"
+                dockerfile=packages/market-data-ingester/Dockerfile.production
+                revision_arg=INGESTER_GIT_REVISION
+                cache_scope=ingester-production
+                ;;
+              db-migrate)
+                affected="$db_migrate"
+                dockerfile=packages/db-migrate/Dockerfile.production
+                revision_arg=DB_MIGRATE_GIT_REVISION
+                cache_scope=db-migrate-production
+                ;;
+            esac
+            if [ "$affected" = true ]; then
+              image_matrix="$(jq -cn --argjson matrix "$image_matrix" \
+                --arg component "$component" --arg dockerfile "$dockerfile" \
+                --arg revision_arg "$revision_arg" --arg cache_scope "$cache_scope" \
+                '$matrix + [{name:$component,dockerfile:$dockerfile,revision_arg:$revision_arg,
+                  repository:("capitonic/"+$component),cache_scope:$cache_scope}]')"
+            fi
+          done
           {
             echo "polymarket_bot=$polymarket_bot"
             echo "ingester=$ingester"
@@ -136,6 +143,7 @@ jobs:
             echo "db_migrate_tests=$db_migrate_tests"
             echo "helm_lint=$helm_lint"
             echo "helm_chart_sha=$helm_chart_sha"
+            echo "image_matrix=$image_matrix"
             if [ "$polymarket_bot" = true ] || [ "$ingester" = true ] || [ "$db_migrate" = true ]; then
               echo "any_image=true"
             else
@@ -145,7 +153,7 @@ jobs:
 
   helm-lint:
     name: Helm chart lint
-    needs: changes
+    needs: [changes, repository-layout]
     if: needs.changes.outputs.helm_lint == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -195,8 +203,11 @@ jobs:
 
   rust-tests:
     name: Rust tests
-    needs: changes
-    if: needs.changes.outputs.polymarket_bot_tests == 'true'
+    needs: [changes, repository-layout, helm-lint]
+    if: >-
+      always() && needs.repository-layout.result == 'success' &&
+      (needs.helm-lint.result == 'success' || needs.helm-lint.result == 'skipped') &&
+      needs.changes.outputs.polymarket_bot_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -233,8 +244,11 @@ jobs:
 
   market-data-ingester-tests:
     name: Market data ingester tests
-    needs: changes
-    if: needs.changes.outputs.ingester_tests == 'true'
+    needs: [changes, repository-layout, helm-lint]
+    if: >-
+      always() && needs.repository-layout.result == 'success' &&
+      (needs.helm-lint.result == 'success' || needs.helm-lint.result == 'skipped') &&
+      needs.changes.outputs.ingester_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -296,8 +310,11 @@ jobs:
 
   db-migrate-tests:
     name: Database migration package tests
-    needs: changes
-    if: needs.changes.outputs.db_migrate_tests == 'true'
+    needs: [changes, repository-layout, helm-lint]
+    if: >-
+      always() && needs.repository-layout.result == 'success' &&
+      (needs.helm-lint.result == 'success' || needs.helm-lint.result == 'skipped') &&
+      needs.changes.outputs.db_migrate_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -322,50 +339,30 @@ jobs:
       github.ref == 'refs/heads/development' &&
       needs.changes.outputs.any_image == 'true' &&
       needs.repository-layout.result == 'success' &&
+      (needs.helm-lint.result == 'success' || needs.helm-lint.result == 'skipped') &&
       (needs.rust-tests.result == 'success' || needs.rust-tests.result == 'skipped') &&
       (needs.market-data-ingester-tests.result == 'success' || needs.market-data-ingester-tests.result == 'skipped') &&
       (needs.db-migrate-tests.result == 'success' || needs.db-migrate-tests.result == 'skipped')
-    needs: [repository-layout, changes, rust-tests, market-data-ingester-tests, db-migrate-tests]
+    needs: [changes, repository-layout, helm-lint, rust-tests, market-data-ingester-tests, db-migrate-tests]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: polymarket-bot
-            dockerfile: packages/polymarket-bot/Dockerfile.production
-            revision_arg: POLYMARKET_GIT_REVISION
-            repository: capitonic/polymarket-bot
-            cache_scope: polymarket-bot-production
-            change_key: polymarket_bot
-          - name: ingester
-            dockerfile: packages/market-data-ingester/Dockerfile.production
-            revision_arg: INGESTER_GIT_REVISION
-            repository: capitonic/ingester
-            cache_scope: ingester-production
-            change_key: ingester
-          - name: db-migrate
-            dockerfile: packages/db-migrate/Dockerfile.production
-            revision_arg: DB_MIGRATE_GIT_REVISION
-            repository: capitonic/db-migrate
-            cache_scope: db-migrate-production
-            change_key: db_migrate
+        include: ${{ fromJSON(needs.changes.outputs.image_matrix) }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - uses: docker/setup-buildx-action@v4
       - name: Configure AWS credentials
-        if: needs.changes.outputs[matrix.change_key] == 'true'
         uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
       - name: Log in to Amazon ECR
-        if: needs.changes.outputs[matrix.change_key] == 'true'
         uses: aws-actions/amazon-ecr-login@v2
       - name: Resolve accepted semver RC identity
-        if: needs.changes.outputs[matrix.change_key] == 'true'
         id: release
         shell: bash
         env:
@@ -399,13 +396,13 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
       - name: Checkout accepted component source
-        if: needs.changes.outputs[matrix.change_key] == 'true' && steps.release.outputs.existing_rc != 'true'
+        if: steps.release.outputs.existing_rc != 'true'
         uses: actions/checkout@v6
         with:
           ref: ${{ steps.release.outputs.source_revision }}
           path: build-source
       - name: Build and publish ARM64 image
-        if: needs.changes.outputs[matrix.change_key] == 'true' && steps.release.outputs.existing_rc != 'true'
+        if: steps.release.outputs.existing_rc != 'true'
         uses: docker/build-push-action@v7
         with:
           context: build-source
@@ -421,7 +418,6 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.cache_scope }}-arm64
           cache-to: type=gha,scope=${{ matrix.cache_scope }}-arm64,mode=max
       - name: Verify published ARM64 image and embedded revision
-        if: needs.changes.outputs[matrix.change_key] == 'true'
         env:
           COMPONENT: ${{ matrix.name }}
           REPOSITORY: ${{ matrix.repository }}
