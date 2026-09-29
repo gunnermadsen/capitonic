@@ -123,7 +123,8 @@ impl TradingEntryStatusSnapshot {
     }
 
     pub fn select(&self, scope: &str, process_id: Option<Uuid>) -> EntryStatusSelection {
-        let permission = if scope.eq_ignore_ascii_case("all processes") || scope == "all" {
+        let all_processes = scope.eq_ignore_ascii_case("all processes") || scope == "all";
+        let permission = if all_processes {
             self.aggregate.clone()
         } else {
             process_id
@@ -149,6 +150,13 @@ impl TradingEntryStatusSnapshot {
             display: permission.display,
             reason: permission.reason,
             alert_enabled: permission.alert_enabled,
+            enabled_count: all_processes.then(|| {
+                self.processes
+                    .iter()
+                    .filter(|process| process.permission.state == EntryPermissionState::Enabled)
+                    .count()
+            }),
+            total_count: all_processes.then_some(self.processes.len()),
         }
     }
 
@@ -184,6 +192,10 @@ pub struct EntryStatusSelection {
     pub display: String,
     pub reason: Option<String>,
     pub alert_enabled: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_count: Option<usize>,
 }
 
 fn aggregate_entry_permission(processes: &[ProcessEntryPermission]) -> EntryPermission {
@@ -635,6 +647,85 @@ mod tests {
         let unavailable = snapshot.select("Selected process", None);
         assert_eq!(unavailable.state, EntryPermissionState::Blocked);
         assert_eq!(unavailable.display, "Blocked — status unavailable");
+    }
+
+    #[test]
+    fn entry_status_counts_only_enabled_permissions_for_all_processes() {
+        let now = Utc.timestamp_opt(1_800_000_000, 0).unwrap();
+        for (permissions, enabled_count) in [
+            (vec![], 0),
+            (vec![EntryPermission::disabled()], 0),
+            (
+                vec![
+                    EntryPermission::enabled(),
+                    EntryPermission::disabled(),
+                    EntryPermission::stopped(),
+                    EntryPermission::blocked(Some("reconciliation_stale".to_string())),
+                    EntryPermission::unknown(Some("runtime_not_attached".to_string())),
+                ],
+                1,
+            ),
+            (
+                vec![EntryPermission::enabled(), EntryPermission::enabled()],
+                2,
+            ),
+            (vec![EntryPermission::enabled(); 501], 501),
+        ] {
+            let total_count = permissions.len();
+            let processes = permissions
+                .into_iter()
+                .enumerate()
+                .map(|(index, permission)| ProcessEntryPermission {
+                    process_id: Uuid::from_u128(index as u128 + 1),
+                    permission,
+                })
+                .collect();
+            let snapshot = TradingEntryStatusSnapshot::new(now, processes);
+            for scope in ["All processes", "all"] {
+                let selection = snapshot.select(scope, Some(Uuid::from_u128(1)));
+                assert_eq!(selection.enabled_count, Some(enabled_count));
+                assert_eq!(selection.total_count, Some(total_count));
+                assert_eq!(
+                    selection.alert_enabled,
+                    i64::from(total_count > 0 && enabled_count == total_count)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn selected_entry_status_preserves_regular_status_without_aggregate_counts() {
+        let now = Utc.timestamp_opt(1_800_000_000, 0).unwrap();
+        let snapshot = TradingEntryStatusSnapshot::new(
+            now,
+            vec![
+                ProcessEntryPermission {
+                    process_id: Uuid::from_u128(1),
+                    permission: EntryPermission::enabled(),
+                },
+                ProcessEntryPermission {
+                    process_id: Uuid::from_u128(2),
+                    permission: EntryPermission::disabled(),
+                },
+            ],
+        );
+        for (process_id, alert_enabled, display) in [
+            (Some(Uuid::from_u128(1)), 1, "Enabled"),
+            (
+                Some(Uuid::from_u128(2)),
+                0,
+                "Blocked — disabled by configuration",
+            ),
+            (Some(Uuid::from_u128(3)), 0, "Blocked — status unavailable"),
+            (None, 0, "Blocked — status unavailable"),
+        ] {
+            let selection = snapshot.select("Selected process", process_id);
+            assert_eq!(selection.alert_enabled, alert_enabled);
+            assert_eq!(selection.display, display);
+            let response = serde_json::to_value(selection).unwrap();
+            assert!(response.get("enabled_count").is_none());
+            assert!(response.get("total_count").is_none());
+        }
     }
 
     #[test]

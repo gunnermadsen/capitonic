@@ -134,7 +134,7 @@ state_file.write_text(json.dumps(state))
                 prior_builds = int(self.count.read_text())
                 first = self.run_ci(component)
                 self.assertEqual(first.returncode, 0, first.stderr)
-                expected_base = {"polymarket-bot": "3.2.2", "ingester": "1.2.1",
+                expected_base = {"polymarket-bot": "3.2.3", "ingester": "1.2.1",
                                  "db-migrate": "0.2.0"}[component]
                 self.assertIn(f"image/{component}/v{expected_base}-local.0",
                               self.tags(component))
