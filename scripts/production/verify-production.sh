@@ -112,11 +112,14 @@ alerts="$(curl -fsS -u "$prom_user:$prom_password" --get --data-urlencode 'query
 jq -e '.status == "success" and (.data.result | length) == 0' <<<"$alerts" >/dev/null
 curl -fsS "http://127.0.0.1:$GRAFANA_PORT/api/health" | jq -e '.database == "ok"' >/dev/null
 kubectl -n "$NAMESPACE" get certificate grafana-tls -o json | jq -e 'any(.status.conditions[]?; .type == "Ready" and .status == "True")' >/dev/null
-kubectl -n "$NAMESPACE" logs deployment/cloudflared --since=10m --tail=300 | grep -q 'Registered tunnel connection'
+kubectl -n "$NAMESPACE" get deployment cloudflared -o json | jq -e '
+  .spec.replicas > 0 and
+  .status.readyReplicas == .spec.replicas and
+  .status.availableReplicas == .spec.replicas
+' >/dev/null
 cloudflared_config="$(kubectl -n "$NAMESPACE" get configmap cloudflared -o jsonpath='{.data.config\.yml}')"
-grep -q 'hostname: ssh.capitonic.com' <<<"$cloudflared_config"
-grep -q 'service: ssh://127.0.0.1:22' <<<"$cloudflared_config"
-! grep -q 'monitor.capitonic.com' <<<"$cloudflared_config"
+[[ "$(yq -r '.ingress[] | select(.hostname == "ssh.capitonic.com") | .service' <<<"$cloudflared_config")" == "ssh://127.0.0.1:22" ]]
+[[ "$(yq -r '[.ingress[] | select(.hostname == "monitor.capitonic.com")] | length' <<<"$cloudflared_config")" == "0" ]]
 ss -ltnH '( sport = :22 )' | awk '{print $4}' | grep -qx '127.0.0.1:22'
 [[ "$(ss -ltnH '( sport = :22 )' | wc -l | tr -d ' ')" == "1" ]]
 grafana_headers="$(mktemp /tmp/capitonic-grafana-headers.XXXXXX)"
