@@ -13,7 +13,9 @@ use polymarket_bot::{
         LivePoly1271FunderProbeResponse, LiveVenueStatus, LiveWalletAddressDiagnostics,
         LiveWalletCandidateAddressDiagnostics, LiveWalletTokenBalances, ReconciliationReport,
     },
-    grafana_live::{EntryPermissionState, EntryStatusSelection},
+    grafana_live::{
+        EntryPermission, EntryStatusSelection, ProcessEntryPermission, TradingEntryStatusSnapshot,
+    },
     http::{self, ControlApi, HttpError, MetricsResponse},
     models::{ProcessExecutionConfig, TradingProcess, TradingProcessConfig},
 };
@@ -46,17 +48,23 @@ impl ControlApi for FakeControlApi {
 
     async fn btc_entry_status(
         &self,
-        _request: http::EntryStatusRequest,
+        request: http::EntryStatusRequest,
     ) -> Result<EntryStatusSelection, HttpError> {
-        let observed_at = Utc::now();
-        Ok(EntryStatusSelection {
-            observed_at,
-            observed_at_epoch_seconds: observed_at.timestamp(),
-            state: EntryPermissionState::Enabled,
-            display: "Enabled".to_string(),
-            reason: None,
-            alert_enabled: 1,
-        })
+        let process_id = request.process_id.unwrap_or_else(|| Uuid::from_u128(1));
+        let snapshot = TradingEntryStatusSnapshot::new(
+            Utc::now(),
+            vec![
+                ProcessEntryPermission {
+                    process_id,
+                    permission: EntryPermission::enabled(),
+                },
+                ProcessEntryPermission {
+                    process_id: Uuid::from_u128(2),
+                    permission: EntryPermission::disabled(),
+                },
+            ],
+        );
+        Ok(snapshot.select(&request.scope, request.process_id))
     }
 
     async fn live_status(&self) -> Result<LiveVenueStatus, HttpError> {
@@ -763,7 +771,31 @@ async fn authenticated_admin_can_read_alertable_btc_entry_status() {
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["display"], "Enabled");
     assert_eq!(json["alert_enabled"], 1);
+    assert!(json.get("enabled_count").is_none());
+    assert!(json.get("total_count").is_none());
     assert!(json["observed_at_epoch_seconds"].as_i64().is_some());
+}
+
+#[tokio::test]
+async fn authenticated_admin_can_read_all_process_entry_counts_without_changing_alert_status() {
+    let app = http::router(Arc::new(FakeControlApi), "secret");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/admin/strategy/btc-5m/entry-status?scope=All%20processes")
+                .header(AUTHORIZATION, "Bearer secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["enabled_count"], 1);
+    assert_eq!(json["total_count"], 2);
+    assert_eq!(json["alert_enabled"], 0);
+    assert_eq!(json["display"], "Blocked — 1 of 2");
 }
 
 #[tokio::test]

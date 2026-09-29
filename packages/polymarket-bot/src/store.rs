@@ -811,7 +811,6 @@ impl Store {
               AND process_scope = 'realtime_paper'
               AND status <> 'completed'
             ORDER BY process_id
-            LIMIT 500
             "#,
         )
         .fetch_all(&self.pool)

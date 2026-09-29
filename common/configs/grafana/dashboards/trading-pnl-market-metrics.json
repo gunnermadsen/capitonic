@@ -2260,7 +2260,7 @@
         "type": "yesoreyeram-infinity-datasource",
         "uid": "polymarket-bot-runtime"
       },
-      "description": "Binary trading-entry permission from durable playbook configuration and the existing read-only live entry status. This is the same backend-parsed 1/0 field used by Grafana-managed alerts.",
+      "description": "All processes shows entry-enabled / total non-completed btc_5m realtime_paper processes: none red, partial yellow, all green, and no processes gray. Selected process retains its regular Enabled/Blocked status. Entry permission includes durable configuration and the existing runtime/live checks; alert_enabled remains unchanged.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -2283,13 +2283,13 @@
               "type": "value"
             }
           ],
-          "noValue": "Blocked",
+          "noValue": "Status unavailable",
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": 0
+                "color": "gray",
+                "value": null
               }
             ]
           }
@@ -2325,9 +2325,19 @@
         {
           "columns": [
             {
-              "selector": "alert_enabled",
+              "selector": "value",
               "text": "Trading Entry Status",
               "type": "number"
+            },
+            {
+              "selector": "text",
+              "text": "Status text",
+              "type": "string"
+            },
+            {
+              "selector": "color",
+              "text": "Status color",
+              "type": "string"
             }
           ],
           "datasource": {
@@ -2336,11 +2346,11 @@
           },
           "format": "table",
           "json_options": {
-            "root_is_not_array": true
+            "root_is_not_array": false
           },
           "parser": "backend",
           "refId": "A",
-          "root_selector": "",
+          "root_selector": "(\n  $all := \"${pnl_scope}\" = \"All processes\";\n  $counts := $exists(enabled_count) and $exists(total_count);\n  [{\n    \"value\": alert_enabled,\n    \"text\": $all ? ($counts ? (total_count = 0 ? \"0/0 — No processes\" : $string(enabled_count) & \"/\" & $string(total_count)) : \"Status unavailable\") : (alert_enabled = 1 ? \"Enabled\" : \"Blocked\"),\n    \"color\": $all ? ($counts ? (total_count = 0 ? \"gray\" : enabled_count = 0 ? \"red\" : enabled_count = total_count ? \"green\" : \"yellow\") : \"gray\") : (alert_enabled = 1 ? \"green\" : \"red\")\n  }]\n)",
           "source": "url",
           "type": "json",
           "url": "http://polymarket-bot:8097/admin/strategy/btc-5m/entry-status?scope=${pnl_scope:percentencode}&process_id=${process_id}",
@@ -2351,7 +2361,46 @@
         }
       ],
       "title": "Trading Entry Status",
-      "type": "stat"
+      "type": "stat",
+      "transformations": [
+        {
+          "id": "configFromData",
+          "options": {
+            "configRefId": "A",
+            "applyTo": {
+              "id": "byName",
+              "options": "Trading Entry Status"
+            },
+            "mappings": [
+              {
+                "fieldName": "Trading Entry Status",
+                "handlerKey": "mappings.value",
+                "reducerId": "allValues"
+              },
+              {
+                "fieldName": "Status text",
+                "handlerKey": "mappings.text",
+                "reducerId": "allValues"
+              },
+              {
+                "fieldName": "Status color",
+                "handlerKey": "mappings.color",
+                "reducerId": "allValues"
+              }
+            ]
+          }
+        },
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "Trading Entry Status"
+              ]
+            }
+          }
+        }
+      ]
     },
     {
       "datasource": {
