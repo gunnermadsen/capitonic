@@ -109,7 +109,16 @@ apply_env_secret grafana-auth "$temporary_directory/grafana.env"
 
 write_env_file "$temporary_directory/prometheus.env" \
   username PROMETHEUS_BASIC_AUTH_USER password PROMETHEUS_BASIC_AUTH_PASSWORD password-hash PROMETHEUS_BASIC_AUTH_PASSWORD_HASH
-apply_env_secret prometheus-auth "$temporary_directory/prometheus.env"
+jq -n \
+  --arg username "$(json_value PROMETHEUS_BASIC_AUTH_USER)" \
+  --arg password_hash "$(json_value PROMETHEUS_BASIC_AUTH_PASSWORD_HASH)" \
+  '{basic_auth_users: {($username): $password_hash}}' >"$temporary_directory/web.yml"
+chmod 0600 "$temporary_directory/web.yml"
+kubectl -n "$NAMESPACE" create secret generic prometheus-auth \
+  --from-env-file="$temporary_directory/prometheus.env" \
+  --from-file=web.yml="$temporary_directory/web.yml" \
+  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl -n "$NAMESPACE" annotate secret prometheus-auth capitonic.io/asm-version="$secret_version" --overwrite >/dev/null
 
 write_env_file "$temporary_directory/cloudflare-dns.env" api-token CLOUDFLARE_API_TOKEN
 apply_env_secret cloudflare-dns "$temporary_directory/cloudflare-dns.env"
