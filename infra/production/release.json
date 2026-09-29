@@ -6,7 +6,9 @@
     "polymarket-bot": {
       "repository": "capitonic/polymarket-bot",
       "rcVersion": "v3.2.3-rc.0",
-      "sourceRevision": "f6422f19fd9caf589425c1920cbcbd54bc10944d"
+      "sourceRevision": "f6422f19fd9caf589425c1920cbcbd54bc10944d",
+      "finalVersion": "v3.2.3",
+      "digest": "sha256:28634cdba6c41f8b3558aac4ae5e00a8ceffa6da406b68be6604a53a807b9524"
     },
     "ingester": {
       "repository": "capitonic/ingester",
