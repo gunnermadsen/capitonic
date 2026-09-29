@@ -46,6 +46,8 @@ bot_token="$(kubectl -n "$NAMESPACE" get secret polymarket-bot-auth -o jsonpath=
 ingester_token="$(kubectl -n "$NAMESPACE" get secret ingester-auth -o jsonpath='{.data.admin-token}' | base64 -d)"
 prom_user="$(kubectl -n "$NAMESPACE" get secret prometheus-auth -o jsonpath='{.data.username}' | base64 -d)"
 prom_password="$(kubectl -n "$NAMESPACE" get secret prometheus-auth -o jsonpath='{.data.password}' | base64 -d)"
+grafana_user="$(kubectl -n "$NAMESPACE" get secret grafana-auth -o jsonpath='{.data.admin-user}' | base64 -d)"
+grafana_password="$(kubectl -n "$NAMESPACE" get secret grafana-auth -o jsonpath='{.data.admin-password}' | base64 -d)"
 
 kubectl -n "$NAMESPACE" port-forward service/polymarket-bot "$BOT_PORT:8097" >/tmp/capitonic-verify-bot.log 2>&1 & bot_forward=$!
 kubectl -n "$NAMESPACE" port-forward service/ingester-master "$INGESTER_PORT:8098" >/tmp/capitonic-verify-ingester.log 2>&1 & ingester_forward=$!
@@ -111,6 +113,12 @@ jq -e '
 alerts="$(curl -fsS -u "$prom_user:$prom_password" --get --data-urlencode 'query=ALERTS{alertstate="firing",severity="critical"}' "http://127.0.0.1:$PROMETHEUS_PORT/api/v1/query")"
 jq -e '.status == "success" and (.data.result | length) == 0' <<<"$alerts" >/dev/null
 curl -fsS "http://127.0.0.1:$GRAFANA_PORT/api/health" | jq -e '.database == "ok"' >/dev/null
+curl -fsS -u "$grafana_user:$grafana_password" \
+  "http://127.0.0.1:$GRAFANA_PORT/api/datasources/uid/polymarket-bot-runtime" \
+  | jq -e '.uid == "polymarket-bot-runtime" and .type == "yesoreyeram-infinity-datasource"' >/dev/null
+curl -fsS -u "$grafana_user:$grafana_password" \
+  "http://127.0.0.1:$GRAFANA_PORT/api/plugins/yesoreyeram-infinity-datasource/settings" \
+  | jq -e '.enabled == true' >/dev/null
 kubectl -n "$NAMESPACE" get certificate grafana-tls -o json | jq -e 'any(.status.conditions[]?; .type == "Ready" and .status == "True")' >/dev/null
 kubectl -n "$NAMESPACE" get deployment cloudflared -o json | jq -e '
   .spec.replicas > 0 and

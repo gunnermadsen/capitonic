@@ -37,3 +37,16 @@ datasources:
       connMaxLifetime: 14400
     secureJsonData:
       password: ${GRAFANA_POSTGRES_PASSWORD}
+  - name: Polymarket Bot Runtime
+    type: yesoreyeram-infinity-datasource
+    uid: polymarket-bot-runtime
+    access: proxy
+    editable: false
+    jsonData:
+      auth_method: bearerToken
+      allowedHosts:
+        - http://polymarket-bot:8097
+      timeoutInSeconds: 2
+      allowDangerousHTTPMethods: false
+    secureJsonData:
+      bearerToken: ${POLYMARKET_HTTP_ADMIN_TOKEN}
