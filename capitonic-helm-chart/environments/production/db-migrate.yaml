@@ -3,6 +3,7 @@ image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/db-migrate@sha256:
 imagePullPolicy: IfNotPresent
 imagePullSecrets:
   - name: ecr-registry
+postgresHost: timescaledb-0.timescaledb-headless
 release:
   version: v0.2.0-rc.1
   digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

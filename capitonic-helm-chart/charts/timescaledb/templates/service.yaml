@@ -12,6 +12,7 @@ metadata:
     capitonic.io/rollout-domain: database
 spec:
   clusterIP: None
+  publishNotReadyAddresses: true
   selector:
     app.kubernetes.io/name: timescaledb
     app.kubernetes.io/instance: {{ .Release.Name }}

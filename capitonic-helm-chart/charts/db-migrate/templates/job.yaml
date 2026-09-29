@@ -35,7 +35,7 @@ spec:
           image: {{ .Values.image | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           env:
-            - {name: POSTGRES_HOST, value: timescaledb}
+            - {name: POSTGRES_HOST, value: {{ .Values.postgresHost | quote }}}
             - {name: POSTGRES_PORT, value: "5432"}
             - {name: POSTGRES_USER, value: postgres}
             - {name: POSTGRES_DB, value: polymarket}
