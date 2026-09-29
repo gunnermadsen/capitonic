@@ -118,7 +118,10 @@ curl -fsS -u "$grafana_user:$grafana_password" \
   | jq -e '.uid == "polymarket-bot-runtime" and .type == "yesoreyeram-infinity-datasource"' >/dev/null
 curl -fsS -u "$grafana_user:$grafana_password" \
   "http://127.0.0.1:$GRAFANA_PORT/api/plugins/yesoreyeram-infinity-datasource/settings" \
-  | jq -e '.enabled == true' >/dev/null
+  | jq -e '.id == "yesoreyeram-infinity-datasource" and .type == "datasource"' >/dev/null
+curl -fsS -u "$grafana_user:$grafana_password" \
+  "http://127.0.0.1:$GRAFANA_PORT/api/datasources/uid/polymarket-bot-runtime/health" \
+  | jq -e '.status == "OK"' >/dev/null
 kubectl -n "$NAMESPACE" get certificate grafana-tls -o json | jq -e 'any(.status.conditions[]?; .type == "Ready" and .status == "True")' >/dev/null
 kubectl -n "$NAMESPACE" get deployment cloudflared -o json | jq -e '
   .spec.replicas > 0 and
