@@ -44,6 +44,7 @@ spec:
           env:
             - {name: GF_USERS_DEFAULT_THEME, value: dark}
             - {name: GF_SERVER_ROOT_URL, value: {{ .Values.serverRootUrl | quote }}}
+            - {name: GF_PLUGINS_PREINSTALL_SYNC, value: "yesoreyeram-infinity-datasource@3.11.1"}
             - {name: PROMETHEUS_ENVIRONMENT, value: {{ .Values.environment | quote }}}
             - {name: GRAFANA_ALERT_ENVIRONMENT, value: {{ .Values.environment | quote }}}
             - {name: GF_SECURITY_ADMIN_USER, valueFrom: {secretKeyRef: {name: grafana-auth, key: admin-user}}}
@@ -51,6 +52,7 @@ spec:
             - {name: PROMETHEUS_BASIC_AUTH_USER, valueFrom: {secretKeyRef: {name: prometheus-auth, key: username}}}
             - {name: PROMETHEUS_BASIC_AUTH_PASSWORD, valueFrom: {secretKeyRef: {name: prometheus-auth, key: password}}}
             - {name: GRAFANA_POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: postgres-credentials, key: CAPITONIC_GRAFANA_POSTGRES_PASSWORD}}}
+            - {name: POLYMARKET_HTTP_ADMIN_TOKEN, valueFrom: {secretKeyRef: {name: polymarket-bot-auth, key: admin-token}}}
           startupProbe:
             httpGet: {path: /api/health, port: http}
             failureThreshold: 30
