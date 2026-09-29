@@ -116,8 +116,9 @@ jq -n \
 chmod 0600 "$temporary_directory/web.yml"
 kubectl -n "$NAMESPACE" create secret generic prometheus-auth \
   --from-env-file="$temporary_directory/prometheus.env" \
-  --from-file=web.yml="$temporary_directory/web.yml" \
-  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  --dry-run=client -o json \
+  | jq --rawfile web_config "$temporary_directory/web.yml" '.data["web.yml"] = ($web_config | @base64)' \
+  | kubectl apply -f - >/dev/null
 kubectl -n "$NAMESPACE" annotate secret prometheus-auth capitonic.io/asm-version="$secret_version" --overwrite >/dev/null
 
 write_env_file "$temporary_directory/cloudflare-dns.env" api-token CLOUDFLARE_API_TOKEN
