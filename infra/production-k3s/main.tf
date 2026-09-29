@@ -142,8 +142,8 @@ resource "aws_vpc_security_group_egress_rule" "cloudflare_tunnel_http2" {
 
 resource "aws_vpc_security_group_egress_rule" "dns_udp" {
   security_group_id = aws_security_group.k3s_host.id
-  description       = "DNS through the VPC resolver"
-  cidr_ipv4         = data.aws_vpc.default.cidr_block
+  description       = "DNS egress for recursive and authoritative resolvers"
+  cidr_ipv4         = "0.0.0.0/0"
   from_port         = 53
   ip_protocol       = "udp"
   to_port           = 53
@@ -151,8 +151,8 @@ resource "aws_vpc_security_group_egress_rule" "dns_udp" {
 
 resource "aws_vpc_security_group_egress_rule" "dns_tcp" {
   security_group_id = aws_security_group.k3s_host.id
-  description       = "DNS TCP through the VPC resolver"
-  cidr_ipv4         = data.aws_vpc.default.cidr_block
+  description       = "DNS TCP egress for recursive and authoritative resolvers"
+  cidr_ipv4         = "0.0.0.0/0"
   from_port         = 53
   ip_protocol       = "tcp"
   to_port           = 53
