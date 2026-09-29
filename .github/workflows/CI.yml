@@ -4,12 +4,8 @@ on:
   push:
     branches:
       - development
-  pull_request:
-    branches:
-      - development
-      - master
-      - production
-  workflow_dispatch:
+      - feature/**
+      - defect/**
 
 permissions:
   contents: read
