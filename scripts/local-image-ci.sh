@@ -49,7 +49,7 @@ case "$component" in
   polymarket-bot)
     dockerfile="packages/polymarket-bot/Dockerfile.production"
     revision_arg="POLYMARKET_GIT_REVISION"
-    base_version="3.2.2"
+    base_version="3.2.3"
     checks_description="local formatting, Clippy, and component tests passed"
     image_inputs=(.dockerignore Cargo.toml Cargo.lock packages/polymarket-bot/Cargo.toml packages/market-data-ingester/Cargo.toml packages/polymarket-bot/build.rs common/proto packages/polymarket-bot/src packages/btc-directional-model/runtime-models "$dockerfile")
     ;;
