@@ -39,7 +39,7 @@ jobs:
           fi
 
   changes:
-    name: Detect image changes
+    name: Detect affected components
     runs-on: ubuntu-latest
     outputs:
       polymarket_bot: ${{ steps.filter.outputs.polymarket_bot }}
@@ -48,6 +48,8 @@ jobs:
       polymarket_bot_tests: ${{ steps.filter.outputs.polymarket_bot_tests }}
       ingester_tests: ${{ steps.filter.outputs.ingester_tests }}
       db_migrate_tests: ${{ steps.filter.outputs.db_migrate_tests }}
+      helm_lint: ${{ steps.filter.outputs.helm_lint }}
+      helm_chart_sha: ${{ steps.filter.outputs.helm_chart_sha }}
       any_image: ${{ steps.filter.outputs.any_image }}
     steps:
       - uses: actions/checkout@v6
@@ -108,6 +110,23 @@ jobs:
           polymarket_bot_tests="$(changed Cargo.toml Cargo.lock packages/polymarket-bot packages/btc-directional-model/runtime-models common/proto)"
           ingester_tests="$(changed Cargo.toml Cargo.lock packages/market-data-ingester common/proto)"
           db_migrate_tests="$(changed packages/db-migrate)"
+          helm_inputs=(
+            capitonic-helm-chart
+            common/configs/alloy
+            common/configs/grafana
+            common/configs/loki
+            common/configs/pgbouncer
+            common/configs/prometheus
+            common/scripts/pgbouncer-entrypoint.sh
+            scripts/helm/bake-assets.py
+          )
+          helm_lint="$(changed .github/workflows/CI.yml "${helm_inputs[@]}")"
+          helm_chart_sha="$(git ls-files -z -- "${helm_inputs[@]}" \
+            | sort -z \
+            | xargs -0 sha256sum \
+            | sha256sum \
+            | cut -d' ' -f1)"
+          [[ "$helm_chart_sha" =~ ^[0-9a-f]{64}$ ]]
           {
             echo "polymarket_bot=$polymarket_bot"
             echo "ingester=$ingester"
@@ -115,12 +134,64 @@ jobs:
             echo "polymarket_bot_tests=$polymarket_bot_tests"
             echo "ingester_tests=$ingester_tests"
             echo "db_migrate_tests=$db_migrate_tests"
+            echo "helm_lint=$helm_lint"
+            echo "helm_chart_sha=$helm_chart_sha"
             if [ "$polymarket_bot" = true ] || [ "$ingester" = true ] || [ "$db_migrate" = true ]; then
               echo "any_image=true"
             else
               echo "any_image=false"
             fi
           } >> "$GITHUB_OUTPUT"
+
+  helm-lint:
+    name: Helm chart lint
+    needs: changes
+    if: needs.changes.outputs.helm_lint == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Restore validated chart hash
+        id: helm-lint-cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/capitonic-helm-lint
+          key: helm-lint-v1-${{ runner.os }}-helm-3.18.6-${{ needs.changes.outputs.helm_chart_sha }}-${{ hashFiles('.github/workflows/CI.yml') }}
+
+      - name: Install Helm
+        if: steps.helm-lint-cache.outputs.cache-hit != 'true'
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.18.6
+
+      - name: Bake and lint Helm charts
+        if: steps.helm-lint-cache.outputs.cache-hit != 'true'
+        env:
+          HELM_CHART_SHA: ${{ needs.changes.outputs.helm_chart_sha }}
+          PROMETHEUS_BASIC_AUTH_USER: ci
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'python3 scripts/helm/bake-assets.py --clean >/dev/null 2>&1 || true' EXIT
+          python3 scripts/helm/bake-assets.py
+          for chart in capitonic-helm-chart/charts/*; do
+            name="$(basename "$chart")"
+            values="capitonic-helm-chart/environments/production/$name.yaml"
+            extra_values=()
+            if [ -f "$values" ]; then
+              extra_values=(-f "$values")
+            fi
+            extra_settings=()
+            case "$name" in
+              cert-manager-config) extra_settings=(--set-string email=ci@capitonic.invalid) ;;
+              cloudflared) extra_settings=(--set-string tunnelId=00000000-0000-0000-0000-000000000000) ;;
+            esac
+            helm lint "$chart" "${extra_values[@]}" "${extra_settings[@]}"
+          done
+          mkdir -p "$RUNNER_TEMP/capitonic-helm-lint"
+          printf '%s\n' "$HELM_CHART_SHA" > "$RUNNER_TEMP/capitonic-helm-lint/validated-sha256"
 
   rust-tests:
     name: Rust tests
