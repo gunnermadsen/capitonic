@@ -63,6 +63,7 @@ PermitRootLogin no
 AllowUsers $SSH_USER
 EOF
 
+install -d -m 0755 /run/sshd
 /usr/sbin/sshd -t
 systemctl unmask ssh.service >/dev/null
 systemctl disable --now ssh.socket >/dev/null 2>&1 || true
