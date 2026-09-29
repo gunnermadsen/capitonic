@@ -16,22 +16,31 @@ sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null
 
 apt-get update
 apt-get install -y --no-install-recommends \
-  ca-certificates curl dbus-x11 gnupg jq unzip \
+  ca-certificates curl dbus-x11 file gnupg jq unzip \
   xfce4-session xfce4-panel xfce4-settings xfdesktop4 thunar xfce4-terminal \
   xorgxrdp xrdp
 
 install -d -m 0755 /etc/apt/keyrings
 curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
   | gpg --dearmor --yes -o /etc/apt/keyrings/google-chrome.gpg
-echo 'deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main' \
+echo 'deb [arch=arm64 signed-by=/etc/apt/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main' \
   > /etc/apt/sources.list.d/google-chrome.list
 apt-get update
 apt-get install -y --no-install-recommends google-chrome-stable
 
-curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip
+case "$(uname -m)" in
+  aarch64 | arm64) aws_cli_arch='aarch64' ;;
+  x86_64) aws_cli_arch='x86_64' ;;
+  *)
+    echo "Unsupported AWS CLI architecture: $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$${aws_cli_arch}.zip" -o /tmp/awscliv2.zip
 unzip -q /tmp/awscliv2.zip -d /tmp
 /tmp/aws/install --update
 rm -rf /tmp/aws /tmp/awscliv2.zip
+file -L "$(command -v aws)" | grep -q 'ARM aarch64'
 
 curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
   | gpg --dearmor --yes -o /etc/apt/keyrings/cloudflare-main.gpg

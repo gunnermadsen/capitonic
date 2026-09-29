@@ -143,14 +143,20 @@ jobs:
           parameters="$(mktemp)"
           jq -n '{commands: [
             "timeout 1800 cloud-init status --wait",
+            "test \"$(uname -m)\" = aarch64",
+            "test \"$(dpkg --print-architecture)\" = arm64",
             "systemctl is-active xrdp",
             "systemctl is-active cloudflared",
             "systemctl is-enabled ssh.service 2>/dev/null | grep -qx masked",
             "systemctl is-enabled ssh.socket 2>/dev/null | grep -qx masked",
+            "test -z \"$(ss -ltnH sport = :22)\"",
             "ss -4 -ltnH sport = :3389 | awk '\''{print $4}'\'' | grep -qx 127.0.0.1:3389",
             "test -z \"$(ss -6 -ltnH sport = :3389)\"",
             "command -v google-chrome-stable",
+            "test \"$(dpkg-query -W -f='\''${Architecture}'\'' google-chrome-stable)\" = arm64",
             "google-chrome-stable --version",
+            "file -L \"$(command -v aws)\" | grep -q '\''ARM aarch64'\''",
+            "aws --version 2>&1 | grep -q '\''exe/aarch64'\''",
             "! command -v firefox",
             "test $(stat -c %a /etc/cloudflared/token) = 600",
             "journalctl -u cloudflared --no-pager -n 300 | grep -q '\''Registered tunnel connection'\''"
@@ -178,11 +184,16 @@ jobs:
             --query 'length(SecurityGroups[0].IpPermissions)' --output text)"
           [ "$ingress_count" = "0" ]
 
+          instance_type="$(aws ec2 describe-instances --instance-ids "$instance_id" \
+            --query 'Reservations[0].Instances[0].InstanceType' --output text)"
+          [ "$instance_type" = "c7g.xlarge" ]
+
       - name: Publish connection summary
         run: |
           echo "### Management host ready" >> "$GITHUB_STEP_SUMMARY"
           echo "- Region: eu-west-1 (Ireland)" >> "$GITHUB_STEP_SUMMARY"
           echo "- Instance: $(terraform -chdir="$TF_DIR" output -raw instance_id)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Instance type: c7g.xlarge (ARM64)" >> "$GITHUB_STEP_SUMMARY"
           echo "- RDP: rdp.capitonic.com through Cloudflare Access" >> "$GITHUB_STEP_SUMMARY"
           echo "- Direct inbound ports: none" >> "$GITHUB_STEP_SUMMARY"
           echo "- Desktop browser: Google Chrome" >> "$GITHUB_STEP_SUMMARY"
