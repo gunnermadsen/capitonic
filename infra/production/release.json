@@ -5,8 +5,8 @@
   "components": {
     "polymarket-bot": {
       "repository": "capitonic/polymarket-bot",
-      "rcVersion": "v3.2.2-rc.1",
-      "sourceRevision": "61ace8bd58ba479d6bef089e30642aee559298a1"
+      "rcVersion": "v3.2.3-rc.0",
+      "sourceRevision": "f6422f19fd9caf589425c1920cbcbd54bc10944d"
     },
     "ingester": {
       "repository": "capitonic/ingester",

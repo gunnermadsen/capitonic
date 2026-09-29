@@ -3,4 +3,4 @@ name: polymarket-bot
 description: Capitonic trading bot for local Kubernetes
 type: application
 version: 0.2.0
-appVersion: "v3.2.3-local.0"
+appVersion: "v3.2.3-rc.0"
