@@ -10,13 +10,13 @@ variable "aws_region" {
 }
 
 variable "instance_type" {
-  description = "Ephemeral x86_64 management host sized for XFCE, Chrome, and administrative sessions."
+  description = "Ephemeral ARM64 management host sized for XFCE, Chrome, and administrative sessions."
   type        = string
-  default     = "t3.large"
+  default     = "c7g.xlarge"
 
   validation {
-    condition     = var.instance_type == "t3.large"
-    error_message = "The approved ephemeral management host size is t3.large."
+    condition     = var.instance_type == "c7g.xlarge"
+    error_message = "The approved ephemeral management host size is c7g.xlarge."
   }
 }
 

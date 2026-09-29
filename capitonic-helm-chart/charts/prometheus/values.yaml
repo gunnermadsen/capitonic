@@ -4,6 +4,10 @@ imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 apiIngress:
   enabled: true
+  host: localhost
+  tls:
+    enabled: false
+    secretName: grafana-tls
 storage:
   className: local-path
   size: 2Gi

@@ -115,7 +115,7 @@ variable "cloudflare_zone_id" {
 }
 
 variable "cloudflare_account_id" {
-  description = "Cloudflare account containing the production tunnel and Access application."
+  description = "Cloudflare account containing the production SSH tunnel and Access application."
   type        = string
   sensitive   = true
 }
@@ -127,15 +127,21 @@ variable "cloudflare_access_email" {
 }
 
 variable "cloudflare_tunnel_id" {
-  description = "Existing production Cloudflare Tunnel UUID."
+  description = "Existing production Cloudflare Tunnel UUID used only for SSH access."
   type        = string
   sensitive   = true
 }
 
 variable "cloudflare_monitor_hostname" {
-  description = "Cloudflare Access hostname routed to the k3s Grafana ingress."
+  description = "Public Cloudflare-proxied hostname routed directly to the k3s Grafana HTTPS ingress."
   type        = string
   default     = "monitor.capitonic.com"
+}
+
+variable "cloudflare_ssh_hostname" {
+  description = "Cloudflare Access hostname routed through the production tunnel to loopback SSH."
+  type        = string
+  default     = "ssh.capitonic.com"
 }
 
 variable "cloudflare_tunnel_ipv4_cidrs" {

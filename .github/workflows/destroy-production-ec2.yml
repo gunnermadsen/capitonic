@@ -82,13 +82,15 @@ jobs:
           ! aws iam get-role --role-name capitonic-polymarket-bot-host >/dev/null 2>&1
           ! aws iam get-instance-profile --instance-profile-name capitonic-polymarket-bot-host >/dev/null 2>&1
           [ "$(aws ec2 describe-security-groups --region "$AWS_REGION" --filters Name=group-name,Values=capitonic-polymarket-bot-sg --query 'length(SecurityGroups)' --output text)" = 0 ]
-          dns_count="$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "https://api.cloudflare.com/client/v4/zones/$TF_VAR_cloudflare_zone_id/dns_records?name=monitor.capitonic.com" | jq '.result | length')"
-          [ "$dns_count" = 0 ]
-          access_count="$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+          for hostname in monitor.capitonic.com ssh.capitonic.com; do
+            dns_count="$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/zones/$TF_VAR_cloudflare_zone_id/dns_records?name=$hostname" | jq '.result | length')"
+            [ "$dns_count" = 0 ]
+          done
+          ssh_access_count="$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$TF_VAR_cloudflare_account_id/access/apps" \
-            | jq '[.result[] | select(.domain == "monitor.capitonic.com")] | length')"
-          [ "$access_count" = 0 ]
+            | jq '[.result[] | select(.domain == "ssh.capitonic.com")] | length')"
+          [ "$ssh_access_count" = 0 ]
           aws s3api head-bucket --bucket capitonic-polybot-tfstate-192200846560-euw1
           aws s3api head-bucket --bucket capitonic-polybot-backups-192200846560-euw1
           aws secretsmanager describe-secret --region "$AWS_REGION" --secret-id capitonic/polymarket-bot/production >/dev/null

@@ -12,8 +12,6 @@ data:
     tunnel: {{ required "cloudflared tunnelId is required" .Values.tunnelId | quote }}
     credentials-file: /etc/cloudflared-credentials/credentials.json
     ingress:
-      - hostname: {{ .Values.hostname | quote }}
-        service: https://traefik.kube-system.svc.cluster.local:443
-        originRequest:
-          originServerName: {{ .Values.hostname | quote }}
+      - hostname: {{ required "cloudflared sshHostname is required" .Values.sshHostname | quote }}
+        service: ssh://127.0.0.1:22
       - service: http_status:404

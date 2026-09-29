@@ -111,6 +111,15 @@ resource "aws_security_group" "k3s_host" {
   tags = { Name = "${local.name_prefix}-sg" }
 }
 
+resource "aws_vpc_security_group_ingress_rule" "https" {
+  security_group_id = aws_security_group.k3s_host.id
+  description       = "Public HTTPS ingress to Traefik; SSH remains Cloudflare Tunnel only"
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 443
+  ip_protocol       = "tcp"
+  to_port           = 443
+}
+
 resource "aws_vpc_security_group_egress_rule" "https" {
   security_group_id = aws_security_group.k3s_host.id
   description       = "TLS egress for AWS, GitHub, registries, providers, and package repositories"

@@ -8,4 +8,8 @@ release:
   digest: sha256:464befc64028760c8bc34800a1c8e152f94ec29eca2f1f658addfeab4902ea54
   sourceRevision: 61ace8bd58ba479d6bef089e30642aee559298a1
 apiIngress:
-  enabled: false
+  enabled: true
+  host: monitor.capitonic.com
+  tls:
+    enabled: true
+    secretName: grafana-tls

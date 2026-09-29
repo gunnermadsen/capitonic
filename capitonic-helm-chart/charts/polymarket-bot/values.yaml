@@ -4,6 +4,10 @@ imagePullPolicy: Never
 imagePullSecrets: []
 apiIngress:
   enabled: true
+  host: localhost
+  tls:
+    enabled: false
+    secretName: grafana-tls
 replicaCount: 1
 resources:
   requests: {cpu: 100m, memory: 256Mi}

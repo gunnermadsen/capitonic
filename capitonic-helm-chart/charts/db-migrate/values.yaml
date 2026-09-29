@@ -2,6 +2,9 @@ image: capitonic/db-migrate:v0.2.0-rc.1
 environment: development
 imagePullPolicy: Never
 imagePullSecrets: []
+jobName: db-migrate
+command: []
+migrationsPattern: ""
 postgresHost: timescaledb
 resources:
   requests: {cpu: 100m, memory: 128Mi}

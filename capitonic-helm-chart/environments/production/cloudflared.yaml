@@ -1,0 +1,5 @@
+environment: production
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+sshHostname: ssh.capitonic.com
+replicaCount: 1

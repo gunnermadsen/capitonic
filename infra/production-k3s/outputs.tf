@@ -35,6 +35,14 @@ output "monitor_hostname" {
   value = var.cloudflare_monitor_hostname
 }
 
+output "ssh_hostname" {
+  value = var.cloudflare_ssh_hostname
+}
+
+output "security_group_id" {
+  value = aws_security_group.k3s_host.id
+}
+
 output "ssm_start_session_command" {
   value = "aws ssm start-session --region ${var.aws_region} --target ${aws_instance.k3s_host.id}"
 }

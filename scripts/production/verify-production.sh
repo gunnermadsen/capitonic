@@ -27,10 +27,14 @@ done
 [[ "$(kubectl -n "$NAMESPACE" get job db-migrate -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$expected_migrate" ]]
 [[ "$(kubectl -n "$NAMESPACE" get deployment ingester-worker -o jsonpath='{.status.readyReplicas}')" == "4" ]]
 
-latest_committed_migration="$(find "$APP_DIRECTORY/packages/db-migrate/src/migrations" -maxdepth 1 -type f -name '[0-9]*.ts' -exec basename {} \; | cut -d- -f1 | sort -n | tail -n1)"
+latest_committed_migration="$(find "$APP_DIRECTORY/packages/db-migrate/src/migrations" "$APP_DIRECTORY/packages/db-migrate/src/fresh-install" -maxdepth 1 -type f -name '[0-9]*.ts' -exec basename {} \; | cut -d- -f1 | sort -n | tail -n1)"
 latest_applied_migration="$(kubectl -n "$NAMESPACE" exec timescaledb-0 -c timescaledb -- \
   psql -U postgres -d polymarket -Atc 'SELECT coalesce(max(timestamp),0) FROM public.migrations')"
 [[ "$latest_applied_migration" == "$latest_committed_migration" ]]
+latest_committed_weather_migration="$(find "$APP_DIRECTORY/packages/db-migrate/src/migrations/weather" -maxdepth 1 -type f -name '[0-9]*.ts' -exec basename {} \; | cut -d- -f1 | sort -n | tail -n1)"
+latest_applied_weather_migration="$(kubectl -n "$NAMESPACE" exec timescaledb-0 -c timescaledb -- \
+  psql -U postgres -d polymarket -Atc 'SELECT coalesce(max(timestamp),0) FROM public.weather_migrations')"
+[[ "$latest_applied_weather_migration" == "$latest_committed_weather_migration" ]]
 
 bot_token="$(kubectl -n "$NAMESPACE" get secret polymarket-bot-auth -o jsonpath='{.data.admin-token}' | base64 -d)"
 ingester_token="$(kubectl -n "$NAMESPACE" get secret ingester-auth -o jsonpath='{.data.admin-token}' | base64 -d)"
@@ -48,6 +52,13 @@ for attempt in $(seq 1 90); do
   curl -fsS "http://127.0.0.1:$GRAFANA_PORT/api/health" >/dev/null 2>&1 && break
   sleep 1
 done
+
+bot_unauthorized="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$BOT_PORT/admin/trading-processes?limit=1")"
+ingester_unauthorized="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$INGESTER_PORT/ingesters")"
+prometheus_unauthorized="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PROMETHEUS_PORT/api/v1/query?query=up")"
+[[ "$bot_unauthorized" == "401" || "$bot_unauthorized" == "403" ]]
+[[ "$ingester_unauthorized" == "401" || "$ingester_unauthorized" == "403" ]]
+[[ "$prometheus_unauthorized" == "401" ]]
 
 profiles="$(curl -fsS -H "Authorization: Bearer $ingester_token" "http://127.0.0.1:$INGESTER_PORT/ingesters")"
 jq -e '
@@ -97,6 +108,33 @@ jq -e '.status == "success" and (.data.result | length) == 0' <<<"$alerts" >/dev
 curl -fsS "http://127.0.0.1:$GRAFANA_PORT/api/health" | jq -e '.database == "ok"' >/dev/null
 kubectl -n "$NAMESPACE" get certificate grafana-tls -o json | jq -e 'any(.status.conditions[]?; .type == "Ready" and .status == "True")' >/dev/null
 kubectl -n "$NAMESPACE" logs deployment/cloudflared --since=10m --tail=300 | grep -q 'Registered tunnel connection'
+cloudflared_config="$(kubectl -n "$NAMESPACE" get configmap cloudflared -o jsonpath='{.data.config\.yml}')"
+grep -q 'hostname: ssh.capitonic.com' <<<"$cloudflared_config"
+grep -q 'service: ssh://127.0.0.1:22' <<<"$cloudflared_config"
+! grep -q 'monitor.capitonic.com' <<<"$cloudflared_config"
+ss -ltnH '( sport = :22 )' | awk '{print $4}' | grep -qx '127.0.0.1:22'
+[[ "$(ss -ltnH '( sport = :22 )' | wc -l | tr -d ' ')" == "1" ]]
+grafana_headers="$(mktemp /tmp/capitonic-grafana-headers.XXXXXX)"
+trap 'rm -f "$grafana_headers"; kill "$bot_forward" "$ingester_forward" "$prometheus_forward" "$grafana_forward" 2>/dev/null || true' EXIT
+grafana_status="$(curl -sS --resolve monitor.capitonic.com:443:127.0.0.1 \
+  -D "$grafana_headers" -o /dev/null -w '%{http_code}' https://monitor.capitonic.com/)"
+[[ "$grafana_status" == "302" ]]
+grep -Eiq '^location: /login([?[:space:]]|$)' "$grafana_headers"
+public_bot_unauthorized="$(curl -sS --resolve monitor.capitonic.com:443:127.0.0.1 -o /dev/null -w '%{http_code}' \
+  'https://monitor.capitonic.com/api/bot/admin/trading-processes?limit=1')"
+public_ingester_unauthorized="$(curl -sS --resolve monitor.capitonic.com:443:127.0.0.1 -o /dev/null -w '%{http_code}' \
+  'https://monitor.capitonic.com/api/ingester/ingesters')"
+public_prometheus_unauthorized="$(curl -sS --resolve monitor.capitonic.com:443:127.0.0.1 -o /dev/null -w '%{http_code}' \
+  'https://monitor.capitonic.com/api/metrics/api/v1/query?query=up')"
+[[ "$public_bot_unauthorized" == "401" || "$public_bot_unauthorized" == "403" ]]
+[[ "$public_ingester_unauthorized" == "401" || "$public_ingester_unauthorized" == "403" ]]
+[[ "$public_prometheus_unauthorized" == "401" ]]
+curl -fsS --resolve monitor.capitonic.com:443:127.0.0.1 -H "Authorization: Bearer $bot_token" \
+  'https://monitor.capitonic.com/api/bot/admin/trading-processes?limit=1' | jq -e '.processes | type == "array"' >/dev/null
+curl -fsS --resolve monitor.capitonic.com:443:127.0.0.1 -H "Authorization: Bearer $ingester_token" \
+  'https://monitor.capitonic.com/api/ingester/ingesters' | jq -e 'type == "array"' >/dev/null
+curl -fsS --resolve monitor.capitonic.com:443:127.0.0.1 -u "$prom_user:$prom_password" \
+  'https://monitor.capitonic.com/api/metrics/api/v1/query?query=up' | jq -e '.status == "success"' >/dev/null
 
 jq -n --arg paper_process_id "$paper_id" --arg live_process_id "$live_id" \
   --arg bot_image "$expected_bot" --arg ingester_image "$expected_ingester" --arg migration "$latest_applied_migration" \
