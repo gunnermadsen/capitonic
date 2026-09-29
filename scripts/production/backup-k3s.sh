@@ -45,8 +45,9 @@ kubectl -n "$NAMESPACE" exec timescaledb-0 -c timescaledb -- psql -U postgres -d
 aws secretsmanager describe-secret --region "$AWS_REGION" --secret-id "$APP_SECRET_NAME" \
   --query '{ARN:ARN,LastChangedDate:LastChangedDate}' --output json >"$backup_directory/asm-secret.json"
 aws secretsmanager list-secret-version-ids --region "$AWS_REGION" --secret-id "$APP_SECRET_NAME" \
-  --include-deprecated --query 'Versions[?contains(VersionStages, `AWSCURRENT`)].{VersionId:VersionId,VersionStages:VersionStages}' \
-  --output json >"$backup_directory/asm-version.json"
+  --include-deprecated --output json \
+  | jq '[.Versions[] | select((.VersionStages // []) | index("AWSCURRENT")) | {VersionId,VersionStages}]' \
+    >"$backup_directory/asm-version.json"
 
 kubectl -n "$NAMESPACE" scale deployment/ingester-master --replicas=0
 kubectl -n "$NAMESPACE" scale deployment/ingester-worker deployment/polymarket-bot --replicas=0
