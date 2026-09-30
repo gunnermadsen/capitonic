@@ -89,7 +89,7 @@ jobs:
           for host in monitor.capitonic.com api.capitonic.com metrics.capitonic.com ops.capitonic.com; do
             headers="$(mktemp)"
             status="$(curl -sS --max-time 15 -D "$headers" -o /dev/null -w '%{http_code}' "http://$host/capitonic-https-check?source=workflow")"
-            grep -Eiq "^location: https://$host/capitonic-https-check\\?source=workflow\\r?$" "$headers"
+            tr -d '\r' < "$headers" | grep -Eiq "^location: https://$host/capitonic-https-check\\?source=workflow$"
             rm -f "$headers"
             [[ "$status" == 308 ]]
           done
