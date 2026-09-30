@@ -45,7 +45,14 @@ selected_release_ready() {
 deploy_selected_components() {
   local component revision snapshot started missing ready desired backfills attempt tunnel_id failed=false rollback_failed=false
   local -a selected=() deployed=() chart_options=()
-  IFS=, read -ra selected <<< "$DEPLOY_COMPONENTS"
+  if [[ ",$DEPLOY_COMPONENTS," == *,ingester,* || ",$DEPLOY_COMPONENTS," == *,polymarket-bot,* ]]; then
+    scripts/production/reconcile-application-charts.sh
+  fi
+  IFS=, read -ra requested <<< "$DEPLOY_COMPONENTS"
+  for component in "${requested[@]}"; do
+    case "$component" in ingester|polymarket-bot) ;; *) selected+=("$component") ;; esac
+  done
+  ((${#selected[@]})) || return 0
   ((${#selected[@]})) || { echo 'No production components selected.' >&2; return 64; }
   for component in "${selected[@]}"; do
     case "$component" in

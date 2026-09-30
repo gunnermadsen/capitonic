@@ -3,12 +3,22 @@ name: Deploy Production Argo CD
 on:
   workflow_call:
     inputs:
+      revision:
+        description: Committed revision to provision
+        required: false
+        type: string
+        default: production
       access_mode:
         required: false
         type: string
         default: native
   workflow_dispatch:
     inputs:
+      revision:
+        description: Committed revision to provision
+        required: false
+        type: string
+        default: production
       access_mode:
         description: Expected public operations UI protection
         required: true
@@ -36,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: production
+          ref: ${{ inputs.revision || 'production' }}
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}

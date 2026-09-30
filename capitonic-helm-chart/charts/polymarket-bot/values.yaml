@@ -13,3 +13,7 @@ replicaCount: 1
 resources:
   requests: {cpu: 100m, memory: 256Mi}
   limits: {cpu: 2000m, memory: 512Mi}
+
+externalSecrets:
+  enabled: false
+credentialRevisions: {}

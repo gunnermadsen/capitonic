@@ -115,3 +115,9 @@ jobs:
     needs: provision
     if: inputs.terraform_action != 'plan'
     uses: ./.github/workflows/provision-production-dns.yml
+
+  external-secrets:
+    name: Provision production secret synchronization
+    needs: provision
+    if: inputs.terraform_action != 'plan'
+    uses: ./.github/workflows/deploy-production-external-secrets.yml

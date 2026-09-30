@@ -91,6 +91,10 @@ write_env_file() {
 
 apply_env_secret() {
   local name="$1" file="$2"
+  if kubectl -n "$NAMESPACE" get externalsecret "$name" >/dev/null 2>&1; then
+    echo "Skipping ESO-managed secret $name; admit a new version through production CD."
+    return 0
+  fi
   kubectl -n "$NAMESPACE" create secret generic "$name" --from-env-file="$file" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   kubectl -n "$NAMESPACE" annotate secret "$name" capitonic.io/asm-version="$secret_version" --overwrite >/dev/null
@@ -173,11 +177,21 @@ fi
 
 if [[ "$RESTART_SCOPE" == "all" || "$RESTART_SCOPE" == "application" ]]; then
   for deployment in pgbouncer ingester-master ingester-worker polymarket-bot; do
+    if [[ "$deployment" == ingester-master || "$deployment" == ingester-worker || "$deployment" == polymarket-bot ]] &&
+       kubectl -n argocd get application ingester >/dev/null 2>&1; then
+      echo "Skipping Argo-managed workload $deployment; production CD owns its rollout."
+      continue
+    fi
     kubectl -n "$NAMESPACE" get deployment "$deployment" >/dev/null 2>&1 && kubectl -n "$NAMESPACE" rollout restart "deployment/$deployment"
   done
 fi
 if [[ "$RESTART_SCOPE" == "all" || "$RESTART_SCOPE" == "monitoring" ]]; then
   for deployment in grafana cloudflared; do
+    if [[ "$deployment" == ingester-master || "$deployment" == ingester-worker || "$deployment" == polymarket-bot ]] &&
+       kubectl -n argocd get application ingester >/dev/null 2>&1; then
+      echo "Skipping Argo-managed workload $deployment; production CD owns its rollout."
+      continue
+    fi
     kubectl -n "$NAMESPACE" get deployment "$deployment" >/dev/null 2>&1 && kubectl -n "$NAMESPACE" rollout restart "deployment/$deployment"
   done
   kubectl -n "$NAMESPACE" get statefulset prometheus >/dev/null 2>&1 && kubectl -n "$NAMESPACE" rollout restart statefulset/prometheus

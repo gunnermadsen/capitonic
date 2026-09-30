@@ -65,3 +65,69 @@ GitHub Actions retains the local CI component boundaries: it runs the bot and in
 ## Finishing a version
 
 Production CD selects the committed RC in `infra/production/release.json`, verifies its immutable Ireland ECR digest and `linux/arm64` platform, and creates the final `vMAJOR.MINOR.PATCH` ECR tag against that same manifest. It derives the final version through SemVer validation and shell parameter expansion; text substitution must not guess or strip an arbitrary suffix. CD then writes the exact digest, embedded source revision, and final version into the production Helm overlay and chart `appVersion` before deployment. An existing final tag must already identify the selected RC digest or promotion stops. Choose a new base version per component from the change: patch for a compatible fix, minor for compatible new behavior, or major for a breaking change. On that base, local candidates start at `local.0` and RCs start at `rc.0`; subsequent candidates increment within the same base version.
+
+## Production chart and runtime secret ownership
+
+Argo CD reconciles the existing bot and ingester resources at the immutable Git
+revision admitted by production CD. Actions retains image qualification, ECR
+promotion, release pins, and full functional verification. Direct Helm deployment
+of those applications stops after adoption; other releases and separately approved
+migrations retain their existing owners. Pruning and replacement syncs are disabled.
+The ingester master remains the owner of worker scaling.
+
+External Secrets Operator is a separate official Helm release pinned by
+`infra/production/external-secrets-release.json`, with production values in
+`capitonic-helm-chart/environments/production/external-secrets.yaml`. The dedicated
+`Deploy Production External Secrets` workflow bootstraps it and subsequently asks
+Argo to reconcile it. The Argo provisioning workflow retains native authentication,
+read-only default access, and existing ingress configuration while enabling chart
+reconciliation. Neither workflow provisions or replaces EC2.
+
+On clean EC2 provisioning, the node workflow installs ESO after k3s readiness.
+The full-stack workflow then bootstraps existing Kubernetes secrets and infrastructure
+before configuring Argo. Before first Argo sync, production CD must select immutable
+AWS versions through `prepare-runtime-secrets.py`; empty version references fail closed.
+Do not execute EC2 provisioning to update ESO or Argo on an existing host.
+
+AWS stores one JSON object. Explicit property mappings populate the existing
+`ingester-auth`, `ingester-provider-auth`, `polymarket-bot-auth`, and
+`polymarket-live-auth` Secrets. ESO uses immutable version IDs, OnChange refresh,
+Orphan creation, and Retain deletion. Database, monitoring, ECR, and Argo bootstrap
+credentials remain outside this ownership transfer. Existing administrative secret
+refresh skips ESO-owned Secrets and Argo-owned workload restarts. Manual runtime
+refresh dispatches ordinary production CD, using the same admission mechanism.
+
+CD compares projected property values with Kubernetes without printing credentials.
+Only changed consumers receive a new opaque credential revision. Image pins and
+credential revisions enter one admitted pod template. Argo waits for each
+ExternalSecret's successful refresh after its requested timestamp before applying
+later workload waves. Full verification checks actual selected AWS/Kubernetes value
+parity. Unchanged projections retain references and rollout tokens, so reconciliation
+does not restart pods. Independent AWS changes remain unapplied until admitted by CD.
+
+### Cutover acceptance contract
+
+First adopt the existing resources using their current images, preserving workload
+UIDs, selectors, volumes, worker capacity, and enabled process identities. Confirm
+secret parity, healthy ESO/Argo reconciliation, advancing profile watermarks, process
+readiness, migration state, and no attributable critical alerts. Preserve the
+pre-cutover snapshot and prior admitted application revisions.
+
+The planned parallel microservice change is the image/version acceptance input;
+do not manufacture an unrelated application source change to test deployment.
+Combine its qualified immutable image pin with an AWS-property mapping change,
+keeping the destination Kubernetes key/environment name stable. Retain the previous
+AWS property/version through verification. Record Deployment generations, ReplicaSet
+identities, immutable images, enabled process IDs, and feed watermarks before/after.
+Require one pod-template rollout per affected Deployment and no unrelated rollout.
+Reconcile the same admitted release again and require unchanged ReplicaSets/pod UIDs.
+Then validate a secret-only update affects only declared consumers. Completion of
+ownership handover does not count as completion of this image/version test.
+
+For an attributable failed release, restore previous immutable Argo target revisions,
+including AWS-version mappings, and verify functional recovery. Do not run Helm
+rollback against an actively reconciling different Argo target. On a full-verifier
+failure with uncertain attribution, preserve evidence and perform read-only RCA
+before deciding rollback. To reverse ownership, suspend Argo and ESO reconciliation
+before restoring the original writers; retain Secrets, storage, database state,
+and the recorded rollback tuple.

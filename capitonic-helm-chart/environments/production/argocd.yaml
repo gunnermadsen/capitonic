@@ -8,6 +8,24 @@ configs:
     users.anonymous.enabled: "false"
     application.resourceTrackingMethod: label
     application.instanceLabelKey: app.kubernetes.io/instance
+    resource.customizations.health.external-secrets.io_ExternalSecret: |
+      hs = {status = "Progressing", message = "Waiting for selected AWS secret version"}
+      local expected = obj.metadata.annotations["capitonic.io/refresh-after"]
+      if obj.status ~= nil and obj.status.refreshTime ~= nil and expected ~= nil then
+        -- Normalize fractional seconds before comparing UTC timestamps.
+        local refreshed = string.gsub(obj.status.refreshTime, "%.[0-9]+Z$", "Z")
+        local synced = obj.status.syncedResourceVersion or ""
+        local generation = tostring(obj.metadata.generation) .. "-"
+        if refreshed >= expected and string.sub(synced, 1, #generation) == generation then
+          for _, condition in ipairs(obj.status.conditions or {}) do
+            if condition.type == "Ready" and condition.status == "True" then
+              hs.status = "Healthy"
+              hs.message = "Selected secret synchronized"
+            end
+          end
+        end
+      end
+      return hs
   params:
     server.insecure: "true"
   rbac:

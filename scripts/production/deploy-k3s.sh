@@ -135,7 +135,9 @@ latest_applied="$(kubectl -n "$NAMESPACE" exec timescaledb-0 -c timescaledb -- p
 
 deploy_chart timescaledb
 deploy_chart pgbouncer
-deploy_chart ingester
+if ! kubectl -n argocd get application ingester >/dev/null 2>&1; then
+  deploy_chart ingester
+fi
 deploy_chart prometheus
 deploy_chart loki
 deploy_chart grafana
@@ -149,7 +151,11 @@ helm upgrade --install cloudflared capitonic-helm-chart/charts/cloudflared \
   -f capitonic-helm-chart/environments/production/cloudflared.yaml \
   --set-string tunnelId="$tunnel_id" --atomic --wait --timeout 10m
 
-deploy_chart polymarket-bot
+if kubectl -n argocd get application polymarket-bot >/dev/null 2>&1; then
+  scripts/production/reconcile-application-charts.sh
+else
+  deploy_chart polymarket-bot
+fi
 scripts/production/reconcile-production-profiles.sh
 scripts/production/deploy-pilot-pair.sh
 scripts/production/verify-production.sh

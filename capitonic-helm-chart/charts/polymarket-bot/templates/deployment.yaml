@@ -19,6 +19,10 @@ spec:
       app.kubernetes.io/instance: {{ .Release.Name }}
   template:
     metadata:
+{{- with index .Values.credentialRevisions "polymarket-bot" }}
+      annotations:
+        capitonic.io/credential-revision: {{ . | quote }}
+{{- end }}
       labels:
         app.kubernetes.io/name: polymarket-bot
         app.kubernetes.io/instance: {{ .Release.Name }}

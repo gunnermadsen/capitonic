@@ -18,6 +18,10 @@ spec:
       app.kubernetes.io/instance: {{ .Release.Name }}
   template:
     metadata:
+{{- with index .Values.credentialRevisions "ingester-master" }}
+      annotations:
+        capitonic.io/credential-revision: {{ . | quote }}
+{{- end }}
       labels:
         app.kubernetes.io/name: ingester-master
         app.kubernetes.io/instance: {{ .Release.Name }}
