@@ -7,6 +7,7 @@ configs:
     admin.enabled: "false"
     users.anonymous.enabled: "true"
     application.resourceTrackingMethod: label
+    application.instanceLabelKey: app.kubernetes.io/instance
   params:
     server.insecure: "true"
   rbac:
