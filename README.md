@@ -20,6 +20,7 @@ Create local env files from the examples and fill in the secret values:
 - `.env.postgres.roles`: canonical source for application database-role passwords.
 - `.env.postgres.<service>`: generated least-privilege credential mounted into one service.
 - `.env.grafana`: Grafana admin credentials and datasource settings.
+- `.env.argo`: Argo CD admin password, bcrypt hash, and password modification time.
 
 Generate the application database credentials from the primary checkout without printing
 their values:

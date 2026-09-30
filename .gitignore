@@ -2,6 +2,7 @@
 .env.*
 !.env.example
 !.env.grafana.example
+!.env.argo.example
 !.env.postgres.example
 !.env.postgres.roles.example
 !.env.market-data-ingester.example

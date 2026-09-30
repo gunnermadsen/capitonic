@@ -4,8 +4,8 @@ global:
 configs:
   cm:
     url: https://ops.capitonic.com
-    admin.enabled: "false"
-    users.anonymous.enabled: "true"
+    admin.enabled: "true"
+    users.anonymous.enabled: "false"
     application.resourceTrackingMethod: label
     application.instanceLabelKey: app.kubernetes.io/instance
   params:
