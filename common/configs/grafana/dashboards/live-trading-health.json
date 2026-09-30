@@ -58,10 +58,10 @@
   "refresh": "10s",
   "schemaVersion": 41,
   "tags": ["polymarket", "live-trading", "execution", "reconciliation"],
-  "templating": {"list": [{"name": "process_id", "type": "query", "label": "Trading process", "datasource": {"type": "grafana-postgresql-datasource", "uid": "postgres"}, "query": "SELECT p.name || ' [' || left(p.process_id::text, 8) || ']' AS __text, p.process_id::text AS __value FROM polymarket.trading_processes p WHERE p.process_type = 'btc_5m' AND p.process_scope = 'realtime_paper' AND p.status <> 'completed' ORDER BY p.created_at DESC", "includeAll": true, "allValue": ".+", "multi": true, "refresh": 1, "current": {"text": "All", "value": "$__all"}, "definition": "SELECT p.name || ' [' || left(p.process_id::text, 8) || ']' AS __text, p.process_id::text AS __value FROM polymarket.trading_processes p WHERE p.process_type = 'btc_5m' AND p.process_scope = 'realtime_paper' AND p.status <> 'completed' ORDER BY p.created_at DESC", "description": "Show durable process names and short IDs; filter panels by the canonical process_id. Completed processes are excluded."}]},
+  "templating": {"list": [{"name": "process_id", "type": "query", "label": "Trading process", "datasource": {"type": "grafana-postgresql-datasource", "uid": "postgres"}, "query": "SELECT p.name || ' [' || left(p.process_id::text, 8) || ']' AS __text, p.process_id::text AS __value FROM polymarket.trading_processes p WHERE p.process_type = 'btc_5m' AND p.process_scope = 'realtime_paper' AND p.status <> 'completed' AND p.config #>> '{execution,mode}' = 'live' ORDER BY p.created_at DESC", "includeAll": true, "allValue": ".+", "multi": true, "refresh": 1, "current": {"text": "All", "value": "$__all"}, "definition": "SELECT p.name || ' [' || left(p.process_id::text, 8) || ']' AS __text, p.process_id::text AS __value FROM polymarket.trading_processes p WHERE p.process_type = 'btc_5m' AND p.process_scope = 'realtime_paper' AND p.status <> 'completed' AND p.config #>> '{execution,mode}' = 'live' ORDER BY p.created_at DESC", "description": "Show non-completed BTC live process names and short IDs; retain canonical process_id values for all panel filters, including stopped live processes."}]},
   "time": {"from": "now-6h", "to": "now"},
   "timezone": "browser",
   "title": "Live Trading Health",
   "uid": "reconciliation-health",
-  "version": 11
+  "version": 12
 }
