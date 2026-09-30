@@ -128,7 +128,7 @@ jobs:
           for host in monitor.capitonic.com api.capitonic.com metrics.capitonic.com ops.capitonic.com; do
             headers="$(mktemp)"
             curl -sS --max-time 15 -D "$headers" -o /dev/null "https://$host/"
-            grep -Eiq '^strict-transport-security: max-age=300\r?$' "$headers"
+            tr -d '\r' < "$headers" | grep -Eiq '^strict-transport-security: max-age=300$'
             rm -f "$headers"
           done
           status="$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' https://metrics.capitonic.com/)"
