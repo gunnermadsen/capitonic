@@ -26,6 +26,9 @@ spec:
         capitonic.io/environment: {{ $.Values.environment | quote }}
         capitonic.io/rollout-domain: monitoring
       annotations:
+{{- with (index .Values.credentialRevisions "grafana") }}
+        capitonic.io/credential-revision: {{ . | quote }}
+{{- end }}
         checksum/provisioning: {{ (.Files.Glob "assets/**").AsConfig | sha256sum }}
     spec:
       imagePullSecrets: {{ toJson .Values.imagePullSecrets }}

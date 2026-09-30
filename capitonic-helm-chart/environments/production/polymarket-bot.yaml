@@ -18,6 +18,7 @@ externalSecrets:
   entries:
     - consumers:
         - polymarket-bot
+        - grafana
       name: polymarket-bot-auth
       properties:
         admin-token: POLYMARKET_HTTP_ADMIN_TOKEN

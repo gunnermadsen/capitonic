@@ -45,6 +45,9 @@ selected_release_ready() {
 deploy_selected_components() {
   local component revision snapshot started missing ready desired backfills attempt tunnel_id failed=false rollback_failed=false
   local -a selected=() deployed=() chart_options=()
+  if [[ ",$DEPLOY_COMPONENTS," == *,polymarket-bot,* || ",$DEPLOY_COMPONENTS," == *,ingester,* || ",$DEPLOY_COMPONENTS," == *,db-migrate,* ]]; then
+    scripts/production/refresh-ecr-pull-secret.sh
+  fi
   if [[ ",$DEPLOY_COMPONENTS," == *,ingester,* || ",$DEPLOY_COMPONENTS," == *,polymarket-bot,* ]]; then
     scripts/production/reconcile-application-charts.sh
   fi
@@ -87,9 +90,6 @@ deploy_selected_components() {
   fi
   echo "Deploying only: $DEPLOY_COMPONENTS; rollback snapshot: $snapshot"
 
-  if [[ ",$DEPLOY_COMPONENTS," == *,polymarket-bot,* || ",$DEPLOY_COMPONENTS," == *,ingester,* || ",$DEPLOY_COMPONENTS," == *,db-migrate,* ]]; then
-    scripts/production/refresh-ecr-pull-secret.sh
-  fi
   if [[ ",$DEPLOY_COMPONENTS," == *,grafana,* || ",$DEPLOY_COMPONENTS," == *,prometheus,* || ",$DEPLOY_COMPONENTS," == *,loki,* || ",$DEPLOY_COMPONENTS," == *,alloy,* ]]; then
     local prometheus_user
     prometheus_user="$(kubectl -n "$NAMESPACE" get secret prometheus-auth -o jsonpath='{.data.username}' | base64 -d)"

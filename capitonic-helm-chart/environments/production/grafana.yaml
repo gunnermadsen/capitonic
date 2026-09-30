@@ -13,3 +13,5 @@ ingress:
 storage:
   className: local-path
   size: 2Gi
+
+credentialRevisions: {}

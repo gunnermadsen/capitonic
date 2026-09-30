@@ -16,7 +16,10 @@ def command(*args):
     return subprocess.check_output(args, text=True)
 
 
-def load_values(component):
+def load_values(component, revision=None):
+    if revision:
+        source = command("git", "-C", str(ROOT), "show", f"{revision}:capitonic-helm-chart/environments/production/{component}.yaml")
+        return json.loads(subprocess.check_output(["yq", "-o=json", ".", "-"], text=True, input=source))
     return json.loads(command('yq', '-o=json', '.', str(ROOT / f'capitonic-helm-chart/environments/production/{component}.yaml')))
 
 
@@ -24,10 +27,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--verify', action='store_true')
     parser.add_argument('--component', choices=COMPONENTS)
+    parser.add_argument('--revision', help='Immutable rollback revision to verify')
     args = parser.parse_args()
     components = (args.component,) if args.component else COMPONENTS
-    values = {component: load_values(component) for component in components}
+    if args.revision and not args.verify:
+        parser.error("--revision requires --verify")
+    values = {component: (load_values(component, args.revision) if args.revision else load_values(component)) for component in components}
     credentials = {component: dict(v.get('credentialRevisions', {})) for component, v in values.items()}
+    if not args.verify:
+        credentials["grafana"] = load_values("grafana").get("credentialRevisions", {})
     aws_cache = {}
     changed_consumers = set()
     now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -81,9 +89,9 @@ def main():
         print('Selected AWS JSON properties exactly match all managed Kubernetes Secrets')
         return
     for consumer in changed_consumers:
-        owner = 'polymarket-bot' if consumer == 'polymarket-bot' else 'ingester'
+        owner = consumer if consumer in ('polymarket-bot', 'grafana') else 'ingester'
         credentials[owner][consumer] = str(uuid.uuid4())
-    print(json.dumps({component: {'externalSecrets': values[component]['externalSecrets'], 'credentialRevisions': credentials[component]} for component in components}, sort_keys=True))
+    print(json.dumps({component: {'externalSecrets': values[component]['externalSecrets'], 'credentialRevisions': credentials[component]} for component in components} | ({'grafana': {'credentialRevisions': credentials['grafana']}} if not args.verify else {}), sort_keys=True))
 
 
 if __name__ == '__main__':

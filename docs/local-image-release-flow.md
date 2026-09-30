@@ -98,7 +98,9 @@ refresh skips ESO-owned Secrets and Argo-owned workload restarts. Manual runtime
 refresh dispatches ordinary production CD, using the same admission mechanism.
 
 CD compares projected property values with Kubernetes without printing credentials.
-Only changed consumers receive a new opaque credential revision. Image pins and
+Only changed consumers receive a new opaque credential revision. Grafana also consumes
+the bot admin token and is refreshed through its existing Helm owner when that token
+changes; its credential revision is provisioned in chart values. Image pins and
 credential revisions enter one admitted pod template. Argo waits for each
 ExternalSecret's successful refresh after its requested timestamp before applying
 later workload waves. Full verification checks actual selected AWS/Kubernetes value
@@ -125,7 +127,8 @@ Then validate a secret-only update affects only declared consumers. Completion o
 ownership handover does not count as completion of this image/version test.
 
 For an attributable failed release, restore previous immutable Argo target revisions,
-including AWS-version mappings, and verify functional recovery. Do not run Helm
+including AWS-version mappings, restore the Grafana Helm revision when affected,
+and wait for reconciliation and verify functional recovery. Do not run Helm
 rollback against an actively reconciling different Argo target. On a full-verifier
 failure with uncertain attribution, preserve evidence and perform read-only RCA
 before deciding rollback. To reverse ownership, suspend Argo and ESO reconciliation

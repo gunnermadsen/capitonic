@@ -121,6 +121,10 @@ jobs:
               yq -i '.externalSecrets = (strenv(CONFIGURATION) | from_json | .externalSecrets) | .credentialRevisions = (strenv(CONFIGURATION) | from_json | .credentialRevisions)' \
               "capitonic-helm-chart/environments/production/$component.yaml"
           done
+          CONFIGURATION="$(jq -c '.grafana' <<< "$configuration")" yq -i '.credentialRevisions = (strenv(CONFIGURATION) | from_json | .credentialRevisions)' capitonic-helm-chart/environments/production/grafana.yaml
+          if ! git diff --quiet -- capitonic-helm-chart/environments/production/grafana.yaml; then
+            echo "DEPLOY_COMPONENTS=$DEPLOY_COMPONENTS,grafana" >> "$GITHUB_ENV"
+          fi
       - name: Promote accepted RC digests and write exact Helm pins
         run: scripts/production/promote-production-images.sh
       - name: Commit generated production pins
@@ -139,7 +143,7 @@ jobs:
               git add infra/production/release.json "capitonic-helm-chart/environments/production/$component.yaml" "capitonic-helm-chart/charts/$component/Chart.yaml"
             done
           fi
-          git add capitonic-helm-chart/environments/production/ingester.yaml capitonic-helm-chart/environments/production/polymarket-bot.yaml
+          git add capitonic-helm-chart/environments/production/ingester.yaml capitonic-helm-chart/environments/production/polymarket-bot.yaml capitonic-helm-chart/environments/production/grafana.yaml
           if git diff --cached --quiet; then
             echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           else
