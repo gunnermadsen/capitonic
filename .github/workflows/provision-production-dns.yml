@@ -1,0 +1,80 @@
+name: Provision Production DNS
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: capitonic-production-dns
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-1
+  AWS_ROLE_ARN: arn:aws:iam::192200846560:role/capitonic-polymarket-bot-github-actions-prod
+  TF_DIR: infra/production-k3s
+  TF_STATE_BUCKET: capitonic-polybot-tfstate-192200846560-euw1
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  dns:
+    name: Converge production DNS and operator access
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: production
+      - uses: hashicorp/setup-terraform@v4
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Load Cloudflare inputs
+        run: scripts/load-cloudflare-terraform-env.sh
+      - name: Initialize production Terraform state
+        run: |
+          set -euo pipefail
+          cat > "$TF_DIR/backend.hcl" <<EOF
+          bucket       = "$TF_STATE_BUCKET"
+          key          = "production/k3s/terraform.tfstate"
+          region       = "$AWS_REGION"
+          encrypt      = true
+          use_lockfile = true
+          EOF
+          terraform -chdir="$TF_DIR" init -backend-config=backend.hcl
+          terraform -chdir="$TF_DIR" fmt -check -recursive
+          terraform -chdir="$TF_DIR" validate
+      - name: Adopt existing DNS and Access resources
+        run: scripts/import-cloudflare-dns-records.sh
+      - name: Plan only the new hostnames and Access policy
+        run: |
+          set -euo pipefail
+          terraform -chdir="$TF_DIR" plan -input=false -lock-timeout=5m \
+            -target=cloudflare_dns_record.api \
+            -target=cloudflare_dns_record.metrics \
+            -target=cloudflare_dns_record.ops \
+            -target=cloudflare_zero_trust_access_application.stack_ops \
+            -out=production-dns.tfplan
+          terraform -chdir="$TF_DIR" show -json production-dns.tfplan | jq -e '
+            [.resource_changes[]? | select(.change.actions != ["no-op"])]
+            | all(.[];
+                (.address | IN(
+                  "cloudflare_dns_record.api",
+                  "cloudflare_dns_record.metrics",
+                  "cloudflare_dns_record.ops",
+                  "cloudflare_zero_trust_access_application.stack_ops"))
+                and (.change.actions | index("delete") | not))
+          ' >/dev/null
+      - name: Apply scoped DNS plan
+        run: terraform -chdir="$TF_DIR" apply -input=false -lock-timeout=5m production-dns.tfplan
+      - name: Confirm repeated plan is a no-op
+        run: |
+          set -euo pipefail
+          terraform -chdir="$TF_DIR" plan -input=false -lock-timeout=5m -detailed-exitcode \
+            -target=cloudflare_dns_record.api \
+            -target=cloudflare_dns_record.metrics \
+            -target=cloudflare_dns_record.ops \
+            -target=cloudflare_zero_trust_access_application.stack_ops

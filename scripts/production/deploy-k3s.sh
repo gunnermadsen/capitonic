@@ -24,7 +24,7 @@ scripts/production/install-yq.sh
 for component in "${components[@]}"; do
   case "$component" in
     polymarket-bot|ingester|db-migrate) ;;
-    grafana|prometheus|loki|alloy) continue ;;
+    grafana|prometheus|loki|alloy|cloudflared) continue ;;
     *) echo "Unsupported deployment component: $component" >&2; exit 64 ;;
   esac
   image="$(yq -r .image "capitonic-helm-chart/environments/production/$component.yaml")"

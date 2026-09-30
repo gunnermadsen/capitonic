@@ -4,6 +4,7 @@ imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 tunnelId: ""
 sshHostname: ssh.capitonic.com
+opsHostname: ""
 replicaCount: 1
 resources:
   requests: {cpu: 25m, memory: 64Mi}

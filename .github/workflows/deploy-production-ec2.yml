@@ -109,3 +109,9 @@ jobs:
             .[0].Ipv6Ranges == [] and .[0].PrefixListIds == [] and .[0].UserIdGroupPairs == [] and
             ([.[0].IpRanges[].CidrIp] == ["0.0.0.0/0"])
           ' <<<"$ingress_rules" >/dev/null
+
+  dns:
+    name: Converge production DNS
+    needs: provision
+    if: inputs.terraform_action != 'plan'
+    uses: ./.github/workflows/provision-production-dns.yml

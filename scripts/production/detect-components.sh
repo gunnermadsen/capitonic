@@ -9,7 +9,7 @@ images=("") charts=("")
 image() { images+=("$1"); charts+=("$1"); }
 chart() {
   case "$1" in
-    polymarket-bot|ingester|db-migrate|grafana|prometheus|loki|alloy) charts+=("$1") ;;
+    polymarket-bot|ingester|db-migrate|grafana|prometheus|loki|alloy|cloudflared) charts+=("$1") ;;
     *) echo "No automatic deployment owner for chart $1; leaving it unchanged." >&2 ;;
   esac
 }

@@ -1,4 +1,5 @@
 {{- if .Values.apiIngress.enabled }}
+{{- if ne .Values.environment "production" }}
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
@@ -13,12 +14,15 @@ spec:
   stripPrefix:
     prefixes: [/api/ingester]
 ---
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: ingester-master
   annotations:
+{{- if ne .Values.environment "production" }}
     traefik.ingress.kubernetes.io/router.middlewares: {{ .Release.Namespace }}-ingester-strip-api-ingester@kubernetescrd
+{{- end }}
 {{- if .Values.apiIngress.tls.enabled }}
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
 {{- else }}
@@ -41,10 +45,21 @@ spec:
     - host: {{ .Values.apiIngress.host | quote }}
       http:
         paths:
+{{- if eq .Values.environment "production" }}
+{{- range $path := list "/strategy" "/backfills" "/drains" "/datasets" "/workers" "/stream/routes" "/ingesters" }}
+          - path: {{ $path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: ingester-master
+                port: {name: http}
+{{- end }}
+{{- else }}
           - path: /api/ingester
             pathType: Prefix
             backend:
               service:
                 name: ingester-master
                 port: {name: http}
+{{- end }}
 {{- end }}

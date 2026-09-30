@@ -1,0 +1,64 @@
+name: Deploy Production Argo CD
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: capitonic-production-argocd
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-1
+  AWS_ROLE_ARN: arn:aws:iam::192200846560:role/capitonic-polymarket-bot-github-actions-prod
+
+jobs:
+  deploy:
+    name: Install and verify Argo CD on the production node
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: production
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Resolve production node
+        id: host
+        run: |
+          set -euo pipefail
+          instance_id="$(aws ec2 describe-instances --region "$AWS_REGION" \
+            --filters Name=tag:Name,Values=capitonic-polymarket-bot Name=tag:Environment,Values=production Name=instance-state-name,Values=running \
+            --query 'Reservations[].Instances[].InstanceId' --output text)"
+          [ "$(wc -w <<< "$instance_id")" -eq 1 ]
+          echo "instance_id=$instance_id" >> "$GITHUB_OUTPUT"
+      - name: Install at the committed production revision
+        env:
+          INSTANCE_ID: ${{ steps.host.outputs.instance_id }}
+        run: |
+          set -euo pipefail
+          revision="$(git rev-parse HEAD)"
+          checkout_payload="$(base64 -w0 scripts/production/checkout-revision.sh)"
+          command="install -d -m 0700 /run/capitonic && printf '%s' '$checkout_payload' | base64 -d > /run/capitonic/checkout-revision.sh && chmod 0700 /run/capitonic/checkout-revision.sh && /run/capitonic/checkout-revision.sh $revision && rm -f /run/capitonic/checkout-revision.sh && cd /opt/polymarket-bot && scripts/production/deploy-argocd.sh"
+          scripts/production/run-ssm-command.sh "$INSTANCE_ID" 1800 'Install and verify production Argo CD' "$command"
+      - name: Verify Cloudflare Access fronts the operations UI
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            headers="$(mktemp)"
+            status="$(curl -sS -D "$headers" -o /dev/null -w '%{http_code}' https://ops.capitonic.com/ || true)"
+            if [[ "$status" == 302 ]] && grep -Eiq '^location: .*cloudflareaccess.com' "$headers"; then
+              rm -f "$headers"
+              exit 0
+            fi
+            rm -f "$headers"
+            sleep 5
+          done
+          echo 'ops.capitonic.com did not present the Cloudflare Access login.' >&2
+          exit 1

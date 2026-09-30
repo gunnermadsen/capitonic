@@ -1,0 +1,29 @@
+global:
+  domain: ops.capitonic.com
+
+configs:
+  cm:
+    url: https://ops.capitonic.com
+    admin.enabled: "false"
+    users.anonymous.enabled: "true"
+  params:
+    server.insecure: "true"
+  rbac:
+    policy.default: role:readonly
+
+server:
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    hostname: ops.capitonic.com
+    path: /
+    pathType: Prefix
+    annotations:
+      traefik.ingress.kubernetes.io/router.entrypoints: web
+
+dex:
+  enabled: false
+notifications:
+  enabled: false
+applicationSet:
+  enabled: false

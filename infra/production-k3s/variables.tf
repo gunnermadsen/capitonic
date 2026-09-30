@@ -138,6 +138,24 @@ variable "cloudflare_monitor_hostname" {
   default     = "monitor.capitonic.com"
 }
 
+variable "cloudflare_api_hostname" {
+  description = "Cloudflare-proxied hostname for the production microservice APIs."
+  type        = string
+  default     = "api.capitonic.com"
+}
+
+variable "cloudflare_metrics_hostname" {
+  description = "Cloudflare-proxied hostname for the production Prometheus API."
+  type        = string
+  default     = "metrics.capitonic.com"
+}
+
+variable "cloudflare_ops_hostname" {
+  description = "Cloudflare Access hostname routed through the production tunnel to Argo CD."
+  type        = string
+  default     = "ops.capitonic.com"
+}
+
 variable "cloudflare_ssh_hostname" {
   description = "Cloudflare Access hostname routed through the production tunnel to loopback SSH."
   type        = string

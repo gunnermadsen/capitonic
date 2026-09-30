@@ -22,7 +22,7 @@ archiveStorage:
   runAsGroup: 10003
 apiIngress:
   enabled: true
-  host: monitor.capitonic.com
+  host: api.capitonic.com
   tls:
     enabled: true
-    secretName: grafana-tls
+    secretName: api-tls

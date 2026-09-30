@@ -25,3 +25,8 @@ jobs:
     name: Promote, deploy, and verify the complete stack
     needs: secrets
     uses: ./.github/workflows/CD.yml
+
+  argocd:
+    name: Provision Argo CD observation
+    needs: deployment
+    uses: ./.github/workflows/deploy-production-argocd.yml

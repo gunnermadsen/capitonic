@@ -123,6 +123,9 @@ curl -fsS -u "$grafana_user:$grafana_password" \
   "http://127.0.0.1:$GRAFANA_PORT/api/datasources/uid/polymarket-bot-runtime/health" \
   | jq -e '.status == "OK"' >/dev/null
 kubectl -n "$NAMESPACE" get certificate grafana-tls -o json | jq -e 'any(.status.conditions[]?; .type == "Ready" and .status == "True")' >/dev/null
+for certificate in api-tls metrics-tls; do
+  kubectl -n "$NAMESPACE" wait --for=condition=Ready "certificate/$certificate" --timeout=5m
+done
 kubectl -n "$NAMESPACE" get deployment cloudflared -o json | jq -e '
   .spec.replicas > 0 and
   .status.readyReplicas == .spec.replicas and
@@ -130,6 +133,7 @@ kubectl -n "$NAMESPACE" get deployment cloudflared -o json | jq -e '
 ' >/dev/null
 cloudflared_config="$(kubectl -n "$NAMESPACE" get configmap cloudflared -o jsonpath='{.data.config\.yml}')"
 [[ "$(yq -r '.ingress[] | select(.hostname == "ssh.capitonic.com") | .service' <<<"$cloudflared_config")" == "ssh://127.0.0.1:22" ]]
+[[ "$(yq -r '.ingress[] | select(.hostname == "ops.capitonic.com") | .service' <<<"$cloudflared_config")" == "http://traefik.kube-system.svc.cluster.local:80" ]]
 [[ "$(yq -r '[.ingress[] | select(.hostname == "monitor.capitonic.com")] | length' <<<"$cloudflared_config")" == "0" ]]
 ss -ltnH '( sport = :22 )' | awk '{print $4}' | grep -qx '127.0.0.1:22'
 [[ "$(ss -ltnH '( sport = :22 )' | wc -l | tr -d ' ')" == "1" ]]
@@ -139,21 +143,26 @@ grafana_status="$(curl -sS --resolve monitor.capitonic.com:443:127.0.0.1 \
   -D "$grafana_headers" -o /dev/null -w '%{http_code}' https://monitor.capitonic.com/)"
 [[ "$grafana_status" == "302" ]]
 grep -Eiq '^location: /login([?[:space:]]|$)' "$grafana_headers"
-public_bot_unauthorized="$(curl -sS --resolve monitor.capitonic.com:443:127.0.0.1 -o /dev/null -w '%{http_code}' \
-  'https://monitor.capitonic.com/api/bot/admin/trading-processes?limit=1')"
-public_ingester_unauthorized="$(curl -sS --resolve monitor.capitonic.com:443:127.0.0.1 -o /dev/null -w '%{http_code}' \
-  'https://monitor.capitonic.com/api/ingester/ingesters')"
-public_prometheus_unauthorized="$(curl -sS --resolve monitor.capitonic.com:443:127.0.0.1 -o /dev/null -w '%{http_code}' \
-  'https://monitor.capitonic.com/api/metrics/api/v1/query?query=up')"
+public_bot_unauthorized="$(curl -sS --resolve api.capitonic.com:443:127.0.0.1 -o /dev/null -w '%{http_code}' \
+  'https://api.capitonic.com/admin/trading-processes?limit=1')"
+public_ingester_unauthorized="$(curl -sS --resolve api.capitonic.com:443:127.0.0.1 -o /dev/null -w '%{http_code}' \
+  'https://api.capitonic.com/ingesters')"
+public_prometheus_unauthorized="$(curl -sS --resolve metrics.capitonic.com:443:127.0.0.1 -o /dev/null -w '%{http_code}' \
+  'https://metrics.capitonic.com/api/v1/query?query=up')"
 [[ "$public_bot_unauthorized" == "401" || "$public_bot_unauthorized" == "403" ]]
 [[ "$public_ingester_unauthorized" == "401" || "$public_ingester_unauthorized" == "403" ]]
 [[ "$public_prometheus_unauthorized" == "401" ]]
-curl -fsS --resolve monitor.capitonic.com:443:127.0.0.1 -H "Authorization: Bearer $bot_token" \
-  'https://monitor.capitonic.com/api/bot/admin/trading-processes?limit=1' | jq -e '.processes | type == "array"' >/dev/null
-curl -fsS --resolve monitor.capitonic.com:443:127.0.0.1 -H "Authorization: Bearer $ingester_token" \
-  'https://monitor.capitonic.com/api/ingester/ingesters' | jq -e 'type == "array"' >/dev/null
-curl -fsS --resolve monitor.capitonic.com:443:127.0.0.1 -u "$prom_user:$prom_password" \
-  'https://monitor.capitonic.com/api/metrics/api/v1/query?query=up' | jq -e '.status == "success"' >/dev/null
+curl -fsS --resolve api.capitonic.com:443:127.0.0.1 -H "Authorization: Bearer $bot_token" \
+  'https://api.capitonic.com/admin/trading-processes?limit=1' | jq -e '.processes | type == "array"' >/dev/null
+curl -fsS --resolve api.capitonic.com:443:127.0.0.1 -H "Authorization: Bearer $ingester_token" \
+  'https://api.capitonic.com/ingesters' | jq -e 'type == "array"' >/dev/null
+curl -fsS --resolve metrics.capitonic.com:443:127.0.0.1 -u "$prom_user:$prom_password" \
+  'https://metrics.capitonic.com/api/v1/query?query=up' | jq -e '.status == "success"' >/dev/null
+for old_path in /api/bot/admin/trading-processes /api/ingester/ingesters /api/metrics/api/v1/query; do
+  old_status="$(curl -sS --resolve monitor.capitonic.com:443:127.0.0.1 \
+    -o /dev/null -w '%{http_code}' "https://monitor.capitonic.com$old_path")"
+  [[ "$old_status" == "404" ]]
+done
 
 jq -n --arg paper_process_id "$paper_id" --arg live_process_id "$live_id" \
   --arg bot_image "$expected_bot" --arg ingester_image "$expected_ingester" --arg migration "$latest_applied_migration" \

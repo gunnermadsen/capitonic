@@ -6,7 +6,7 @@ storage:
   size: 5Gi
 apiIngress:
   enabled: true
-  host: monitor.capitonic.com
+  host: metrics.capitonic.com
   tls:
     enabled: true
-    secretName: grafana-tls
+    secretName: metrics-tls

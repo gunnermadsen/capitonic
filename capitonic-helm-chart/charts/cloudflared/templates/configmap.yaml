@@ -14,4 +14,8 @@ data:
     ingress:
       - hostname: {{ required "cloudflared sshHostname is required" .Values.sshHostname | quote }}
         service: ssh://127.0.0.1:22
+{{- if .Values.opsHostname }}
+      - hostname: {{ .Values.opsHostname | quote }}
+        service: http://traefik.kube-system.svc.cluster.local:80
+{{- end }}
       - service: http_status:404

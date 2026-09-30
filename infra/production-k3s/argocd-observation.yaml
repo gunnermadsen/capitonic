@@ -1,0 +1,49 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: capitonic-production-observe
+  namespace: argocd
+spec:
+  sourceRepos:
+    - https://github.com/gunnermadsen/capitonic.git
+  destinations:
+    - namespace: capitonic
+      server: https://kubernetes.default.svc
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: capitonic-production-bot
+  namespace: argocd
+spec:
+  project: capitonic-production-observe
+  source:
+    repoURL: https://github.com/gunnermadsen/capitonic.git
+    targetRevision: production
+    path: capitonic-helm-chart/charts/polymarket-bot
+    helm:
+      releaseName: polymarket-bot
+      valueFiles:
+        - ../../environments/production/polymarket-bot.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: capitonic
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: capitonic-production-ingester
+  namespace: argocd
+spec:
+  project: capitonic-production-observe
+  source:
+    repoURL: https://github.com/gunnermadsen/capitonic.git
+    targetRevision: production
+    path: capitonic-helm-chart/charts/ingester
+    helm:
+      releaseName: ingester
+      valueFiles:
+        - ../../environments/production/ingester.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: capitonic

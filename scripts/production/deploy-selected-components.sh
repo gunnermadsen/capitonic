@@ -38,6 +38,7 @@ selected_release_ready() {
     grafana) kubectl -n "$NAMESPACE" rollout status deployment/grafana --timeout=5m ;;
     prometheus|loki) kubectl -n "$NAMESPACE" rollout status "statefulset/$component" --timeout=5m ;;
     alloy) kubectl -n "$NAMESPACE" rollout status daemonset/alloy --timeout=5m ;;
+    cloudflared) kubectl -n "$NAMESPACE" rollout status deployment/cloudflared --timeout=5m ;;
   esac
 }
 
@@ -48,7 +49,7 @@ deploy_selected_components() {
   ((${#selected[@]})) || { echo 'No production components selected.' >&2; return 64; }
   for component in "${selected[@]}"; do
     case "$component" in
-      polymarket-bot|ingester|db-migrate|grafana|prometheus|loki|alloy) ;;
+      polymarket-bot|ingester|db-migrate|grafana|prometheus|loki|alloy|cloudflared) ;;
       *) echo "Unsupported deployment component: $component" >&2; return 64 ;;
     esac
   done

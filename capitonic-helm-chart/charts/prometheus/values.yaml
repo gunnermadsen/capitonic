@@ -5,6 +5,7 @@ imagePullSecrets: []
 apiIngress:
   enabled: true
   host: localhost
+  clusterIssuer: letsencrypt-production
   tls:
     enabled: false
     secretName: grafana-tls
