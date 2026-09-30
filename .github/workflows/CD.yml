@@ -127,6 +127,10 @@ jobs:
           fi
       - name: Promote accepted RC digests and write exact Helm pins
         run: scripts/production/promote-production-images.sh
+      - name: Install Helm for chart provenance checks
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.18.6
       - name: Commit generated production pins
         id: pins
         shell: bash
@@ -147,8 +151,26 @@ jobs:
           if git diff --cached --quiet; then
             echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           else
+            chart_paths=()
+            while IFS= read -r path; do
+              [[ "$path" == capitonic-helm-chart/charts/*/Chart.yaml ]] && chart_paths+=("$path")
+            done < <(git diff --cached --name-only)
+            for path in "${chart_paths[@]}"; do
+              chart="${path%/Chart.yaml}"
+              component="${chart##*/}"
+              helm lint "$chart" -f "capitonic-helm-chart/environments/production/$component.yaml"
+              helm template "$component" "$chart" -f "capitonic-helm-chart/environments/production/$component.yaml" >/dev/null
+            done
             git commit -m 'release: admit production images and secret versions [production-pins]'
-            git push origin HEAD:production
+            refs=(HEAD:production)
+            for path in "${chart_paths[@]}"; do
+              component="${path%/Chart.yaml}"; component="${component##*/}"
+              version="$(yq -r .version "$path")"
+              tag="helm/$component/v$version"
+              git tag -a "$tag" HEAD -m "Chart: ${path%/Chart.yaml}; admit exact production image pin and appVersion; production Helm lint/render passed."
+              refs+=("refs/tags/$tag")
+            done
+            git push --atomic origin "${refs[@]}"
             echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           fi
       - name: Deploy exact revision through SSM

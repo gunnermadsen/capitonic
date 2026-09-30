@@ -1,4 +1,4 @@
-image: capitonic/polymarket-bot:v3.2.4-local.0
+image: capitonic/polymarket-bot:v3.2.4-rc.0
 environment: development
 imagePullPolicy: Never
 imagePullSecrets: []
@@ -13,7 +13,6 @@ replicaCount: 1
 resources:
   requests: {cpu: 100m, memory: 256Mi}
   limits: {cpu: 2000m, memory: 512Mi}
-
 externalSecrets:
   enabled: false
 credentialRevisions: {}
