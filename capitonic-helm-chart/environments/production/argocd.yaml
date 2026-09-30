@@ -8,6 +8,7 @@ configs:
     users.anonymous.enabled: "false"
     application.resourceTrackingMethod: label
     application.instanceLabelKey: app.kubernetes.io/instance
+    resource.customizations.useOpenLibs.external-secrets.io_ExternalSecret: "true"
     resource.customizations.health.external-secrets.io_ExternalSecret: |
       hs = {status = "Progressing", message = "Waiting for selected AWS secret version"}
       local expected = obj.metadata.annotations["capitonic.io/refresh-after"]
