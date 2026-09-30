@@ -62,6 +62,6 @@ curl --fail --silent --show-error \
 - Prometheus self, Loki, Alloy, database, pool, bot, and deployed ingester targets are up. The ingester scrape jobs come from the shared Prometheus configuration through the bake.
 - Alloy delivers current `capitonic` pod logs to Loki without persistent delivery errors.
 - Grafana reports a healthy API, provisions its shared dashboards and the Prometheus, Loki, and PostgreSQL datasources, and can query each deployed dependency.
-- Monitoring configuration is provisioned only through the charts. After successful observability deployment, record the repository-required `provisioned/observability/dev/<timestamp>` tag on the exact deployed commit.
+- Monitoring configuration is provisioned only through the charts. After successful local development observability deployment, record the repository-required `provisioned/observability/<timestamp>` tag on the exact deployed commit; record the development environment in its annotation.
 
 No database migration, Rust image build, Docker Compose edit, or trading-process change is part of this rollout.
