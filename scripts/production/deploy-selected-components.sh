@@ -45,15 +45,23 @@ selected_release_ready() {
 deploy_selected_components() {
   local component revision snapshot started missing ready desired backfills attempt tunnel_id failed=false rollback_failed=false
   local -a selected=() deployed=() chart_options=()
+  local grafana_reconciled=false desired_grafana actual_grafana
   if [[ ",$DEPLOY_COMPONENTS," == *,polymarket-bot,* || ",$DEPLOY_COMPONENTS," == *,ingester,* || ",$DEPLOY_COMPONENTS," == *,db-migrate,* ]]; then
     scripts/production/refresh-ecr-pull-secret.sh
   fi
   if [[ ",$DEPLOY_COMPONENTS," == *,ingester,* || ",$DEPLOY_COMPONENTS," == *,polymarket-bot,* ]]; then
+    desired_grafana="$(yq -r '.credentialRevisions.grafana // ""' capitonic-helm-chart/environments/production/grafana.yaml)"
+    actual_grafana="$(kubectl -n "$NAMESPACE" get deployment grafana -o json | jq -r '.spec.template.metadata.annotations["capitonic.io/credential-revision"] // ""')"
+    [[ "$desired_grafana" == "$actual_grafana" ]] || grafana_reconciled=true
     scripts/production/reconcile-application-charts.sh
   fi
   IFS=, read -ra requested <<< "$DEPLOY_COMPONENTS"
   for component in "${requested[@]}"; do
-    case "$component" in ingester|polymarket-bot) ;; *) selected+=("$component") ;; esac
+    case "$component" in
+      ingester|polymarket-bot) ;;
+      grafana) [[ "$grafana_reconciled" == true ]] || selected+=("$component") ;;
+      *) selected+=("$component") ;;
+    esac
   done
   ((${#selected[@]})) || return 0
   ((${#selected[@]})) || { echo 'No production components selected.' >&2; return 64; }
@@ -126,6 +134,10 @@ deploy_selected_components() {
     [[ -z "${missing:-}" ]] || failed=true
   fi
   if [[ "$failed" == true ]]; then
+    if [[ "${ARGO_CREDENTIAL_ROLLBACK_OWNER:-false}" == true ]]; then
+      echo "Credential release failed; Argo coordinator owns the ordered rollback; preserve $snapshot." >&2
+      return 71
+    fi
     for ((i=${#deployed[@]}-1; i>=0; i--)); do
       component="${deployed[i]}"
       revision="$(cat "$snapshot/$component-revision")"

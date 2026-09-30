@@ -43,6 +43,7 @@ latest_applied_weather_migration="$(kubectl -n "$NAMESPACE" exec timescaledb-0 -
 [[ "$latest_applied_weather_migration" == "$latest_committed_weather_migration" ]]
 
 bot_token="$(kubectl -n "$NAMESPACE" get secret polymarket-bot-auth -o jsonpath='{.data.admin-token}' | base64 -d)"
+[[ "$(kubectl -n "$NAMESPACE" exec deployment/grafana -- printenv POLYMARKET_HTTP_ADMIN_TOKEN)" == "$bot_token" ]]
 ingester_token="$(kubectl -n "$NAMESPACE" get secret ingester-auth -o jsonpath='{.data.admin-token}' | base64 -d)"
 prom_user="$(kubectl -n "$NAMESPACE" get secret prometheus-auth -o jsonpath='{.data.username}' | base64 -d)"
 prom_password="$(kubectl -n "$NAMESPACE" get secret prometheus-auth -o jsonpath='{.data.password}' | base64 -d)"

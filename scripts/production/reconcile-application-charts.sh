@@ -48,7 +48,7 @@ if [[ "$verified" == true ]]; then
  actual_grafana="$(kubectl -n capitonic get deployment grafana -o json | jq -r '.spec.template.metadata.annotations["capitonic.io/credential-revision"] // ""')"
  if [[ "$desired_grafana" != "$actual_grafana" ]]; then
   grafana_changed=true
-  DEPLOYMENT_SCOPE=selected DEPLOY_COMPONENTS=grafana scripts/production/deploy-k3s.sh || verified=false
+  ARGO_CREDENTIAL_ROLLBACK_OWNER=true DEPLOYMENT_SCOPE=selected DEPLOY_COMPONENTS=grafana scripts/production/deploy-k3s.sh || verified=false
  fi
 fi
 if [[ "$verified" == true ]]; then

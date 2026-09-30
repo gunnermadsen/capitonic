@@ -33,15 +33,19 @@ for component in "${components[@]}"; do
 done
 
 deploy_chart() {
-  local chart="$1" wait_for_jobs=()
+  local chart="$1" wait_for_jobs=() rollback_options=(--atomic)
   shift
   [[ "$chart" == "db-migrate" ]] && wait_for_jobs=(--wait-for-jobs)
+  # Shared credential rollback must restore ESO values before restarting Grafana.
+  if [[ "$chart" == grafana && "${ARGO_CREDENTIAL_ROLLBACK_OWNER:-false}" == true ]]; then
+    rollback_options=()
+  fi
   helm lint "capitonic-helm-chart/charts/$chart" \
     -f "capitonic-helm-chart/environments/production/$chart.yaml" "$@"
   helm upgrade --install "$chart" "capitonic-helm-chart/charts/$chart" \
     --namespace "$NAMESPACE" --create-namespace \
     -f "capitonic-helm-chart/environments/production/$chart.yaml" \
-    --atomic --wait "${wait_for_jobs[@]}" --timeout 15m "$@"
+    "${rollback_options[@]}" --wait "${wait_for_jobs[@]}" --timeout 15m "$@"
 }
 
 if [[ "${DEPLOYMENT_SCOPE:-full-stack}" == selected ]]; then
