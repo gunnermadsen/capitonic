@@ -9,7 +9,7 @@ metadata:
     capitonic.io/environment: {{ .Values.environment | quote }}
 spec:
   replicas: {{ .Values.replicaCount }}
-  strategy: {type: RollingUpdate}
+  strategy: {type: Recreate}
   selector:
     matchLabels:
       app.kubernetes.io/name: cloudflared
