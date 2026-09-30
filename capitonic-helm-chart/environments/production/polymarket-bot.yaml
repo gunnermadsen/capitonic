@@ -13,29 +13,5 @@ apiIngress:
   tls:
     enabled: true
     secretName: api-tls
-externalSecrets:
-  enabled: true
-  entries:
-    - consumers:
-        - polymarket-bot
-        - grafana
-      name: polymarket-bot-auth
-      properties:
-        admin-token: POLYMARKET_HTTP_ADMIN_TOKEN
-      refreshAfter: "2026-09-30T22:06:41Z"
-      version: 7023cfad-642b-4a22-95d0-b36d9317489b
-    - consumers:
-        - polymarket-bot
-      name: polymarket-live-auth
-      properties:
-        POLYMARKET_CLOB_API_KEY: POLYMARKET_CLOB_API_KEY
-        POLYMARKET_CLOB_PASSPHRASE: POLYMARKET_CLOB_PASSPHRASE
-        POLYMARKET_CLOB_SECRET: POLYMARKET_CLOB_SECRET
-        POLYMARKET_FUNDER_ADDRESS: POLYMARKET_FUNDER_ADDRESS
-        POLYMARKET_PRIVATE_KEY: POLYMARKET_PRIVATE_KEY
-        POLYMARKET_SIGNATURE_TYPE: POLYMARKET_SIGNATURE_TYPE
-      refreshAfter: "2026-09-30T22:06:41Z"
-      version: 7023cfad-642b-4a22-95d0-b36d9317489b
-  region: eu-west-1
-  secretId: capitonic/polymarket-bot/production
+externalSecrets: {"enabled": true, "entries": [{"consumers": ["polymarket-bot", "grafana"], "name": "polymarket-bot-auth", "properties": {"admin-token": "POLYMARKET_HTTP_ADMIN_TOKEN"}, "refreshAfter": "2026-09-30T22:06:41Z", "version": "7023cfad-642b-4a22-95d0-b36d9317489b"}, {"consumers": ["polymarket-bot"], "name": "polymarket-live-auth", "properties": {"POLYMARKET_CLOB_API_KEY": "POLYMARKET_CLOB_API_KEY", "POLYMARKET_CLOB_PASSPHRASE": "POLYMARKET_CLOB_PASSPHRASE", "POLYMARKET_CLOB_SECRET": "POLYMARKET_CLOB_SECRET", "POLYMARKET_FUNDER_ADDRESS": "POLYMARKET_FUNDER_ADDRESS", "POLYMARKET_PRIVATE_KEY": "POLYMARKET_PRIVATE_KEY", "POLYMARKET_SIGNATURE_TYPE": "POLYMARKET_SIGNATURE_TYPE"}, "refreshAfter": "2026-09-30T22:06:41Z", "version": "7023cfad-642b-4a22-95d0-b36d9317489b"}], "region": "eu-west-1", "secretId": "capitonic/polymarket-bot/production"}
 credentialRevisions: {}

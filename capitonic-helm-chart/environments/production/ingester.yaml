@@ -26,28 +26,5 @@ apiIngress:
   tls:
     enabled: true
     secretName: api-tls
-externalSecrets:
-  enabled: true
-  entries:
-    - consumers:
-        - ingester-master
-        - ingester-worker
-        - polymarket-bot
-      name: ingester-auth
-      properties:
-        admin-token: MARKET_DATA_INGESTER_ADMIN_TOKEN
-      refreshAfter: "2026-09-30T22:06:41Z"
-      version: 7023cfad-642b-4a22-95d0-b36d9317489b
-    - consumers:
-        - ingester-worker
-      name: ingester-provider-auth
-      properties:
-        PMDATA_API_KEY: PMDATA_API_KEY
-        POLYMARKET_CHAINLINK_DATA_STREAMS_API_KEY: POLYMARKET_CHAINLINK_DATA_STREAMS_API_KEY
-        POLYMARKET_CHAINLINK_DATA_STREAMS_API_SECRET: POLYMARKET_CHAINLINK_DATA_STREAMS_API_SECRET
-        POLYMARKET_CHAINLINK_DATA_STREAMS_CANDLESTICK_API_KEY: POLYMARKET_CHAINLINK_DATA_STREAMS_CANDLESTICK_API_KEY
-      refreshAfter: "2026-09-30T22:06:41Z"
-      version: 7023cfad-642b-4a22-95d0-b36d9317489b
-  region: eu-west-1
-  secretId: capitonic/polymarket-bot/production
+externalSecrets: {"enabled": true, "entries": [{"consumers": ["ingester-master", "ingester-worker", "polymarket-bot"], "name": "ingester-auth", "properties": {"admin-token": "MARKET_DATA_INGESTER_ADMIN_TOKEN"}, "refreshAfter": "2026-09-30T22:06:41Z", "version": "7023cfad-642b-4a22-95d0-b36d9317489b"}, {"consumers": ["ingester-worker"], "name": "ingester-provider-auth", "properties": {"PMDATA_API_KEY": "PMDATA_API_KEY", "POLYMARKET_CHAINLINK_DATA_STREAMS_API_KEY": "POLYMARKET_CHAINLINK_DATA_STREAMS_API_KEY", "POLYMARKET_CHAINLINK_DATA_STREAMS_API_SECRET": "POLYMARKET_CHAINLINK_DATA_STREAMS_API_SECRET", "POLYMARKET_CHAINLINK_DATA_STREAMS_CANDLESTICK_API_KEY": "POLYMARKET_CHAINLINK_DATA_STREAMS_CANDLESTICK_API_KEY"}, "refreshAfter": "2026-09-30T22:06:41Z", "version": "7023cfad-642b-4a22-95d0-b36d9317489b"}], "region": "eu-west-1", "secretId": "capitonic/polymarket-bot/production"}
 credentialRevisions: {}
