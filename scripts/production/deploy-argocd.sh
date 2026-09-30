@@ -52,7 +52,8 @@ kubectl -n argocd rollout status deployment/argocd-server --timeout=5m
 kubectl -n argocd rollout status deployment/argocd-repo-server --timeout=5m
 kubectl -n argocd get configmap argocd-cm -o json | jq -e '
   .data["admin.enabled"] == "false" and
-  .data["users.anonymous.enabled"] == "true"' >/dev/null
+  .data["users.anonymous.enabled"] == "true" and
+  .data["application.resourceTrackingMethod"] == "label"' >/dev/null
 kubectl -n argocd get configmap argocd-rbac-cm -o json | jq -e '
   .data["policy.default"] == "role:readonly"' >/dev/null
 kubectl -n argocd get ingress argocd-server -o json | jq -e '

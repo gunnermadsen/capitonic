@@ -6,6 +6,7 @@ configs:
     url: https://ops.capitonic.com
     admin.enabled: "false"
     users.anonymous.enabled: "true"
+    application.resourceTrackingMethod: label
   params:
     server.insecure: "true"
   rbac:
