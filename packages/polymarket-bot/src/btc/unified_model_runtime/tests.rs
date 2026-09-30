@@ -246,6 +246,20 @@ fn frozen_core_features_match_training_from_raw_seconds() {
                     ),
                 }
             }
+            let mut thin_up = up.clone();
+            let mut thin_down = down.clone();
+            thin_up.asks[0].size = dec!(1);
+            thin_down.asks[0].size = dec!(1);
+            let thin = crate::btc::directional_features::build_payoff_feature_values_with_policy(
+                &window, start, at, boundary, &external, &thin_up, &thin_down, 0.02, &names, true,
+            )
+            .unwrap();
+            assert_eq!(thin.len(), names.len());
+            for (name, value) in names.iter().zip(thin) {
+                if name == "up_ask_vwap_5" || name == "down_ask_vwap_5" {
+                    assert!(value.is_nan());
+                }
+            }
             checked += 1;
         }
     }
@@ -279,7 +293,8 @@ fn frozen_admission_outputs_match_python_and_bindings_fail_closed() {
             policy: adapter.policy().clone(),
         };
         binding.validate(adapter, 5.0).unwrap();
-        assert!(binding.validate(adapter, 10.0).is_err());
+        binding.validate(adapter, 10.0).unwrap();
+        assert!(binding.validate(adapter, 0.0).is_err());
         binding.sources[0].semantics = "unqualified_substitution".into();
         assert!(binding.validate(adapter, 5.0).is_err());
         let vectors: serde_json::Value =
@@ -596,4 +611,91 @@ fn exported_bucket_packages_pass_registration_parity() {
             "time_bucket_specialist"
         );
     }
+}
+
+#[test]
+fn every_umr_package_uses_process_quantity_and_preserves_reference_predictions() {
+    let mut adapters = std::collections::HashSet::new();
+    let mut checked = 0;
+    for entry in std::fs::read_dir(root().join("runtime-models")).unwrap() {
+        let dir = entry.unwrap().path();
+        if !dir.join("model.json").is_file() {
+            continue;
+        }
+        let payload: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("model.json")).unwrap()).unwrap();
+        let Some(kind) = payload
+            .pointer("/payoff_model/definition/contract/adapter")
+            .and_then(|v| v.as_str())
+        else {
+            continue;
+        };
+        adapters.insert(kind.to_owned());
+        let m = model(dir.file_name().unwrap().to_str().unwrap());
+        let adapter = m.unified_adapter().unwrap();
+        let binding = contract::ProcessBinding {
+            version: contract::CONTRACT_VERSION.into(),
+            sources: adapter
+                .contract()
+                .inputs
+                .iter()
+                .filter(|v| v.required)
+                .map(|v| contract::SourceBinding {
+                    slot: v.slot.clone(),
+                    product: v.product.clone(),
+                    semantics: v.semantics.clone(),
+                })
+                .collect(),
+            policy: adapter.policy(),
+        };
+        for size in [1.0, 5.0, 10.0, 25.0] {
+            binding.validate(adapter, size).unwrap();
+        }
+        for size in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(binding.validate(adapter, size).is_err());
+        }
+        let vectors: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("golden-vectors.json")).unwrap())
+                .unwrap();
+        let up = m
+            .feature_names()
+            .iter()
+            .position(|v| v == "up_ask_vwap_5")
+            .unwrap();
+        let down = m
+            .feature_names()
+            .iter()
+            .position(|v| v == "down_ask_vwap_5")
+            .unwrap();
+        for row in vectors["vectors"].as_array().unwrap() {
+            let x: Vec<_> = row["feature_values"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_f64().unwrap_or(f64::NAN))
+                .collect();
+            let seconds = row["seconds_elapsed"].as_i64().unwrap();
+            let reference = adapter.evaluate(&x, seconds).unwrap();
+            let five = adapter
+                .evaluate_for_execution(&x, seconds, x[up], x[down])
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(&reference).unwrap(),
+                serde_json::to_value(&five).unwrap()
+            );
+            let ten = adapter
+                .evaluate_for_execution(&x, seconds, 0.99, 0.99)
+                .unwrap();
+            assert_eq!(reference.score.probability_up, ten.score.probability_up);
+            assert_eq!(reference.score.confidence, ten.score.confidence);
+            assert_eq!(reference.score.raw_logit, ten.score.raw_logit);
+            assert!(
+                !ten.score.accepted,
+                "expensive process-sized cost must block {kind}"
+            );
+            checked += 1;
+        }
+    }
+    assert_eq!(adapters.len(), 3);
+    assert!(checked > 100);
 }

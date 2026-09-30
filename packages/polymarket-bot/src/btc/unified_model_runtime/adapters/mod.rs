@@ -63,6 +63,14 @@ pub trait ModelAdapter: std::fmt::Debug + Send + Sync {
     fn supported_products(&self) -> &'static [&'static str];
     fn policy(&self) -> serde_json::Value;
     fn evaluate(&self, features: &[f64], seconds: i64) -> Result<Evaluation>;
+    /// Price admission for the process quantity without rewriting trained feature values.
+    fn evaluate_for_execution(
+        &self,
+        features: &[f64],
+        seconds: i64,
+        up_cost: f64,
+        down_cost: f64,
+    ) -> Result<Evaluation>;
     fn directional_probability(&self, features: &[f64]) -> Result<f64>;
     fn requires_history(&self) -> bool;
     fn new_session(&self) -> Box<dyn FeatureSession>;

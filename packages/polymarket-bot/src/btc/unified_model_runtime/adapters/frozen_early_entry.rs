@@ -53,9 +53,6 @@ impl Adapter {
         {
             bail!("unsupported UMR feature capability");
         }
-        if definition.contract.qualified_trade_size != Some(5.0) {
-            bail!("frozen early-entry size qualification mismatch");
-        }
         if definition.contract.adapter != "frozen_early_entry"
             || definition.contract.missing_policy != "native_missing_branch"
         {
@@ -143,6 +140,30 @@ impl Adapter {
         Ok(p.clamp(1e-6, 1.0 - 1e-6))
     }
     pub fn evaluate(&self, features: &[f64], seconds: i64) -> Result<Evaluation> {
+        if features.len() != self.names.len() {
+            bail!("UMR feature width mismatch");
+        }
+        let cost = |name: &str| {
+            features[self
+                .names
+                .iter()
+                .position(|v| v == name)
+                .expect("validated cost feature")]
+        };
+        self.evaluate_for_execution(
+            features,
+            seconds,
+            cost("up_ask_vwap_5"),
+            cost("down_ask_vwap_5"),
+        )
+    }
+    fn evaluate_for_execution(
+        &self,
+        features: &[f64],
+        seconds: i64,
+        up_cost: f64,
+        down_cost: f64,
+    ) -> Result<Evaluation> {
         if features.len() != self.names.len() || !(60..=89).contains(&seconds) || seconds % 5 != 0 {
             bail!("UMR input width or frozen schedule mismatch");
         }
@@ -159,11 +180,7 @@ impl Adapter {
                 .unwrap_or(f64::NAN)
         };
         let confidence = p.max(1.0 - p);
-        let cost = get(if p >= 0.5 {
-            "up_ask_vwap_5"
-        } else {
-            "down_ask_vwap_5"
-        });
+        let cost = if p >= 0.5 { up_cost } else { down_cost };
         let fee_rate = get("fee_rate");
         if !cost.is_finite()
             || !(0.0..=1.0).contains(&cost)
@@ -305,6 +322,15 @@ impl ModelAdapter for Adapter {
     }
     fn evaluate(&self, features: &[f64], seconds: i64) -> Result<Evaluation> {
         Adapter::evaluate(self, features, seconds)
+    }
+    fn evaluate_for_execution(
+        &self,
+        features: &[f64],
+        seconds: i64,
+        up_cost: f64,
+        down_cost: f64,
+    ) -> Result<Evaluation> {
+        Adapter::evaluate_for_execution(self, features, seconds, up_cost, down_cost)
     }
     fn directional_probability(&self, features: &[f64]) -> Result<f64> {
         Adapter::directional_probability(self, features)

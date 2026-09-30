@@ -261,6 +261,7 @@ mod lifecycle_tests {
         let control = BtcRealtimePaperControlConfig {
             schema_version: SELECTABLE_BTC_PROCESS_SCHEMA_VERSION.to_string(),
             strategy: serde_json::json!({
+                "target_size": "5",
                 "decision_strategy": {
                     "type": "btc_directional_model",
                     "model_key": polymarket_bot::btc::BTC_DIRECTIONAL_MODEL_V1_KEY,
@@ -357,6 +358,7 @@ mod lifecycle_tests {
         let mut control = BtcRealtimePaperControlConfig {
             schema_version: SELECTABLE_BTC_PROCESS_SCHEMA_VERSION.to_string(),
             strategy: serde_json::json!({
+                "target_size": "5",
                 "decision_strategy": {
                     "type": "btc_asymmetric_value_model",
                     "model_key": "btc-5m-asymmetric-core-paper-20260805-v1",
@@ -444,6 +446,7 @@ mod lifecycle_tests {
             next_experiment_key: "btc-5m-directional-model-validation-test".to_string(),
             preregistration_sha256: "e".repeat(64),
             strategy: serde_json::json!({
+                "target_size": "5",
                 "decision_strategy": {
                     "type": "btc_directional_model",
                     "model_key": polymarket_bot::btc::BTC_DIRECTIONAL_MODEL_V1_KEY,
@@ -1103,5 +1106,60 @@ mod lifecycle_tests {
             checked += 1;
         }
         assert_eq!(checked, 2);
+    }
+    #[test]
+    fn paper_and_live_definitions_resolve_only_the_saved_process_quantity() {
+        for filename in [
+            "btc-5m-conservative-selective-paper-20260917.json",
+            "btc-5m-conservative-selective-live-pilot-20260921.json",
+        ] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../infra/processes")
+                .join(filename);
+            let definition: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            let original = definition["config"]["raw"]["btc_realtime_paper"].clone();
+            for quantity in ["1", "5", "10", "25"] {
+                let mut value = original.clone();
+                value["strategy"]["target_size"] = quantity.into();
+                let control =
+                    parse_btc_process_control(value.clone(), BtcDefinitionUse::InactiveDefinition)
+                        .unwrap();
+                let members = resolve_btc_members(&control).unwrap();
+                let expected = quantity.parse::<rust_decimal::Decimal>().unwrap();
+                assert!(members
+                    .iter()
+                    .all(|(_, strategy, _)| strategy.target_size == expected));
+                // Resume uses the same durable JSON, not a model size or a mutable shared override.
+                let resumed = parse_btc_process_control(
+                    serde_json::from_slice(&serde_json::to_vec(&value).unwrap()).unwrap(),
+                    BtcDefinitionUse::DurableResume,
+                )
+                .unwrap();
+                assert!(resolve_btc_members(&resumed)
+                    .unwrap()
+                    .iter()
+                    .all(|(_, strategy, _)| strategy.target_size == expected));
+            }
+            for quantity in [
+                serde_json::Value::Null,
+                serde_json::json!("0"),
+                serde_json::json!("-1"),
+            ] {
+                let mut value = original.clone();
+                value["strategy"]["target_size"] = quantity;
+                let control =
+                    parse_btc_process_control(value, BtcDefinitionUse::InactiveDefinition).unwrap();
+                assert!(resolve_btc_members(&control).is_err());
+            }
+            let mut value = original;
+            value["strategy"]
+                .as_object_mut()
+                .unwrap()
+                .remove("target_size");
+            let control =
+                parse_btc_process_control(value, BtcDefinitionUse::InactiveDefinition).unwrap();
+            assert!(resolve_btc_members(&control).is_err());
+        }
     }
 }

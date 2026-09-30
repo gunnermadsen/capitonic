@@ -71,8 +71,7 @@ impl Adapter {
         } = definition;
         contract.validate()?;
         ensure!(
-            contract.missing_policy == "native_missing_branch"
-                && contract.qualified_trade_size == Some(5.0),
+            contract.missing_policy == "native_missing_branch",
             "invalid bucket model contract"
         );
         ensure!(
@@ -170,6 +169,21 @@ impl ModelAdapter for Adapter {
         Box::new(Session)
     }
     fn evaluate(&self, values: &[f64], seconds: i64) -> Result<Evaluation> {
+        ensure!(values.len() == self.width, "bucket feature width mismatch");
+        self.evaluate_for_execution(
+            values,
+            seconds,
+            values[self.up_cost],
+            values[self.down_cost],
+        )
+    }
+    fn evaluate_for_execution(
+        &self,
+        values: &[f64],
+        seconds: i64,
+        up_cost: f64,
+        down_cost: f64,
+    ) -> Result<Evaluation> {
         let (start_second, end_second) = match &self.policy {
             Policy::Bucket(policy) => (policy.start_second, policy.end_second),
             Policy::Conservative(policy) => (policy.start_second, policy.end_second),
@@ -181,7 +195,7 @@ impl ModelAdapter for Adapter {
         let p = self.probability(values)?;
         let up = p >= 0.5;
         let confidence = p.max(1.0 - p);
-        let cost = values[if up { self.up_cost } else { self.down_cost }];
+        let cost = if up { up_cost } else { down_cost };
         let (accepted, reason, stressed_edge, failed_policy_checks) = match &self.policy {
             Policy::Bucket(policy) => {
                 let fee = values[self.fee.expect("validated bucket fee feature")];

@@ -27,6 +27,7 @@ pub(crate) fn verify(model: &RuntimeDirectionalModel, bytes: &[u8]) -> Result<()
         let score = if model.is_asymmetric_value() {
             model.score_asymmetric_value_snapshot(
                 &BtcDirectionalModelFeatureSnapshot {
+                    execution_ask_vwaps: None,
                     model_key: model.model_key().into(),
                     model_artifact_sha256: model.artifact_sha256().into(),
                     feature_schema_version: model.feature_schema_version().into(),

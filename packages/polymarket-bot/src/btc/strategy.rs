@@ -1210,8 +1210,17 @@ fn score_btc_directional_model(
                     );
                     BtcRejectReason::InvalidFeatureValue
                 })?;
+            let costs = features
+                .execution_ask_vwaps
+                .as_ref()
+                .ok_or(BtcRejectReason::InvalidFeatureValue)?;
             let result = adapter
-                .evaluate(&features.feature_values, features.seconds_elapsed)
+                .evaluate_for_execution(
+                    &features.feature_values,
+                    features.seconds_elapsed,
+                    costs[0].and_then(|v| v.to_f64()).unwrap_or(f64::NAN),
+                    costs[1].and_then(|v| v.to_f64()).unwrap_or(f64::NAN),
+                )
                 .map_err(|error| {
                     super::unified_model_runtime::telemetry::failure(
                         snapshot.process_id,
@@ -2268,6 +2277,7 @@ mod tests {
         )
         .unwrap();
         snapshot.directional_model = Some(BtcDirectionalModelFeatureSnapshot {
+            execution_ask_vwaps: None,
             model_key: model_key.to_string(),
             model_artifact_sha256: artifact_sha256.to_string(),
             feature_schema_version: feature_schema_version.to_string(),
@@ -2349,6 +2359,7 @@ mod tests {
         let mut snapshot = snapshot();
         snapshot.feature_schema_version = BTC_DIRECTIONAL_MODEL_FEATURE_SCHEMA_VERSION.to_string();
         let mut features = BtcDirectionalModelFeatureSnapshot {
+            execution_ask_vwaps: None,
             model_key: BTC_DIRECTIONAL_MODEL_V1_KEY.to_string(),
             model_artifact_sha256: BTC_DIRECTIONAL_MODEL_V1_ARTIFACT_SHA256.to_string(),
             feature_schema_version: BTC_DIRECTIONAL_MODEL_FEATURE_SCHEMA_VERSION.to_string(),
@@ -2692,5 +2703,90 @@ mod tests {
             DeterministicBtcStrategy::evaluate(&config, &snapshot),
             DeterministicBtcStrategy::evaluate(&config, &snapshot)
         );
+    }
+    #[test]
+    fn conservative_admission_and_intent_use_process_sized_execution_books() {
+        use crate::btc::unified_model_runtime::contract::{
+            ProcessBinding, SourceBinding, CONTRACT_VERSION,
+        };
+        let (mut config, mut snapshot) =
+            payoff_model_case("btc-5m-conservative-selective-paper-20260917", "up", false);
+        let features = snapshot.directional_model.as_ref().unwrap();
+        let model = runtime_model(&btc_directional_model_selection(
+            &features.model_key,
+            &features.model_artifact_sha256,
+            &features.feature_schema_sha256,
+        ))
+        .unwrap();
+        let adapter = model.unified_adapter().unwrap();
+        config.unified_model = Some(ProcessBinding {
+            version: CONTRACT_VERSION.into(),
+            sources: adapter
+                .contract()
+                .inputs
+                .iter()
+                .filter(|v| v.required)
+                .map(|v| SourceBinding {
+                    slot: v.slot.clone(),
+                    product: v.product.clone(),
+                    semantics: v.semantics.clone(),
+                })
+                .collect(),
+            policy: adapter.policy(),
+        });
+        let frozen_inputs = features.feature_values.clone();
+        let mut probability = None;
+        for (quantity, cost, limit) in [
+            (dec!(5), dec!(0.40), dec!(0.40)),
+            (dec!(10), dec!(0.45), dec!(0.50)),
+        ] {
+            config.target_size = quantity;
+            snapshot
+                .directional_model
+                .as_mut()
+                .unwrap()
+                .execution_ask_vwaps = Some([Some(cost), Some(cost)]);
+            for book in [&mut snapshot.up_book, &mut snapshot.down_book] {
+                book.best_bid = Some(dec!(0.39));
+                book.best_ask = Some(dec!(0.40));
+                book.quoted_size = quantity;
+                book.ask_depth = dec!(100);
+                book.executable_ask_vwap = Some(cost);
+                book.marketable_limit_price = Some(limit);
+            }
+            config.validate().unwrap();
+            let decision = DeterministicBtcStrategy::evaluate_with_directional_model_entry_policy(
+                &config,
+                &snapshot,
+                BtcDirectionalModelEntryPolicy::ExecuteDirectionalPrediction,
+            );
+            let intent = decision
+                .approved_intent
+                .as_ref()
+                .unwrap_or_else(|| panic!("{decision:?}"));
+            assert_eq!(intent.size, quantity);
+            assert_eq!(intent.limit_price, limit);
+            let p = decision.fair_value.as_ref().unwrap().up_probability;
+            if let Some(previous) = probability {
+                assert_eq!(previous, p);
+            }
+            probability = Some(p);
+        }
+        snapshot
+            .directional_model
+            .as_mut()
+            .unwrap()
+            .execution_ask_vwaps = Some([Some(dec!(0.60)), Some(dec!(0.45))]);
+        let rejected = DeterministicBtcStrategy::evaluate_with_directional_model_entry_policy(
+            &config,
+            &snapshot,
+            BtcDirectionalModelEntryPolicy::ExecuteDirectionalPrediction,
+        );
+        assert!(rejected.approved_intent.is_none());
+        let actual = &snapshot.directional_model.as_ref().unwrap().feature_values;
+        assert!(actual
+            .iter()
+            .zip(frozen_inputs)
+            .all(|(a, b)| *a == b || (a.is_nan() && b.is_nan())));
     }
 }

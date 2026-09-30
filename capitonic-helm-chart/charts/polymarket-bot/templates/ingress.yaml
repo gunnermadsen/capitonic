@@ -27,8 +27,6 @@ metadata:
 {{- end }}
 {{- if .Values.apiIngress.tls.enabled }}
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
-{{- else }}
-    traefik.ingress.kubernetes.io/router.entrypoints: web
 {{- end }}
   labels:
     app.kubernetes.io/name: polymarket-bot

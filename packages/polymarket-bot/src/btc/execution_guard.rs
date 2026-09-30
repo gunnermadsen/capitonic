@@ -1927,4 +1927,38 @@ mod tests {
             BtcReferenceExecutionRejectReason::NoncausalEvidence
         );
     }
+    #[test]
+    fn directional_guard_seals_process_quantity_for_fok_and_fak() {
+        let checked_at = Utc.with_ymd_and_hms(2026, 7, 27, 12, 0, 0).unwrap();
+        for size in [dec!(5), dec!(10), dec!(25)] {
+            for order_type in [OrderType::Fok, OrderType::Fak] {
+                let mut guard = sealed_directional_model_guard(checked_at);
+                guard.size = size;
+                guard.order_type = order_type;
+                guard.reseal_for_test();
+                let mut request = directional_model_request(&guard);
+                request.order_type = order_type;
+                assert!(guard
+                    .validate_for_request(
+                        &request,
+                        checked_at,
+                        guard.process_id,
+                        Duration::seconds(2),
+                        Some(Duration::seconds(5))
+                    )
+                    .is_ok());
+                assert_eq!(request.size, size);
+                request.size += Decimal::ONE;
+                assert!(guard
+                    .validate_for_request(
+                        &request,
+                        checked_at,
+                        guard.process_id,
+                        Duration::seconds(2),
+                        Some(Duration::seconds(5))
+                    )
+                    .is_err());
+            }
+        }
+    }
 }
