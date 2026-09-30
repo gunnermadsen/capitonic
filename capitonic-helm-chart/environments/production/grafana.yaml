@@ -13,4 +13,4 @@ ingress:
 storage:
   className: local-path
   size: 2Gi
-credentialRevisions: {}
+credentialRevisions: {"grafana": "e7033bbc-1aa5-4360-b353-5b8f1d26edc0"}
