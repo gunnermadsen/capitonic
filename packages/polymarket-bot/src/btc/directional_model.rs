@@ -164,6 +164,9 @@ pub struct BtcDirectionalModelFeatureSnapshot {
     pub seconds_elapsed: i64,
     pub feature_values: Vec<f64>,
     pub input_sha256: String,
+    /// Causal admission prices for the process quantity; trained features remain frozen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_ask_vwaps: Option<[Option<rust_decimal::Decimal>; 2]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -3509,6 +3512,7 @@ mod tests {
                         model
                             .score_asymmetric_value_snapshot(
                                 &BtcDirectionalModelFeatureSnapshot {
+                                    execution_ask_vwaps: None,
                                     model_key: selection.model_key.clone(),
                                     model_artifact_sha256: selection.artifact_sha256.clone(),
                                     feature_schema_version: model

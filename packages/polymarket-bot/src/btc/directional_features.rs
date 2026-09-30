@@ -2551,7 +2551,7 @@ fn append_payoff_book_features_with_policy(
             .iter()
             .filter_map(|level| level.size.to_f64())
             .sum::<f64>();
-        if depth < if frozen_early { 5.0 } else { 800.0 } {
+        if !frozen_early && depth < 800.0 {
             return None;
         }
         let mut output = Vec::new();

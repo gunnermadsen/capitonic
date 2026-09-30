@@ -1648,4 +1648,39 @@ mod tests {
         assert_eq!(order.order_id, "delegated-order");
         assert_eq!(fake.submit_calls(), 1);
     }
+
+    #[tokio::test]
+    async fn process_sized_live_orders_reach_delegate_unchanged_and_keep_quantity_sealed() {
+        for quantity in [dec!(5), dec!(10), dec!(25)] {
+            let checked_at = Utc::now();
+            let process_id = Uuid::new_v4();
+            let fake = Arc::new(FakeVenue::default());
+            let venue = adapter(
+                &fake,
+                seeded_registry(
+                    "market",
+                    "up",
+                    checked_at - Duration::milliseconds(100),
+                    checked_at,
+                    dec!(100),
+                ),
+                process_id,
+            );
+            let order = venue
+                .submit_order(guarded_request(
+                    checked_at, process_id, "market", "up", quantity,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(order.state, OrderState::Submitted);
+            assert_eq!(order.request.size, quantity);
+            assert_eq!(order.request.price, dec!(0.40));
+            assert_eq!(fake.submit_calls(), 1);
+
+            let mut tampered = guarded_request(checked_at, process_id, "market", "up", quantity);
+            tampered.size += Decimal::ONE;
+            assert!(venue.submit_order(tampered).await.is_err());
+            assert_eq!(fake.submit_calls(), 1);
+        }
+    }
 }

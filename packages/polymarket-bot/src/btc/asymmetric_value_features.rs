@@ -86,6 +86,7 @@ pub fn build_asymmetric_value_feature_snapshot(
         no_ask_vwap,
     )?;
     Ok(BtcDirectionalModelFeatureSnapshot {
+        execution_ask_vwaps: None,
         model_key: selection.model_key.clone(),
         model_artifact_sha256: selection.artifact_sha256.clone(),
         feature_schema_version: model.feature_schema_version().to_string(),

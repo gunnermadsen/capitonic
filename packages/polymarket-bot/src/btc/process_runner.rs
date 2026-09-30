@@ -1491,6 +1491,10 @@ impl BtcProcessRunner {
                             &values,
                         )?;
                         return Ok(BtcDirectionalModelFeatureSnapshot {
+                            execution_ask_vwaps: Some(process_sized_model_costs(
+                                &context,
+                                member.strategy.target_size,
+                            )?),
                             model_key: selection.model_key.clone(),
                             model_artifact_sha256: selection.artifact_sha256.clone(),
                             feature_schema_version: model.feature_schema_version().into(),
@@ -1543,6 +1547,7 @@ impl BtcProcessRunner {
                         &values,
                     )?;
                     Ok(BtcDirectionalModelFeatureSnapshot {
+                        execution_ask_vwaps: None,
                         model_key: selection.model_key.clone(),
                         model_artifact_sha256: selection.artifact_sha256.clone(),
                         feature_schema_version: model.feature_schema_version().to_string(),
@@ -3025,6 +3030,7 @@ fn build_directional_model_feature_snapshot(
         &features.values,
     )?;
     Ok(BtcDirectionalModelFeatureSnapshot {
+        execution_ask_vwaps: None,
         model_key: selection.model_key.clone(),
         model_artifact_sha256: selection.artifact_sha256.clone(),
         feature_schema_version: features.schema_version().to_string(),
@@ -3303,6 +3309,42 @@ fn decimal_json_field(value: &serde_json::Value, keys: &[&str]) -> Option<Decima
         serde_json::Value::Number(value) => Decimal::from_str(&value.to_string()).ok(),
         _ => None,
     })
+}
+
+fn process_sized_model_costs(
+    context: &super::unified_model_runtime::adapters::FeatureContext<'_>,
+    target_size: Decimal,
+) -> Result<[Option<Decimal>; 2]> {
+    let mut costs = [None; 2];
+    for (index, (outcome, observed)) in [
+        (BtcOutcome::Up, context.up),
+        (BtcOutcome::Down, context.down),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let checkpoint = context
+            .state
+            .unified_book_history
+            .at(
+                &observed.market_id,
+                &observed.token_id,
+                observed.connection_id,
+                context.feature_as_of,
+            )
+            .context("UMR causal admission book unavailable")?;
+        let book = book_features(
+            outcome,
+            &observed.token_id,
+            Some(checkpoint),
+            context.feature_as_of,
+            target_size,
+        );
+        if book.quoted_size >= target_size {
+            costs[index] = book.executable_ask_vwap;
+        }
+    }
+    Ok(costs)
 }
 
 fn book_features(
@@ -4270,6 +4312,7 @@ mod tests {
             fee_observed_at: Some(observed_at - chrono::Duration::milliseconds(2)),
         };
         let directional_model = BtcDirectionalModelFeatureSnapshot {
+            execution_ask_vwaps: None,
             model_key: BTC_DIRECTIONAL_MODEL_V1_KEY.to_string(),
             model_artifact_sha256: BTC_DIRECTIONAL_MODEL_V1_ARTIFACT_SHA256.to_string(),
             feature_schema_version: BTC_DIRECTIONAL_MODEL_FEATURE_SCHEMA_VERSION.to_string(),
@@ -4781,5 +4824,94 @@ mod tests {
             observation_clob_connection_id(&market, &coherent),
             Some(second_epoch)
         );
+    }
+
+    #[test]
+    fn book_pricing_uses_process_quantity_across_levels_without_resizing() {
+        let now = Utc::now();
+        let checkpoint = OrderbookCheckpoint {
+            checkpoint_id: Uuid::new_v4(),
+            market_id: "m".into(),
+            token_id: "up".into(),
+            source_timestamp: now,
+            received_at: now,
+            observed_at: now,
+            connection_id: Uuid::new_v4(),
+            ingest_sequence: 1,
+            source_hash: None,
+            tick_size: dec!(0.01),
+            best_bid: Some(dec!(0.39)),
+            best_ask: Some(dec!(0.40)),
+            bids: vec![],
+            asks: vec![
+                super::super::types::OrderbookLevel {
+                    price: dec!(0.40),
+                    size: dec!(5),
+                },
+                super::super::types::OrderbookLevel {
+                    price: dec!(0.50),
+                    size: dec!(7),
+                },
+            ],
+            integrity_status: FeedIntegrityStatus::Ok,
+        };
+        for (quantity, vwap, limit, quoted) in [
+            (dec!(5), dec!(0.40), dec!(0.40), dec!(5)),
+            (dec!(10), dec!(0.45), dec!(0.50), dec!(10)),
+            (dec!(15), dec!(5.5) / dec!(12), dec!(0.50), dec!(12)),
+        ] {
+            let features = book_features(BtcOutcome::Up, "up", Some(&checkpoint), now, quantity);
+            assert_eq!(features.executable_ask_vwap, Some(vwap));
+            assert_eq!(features.marketable_limit_price, Some(limit));
+            assert_eq!(features.quoted_size, quoted);
+        }
+        let mut state = RealtimeState::default();
+        let mut down = checkpoint.clone();
+        down.token_id = "down".into();
+        for book in [&checkpoint, &down] {
+            Arc::make_mut(&mut state.unified_book_history).observe(book.clone());
+        }
+        let mut advanced = checkpoint.clone();
+        advanced.received_at += chrono::Duration::seconds(1);
+        advanced.source_timestamp = advanced.received_at;
+        advanced.ingest_sequence += 1;
+        advanced.asks[0].price = dec!(0.70);
+        advanced.asks[1].price = dec!(0.80);
+        Arc::make_mut(&mut state.unified_book_history).observe(advanced.clone());
+        let binding = super::super::unified_model_runtime::contract::ProcessBinding {
+            version: super::super::unified_model_runtime::contract::CONTRACT_VERSION.into(),
+            sources: vec![],
+            policy: serde_json::json!({}),
+        };
+        let context = super::super::unified_model_runtime::adapters::FeatureContext {
+            state: &state,
+            binding: &binding,
+            market_id: "m",
+            window_start: now - chrono::Duration::seconds(60),
+            feature_as_of: now,
+            up: &advanced,
+            down: &down,
+            fee_rate: 0.0,
+            names: &[],
+        };
+        assert_eq!(
+            process_sized_model_costs(&context, dec!(5)).unwrap(),
+            [Some(dec!(0.40)); 2]
+        );
+        assert_eq!(
+            process_sized_model_costs(&context, dec!(10)).unwrap(),
+            [Some(dec!(0.45)); 2]
+        );
+        assert_eq!(
+            process_sized_model_costs(&context, dec!(15)).unwrap(),
+            [None; 2]
+        );
+        let mut other_epoch = advanced.clone();
+        other_epoch.connection_id = Uuid::new_v4();
+        let wrong_epoch = super::super::unified_model_runtime::adapters::FeatureContext {
+            up: &other_epoch,
+            ..context
+        };
+        assert!(process_sized_model_costs(&wrong_epoch, dec!(10)).is_err());
     }
 }

@@ -30,7 +30,7 @@ Existing directional, payoff and asymmetric implementations remain supported thr
 
 The UMR contract version is `capitonic-unified-model-runtime-v1`. The durable prediction envelope version is `capitonic-model-evaluation-v1`. Existing runtime manifest and feature snapshot contracts remain valid.
 
-A new package embeds its UMR contract in the checksummed model payload. It declares its adapter/version, input products and semantics, required/optional status, lookback, age bounds, feature clock, missing-value policy, probability meaning and qualified trade size. Ordered feature names and numerical representation remain in the existing checksummed feature schema. Prediction cadence and frozen admission components remain in the model artifact.
+A new package embeds its UMR contract in the checksummed model payload. It declares its adapter/version, input products and semantics, required/optional status, lookback, age bounds, feature clock, missing-value policy, probability meaning and historical evaluated trade size. Ordered feature names and numerical representation remain in the existing checksummed feature schema. Prediction cadence and frozen admission components remain in the model artifact.
 
 `strategy.decision_strategy` is the strict version-1 `unified_model_router` selection in a version-4 process configuration. Its ordered `models` array supports one or multiple immutable models through the same execution path. Routing is `first_qualified`, with `array_order` ties. The existing process-level `sources` array is the sole source selector. UMR compiles internal bindings from those selectors and the selected package contracts; no editable per-member sources or duplicate policy object exists. Required inputs must be selected; optional inputs are used only when selected. Packages retain their frozen bucket, cadence and qualification policy. The definition API resolves omitted checksums from the existing catalog and persists them; runtime startup requires pinned identities.
 
@@ -63,7 +63,7 @@ Contract changes that alter meaning require a new version. Backward-compatible a
 
 ## Frozen early-entry semantics
 
-The five champions use the frozen distilled students, not their training teachers. Admission components and temporal snapshots are exported without fitting or calibration. Entry opportunities are seconds 60, 65, 70, 75, 80 and 85; size is five shares.
+The five champions use the frozen distilled students, not their training teachers. Admission components and temporal snapshots are exported without fitting or calibration. Entry opportunities are seconds 60, 65, 70, 75, 80 and 85. Their frozen five-share feature definitions remain mathematical inputs; purchased quantity comes only from process configuration.
 
 The opening boundary is the open of the Binance second beginning one second before the market window. Core features follow the training recipe. Book features use a snapshot available at or before the model timestamp and within the frozen two-second age bound. Order execution independently uses the existing current-book identity, freshness, capital and accounting controls. The feature adapter does not impose the legacy payoff builder's 800-share ladder requirement.
 
@@ -97,3 +97,11 @@ Transient feed, history, persistence and transport failures block only affected 
 Model processes resolve observation books from the existing immutable `RealtimeState.unified_book_history`, using the captured market identity, connection epoch and observation timestamp. They must not read the advancing current-book registry and compare it against an earlier observation. Frozen adapters continue to select their own causal whole-second feature boundary from that same history. Current execution-book checks remain separate and unchanged.
 
 Missing, invalid, stale or wrong-epoch inputs block only the affected observation. A later healthy observation recovers without durable authorization changes. The history remains bounded; no new feed, cache or database read is introduced.
+
+## Process order quantity
+
+`trading_processes.config.raw.btc_realtime_paper.strategy.target_size` is the sole requested entry quantity for both paper and live BTC processes. Persisted definitions must supply a positive quantity; model `qualified_trade_size` records historical evaluation provenance and does not constrain order size. Router members inherit the owning process quantity.
+
+UMR reference evaluation preserves immutable feature and golden-vector semantics. Runtime admission additionally receives the process-sized UP/DOWN executable VWAP from the shared causal feature-time book using the existing quantity-aware book walk, rather than treating frozen five-share features as requested order cost. Outcome and temporal predictors still consume their unchanged trained features. Existing admission thresholds, capital controls, identity checks, fees, order guards, and accounting remain active. Increasing size can change admission, not the learned parameters, and historical five-share results do not establish profitability at another size.
+
+No execution layer silently substitutes a model size or reduces the requested quantity. FOK requires the full requested fill; FAK may fill less and cancel the remainder. Actual fills remain distinct from requested quantity. Invalid venue precision, insufficient capital, stale evidence and unavailable depth retain their existing action-scoped rejection behavior.

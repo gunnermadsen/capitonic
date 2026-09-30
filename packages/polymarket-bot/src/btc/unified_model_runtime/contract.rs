@@ -17,6 +17,7 @@ pub struct ModelContract {
     pub probability_semantics: String,
     pub feature_clock: String,
     pub missing_policy: String,
+    /// Historical evaluation size, not an order-size control. Process configuration owns size.
     pub qualified_trade_size: Option<f64>,
 }
 
@@ -72,8 +73,8 @@ impl ModelContract {
 
     pub fn validate_bindings(&self, bindings: &[SourceBinding], size: f64) -> Result<()> {
         self.validate()?;
-        if self.qualified_trade_size.is_some_and(|v| size != v) {
-            bail!("trade size differs from frozen model qualification");
+        if !size.is_finite() || size <= 0.0 {
+            bail!("process trade size must be finite and positive");
         }
         let mut seen = HashSet::new();
         for binding in bindings {

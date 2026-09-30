@@ -268,6 +268,9 @@ pub(super) fn resolve_legacy_btc_strategy(
         .strategy
         .as_object()
         .ok_or_else(|| HttpError::bad_request("strategy must be an object"))?;
+    if !overrides.contains_key("target_size") {
+        return Err(HttpError::bad_request("strategy.target_size is required"));
+    }
     let selectable = control.schema_version == SELECTABLE_BTC_PROCESS_SCHEMA_VERSION;
     if selectable && !overrides.contains_key("decision_strategy") {
         return Err(HttpError::bad_request(format!(
@@ -383,6 +386,9 @@ pub(super) fn resolve_btc_members(
         .strategy
         .as_object()
         .ok_or_else(|| HttpError::bad_request("strategy must be an object"))?;
+    if !overrides.contains_key("target_size") {
+        return Err(HttpError::bad_request("strategy.target_size is required"));
+    }
     for forbidden in [
         "unified_model",
         "strategy_version",

@@ -2651,4 +2651,55 @@ mod tests {
         assert!(error.to_string().contains("cannot be negative"));
         assert_eq!(venue.status().await.settlements_applied, 0);
     }
+
+    #[tokio::test]
+    async fn process_sized_paper_orders_keep_requested_quantity_and_account_actual_fills() {
+        for (order_type, quantity, expected_state, expected_filled) in [
+            (OrderType::Fok, dec!(5), OrderState::Filled, dec!(5)),
+            (OrderType::Fok, dec!(10), OrderState::Filled, dec!(10)),
+            (
+                OrderType::Fok,
+                dec!(15),
+                OrderState::Rejected,
+                Decimal::ZERO,
+            ),
+            (OrderType::Fak, dec!(10), OrderState::Filled, dec!(10)),
+            (OrderType::Fak, dec!(15), OrderState::Cancelled, dec!(12)),
+        ] {
+            let venue = venue(
+                registry_with_book(
+                    Utc::now(),
+                    vec![
+                        OrderbookLevel {
+                            price: dec!(0.40),
+                            size: dec!(5),
+                        },
+                        OrderbookLevel {
+                            price: dec!(0.50),
+                            size: dec!(7),
+                        },
+                    ],
+                ),
+                Decimal::ONE,
+            );
+            let mut entry = request(quantity, dec!(0.50));
+            entry.order_type = order_type;
+            let order = venue.submit_order(entry).await.unwrap();
+            assert_eq!(order.request.size, quantity);
+            assert_eq!(order.state, expected_state);
+            let fills = venue.fills_for_order(&order.order_id).await.unwrap();
+            assert_eq!(
+                fills.iter().map(|v| v.size).sum::<Decimal>(),
+                expected_filled
+            );
+            let debits: Decimal = fills.iter().map(|v| v.size * v.price + v.fee).sum();
+            let status = venue.status().await;
+            assert_eq!(status.entry_debits_usd, debits);
+            assert_eq!(
+                status.available_collateral_usd,
+                status.starting_collateral_usd - debits
+            );
+            assert!(venue.get_open_orders().await.unwrap().is_empty());
+        }
+    }
 }
