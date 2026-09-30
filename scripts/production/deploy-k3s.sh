@@ -34,13 +34,14 @@ done
 
 deploy_chart() {
   local chart="$1" wait_for_jobs=()
+  shift
   [[ "$chart" == "db-migrate" ]] && wait_for_jobs=(--wait-for-jobs)
   helm lint "capitonic-helm-chart/charts/$chart" \
-    -f "capitonic-helm-chart/environments/production/$chart.yaml"
+    -f "capitonic-helm-chart/environments/production/$chart.yaml" "$@"
   helm upgrade --install "$chart" "capitonic-helm-chart/charts/$chart" \
     --namespace "$NAMESPACE" --create-namespace \
     -f "capitonic-helm-chart/environments/production/$chart.yaml" \
-    --atomic --wait "${wait_for_jobs[@]}" --timeout 15m
+    --atomic --wait "${wait_for_jobs[@]}" --timeout 15m "$@"
 }
 
 if [[ "${DEPLOYMENT_SCOPE:-full-stack}" == selected ]]; then

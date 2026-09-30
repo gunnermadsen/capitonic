@@ -43,8 +43,8 @@ selected_release_ready() {
 }
 
 deploy_selected_components() {
-  local component revision snapshot started missing ready desired backfills attempt failed=false rollback_failed=false
-  local -a selected=() deployed=()
+  local component revision snapshot started missing ready desired backfills attempt tunnel_id failed=false rollback_failed=false
+  local -a selected=() deployed=() chart_options=()
   IFS=, read -ra selected <<< "$DEPLOY_COMPONENTS"
   ((${#selected[@]})) || { echo 'No production components selected.' >&2; return 64; }
   for component in "${selected[@]}"; do
@@ -93,7 +93,14 @@ deploy_selected_components() {
   started="$(date -u +%s)"
   for component in "${selected[@]}"; do
     [[ "$component" == db-migrate ]] && kubectl -n "$NAMESPACE" delete job db-migrate --ignore-not-found --wait=true
-    if deploy_chart "$component"; then
+    if [[ "$component" == cloudflared ]]; then
+      tunnel_id="$(kubectl -n "$NAMESPACE" get secret cloudflare-tunnel -o jsonpath='{.data.credentials\.json}' | base64 -d | jq -r '.TunnelID // .tunnelID // .tunnel_id')"
+      [[ "$tunnel_id" =~ ^[0-9a-f-]{36}$ ]] || { echo 'Cloudflare tunnel ID is invalid.' >&2; return 70; }
+      chart_options=(--set-string "tunnelId=$tunnel_id")
+    else
+      chart_options=()
+    fi
+    if deploy_chart "$component" "${chart_options[@]}"; then
       deployed+=("$component")
     else
       failed=true
