@@ -158,11 +158,12 @@ curl -fsS --resolve api.capitonic.com:443:127.0.0.1 -H "Authorization: Bearer $i
   'https://api.capitonic.com/ingesters' | jq -e 'type == "array"' >/dev/null
 curl -fsS --resolve metrics.capitonic.com:443:127.0.0.1 -u "$prom_user:$prom_password" \
   'https://metrics.capitonic.com/api/v1/query?query=up' | jq -e '.status == "success"' >/dev/null
-for old_path in /api/bot/admin/trading-processes /api/ingester/ingesters /api/metrics/api/v1/query; do
-  old_status="$(curl -sS --resolve monitor.capitonic.com:443:127.0.0.1 \
-    -o /dev/null -w '%{http_code}' "https://monitor.capitonic.com$old_path")"
-  [[ "$old_status" == "404" ]]
-done
+kubectl get ingress -A -o json | jq -e '
+  [.items[] as $ingress | $ingress.spec.rules[]? |
+    select(.host == "monitor.capitonic.com") |
+    {namespace: $ingress.metadata.namespace, name: $ingress.metadata.name, paths: [.http.paths[].path]}]
+  == [{namespace: "capitonic", name: "grafana", paths: ["/"]}]
+' >/dev/null
 
 jq -n --arg paper_process_id "$paper_id" --arg live_process_id "$live_id" \
   --arg bot_image "$expected_bot" --arg ingester_image "$expected_ingester" --arg migration "$latest_applied_migration" \
