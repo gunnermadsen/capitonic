@@ -38,7 +38,7 @@ helm upgrade --install argocd oci://ghcr.io/argoproj/argo-helm/argo-cd \
   --atomic --wait --timeout 15m
 kubectl wait --for=condition=Established crd/applications.argoproj.io crd/appprojects.argoproj.io --timeout=2m
 kubectl -n argocd get secret argocd-secret -o json |
-  jq -r '.data["admin.password"] | @base64d' | cmp - "$snapshot/argocd-admin-hash"
+  jq -jr '.data["admin.password"] | @base64d' | cmp - "$snapshot/argocd-admin-hash"
 kubectl -n argocd create secret generic capitonic-github \
   --from-literal=type=git \
   --from-literal=url=https://github.com/gunnermadsen/capitonic.git \
