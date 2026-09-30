@@ -9,6 +9,10 @@ spec:
   destinations:
     - namespace: capitonic
       server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ""
+      kind: PersistentVolume
+      name: capitonic-ingester-archives
 ---
 apiVersion: argoproj.io/v1alpha1
 kind: Application
