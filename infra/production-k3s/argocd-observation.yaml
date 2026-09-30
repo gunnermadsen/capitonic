@@ -13,7 +13,7 @@ spec:
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: capitonic-production-bot
+  name: polymarket-bot
   namespace: argocd
 spec:
   project: capitonic-production-observe
@@ -32,7 +32,7 @@ spec:
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: capitonic-production-ingester
+  name: ingester
   namespace: argocd
 spec:
   project: capitonic-production-observe

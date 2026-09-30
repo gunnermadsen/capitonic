@@ -40,6 +40,13 @@ kubectl -n argocd create secret generic capitonic-github \
   kubectl label --local -f - argocd.argoproj.io/secret-type=repository -o yaml |
   kubectl apply -f - >/dev/null
 
+for legacy_application in capitonic-production-bot capitonic-production-ingester; do
+  if kubectl -n argocd get application "$legacy_application" >/dev/null 2>&1; then
+    kubectl -n argocd get application "$legacy_application" -o json |
+      jq -e '(.metadata.finalizers // [] | length) == 0' >/dev/null
+    kubectl -n argocd delete application "$legacy_application" --wait=true >/dev/null
+  fi
+done
 kubectl apply -f infra/production-k3s/argocd-observation.yaml >/dev/null
 kubectl -n argocd rollout status deployment/argocd-server --timeout=5m
 kubectl -n argocd rollout status deployment/argocd-repo-server --timeout=5m
@@ -59,16 +66,16 @@ ops_status="$(curl -sS -H 'Host: ops.capitonic.com' -o /dev/null -w '%{http_code
 direct_status="$(curl -ksS --resolve ops.capitonic.com:443:127.0.0.1 -o /dev/null -w '%{http_code}' https://ops.capitonic.com/)"
 [[ "$direct_status" == 404 ]]
 kubectl -n argocd get applications.argoproj.io -o json | jq -e '
-  [.items[] | select(.metadata.name == "capitonic-production-bot" or
-                     .metadata.name == "capitonic-production-ingester")] as $apps |
+  [.items[] | select(.metadata.name == "polymarket-bot" or
+                     .metadata.name == "ingester")] as $apps |
   ($apps | length) == 2 and all($apps[];
     .spec.source.targetRevision == "production" and
     (.spec.syncPolicy.automated // null) == null and
     .spec.destination.namespace == "capitonic")' >/dev/null
 for attempt in $(seq 1 30); do
   if kubectl -n argocd get applications.argoproj.io -o json | jq -e '
-    [.items[] | select(.metadata.name == "capitonic-production-bot" or
-                       .metadata.name == "capitonic-production-ingester")] as $apps |
+    [.items[] | select(.metadata.name == "polymarket-bot" or
+                       .metadata.name == "ingester")] as $apps |
     ($apps | length) == 2 and all($apps[];
       (.status.sync.revision // "" | test("^[0-9a-f]{40}$")) and
       (.status.sync.status == "Synced" or .status.sync.status == "OutOfSync") and
