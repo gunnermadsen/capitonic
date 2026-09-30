@@ -6,12 +6,31 @@ AWS_REGION="${AWS_REGION:-eu-west-1}"
 APP_SECRET_NAME="${APP_SECRET_NAME:-capitonic/polymarket-bot/production}"
 NAMESPACE="${CAPITONIC_NAMESPACE:-capitonic}"
 RESTART_SCOPE="${RESTART_SCOPE:-all}"
+SECRET_SYNC_ENVIRONMENT="${SECRET_SYNC_ENVIRONMENT:-production}"
+SECRET_SYNC_SCOPE="${SECRET_SYNC_SCOPE:-all}"
+SECRET_SYNC_TEMP_ROOT="${SECRET_SYNC_TEMP_ROOT:-/run}"
 ALLOW_DATABASE_CREDENTIAL_ROTATION="${ALLOW_DATABASE_CREDENTIAL_ROTATION:-false}"
 
 [[ "$AWS_REGION" == "eu-west-1" ]]
 case "$RESTART_SCOPE" in all|none|application|monitoring) ;; *) echo "Invalid RESTART_SCOPE." >&2; exit 64 ;; esac
+case "$SECRET_SYNC_SCOPE" in
+  all) ;;
+  ingester-provider)
+    [[ "$RESTART_SCOPE" == none ]] || { echo "Provider-only sync requires RESTART_SCOPE=none." >&2; exit 64; }
+    ;;
+  *) echo "Invalid SECRET_SYNC_SCOPE." >&2; exit 64 ;;
+esac
+case "$SECRET_SYNC_ENVIRONMENT" in
+  production) ;;
+  development)
+    [[ "$(kubectl config current-context)" == rancher-desktop ]] || {
+      echo "Development secret sync requires the rancher-desktop context." >&2; exit 64;
+    }
+    ;;
+  *) echo "Invalid SECRET_SYNC_ENVIRONMENT." >&2; exit 64 ;;
+esac
 
-temporary_directory="$(mktemp -d /run/capitonic-secrets.XXXXXX)"
+temporary_directory="$(mktemp -d "$SECRET_SYNC_TEMP_ROOT/capitonic-secrets.XXXXXX")"
 trap 'rm -rf "$temporary_directory"' EXIT
 chmod 0700 "$temporary_directory"
 secret_json="$temporary_directory/secret.json"
@@ -39,14 +58,18 @@ for key in "${required_keys[@]}"; do
   }
 done
 
+if [[ "$SECRET_SYNC_SCOPE" == all ]]; then
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-kubectl create namespace cert-manager --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+if [[ "$SECRET_SYNC_ENVIRONMENT" == production ]]; then
+  kubectl create namespace cert-manager --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+fi
+fi
 
 json_value() { jq -er --arg key "$1" '.[$key]' "$secret_json"; }
 existing_value() {
   kubectl -n "$NAMESPACE" get secret postgres-credentials -o jsonpath="{.data.$1}" 2>/dev/null | base64 -d || true
 }
-if kubectl -n "$NAMESPACE" get secret postgres-credentials >/dev/null 2>&1; then
+if [[ "$SECRET_SYNC_SCOPE" == all ]] && kubectl -n "$NAMESPACE" get secret postgres-credentials >/dev/null 2>&1; then
   for key in POSTGRES_PASSWORD CAPITONIC_TRADING_POSTGRES_PASSWORD CAPITONIC_INGESTER_MASTER_POSTGRES_PASSWORD CAPITONIC_INGESTER_WORKER_POSTGRES_PASSWORD CAPITONIC_GRAFANA_POSTGRES_PASSWORD; do
     if [[ "$(existing_value "$key")" != "$(json_value "$key")" && "$ALLOW_DATABASE_CREDENTIAL_ROTATION" != "true" ]]; then
       echo "Database credential $key changed; refresh cannot rotate database roles. Run an approved rotation workflow." >&2
@@ -73,6 +96,21 @@ apply_env_secret() {
   kubectl -n "$NAMESPACE" annotate secret "$name" capitonic.io/asm-version="$secret_version" --overwrite >/dev/null
 }
 
+sync_ingester_provider_secret() {
+  printf 'POLYMARKET_CHAINLINK_DATA_STREAMS_API_KEY=%s\n' "$(jq -r '.POLYMARKET_CHAINLINK_DATA_STREAMS_API_KEY // ""' "$secret_json")" >"$temporary_directory/providers.env"
+  printf 'POLYMARKET_CHAINLINK_DATA_STREAMS_API_SECRET=%s\n' "$(jq -r '.POLYMARKET_CHAINLINK_DATA_STREAMS_API_SECRET // ""' "$secret_json")" >>"$temporary_directory/providers.env"
+  printf 'POLYMARKET_CHAINLINK_DATA_STREAMS_CANDLESTICK_API_KEY=%s\n' "$(jq -r '.POLYMARKET_CHAINLINK_DATA_STREAMS_CANDLESTICK_API_KEY // ""' "$secret_json")" >>"$temporary_directory/providers.env"
+  printf 'PMDATA_API_KEY=%s\n' "$(jq -r '.PMDATA_API_KEY // ""' "$secret_json")" >>"$temporary_directory/providers.env"
+  chmod 0600 "$temporary_directory/providers.env"
+  apply_env_secret ingester-provider-auth "$temporary_directory/providers.env"
+}
+
+if [[ "$SECRET_SYNC_SCOPE" == ingester-provider ]]; then
+  sync_ingester_provider_secret
+  echo "Synchronized ASM version $secret_version into $SECRET_SYNC_ENVIRONMENT ingester-provider-auth only."
+  exit 0
+fi
+
 write_env_file "$temporary_directory/postgres.env" \
   POSTGRES_PASSWORD POSTGRES_PASSWORD \
   CAPITONIC_TRADING_POSTGRES_PASSWORD CAPITONIC_TRADING_POSTGRES_PASSWORD \
@@ -96,11 +134,7 @@ apply_env_secret polymarket-live-auth "$temporary_directory/live.env"
 write_env_file "$temporary_directory/ingester.env" admin-token MARKET_DATA_INGESTER_ADMIN_TOKEN
 apply_env_secret ingester-auth "$temporary_directory/ingester.env"
 
-printf 'POLYMARKET_CHAINLINK_DATA_STREAMS_API_KEY=%s\n' "$(jq -r '.POLYMARKET_CHAINLINK_DATA_STREAMS_API_KEY // ""' "$secret_json")" >"$temporary_directory/providers.env"
-printf 'POLYMARKET_CHAINLINK_DATA_STREAMS_API_SECRET=%s\n' "$(jq -r '.POLYMARKET_CHAINLINK_DATA_STREAMS_API_SECRET // ""' "$secret_json")" >>"$temporary_directory/providers.env"
-printf 'POLYMARKET_CHAINLINK_DATA_STREAMS_CANDLESTICK_API_KEY=%s\n' "$(jq -r '.POLYMARKET_CHAINLINK_DATA_STREAMS_CANDLESTICK_API_KEY // ""' "$secret_json")" >>"$temporary_directory/providers.env"
-chmod 0600 "$temporary_directory/providers.env"
-apply_env_secret ingester-provider-auth "$temporary_directory/providers.env"
+sync_ingester_provider_secret
 
 grafana_user="$(jq -r '.GRAFANA_ADMIN_USER // "admin"' "$secret_json")"
 printf 'admin-user=%s\nadmin-password=%s\n' "$grafana_user" "$(json_value GRAFANA_ADMIN_PASSWORD)" >"$temporary_directory/grafana.env"
@@ -121,19 +155,21 @@ kubectl -n "$NAMESPACE" create secret generic prometheus-auth \
   | kubectl apply -f - >/dev/null
 kubectl -n "$NAMESPACE" annotate secret prometheus-auth capitonic.io/asm-version="$secret_version" --overwrite >/dev/null
 
-write_env_file "$temporary_directory/cloudflare-dns.env" api-token CLOUDFLARE_API_TOKEN
-apply_env_secret cloudflare-dns "$temporary_directory/cloudflare-dns.env"
-kubectl -n cert-manager create secret generic cloudflare-dns \
-  --from-env-file="$temporary_directory/cloudflare-dns.env" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-kubectl -n cert-manager annotate secret cloudflare-dns capitonic.io/asm-version="$secret_version" --overwrite >/dev/null
+if [[ "$SECRET_SYNC_ENVIRONMENT" == production ]]; then
+  write_env_file "$temporary_directory/cloudflare-dns.env" api-token CLOUDFLARE_API_TOKEN
+  apply_env_secret cloudflare-dns "$temporary_directory/cloudflare-dns.env"
+  kubectl -n cert-manager create secret generic cloudflare-dns \
+    --from-env-file="$temporary_directory/cloudflare-dns.env" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  kubectl -n cert-manager annotate secret cloudflare-dns capitonic.io/asm-version="$secret_version" --overwrite >/dev/null
 
-json_value CLOUDFLARED_PRODUCTION_TUNNEL_CREDENTIALS_B64 | base64 -d >"$temporary_directory/credentials.json"
-jq -e '(.TunnelID // .tunnelID // .tunnel_id // "") | length > 0' "$temporary_directory/credentials.json" >/dev/null
-chmod 0600 "$temporary_directory/credentials.json"
-kubectl -n "$NAMESPACE" create secret generic cloudflare-tunnel \
-  --from-file=credentials.json="$temporary_directory/credentials.json" \
-  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-kubectl -n "$NAMESPACE" annotate secret cloudflare-tunnel capitonic.io/asm-version="$secret_version" --overwrite >/dev/null
+  json_value CLOUDFLARED_PRODUCTION_TUNNEL_CREDENTIALS_B64 | base64 -d >"$temporary_directory/credentials.json"
+  jq -e '(.TunnelID // .tunnelID // .tunnel_id // "") | length > 0' "$temporary_directory/credentials.json" >/dev/null
+  chmod 0600 "$temporary_directory/credentials.json"
+  kubectl -n "$NAMESPACE" create secret generic cloudflare-tunnel \
+    --from-file=credentials.json="$temporary_directory/credentials.json" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  kubectl -n "$NAMESPACE" annotate secret cloudflare-tunnel capitonic.io/asm-version="$secret_version" --overwrite >/dev/null
+fi
 
 if [[ "$RESTART_SCOPE" == "all" || "$RESTART_SCOPE" == "application" ]]; then
   for deployment in pgbouncer ingester-master ingester-worker polymarket-bot; do
@@ -153,4 +189,4 @@ if [[ "$RESTART_SCOPE" != "none" ]]; then
   done
 fi
 
-echo "Synchronized allowlisted ASM version $secret_version into Kubernetes secrets; host-only credentials were excluded."
+echo "Synchronized allowlisted ASM version $secret_version into $SECRET_SYNC_ENVIRONMENT Kubernetes secrets; host-only credentials were excluded."
