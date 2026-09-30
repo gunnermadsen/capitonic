@@ -2,7 +2,18 @@ name: Provision Production DNS
 
 on:
   workflow_call:
+    inputs:
+      remove_ops_access:
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
+    inputs:
+      remove_ops_access:
+        description: Remove ops Cloudflare Access after verifying Argo CD login
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -21,7 +32,7 @@ env:
 
 jobs:
   dns:
-    name: Converge production DNS and operator access
+    name: Converge production DNS and HTTPS rules
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -47,16 +58,17 @@ jobs:
           terraform -chdir="$TF_DIR" init -backend-config=backend.hcl
           terraform -chdir="$TF_DIR" fmt -check -recursive
           terraform -chdir="$TF_DIR" validate
-      - name: Adopt existing DNS and Access resources
+      - name: Adopt existing DNS and SSH Access resources
         run: scripts/import-cloudflare-dns-records.sh
-      - name: Plan only the new hostnames and Access policy
+      - name: Plan only production hostnames and HTTPS rules
         run: |
           set -euo pipefail
           terraform -chdir="$TF_DIR" plan -input=false -lock-timeout=5m \
             -target=cloudflare_dns_record.api \
             -target=cloudflare_dns_record.metrics \
             -target=cloudflare_dns_record.ops \
-            -target=cloudflare_zero_trust_access_application.stack_ops \
+            -target=cloudflare_ruleset.production_https_redirect \
+            -target=cloudflare_ruleset.production_hsts \
             -out=production-dns.tfplan
           terraform -chdir="$TF_DIR" show -json production-dns.tfplan | jq -e '
             [.resource_changes[]? | select(.change.actions != ["no-op"])]
@@ -65,16 +77,70 @@ jobs:
                   "cloudflare_dns_record.api",
                   "cloudflare_dns_record.metrics",
                   "cloudflare_dns_record.ops",
-                  "cloudflare_zero_trust_access_application.stack_ops"))
+                  "cloudflare_ruleset.production_https_redirect",
+                  "cloudflare_ruleset.production_hsts"))
                 and (.change.actions | index("delete") | not))
           ' >/dev/null
-      - name: Apply scoped DNS plan
+      - name: Apply scoped DNS and HTTPS plan
         run: terraform -chdir="$TF_DIR" apply -input=false -lock-timeout=5m production-dns.tfplan
-      - name: Confirm repeated plan is a no-op
+      - name: Verify HTTP upgrades at the Cloudflare edge
+        run: |
+          set -euo pipefail
+          for host in monitor.capitonic.com api.capitonic.com metrics.capitonic.com ops.capitonic.com; do
+            headers="$(mktemp)"
+            status="$(curl -sS --max-time 15 -D "$headers" -o /dev/null -w '%{http_code}' "http://$host/capitonic-https-check?source=workflow")"
+            grep -Eiq "^location: https://$host/capitonic-https-check\\?source=workflow\\r?$" "$headers"
+            rm -f "$headers"
+            [[ "$status" == 308 ]]
+          done
+      - name: Verify Argo CD login before removing operations Access
+        if: inputs.remove_ops_access == true
+        run: |
+          set -euo pipefail
+          instance_id="$(aws ec2 describe-instances --region "$AWS_REGION" \
+            --filters Name=tag:Name,Values=capitonic-polymarket-bot Name=tag:Environment,Values=production Name=instance-state-name,Values=running \
+            --query 'Reservations[].Instances[].InstanceId' --output text)"
+          [ "$(wc -w <<< "$instance_id")" -eq 1 ]
+          scripts/production/run-ssm-command.sh "$instance_id" 120 \
+            'Verify Argo CD login before Access removal' \
+            'cd /opt/polymarket-bot && scripts/production/verify-argocd-auth.sh'
+      - name: Plan and remove only operations Access
+        if: inputs.remove_ops_access == true
+        run: |
+          set -euo pipefail
+          address=cloudflare_zero_trust_access_application.stack_ops
+          if terraform -chdir="$TF_DIR" state list | grep -qx "$address"; then
+            terraform -chdir="$TF_DIR" plan -input=false -lock-timeout=5m \
+              -target="$address" -out=ops-access.tfplan
+            terraform -chdir="$TF_DIR" show -json ops-access.tfplan | jq -e --arg address "$address" '
+              [.resource_changes[]? | select(.change.actions != ["no-op"])] as $changes |
+              ($changes | length) == 1 and
+              $changes[0].address == $address and
+              $changes[0].change.actions == ["delete"]
+            ' >/dev/null
+            terraform -chdir="$TF_DIR" apply -input=false -lock-timeout=5m ops-access.tfplan
+          fi
+          ! terraform -chdir="$TF_DIR" state list | grep -qx "$address"
+      - name: Verify HTTPS portals and native Argo CD login
+        if: inputs.remove_ops_access == true
+        run: |
+          set -euo pipefail
+          for host in monitor.capitonic.com api.capitonic.com metrics.capitonic.com ops.capitonic.com; do
+            headers="$(mktemp)"
+            curl -sS --max-time 15 -D "$headers" -o /dev/null "https://$host/"
+            grep -Eiq '^strict-transport-security: max-age=300\r?$' "$headers"
+            rm -f "$headers"
+          done
+          status="$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' https://metrics.capitonic.com/)"
+          [[ "$status" == 401 ]]
+          status="$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' https://ops.capitonic.com/api/v1/applications)"
+          [[ "$status" == 401 || "$status" == 403 ]]
+      - name: Confirm repeated DNS and HTTPS plan is a no-op
         run: |
           set -euo pipefail
           terraform -chdir="$TF_DIR" plan -input=false -lock-timeout=5m -detailed-exitcode \
             -target=cloudflare_dns_record.api \
             -target=cloudflare_dns_record.metrics \
             -target=cloudflare_dns_record.ops \
-            -target=cloudflare_zero_trust_access_application.stack_ops
+            -target=cloudflare_ruleset.production_https_redirect \
+            -target=cloudflare_ruleset.production_hsts

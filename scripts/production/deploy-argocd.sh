@@ -65,6 +65,7 @@ kubectl -n argocd get configmap argocd-cm -o json | jq -e '
   .data["application.instanceLabelKey"] == "app.kubernetes.io/instance"' >/dev/null
 kubectl -n argocd get configmap argocd-rbac-cm -o json | jq -e '
   .data["policy.default"] == "role:readonly"' >/dev/null
+scripts/production/verify-argocd-auth.sh
 kubectl -n argocd get ingress argocd-server -o json | jq -e '
   .spec.ingressClassName == "traefik" and
   .metadata.annotations["traefik.ingress.kubernetes.io/router.entrypoints"] == "web" and

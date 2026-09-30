@@ -103,6 +103,12 @@ jobs:
             "https://api.cloudflare.com/client/v4/accounts/$TF_VAR_cloudflare_account_id/access/apps" \
             | jq '[.result[] | select(.domain == "ops.capitonic.com")] | length')"
           [ "$ops_access_count" = 0 ]
+          https_rulesets="$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/zones/$TF_VAR_cloudflare_zone_id/rulesets")"
+          jq -e '
+            [.result[] | select(.name == "Capitonic production HTTPS redirects" or
+                                 .name == "Capitonic production HSTS")] | length == 0
+          ' <<<"$https_rulesets" >/dev/null
           aws s3api head-bucket --bucket capitonic-polybot-tfstate-192200846560-euw1
           aws s3api head-bucket --bucket capitonic-polybot-backups-192200846560-euw1
           aws secretsmanager describe-secret --region "$AWS_REGION" --secret-id capitonic/polymarket-bot/production >/dev/null

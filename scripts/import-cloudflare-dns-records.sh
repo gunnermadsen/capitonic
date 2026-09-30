@@ -80,4 +80,3 @@ import_access_if_present() {
 }
 
 import_access_if_present cloudflare_zero_trust_access_application.stack_ssh "$TF_VAR_cloudflare_ssh_hostname"
-import_access_if_present cloudflare_zero_trust_access_application.stack_ops "$TF_VAR_cloudflare_ops_hostname"

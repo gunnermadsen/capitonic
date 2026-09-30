@@ -198,6 +198,15 @@ jobs:
             esac
             helm lint "$chart" "${extra_values[@]}" "${extra_settings[@]}"
           done
+          argocd_hash_file="$(mktemp)"
+          trap 'rm -f "$argocd_hash_file"; python3 scripts/helm/bake-assets.py --clean >/dev/null 2>&1 || true' EXIT
+          printf '%s' '$2a$10$.....................................................' > "$argocd_hash_file"
+          helm template argocd oci://ghcr.io/argoproj/argo-helm/argo-cd \
+            --version 10.9.2 --namespace argocd \
+            -f capitonic-helm-chart/environments/production/argocd.yaml \
+            --set-file configs.secret.argocdServerAdminPassword="$argocd_hash_file" \
+            --set-string configs.secret.argocdServerAdminPasswordMtime=2026-01-01T00:00:00Z \
+            > /dev/null
           mkdir -p "$RUNNER_TEMP/capitonic-helm-lint"
           printf '%s\n' "$HELM_CHART_SHA" > "$RUNNER_TEMP/capitonic-helm-lint/validated-sha256"
 

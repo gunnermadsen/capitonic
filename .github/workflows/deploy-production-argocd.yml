@@ -2,7 +2,19 @@ name: Deploy Production Argo CD
 
 on:
   workflow_call:
+    inputs:
+      access_mode:
+        required: false
+        type: string
+        default: native
   workflow_dispatch:
+    inputs:
+      access_mode:
+        description: Expected public operations UI protection
+        required: true
+        type: choice
+        default: native
+        options: [native, cloudflare]
 
 permissions:
   contents: read
@@ -47,18 +59,27 @@ jobs:
           checkout_payload="$(base64 -w0 scripts/production/checkout-revision.sh)"
           command="install -d -m 0700 /run/capitonic && printf '%s' '$checkout_payload' | base64 -d > /run/capitonic/checkout-revision.sh && chmod 0700 /run/capitonic/checkout-revision.sh && /run/capitonic/checkout-revision.sh $revision && rm -f /run/capitonic/checkout-revision.sh && cd /opt/polymarket-bot && scripts/production/deploy-argocd.sh"
           scripts/production/run-ssm-command.sh "$INSTANCE_ID" 1800 'Install and verify production Argo CD' "$command"
-      - name: Verify Cloudflare Access fronts the operations UI
+      - name: Verify the public operations UI protection
+        env:
+          ACCESS_MODE: ${{ inputs.access_mode || 'native' }}
         run: |
           set -euo pipefail
+          case "$ACCESS_MODE" in native|cloudflare) ;; *) exit 64 ;; esac
           for attempt in $(seq 1 30); do
             headers="$(mktemp)"
-            status="$(curl -sS -D "$headers" -o /dev/null -w '%{http_code}' https://ops.capitonic.com/ || true)"
-            if [[ "$status" == 302 ]] && grep -Eiq '^location: .*cloudflareaccess.com' "$headers"; then
+            status="$(curl -sS -D "$headers" -o /dev/null -w '%{http_code}' https://ops.capitonic.com/api/v1/applications || true)"
+            if [[ "$ACCESS_MODE" == cloudflare && "$status" == 302 ]] &&
+               grep -Eiq '^location: .*cloudflareaccess.com' "$headers"; then
+              rm -f "$headers"
+              exit 0
+            fi
+            if [[ "$ACCESS_MODE" == native && ( "$status" == 401 || "$status" == 403 ) ]] &&
+               ! grep -Eiq '^location: .*cloudflareaccess.com' "$headers"; then
               rm -f "$headers"
               exit 0
             fi
             rm -f "$headers"
             sleep 5
           done
-          echo 'ops.capitonic.com did not present the Cloudflare Access login.' >&2
+          echo "ops.capitonic.com did not present the expected $ACCESS_MODE protection." >&2
           exit 1
