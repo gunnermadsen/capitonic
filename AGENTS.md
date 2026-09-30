@@ -68,6 +68,14 @@ Think of Capitonic as a vision to generate income through systems with automatio
 - Initiate local CI and CD as separate commands for explicitly requested bot or ingester image work. CI owns candidate image builds, local versions, and image provenance; CD owns chart image and `appVersion` pins and local deployment. The agent coordinates branch integration and golden checkpoint provenance.
 - Model training and observability provisioning retain their `model/...` and `provisioned/observability/...` provenance. They do not enter the application image version sequence unless an image input changes.
 
+## Helm Chart Versioning
+
+- Version each chart independently through `Chart.yaml` `version`, using SemVer `X.Y.Z`. Keep `appVersion` tied to the application version.
+- Bump the affected chart's version in the same commit as changes to templates, defaults, dependencies, image pins, or shared assets packaged into that chart. Documentation-only changes do not require a bump.
+- Use PATCH for compatible fixes and pin updates, MINOR for backward-compatible additions, and MAJOR for changes requiring operator action or breaking existing values or upgrade compatibility, including while versions are `0.x`.
+- Before tagging, run Helm lint and render checks for affected charts using supported values.
+- Create an immutable annotated Git tag `helm/<chart-name>/vX.Y.Z` on the exact version-changing commit, matching `Chart.yaml`. Record the chart path and change summary. Never move or overwrite the tag; it records chart provenance and does not authorize deployment or confer golden status.
+
 ## Golden Image Workflow
 
 `Perform the golden image workflow` authorizes selected branch merges, local image build and deployment, checkpoint verification, promotion, and pushing Git refs to origin. Registry publication, CI completion, and worktree cleanup do not gate the local checkpoint.
