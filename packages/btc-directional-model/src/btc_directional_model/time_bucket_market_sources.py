@@ -121,6 +121,66 @@ def audit_joins(run: Path, population: pl.DataFrame) -> None:
             "products": evidence,
         },
     )
+    summarize_joins(run)
+
+
+def joined_coverage_by_day_bucket(points: pl.DataFrame) -> pl.DataFrame:
+    """Count source availability only, without examining outcomes or selecting cutoffs."""
+    records = []
+    points = points.with_columns(pl.col("decision_at").dt.date().alias("date"))
+    for age in [2, 5, 10]:
+        masks = {}
+        for product in PRODUCTS:
+            windows = [30, 60] if product.endswith("twap") else [None]
+            columns = [
+                f"{product}_{window}_source_age_seconds"
+                if window
+                else f"{product}_source_age_seconds"
+                for window in windows
+            ]
+            masks[product] = pl.all_horizontal(
+                pl.col(column).is_between(0, age).fill_null(False) for column in columns
+            )
+        masks["all_four_products"] = pl.all_horizontal(masks.values())
+        for product, eligible in masks.items():
+            records.append(
+                points.group_by("date", "bucket_start")
+                .agg(
+                    pl.len().alias("observed_market_decisions"),
+                    eligible.sum().alias("causal_fresh_decisions"),
+                )
+                .with_columns(
+                    pl.lit(product).alias("product"),
+                    pl.lit(age).alias("diagnostic_age_seconds"),
+                )
+            )
+    return pl.concat(records).sort("product", "diagnostic_age_seconds", "date", "bucket_start")
+
+
+def summarize_joins(run: Path) -> None:
+    source = run / "metrics/mandatory-product-market-bucket-coverage.parquet"
+    coverage = joined_coverage_by_day_bucket(pl.read_parquet(source))
+    output = run / "metrics/mandatory-product-day-bucket-coverage.parquet"
+    coverage.write_parquet(output, compression="zstd")
+    summary = coverage.group_by("product", "diagnostic_age_seconds").agg(
+        pl.col("observed_market_decisions").sum(),
+        pl.col("causal_fresh_decisions").sum(),
+        pl.col("date").filter(pl.col("causal_fresh_decisions") > 0).min().alias("first_date"),
+        pl.col("date").filter(pl.col("causal_fresh_decisions") > 0).max().alias("last_date"),
+        pl.col("date").filter(pl.col("causal_fresh_decisions") > 0).n_unique().alias("dates"),
+        pl.col("bucket_start").filter(pl.col("causal_fresh_decisions") > 0).n_unique().alias("buckets"),
+    )
+    write_json(
+        run / "manifests/mandatory-product-day-bucket-coverage.json",
+        {
+            "source_sha256": sha256(source),
+            "output": str(output),
+            "output_sha256": sha256(output),
+            "scope": "Coverage only. TWAP products require both 30/60 windows; all-four requires all six observations. No model freshness threshold selected.",
+            "missing_dates": "Absent market dates are unknown coverage, not zero activity.",
+            "summary": summary.sort("product", "diagnostic_age_seconds").to_dicts(),
+        },
+    )
 
 
 def timestamp_inventory(
@@ -261,8 +321,12 @@ def main() -> None:
     parser.add_argument("run", type=Path)
     parser.add_argument("--joins-only", action="store_true")
     parser.add_argument("--freeze-references-only", action="store_true")
+    parser.add_argument("--summarize-joins-only", action="store_true")
     args = parser.parse_args()
     run = checked_run(args.run)
+    if args.summarize_joins_only:
+        summarize_joins(run)
+        return
     if args.freeze_references_only:
         freeze_reference_inventory(run)
         return
