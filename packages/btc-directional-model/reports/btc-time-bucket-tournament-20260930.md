@@ -1,13 +1,14 @@
-# BTC time-bucket tournament: preparation checkpoint
+# BTC time-bucket tournament: fitting checkpoint
 
 Run: `btc-time-bucket-tournament-20261001T001539Z` (September 30 local date).
 Branch: `training/btc-time-bucket-tournament`.
 Integration base: `3580b6f780f2842683ab44346d763adc39498bf9`.
 SSD root: `/Volumes/docker-data/capitonic-btc-directional-model/btc-time-bucket-tournament-20261001T001539Z`.
 
-**Partial: no model has been fitted, evaluated, qualified or deployed.** Source
-acceptance and independent preparation are complete. Chronological fitting awaits
-the label-availability decision below. All eight challengers remain required.
+**Partial: fitting outcomes are recorded; evaluation and qualification are pending.**
+All 38 arms across five folds have explicit outcomes: 140 completed fits and 50
+insufficient-support records. The latter include all ten quiet-arm folds. No date,
+feature, product identity or support criterion was changed to obtain a fit.
 
 ## Contract and frozen experiment
 
@@ -75,13 +76,13 @@ The market population contains 53,465 markets across 187 dates, March 21–Septe
 23. Each core, reference/TWAP and flow layer contains 2,192,065 scheduled observations,
 including explicit missing-source observations. Model-specific complete-case Parquet
 panels exist for 36 independent arms. All fifteen matched ablations share the same
-24,923 complete point identities. The two quiet panels await causal refresh activity.
+24,923 complete point identities. The two quiet panels now use causal refresh activity.
 
 The training-only descriptive study processed 1,818,022 eligible scheduled points.
 Numerical feature, coverage and execution tables are under `metrics/exploration/`;
 its scope is recorded in `diagnostics/training-exploration.md`. Hypothetical bucket
 entries are not sequential-policy income. No evaluation or holdout outcome was used
-to revise the experiment. Quiet/confidence/activity studies remain pending.
+to revise the experiment. The separate quiet/confidence/activity study is complete.
 Numerical findings are in `diagnostics/training-exploration-findings.md`; its
 evidence manifest verifies all 935 stored study artifact hashes and row counts.
 
@@ -92,7 +93,7 @@ models or evaluated strategies. Historical compatibility evidence is retained in
 `manifests/historical-replay-compatibility-current-panels.json`; compatible native
 feature reconstruction and historical OOS replay are still outstanding.
 
-## Fitting blocker
+## Authorized conditional label timing
 
 Archived official outcomes lack original resolution-publication/receipt times.
 A bounded follow-up search found some provider resolution-event clocks, but the
@@ -102,10 +103,22 @@ nor the thirty-minute purge proves when labels became available.
 
 Evidence: `manifests/official-outcome-availability-search.json`, SHA-256
 `253b8aeedbd609042acafe7d64ac666679377f3b1d63f3e09e8148a55fbd92cc`.
-The pending user choice is whether to authorize an explicit offline assumption that
-labels become available thirty minutes after close, or require timestamped evidence.
-No assumption has been authorized or silently applied. Fitting guards reject a
-missing availability contract. This is independent of incumbent trade history.
+The user authorized the explicit offline assumption that official labels become
+available thirty minutes after market close. Every supervised fit, calibration,
+selection and reference fit uses no earlier than that time, or a verified later
+availability timestamp. No later override was established in the existing evidence.
+The assumption is recorded in `inputs/label-availability-contract.json`, SHA-256
+`f4eba46dcc9b3835616f328f59025732b881282bb6723ec82e8d5a89bd918042`.
+Results and qualification are conditional on this assumption; historical label
+availability is not independently proven. It does not establish settlement, cash
+availability or live receipt. No additional label-timestamp search was required.
+
+The reference completed 58 daily chronological OOS fits; 129 daily outcomes lacked
+sufficient earlier support. All 187 dates preserve explicit observations or unknowns.
+The quiet study used only globally eligible training data and found 688 complete
+primary-arm points across 13 dates, with no complete disagreement-arm points.
+Neither quiet arm met the unchanged fold-support requirements. Missing reference
+predictions or execution evidence were never counted as quiet.
 
 ## Implementation, verification and outstanding work
 
@@ -126,11 +139,10 @@ data; no chart is presented as a tournament result.
 Verification manifest SHA-256:
 `5cfa2ee69c86be4c285134a0e2d15caeb5a78df2eb623114830070e1ca093251`.
 
-Remaining: label availability; refresh reference and quiet study; all real candidate
-fits/checkpoints; compatible historical replay; OOS predictions, ablations,
+Remaining: compatible historical replay; OOS predictions, ablations,
 bucket/quantity/stress ledgers, composition, robustness and qualification; final
-fit/report orchestration, immutable artifacts, eligible tags, final reports and
-candidate charts. No model is eligible for a provenance tag. The tournament is
+final artifacts, verified provenance tags, final reports and
+candidate charts. Newly produced artifacts await final provenance verification. The tournament is
 incomplete and qualification has not been assessed.
 
 All generated data remains under the SSD run. Twelve runtime environment links

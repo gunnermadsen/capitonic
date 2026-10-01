@@ -15,6 +15,7 @@ from btc_directional_model.time_bucket_candidates import QUIET_FIELDS, registry
 from btc_directional_model.time_bucket_evaluation import chosen_rows
 from btc_directional_model.time_bucket_execution import book_index
 from btc_directional_model.time_bucket_flow_panels import FEATURES
+from btc_directional_model.time_bucket_policy import intentions
 from btc_directional_model.time_bucket_protocol import boundary
 from btc_directional_model.time_bucket_replay import replay_rows
 from btc_directional_model.time_bucket_source_audit import sha256
@@ -83,6 +84,8 @@ def oos(tmp_path_factory):
     assert len(arms) == 3
     run = tmp_path_factory.mktemp("synthetic-oos")
     save(run / "inputs/tournament-freeze.json", frozen)
+    save(run / "inputs/label-availability-contract.json", {"synthetic_only": True})
+    save(run / "inputs/qualification-reporting-contract.json", {"synthetic_only": True})
     save(run / "inputs/candidate-feature-freeze.json", {"synthetic_only": True, "arms": arms})
     save(run / "manifests/chronological-roles.json", {"configuration_sha256": sha256(run / "inputs/tournament-freeze.json")})
     for name in ("independent-fold-training.json", "quiet-fold-training.json"):
@@ -105,6 +108,10 @@ def oos(tmp_path_factory):
             save(root / "manifest.json", {"synthetic_only": True,
                 "status": "complete" if available else "insufficient_complete_case_support",
                 "artifacts": [{"path": str(artifact), "sha256": sha256(artifact)}]})
+    for name in ["core-panels", "refprice-twap-panels", "flow-panels", "simulated-refresh-panels"]:
+        save(run / "manifests" / f"{name}.json", {"status": "complete", "synthetic_only": True,
+            "days": [{"date": path.stem, "path": str(path), "sha256": sha256(path)}
+                     for path in sorted((run / "datasets/core").glob("*.parquet"))]})
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(tournament, "arms_at_freeze", lambda _: arms)
         patch.setattr(tournament, "read_day", lambda root, day, layers: pl.read_parquet(root / "datasets/core" / f"{day}.parquet"))
@@ -185,3 +192,13 @@ def test_replay_keeps_first_unknown_attempt_and_independent_fak_fok(oos):
     assert fak["filled_quantity"].item() == 2 and fok["filled_quantity"].item() == 0
     assert fak["order_type"].item() == "FAK" and fok["order_type"].item() == "FOK"
     assert chosen_rows(frame, "bucket_diagnostic").height == 13
+
+
+def test_bucket_counterfactual_keeps_neighbors_outside_sequential_mask(oos):
+    frame = category(oos.outputs["conservative_selective_refresh"], "eligible").filter(pl.col("fold") == "fold_1")
+    policy = {"confidence": .55, "minimum_stressed_edge": .01, "maximum_share_cost": .55, "bucket_mask": [120, 140, 160]}
+    sequential = intentions(frame, policy, oos.frozen)
+    diagnostic = intentions(frame, {**policy, "bucket_mask": oos.frozen["bucket_starts"]}, oos.frozen)
+    frame = sequential.with_columns(diagnostic["admitted"].alias("bucket_diagnostic_admitted"))
+    assert chosen_rows(frame, "sequential_policy")["bucket_start"].to_list() == [120]
+    assert chosen_rows(frame, "bucket_diagnostic")["bucket_start"].to_list() == oos.frozen["bucket_starts"]

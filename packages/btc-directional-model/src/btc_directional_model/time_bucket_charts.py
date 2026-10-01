@@ -120,8 +120,9 @@ def _bursts(frame: pl.DataFrame, candidate: str, start: datetime, end: datetime)
         row["start"], row["end"] = _utc(row["start"]), _utc(row["end"])
         if not start <= row["start"] <= row["end"] < end:
             raise ValueError("Burst lies outside the evaluated calendar")
-        for field in ("trade_count", "net_pnl", "stress_pnl"):
-            row[field] = _number(row[field])
+        row["trade_count"] = _number(row["trade_count"])
+        for field in ("net_pnl", "stress_pnl"):
+            row[field] = _number(row[field], nullable=True)
         if row["trade_count"] < 1 or row["trade_count"] % 1:
             raise ValueError("Burst trade counts must be positive integers")
         row["preceding_verified_quiet_minutes"] = _number(row["preceding_verified_quiet_minutes"], nullable=True)
@@ -178,9 +179,9 @@ def render(path: Path, candidate: str, hourly: pl.DataFrame, bursts: pl.DataFram
     burst_rows, material = [], 0
     maximum_count = max((row["filled_trades"] or 0 for row in rows), default=0)
     for number, burst in enumerate(activity, 1):
-        significant = (burst["stress_pnl"] >= frozen["charts"]["positive_burst_annotation_usd"]
+        significant = burst["stress_pnl"] is not None and (burst["stress_pnl"] >= frozen["charts"]["positive_burst_annotation_usd"]
                        or burst["stress_pnl"] <= frozen["charts"]["negative_burst_annotation_usd"])
-        color = "#21734b" if burst["stress_pnl"] >= 0 else "#a33434"
+        color = "#6b7280" if burst["stress_pnl"] is None else "#21734b" if burst["stress_pnl"] >= 0 else "#a33434"
         if significant:
             material += 1
             figure.add_annotation(x=burst["start"], y=maximum_count * 1.06 + 1 + (number % 3) * .8,
@@ -188,10 +189,12 @@ def render(path: Path, candidate: str, hourly: pl.DataFrame, bursts: pl.DataFram
                 font={"size": 9, "color": color}, row=1, col=1)
         quiet = burst["preceding_verified_quiet_minutes"]
         quiet_text = "unknown" if quiet is None else f"{quiet:,.0f} min"
+        net_text = "unknown" if burst["net_pnl"] is None else f'${burst["net_pnl"]:,.2f}'
+        stress_text = "unknown" if burst["stress_pnl"] is None else f'${burst["stress_pnl"]:,.2f}'
         burst_rows.append(f'<tr class="{"material" if significant else ""}"><td>#{number}</td>'
             f'<td>{burst["start"]:%m-%d %H:%M}<br><small>to {burst["end"]:%m-%d %H:%M}</small></td>'
             f'<td>{int(burst["trade_count"])}</td><td>{quiet_text}</td>'
-            f'<td>${burst["net_pnl"]:,.2f}</td><td style="color:{color}">${burst["stress_pnl"]:,.2f}</td></tr>')
+            f'<td>{net_text}</td><td style="color:{color}">{stress_text}</td></tr>')
     figure.update_layout(title={"text": html.escape(title), "font": {"size": 19}}, height=930,
         template="plotly_white", font={"family": "Arial, sans-serif", "size": 11}, barmode="overlay",
         margin={"l": 66, "r": 18, "t": 130, "b": 55}, hovermode="x unified",

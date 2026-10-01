@@ -10,6 +10,7 @@ import joblib
 import polars as pl
 
 from .time_bucket_candidates import complete_cases, registry
+from .time_bucket_exploration import source_groups
 from .time_bucket_flow_panels import FEATURES
 from .time_bucket_policy import intentions
 from .time_bucket_protocol import config, split_rows
@@ -62,9 +63,16 @@ def score_evaluation(run: Path) -> None:
     for name in ["independent-fold-training.json", "quiet-fold-training.json"]:
         if json.loads((run / "manifests" / name).read_text())["status"] != "complete_with_explicit_support_outcomes":
             raise ValueError("All eight candidate fitting outcomes must be frozen before evaluation scoring")
+    panel_names = ["core-panels.json", "refprice-twap-panels.json", "flow-panels.json", "simulated-refresh-panels.json"]
+    panels = {name: json.loads((run / "manifests" / name).read_text()) for name in panel_names}
+    if any(panel["status"] != "complete" for panel in panels.values()):
+        raise ValueError("All causal panel layers must be complete before OOS scoring")
     manifest_path = run / "manifests/evaluation-predictions.json"
     identity = {"configuration": sha256(run / "inputs/tournament-freeze.json"),
+                "label_contract": sha256(run / "inputs/label-availability-contract.json"),
+                "diagnostic_contract": sha256(run / "inputs/qualification-reporting-contract.json"),
                 "features": sha256(run / "inputs/candidate-feature-freeze.json"),
+                "panels": {name: sha256(run / "manifests" / name) for name in panel_names},
                 "fit_manifests": {name: sha256(run / "manifests" / name) for name in [
                     "independent-fold-training.json", "quiet-fold-training.json"]},
                 "code": {name: sha256(Path(__file__).with_name(name)) for name in [
@@ -90,7 +98,16 @@ def score_evaluation(run: Path) -> None:
         for path in sorted((run / "datasets/core").glob("*.parquet")):
             if not (fold["evaluation_start"] <= path.stem < fold["evaluation_end"]):
                 continue
+            for panel in panels.values():
+                evidence = next(row for row in panel["days"] if row["date"] == path.stem)
+                if sha256(Path(evidence["path"])) != evidence["sha256"]:
+                    raise ValueError("Frozen causal evaluation panel changed")
             day = read_day(run, path.stem, ["refprice-twap", "flow", "simulated-refresh"])
+            presence = [pl.all_horizontal(pl.col(field).is_not_null() if field in day else pl.lit(False)
+                                        for field in fields).cast(pl.UInt64) * (1 << i)
+                        for i, fields in enumerate(source_groups().values())]
+            day = day.with_columns(pl.sum_horizontal(presence).alias("source_coverage_mask"),
+                *(pl.col(f"{side}_log_ask_depth").exp().sub(1).alias(f"{side}_decision_ask_depth") for side in ["up", "down"]))
             evaluation_ids = split_rows(day, frozen, fold, "evaluation")["point_id"].implode()
             day = day.with_columns(pl.col("point_id").is_in(evaluation_ids).alias("evaluation_clock_eligible"))
             for arm in arms:
@@ -114,6 +131,10 @@ def score_evaluation(run: Path) -> None:
                     result = rows.with_columns(pl.lit(None, dtype=pl.Float64).alias(c) for c in prediction_columns)
                 result = result.with_columns(pl.col("point_id").is_in(eligible["point_id"].implode()).alias("feature_eligible"))
                 result = intentions(result, bundle["policy"] if bundle else None, frozen)
+                diagnostic_policy = {**bundle["policy"], "bucket_mask": frozen["bucket_starts"]} if bundle and bundle["policy"] else None
+                counterfactual = intentions(result, diagnostic_policy, frozen)
+                result = result.with_columns(counterfactual["admitted"].alias("bucket_diagnostic_admitted"),
+                    counterfactual["admission_reason"].alias("bucket_diagnostic_reason"))
                 for name in ["chosen_probability", "decision_share_cost", "expected_gross_value_per_share"]:
                     if name not in result:
                         result = result.with_columns(pl.lit(None, dtype=pl.Float64).alias(name))
@@ -127,6 +148,9 @@ def score_evaluation(run: Path) -> None:
                 if arm.get("quiet_only"):
                     result = result.with_columns(
                         (pl.col("admitted") & (pl.col("reference_quiet") == 1)).fill_null(False).alias("admitted"),
+                        (pl.col("bucket_diagnostic_admitted") & (pl.col("reference_quiet") == 1)).fill_null(False).alias("bucket_diagnostic_admitted"),
+                        pl.when(pl.col("feature_eligible") & (pl.col("reference_quiet") == 0))
+                        .then(pl.lit("outside_quiet_population")).otherwise(pl.col("bucket_diagnostic_reason")).alias("bucket_diagnostic_reason"),
                         pl.when(pl.col("feature_eligible") & (pl.col("reference_quiet") == 0))
                         .then(pl.lit("outside_quiet_population")).otherwise(pl.col("admission_reason")).alias("admission_reason"))
                 result = result.with_columns(
@@ -139,10 +163,17 @@ def score_evaluation(run: Path) -> None:
                     pl.lit(fold["name"]).alias("fold"),
                     pl.lit(bundle["selected_quantity"] if bundle else None, dtype=pl.Float64).alias("selected_quantity"),
                     pl.lit(checkpoint["status"]).alias("checkpoint_status"))
+                result = result.with_columns(
+                    pl.when(~pl.col("evaluation_clock_eligible")).then(pl.lit("purged_boundary_market"))
+                    .when(~pl.col("feature_eligible")).then(pl.lit("missing_required_causal_features"))
+                    .when(pl.lit(bundle is None)).then(pl.lit("model_unavailable_insufficient_support"))
+                    .otherwise(pl.col("bucket_diagnostic_reason")).alias("bucket_diagnostic_reason"))
                 extra = ["candidate", "arm", "fold", "feature_eligible", "evaluation_clock_eligible",
                          "checkpoint_status", "selected_quantity", "probability_down", "admitted",
                          "admission_reason", "chosen_side", "expected_stressed_value_per_share"]
                 extra += ["reference_quiet", "reference_availability_known", "general_market_diagnostic_admitted"]
+                extra += ["bucket_diagnostic_admitted", "bucket_diagnostic_reason", "source_coverage_mask",
+                          "up_decision_ask_depth", "down_decision_ask_depth"]
                 extra += [c for c in ["chosen_probability", "decision_share_cost", "expected_gross_value_per_share"] if c in result]
                 # Feature values and full lineage traces remain in immutable panel files.
                 retained = list(dict.fromkeys(IDENTITY + DECISION + prediction_columns + extra))

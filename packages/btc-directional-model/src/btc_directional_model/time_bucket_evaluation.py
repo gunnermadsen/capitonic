@@ -20,6 +20,8 @@ from .time_bucket_tournament import arms_at_freeze
 def chosen_rows(predictions: pl.DataFrame, view: str, *, offset: int | None = None,
                 general_market: bool = False) -> pl.DataFrame:
     flag = "general_market_diagnostic_admitted" if general_market else "admitted"
+    if view == "bucket_diagnostic" and "bucket_diagnostic_admitted" in predictions:
+        flag = "bucket_diagnostic_admitted"
     selected = predictions.filter(pl.col(flag)).sort("decision_at", "market_id")
     if offset is not None:
         selected = selected.filter(pl.col("entry_offset") == offset)
@@ -64,6 +66,9 @@ def replay(run: Path) -> None:
             fold = frame["fold"][0] if frame.height else next(f["name"] for f in frozen["folds"] if f["evaluation_start"] <= day < f["evaluation_end"])
             checkpoint = run / "checkpoints" / record["candidate"] / record["arm"] / fold
             fit = json.loads((checkpoint / "manifest.json").read_text())
+            for artifact in fit.get("artifacts", []):
+                if sha256(Path(artifact["path"])) != artifact["sha256"]:
+                    raise ValueError("Frozen fit artifact changed before independent execution replay")
             bundle = joblib.load(checkpoint / "model-bundle.joblib") if fit["status"] == "complete" else None
             pieces = []
             if bundle and bundle["policy"]:
