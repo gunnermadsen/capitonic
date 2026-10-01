@@ -13,28 +13,24 @@ import polars as pl
 from .conservative_selective_training import fit_model, score
 from .time_bucket_activity import activity_states
 from .time_bucket_candidates import CORE, complete_cases
+from .time_bucket_labels import (
+    eligible_labels,
+    label_contract,
+    prediction_features_only,
+    with_label_availability,
+)
 from .time_bucket_policy import cached_q5, choose_policy, selected_attempts
 from .time_bucket_protocol import boundary, config
 from .time_bucket_source_audit import checked_run, sha256, write_json
 from .time_bucket_training import DECISION, IDENTITY, FitBudget, support
 
 
-def label_contract(run: Path) -> dict:
-    path = run / "inputs/label-availability-contract.json"
-    if not path.exists():
-        raise ValueError("Chronological fitting awaits the official-label availability clarification")
-    record = json.loads(path.read_text())
-    if record.get("mode") != "user_authorized_offline_assumption" or record.get("seconds_after_close") != 1800:
-        raise ValueError("No supported authorized label-availability contract")
-    if not record.get("user_authorization"):
-        raise ValueError("The label-availability assumption requires explicit user authorization")
-    return record
-
-
 def reference_splits(panel: pl.DataFrame, day: date, frozen: dict) -> tuple[pl.DataFrame, pl.DataFrame]:
     cutoff = boundary(str(day))
     purge = pl.duration(seconds=frozen["purge_seconds"])
     allowed = panel.filter((pl.col("role") == "training") & (pl.col("window_end") + purge <= cutoff))
+    if "label_use_at" in allowed:
+        allowed = eligible_labels(allowed, cutoff)
     days = sorted(allowed["window_start"].dt.date().unique().to_list())
     count = frozen["reference"]["calibration_days"]
     if len(days) < count + frozen["reference"]["initial_fit_min_days"]:
@@ -42,6 +38,8 @@ def reference_splits(panel: pl.DataFrame, day: date, frozen: dict) -> tuple[pl.D
     calibration_days = days[-count:]
     calibration_start = boundary(str(calibration_days[0]))
     train = allowed.filter(pl.col("window_end") + purge <= calibration_start)
+    if "label_use_at" in train:
+        train = eligible_labels(train, calibration_start)
     calibration = allowed.filter(pl.col("window_start").dt.date().is_in(calibration_days)
                                  & (pl.col("window_start") >= calibration_start + purge))
     if train["window_start"].dt.date().n_unique() < frozen["reference"]["initial_fit_min_days"]:
@@ -52,6 +50,7 @@ def reference_splits(panel: pl.DataFrame, day: date, frozen: dict) -> tuple[pl.D
 def generate(run: Path) -> None:
     frozen = config(run)
     label_identity = label_contract(run)
+    prediction_features_only(CORE)
     eligibility = json.loads((run / "manifests/training-eligibility.json").read_text())
     if "conservative_selective_refresh" not in eligibility.get("accepted_candidates", []):
         raise ValueError("Reference direction/policy checkpoints are not eligible to train")
@@ -61,7 +60,7 @@ def generate(run: Path) -> None:
                 "label_contract": label_identity,
                 "code": {name: sha256(Path(__file__).with_name(name)) for name in [
                     "time_bucket_reference.py", "time_bucket_activity.py", "time_bucket_policy.py",
-                    "conservative_selective_training.py", "time_bucket_protocol.py"]}}
+                    "conservative_selective_training.py", "time_bucket_protocol.py", "time_bucket_labels.py"]}}
     manifest_path = run / "manifests/simulated-refresh-reference.json"
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {
         "identity": identity, "label": "simulated refresh activity", "days": [], "status": "in_progress"}
@@ -85,7 +84,7 @@ def generate(run: Path) -> None:
         complete = complete_cases(frame, arm)
         if complete.height:
             frames.append(complete)
-    panel = pl.concat(frames, how="vertical_relaxed")
+    panel = with_label_availability(pl.concat(frames, how="vertical_relaxed"), label_identity)
     budget = FitBudget(run, frozen)
     completed = {x["date"]: x for x in manifest["days"]}
     for path in paths:
@@ -142,7 +141,10 @@ def generate(run: Path) -> None:
             record.update(status="complete", latest_fit_market_end=str(train["window_end"].max()),
                           latest_calibration_market_end=str(calibration["window_end"].max()),
                           scored_start=str(today["decision_at"].min()), information_cutoff=boundary(str(day)).isoformat(),
-                          excluded_roles=["calibration", "evaluation", "holdout"])
+                          excluded_roles=["calibration", "evaluation", "holdout"],
+                          latest_fit_label_use_at=str(train["label_use_at"].max()),
+                          latest_calibration_label_use_at=str(calibration["label_use_at"].max()),
+                          conditional_on_label_timing_assumption=True)
         result = result.with_columns((pl.col("decision_at") + pl.duration(milliseconds=frozen["book"]["arrival_ms"]))
                                      .alias("evidence_available_at"))
         output.parent.mkdir(parents=True, exist_ok=True)

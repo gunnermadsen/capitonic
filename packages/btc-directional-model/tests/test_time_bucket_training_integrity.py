@@ -47,6 +47,7 @@ def synthetic_run(tmp_path, monkeypatch):
     artifact = checkpoint.with_name("synthetic-artifact.json")
     save(artifact, {"synthetic_only": True, "model_fitted": False})
     record = {"candidate": arm["candidate"], "arm": arm["arm"], "fold": deepcopy(fold),
+              "label_availability_contract": {"synthetic_test_only": True},
               "features": list(arm["features"]), "configuration_sha256": digest(configuration),
               "feature_freeze_sha256": digest(features),
               "panel_manifests": {name: digest(run / "manifests" / name) for name in panel_names},

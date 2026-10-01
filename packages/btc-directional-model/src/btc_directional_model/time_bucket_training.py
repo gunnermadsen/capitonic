@@ -14,8 +14,9 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 
 from .conservative_selective_training import fit_model, score, weights
 from .time_bucket_candidates import complete_cases, derived_features, reference_features
+from .time_bucket_labels import eligible_labels, prediction_features_only, with_label_availability
 from .time_bucket_policy import choose_policy
-from .time_bucket_protocol import config, split_rows
+from .time_bucket_protocol import boundary, config, split_rows
 from .time_bucket_source_audit import sha256, write_json
 
 IDENTITY = ["point_id", "market_id", "window_start", "window_end", "decision_at", "seconds_elapsed",
@@ -156,7 +157,8 @@ def fit_fold(run: Path, panel: pl.DataFrame, arm: dict, fold: dict, budget: FitB
     from .time_bucket_replay import calibration_replay, choose_exit, select_quantity
 
     frozen = config(run)
-    label_contract(run)
+    labels = label_contract(run)
+    prediction_features_only(arm["features"])
     eligibility = json.loads((run / "manifests/training-eligibility.json").read_text())
     if arm["candidate"] not in eligibility.get("accepted_candidates", []):
         raise ValueError("Candidate-specific training checkpoint dependencies are not accepted")
@@ -169,6 +171,7 @@ def fit_fold(run: Path, panel: pl.DataFrame, arm: dict, fold: dict, budget: FitB
     if arm["head"] == "direction_and_exit":
         panel_names.append("exit-labels.json")
     identity = {"candidate": arm["candidate"], "arm": arm["arm"], "fold": fold,
+                "label_availability_contract": labels,
                 "features": arm["features"], "configuration_sha256": sha256(run / "inputs/tournament-freeze.json"),
                 "feature_freeze_sha256": sha256(run / "inputs/candidate-feature-freeze.json"),
                 "panel_manifests": {name: sha256(run / "manifests" / name) for name in panel_names}}
@@ -183,7 +186,9 @@ def fit_fold(run: Path, panel: pl.DataFrame, arm: dict, fold: dict, budget: FitB
         if predictions and sha256(Path(predictions["path"])) != predictions["sha256"]:
             raise ValueError("Calibration predictions changed since checkpoint")
         return record
-    train, calibration = [split_rows(panel, frozen, fold, role) for role in ["training", "calibration"]]
+    panel = with_label_availability(panel, labels)
+    train, calibration = [eligible_labels(split_rows(panel, frozen, fold, role), boundary(cutoff))
+                          for role, cutoff in [("training", fold["calibration_start"]), ("calibration", fold["evaluation_start"])]]
     target.mkdir(parents=True, exist_ok=True)
     record = {**identity,
               "train_markets": train["market_id"].n_unique(), "train_rows": train.height,
@@ -198,18 +203,34 @@ def fit_fold(run: Path, panel: pl.DataFrame, arm: dict, fold: dict, budget: FitB
     # Chronology guards are independent of the row-selection implementation.
     if train.filter(pl.col("role") != "training").height or calibration.filter(pl.col("role") != "calibration").height:
         raise ValueError("Evaluation or holdout observations entered fitting/calibration")
+    exit_train = target_rows = None
+    if arm["head"] == "direction_and_value":
+        value_markets = train.filter(
+            (pl.col("up_fak_evidence_known") & (pl.col("up_fak_quantity_5") > 0))
+            | (pl.col("down_fak_evidence_known") & (pl.col("down_fak_quantity_5") > 0)))["market_id"].n_unique()
+        if value_markets < frozen["calibration"]["minimum_fit_markets"]:
+            record.update(status="insufficient_value_label_support", value_markets=value_markets)
+            write_json(manifest_path, record)
+            return record
+    if arm["head"] == "direction_and_exit":
+        if exit_panel is None:
+            raise ValueError("Buy/sell candidate requires separate causal post-entry training observations")
+        exit_panel = with_label_availability(exit_panel, labels)
+        exit_train = eligible_labels(split_rows(exit_panel, frozen, fold, "training"), boundary(fold["calibration_start"]))
+        target_rows = pl.scan_parquet(run / "datasets/exit-labels/*.parquet").filter(
+            (pl.col("order_type") == "FAK") & pl.col("sell_advantage_label").is_not_null()
+        ).join(exit_train.lazy().select("point_id", "market_id"), on="point_id", how="inner").collect(engine="streaming")
+        if target_rows["market_id"].n_unique() < frozen["calibration"]["minimum_fit_markets"]:
+            record.update(status="insufficient_sell_label_support", exit_markets=target_rows["market_id"].n_unique())
+            write_json(manifest_path, record)
+            return record
+        target_rows = target_rows.drop("market_id")
     budget.reserve(f"{arm['candidate']}/{arm['arm']}/{fold['name']}", 2 if arm["head"] in {"direction_and_value", "direction_and_exit"} else 1)
     direction = fit_model(train, calibration, frozen["model"], frozen, frozen["seed"], features=tuple(arm["features"]))
     bundle = {"direction": direction, "value": None, "exit": None}
     if arm["head"] == "direction_and_value":
         bundle["value"] = value_head(train, arm["features"], frozen)
     if arm["head"] == "direction_and_exit":
-        if exit_panel is None:
-            raise ValueError("Buy/sell candidate requires separate causal post-entry training observations")
-        exit_train = split_rows(exit_panel, frozen, fold, "training")
-        target_rows = pl.scan_parquet(run / "datasets/exit-labels/*.parquet").filter(
-            (pl.col("order_type") == "FAK") & pl.col("sell_advantage_label").is_not_null()
-        ).join(exit_train.lazy().select("point_id"), on="point_id", how="inner").collect(engine="streaming")
         bundle["exit"] = fit_exit(exit_train, target_rows, arm["features"], frozen)
     calibrated = score_bundle(calibration, bundle, frozen)
     policy, search = choose_policy(calibrated, frozen)
@@ -217,7 +238,7 @@ def fit_fold(run: Path, panel: pl.DataFrame, arm: dict, fold: dict, budget: FitB
     bundle["exit_policy"] = None
     exit_calibration = None
     if bundle["exit"]:
-        exit_calibration = split_rows(exit_panel, frozen, fold, "calibration")
+        exit_calibration = eligible_labels(split_rows(exit_panel, frozen, fold, "calibration"), boundary(fold["evaluation_start"]))
         selected_exit, exit_search = choose_exit(run, calibrated, policy, frozen, bundle["exit"], exit_calibration)
         bundle["exit_policy"] = selected_exit
         exit_policy_path = target / "exit-policy.json"
@@ -256,6 +277,9 @@ def fit_fold(run: Path, panel: pl.DataFrame, arm: dict, fold: dict, budget: FitB
     calibration_path.parent.mkdir(parents=True, exist_ok=True)
     calibrated.write_parquet(calibration_path, compression="zstd")
     record.update(status="complete", calibration_ece=direction[3],
+                  conditional_on_label_timing_assumption=True,
+                  latest_fit_label_use_at=str(train["label_use_at"].max()),
+                  latest_calibration_label_use_at=str(calibration["label_use_at"].max()),
                   calibration_predictions={"path": str(calibration_path), "sha256": sha256(calibration_path)},
                   fit_latest_market_end=str(train["window_end"].max()), calibration_latest_market_end=str(calibration["window_end"].max()))
     write_json(manifest_path, record)
