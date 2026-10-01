@@ -8,7 +8,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from btc_directional_model import time_bucket_results
+from btc_directional_model import time_bucket_report, time_bucket_results
 from btc_directional_model.time_bucket_results import (
     activity_bursts,
     composition,
@@ -61,7 +61,7 @@ ARM = {"candidate": "synthetic", "arm": "primary", "head": "direction", "entry_o
 
 def test_complete_summary_preserves_unsupported_quiet_and_hashes(tmp_path, monkeypatch):
     frozen = json.loads((Path(__file__).parents[1] / "configs/btc-time-bucket-tournament.json").read_text())
-    arms = [{**ARM, "candidate": name, "primary": True} for name in ["conservative_selective_refresh", "quiet_explorer"]]
+    arms = [{**ARM, "candidate": name, "primary": True, "features": []} for name in ["conservative_selective_refresh", "quiet_explorer"]]
     (tmp_path / "inputs").mkdir()
     (tmp_path / "metrics").mkdir()
     (tmp_path / "manifests").mkdir()
@@ -100,6 +100,18 @@ def test_complete_summary_preserves_unsupported_quiet_and_hashes(tmp_path, monke
     assert not decision["candidates_and_arms"]["quiet_explorer/primary"]["qualified"]
     assert decision["simulated_refresh_composition"]["matched_markets"] == 0
     time_bucket_results.build(tmp_path)
+    (tmp_path / "manifests/final-models.json").write_text(json.dumps({"status": "complete_with_explicit_support_outcomes",
+        "candidates": [{"candidate": arm["candidate"], "status": "unsupported_no_final_artifact"} for arm in arms]}))
+    for name in ["complete-case-panels", "quiet-complete-case-panels"]:
+        (tmp_path / "manifests" / f"{name}.json").write_text('{"days":[]}')
+    monkeypatch.setattr(time_bucket_report, "config", lambda _: frozen)
+    monkeypatch.setattr(time_bucket_report, "arms_at_freeze", lambda _: arms)
+    time_bucket_report.build(tmp_path)
+    report_manifest = json.loads((tmp_path / "manifests/tournament-report.json").read_text())
+    assert report_manifest["status"] == "complete"
+    for artifact in report_manifest["outputs"]:
+        assert sha256(Path(artifact["path"])) == artifact["sha256"]
+    assert "No OOS predictions: performance unavailable" in (tmp_path / "diagnostics/robustness/quiet_explorer.html").read_text()
 
 
 def passing_gate_inputs():

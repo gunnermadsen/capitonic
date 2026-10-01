@@ -52,11 +52,13 @@ def diagnostic_figure(run: Path, arm: dict, dimensions: pl.DataFrame, folds: pl.
                     y=[value if value is None or math.isfinite(value) else None for value in rows[metric]],
                     mode="lines+markers", name=f"{kind} {metric}", connectgaps=False), row=r, col=c)
     local = folds.filter((pl.col("candidate") == candidate) & (pl.col("arm") == "primary"))
-    figure.add_trace(go.Bar(x=local["fold"].to_list(), y=local["stress_pnl"].to_list(), name="Q5 FAK folds"), row=3, col=1)
+    any_predictions = local["predictions"].sum() > 0
+    figure.add_trace(go.Bar(x=local["fold"].to_list(),
+        y=[row["stress_pnl"] if row["predictions"] else None for row in local.to_dicts()], name="Q5 FAK folds"), row=3, col=1)
     for kind in ["FAK", "FOK"]:
         local = buckets.filter((pl.col("candidate") == candidate) & (pl.col("arm") == "primary")
                                & (pl.col("order_type") == kind)).sort("bucket_start")
-        figure.add_trace(go.Scatter(x=local["bucket_start"].to_list(), y=local["stress_pnl"].to_list(),
+        figure.add_trace(go.Scatter(x=local["bucket_start"].to_list(), y=local["stress_pnl"].to_list() if any_predictions else [None] * local.height,
                                    mode="lines+markers", name=f"{kind} independent bucket"), row=3, col=2)
     local = daily.filter((pl.col("candidate") == candidate) & (pl.col("arm") == "primary")).sort("date")
     dates, data = [], []
@@ -77,8 +79,9 @@ def diagnostic_figure(run: Path, arm: dict, dimensions: pl.DataFrame, folds: pl.
                 running += value
             curve.append(running if value is not None else None)
         figure.add_trace(go.Scatter(x=dates, y=curve, name=f"Cumulative {metric}", connectgaps=False), row=4, col=2)
+    availability = "Observed OOS predictions" if any_predictions else "No OOS predictions: performance unavailable"
     figure.update_layout(height=1500, width=1250, template="plotly_white", title={"text":
-        f"{candidate} · offline backtest · conditional label availability<br><sup>Bucket counterfactuals are separate; missing dates are gaps; ∞ ratios omitted from plot and retained in tables.</sup>"},
+        f"{candidate} · offline backtest · conditional label availability<br><sup>{availability}. Bucket counterfactuals are separate; missing dates are gaps; ∞ ratios retained in tables.</sup>"},
         legend={"orientation": "h", "y": -.08}, margin={"t": 110, "b": 140})
     target = run / "diagnostics/robustness" / f"{candidate}.html"
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -156,7 +159,8 @@ def build(run: Path) -> None:
             ("daily-results", ["date", "fully_covered", "observed_hours", "fills", "filled_notional", "net_pnl", "stress_pnl"]),
             ("bucket-results", ["bucket_start", "order_type", "attempts", "fills", "net_pnl", "stress_pnl"]),
             ("neighbor-stability", ["axis", "neighbor", "fills", "stress_pnl", "pass"])]:
-            lines += [f"{name}:\n", table(data[name].filter((pl.col("candidate") == candidate) & (pl.col("arm") == "primary")).to_dicts(), fields)]
+            records = data[name].filter((pl.col("candidate") == candidate) & (pl.col("arm") == "primary")).to_dicts() if data[name].width else []
+            lines += [f"{name}:\n", table(records, fields)]
         dimensions = data["capacity-stress-controls"]
         if dimensions.width:
             local = dimensions.filter((pl.col("candidate") == candidate) & (pl.col("arm") == "primary")
@@ -174,7 +178,8 @@ def build(run: Path) -> None:
         "## Refresh composition and historical references\n",
         "Actual incumbent trade activity remains unavailable. All quiet/activity comparisons above refer to **simulated refresh activity**. Missing reference observations never establish quiet, and no actual paper/live complementarity is proven.\n",
         "```json\n" + json.dumps(decisions["simulated_refresh_composition"], indent=2) + "\n```\n",
-        "Immutable historical diagnostics and exact feature/cutoff exclusions are recorded in `manifests/historical-native-diagnostics.json` and the historical compatibility manifests. Historical diagnostics are not additional challengers or qualification evidence for new fits.\n",
+        "Immutable historical diagnostics and exact feature/cutoff exclusions are recorded in `manifests/historical-native-diagnostics.json`, `manifests/historical-controls.json`, `manifests/historical-conditional-pathways.json` and the historical compatibility manifests. Historical diagnostics are not additional challengers or qualification evidence for new fits.\n",
+        "[Detailed economic interpretation and model-specific next investigations](../diagnostics/tournament-interpretation.md) reports useful and failed feature families, matched ablations, execution controls and descriptive profitable buckets without revising the experiment.\n",
         "## Interpretation and immutable evidence\n",
         "A return to market close is an outcome-valued backtest, not evidence of settlement or reusable cash at that timestamp. Filled notional measures entry usage; it does not prove cash turnover. Unknown or partial coverage cannot count as a quiet period. Calibration selects policies and quantities; evaluation only measures them.\n",
         "Top-ceil(30%×distinct evaluated candidates) chronological activity/PnL/burst figures and ranking evidence: `diagnostics/activity/charts-manifest.json`. All38arms,13buckets, native quantities, both execution modes, controls and frozen stresses remain in SSD Parquet evidence. Unsupported arms retain explicit checkpoint and prediction rejection records.\n",

@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "run": "btc-time-bucket-tournament-20261001T001539Z",
+  "canonical_ssd_run": "/Volumes/docker-data/capitonic-btc-directional-model/btc-time-bucket-tournament-20261001T001539Z",
+  "branch": "training/btc-time-bucket-tournament",
+  "integration_base": "3580b6f780f2842683ab44346d763adc39498bf9",
+  "previous_attempt_preserved": "aee988e590169a7e853443e00445ff0baeaf50b6",
+  "conditional_on_label_timing_assumption": true,
+  "qualified_candidates": 0,
+  "deployment_authorized": false,
+  "model_artifact_files": 627,
+  "distinct_immutable_model_artifacts": 530,
+  "evidence": [
+    {
+      "path": "/Volumes/docker-data/capitonic-btc-directional-model/btc-time-bucket-tournament-20261001T001539Z/manifests/evaluation-predictions.json",
+      "sha256": "90cff15337f7e59217781fe76db3dce3f33850cb6db7f150784b95487a3ca74b"
+    },
+    {
+      "path": "/Volumes/docker-data/capitonic-btc-directional-model/btc-time-bucket-tournament-20261001T001539Z/manifests/execution-replay.json",
+      "sha256": "290bb9dff99e1e845b7142f6f383f589b92b785a73dc72c3b0dc10524e9339b3"
+    },
+    {
+      "path": "/Volumes/docker-data/capitonic-btc-directional-model/btc-time-bucket-tournament-20261001T001539Z/manifests/tournament-results.json",
+      "sha256": "4c884b73bdca0c0bab93a33f70700c5dd32ff8a5efffd7a2da8d2192e3e2da28"
+    },
+    {
+      "path": "/Volumes/docker-data/capitonic-btc-directional-model/btc-time-bucket-tournament-20261001T001539Z/manifests/final-models.json",
+      "sha256": "e106fa261a794e33001456c4e877f414690e46c4d6635dcb74d96741905f9939"
+    },
+    {
+      "path": "/Volumes/docker-data/capitonic-btc-directional-model/btc-time-bucket-tournament-20261001T001539Z/manifests/model-artifact-inventory.json",
+      "sha256": "c8c98de516c208c5f7bf93e117188d35f925b1c238f96f8ddf5e2a864f459244"
+    },
+    {
+      "path": "/Volumes/docker-data/capitonic-btc-directional-model/btc-time-bucket-tournament-20261001T001539Z/manifests/tournament-report.json",
+      "sha256": "e6622f7a2efacee4a5da10fe8643d3ac8a801c3c9bba719ffeacc1d6abdeb063"
+    },
+    {
+      "path": "/Volumes/docker-data/capitonic-btc-directional-model/btc-time-bucket-tournament-20261001T001539Z/manifests/tournament-interpretation.json",
+      "sha256": "d12c71c6b80a481da5e9a8a05de854f3fd6ea9640e76b612c3a8ddb7a93068fb"
+    },
+    {
+      "path": "/Volumes/docker-data/capitonic-btc-directional-model/btc-time-bucket-tournament-20261001T001539Z/manifests/historical-replay-summary.json",
+      "sha256": "04cf9bf2c243c0ecae372c7cde59aecad890d7589e772f3607390e53bef681c3"
+    },
+    {
+      "path": "/Volumes/docker-data/capitonic-btc-directional-model/btc-time-bucket-tournament-20261001T001539Z/manifests/historical-conditional-pathways.json",
+      "sha256": "0c3124c232a4481e45a0eefd4595c71fc18863aa651887efa5d9209575aac8b2"
+    },
+    {
+      "path": "/Volumes/docker-data/capitonic-btc-directional-model/btc-time-bucket-tournament-20261001T001539Z/manifests/historical-reconstruction-repair.json",
+      "sha256": "5d342585aff32524207394bb357073b863b46e3df0438f973a79def07a9d78ae"
+    },
+    {
+      "path": "/Volumes/docker-data/capitonic-btc-directional-model/btc-time-bucket-tournament-20261001T001539Z/manifests/report-rendering-verification.json",
+      "sha256": "86608ce1b8722e85fbb669581119d5f59abd0b7ed0191b8b0a37bee52461c871"
+    },
+    {
+      "path": "/Volumes/docker-data/capitonic-btc-directional-model/btc-time-bucket-tournament-20261001T001539Z/manifests/quiet-training-study.json",
+      "sha256": "f364f743a46c34562c1fa2a3b9a0a800f5d797f03417b2ae838bba680eeda009"
+    },
+    {
+      "path": "/Volumes/docker-data/capitonic-btc-directional-model/btc-time-bucket-tournament-20261001T001539Z/manifests/evaluation-implementation-freeze.json",
+      "sha256": "4703f8e6b7cc26cdedf1f92a493c0cd865d0e56c820f37d387f8d67369d868dd"
+    },
+    {
+      "path": "/Volumes/docker-data/capitonic-btc-directional-model/btc-time-bucket-tournament-20261001T001539Z/diagnostics/source-coverage/manifest.json",
+      "sha256": "5fc7ce0361dba123ef9167714b19ca8c351496452b5eb7c6a153775de24d28f1"
+    },
+    {
+      "path": "/Volumes/docker-data/capitonic-btc-directional-model/btc-time-bucket-tournament-20261001T001539Z/diagnostics/source-coverage/quiet-manifest.json",
+      "sha256": "5a369d8bf066621af1e0b3ea4c83ade0d8128c31c869d9c20f7a4f35bb737fc0"
+    },
+    {
+      "path": "/Volumes/docker-data/capitonic-btc-directional-model/btc-time-bucket-tournament-20261001T001539Z/diagnostics/activity/charts-manifest.json",
+      "sha256": "8388deb1d74d3f4b1c5b63d0415d6d965581479abe128d87f189153b59a7a974"
+    }
+  ],
+  "tag_status_manifest": "/Volumes/docker-data/capitonic-btc-directional-model/btc-time-bucket-tournament-20261001T001539Z/manifests/model-tags.json"
+}

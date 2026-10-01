@@ -130,6 +130,14 @@ def test_native_closed_second_clock_anchor_and_future_independence():
     assert result.equals(reconstruct_native(rows, changed, FEATURES))
 
 
+def test_decimal_archives_reuse_original_float_feature_representation():
+    rows = schedule([180, 200])
+    numeric = ["open_price", "high_price", "low_price", "close_price", "base_volume",
+               "quote_volume", "taker_buy_base_volume", "taker_buy_quote_volume"]
+    decimal = candles().with_columns(pl.col(name).cast(pl.Decimal(38, 10)) for name in numeric)
+    assert reconstruct_native(rows, decimal, FEATURES).equals(reconstruct_native(rows, candles(), FEATURES))
+
+
 def test_gap_and_late_constituent_are_not_filled_or_shifted():
     rows = schedule([180, 200])
     missing = candles().filter(pl.col("open_timestamp") != START + timedelta(seconds=19))

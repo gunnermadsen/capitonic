@@ -185,6 +185,9 @@ def reconstruct_native(
     ).with_columns(pl.col("observed_at").dt.truncate("5m").alias("window_start"))
     markets = rows.select("market_id", "window_start").unique()
     raw = observed.join(markets, on="window_start", how="inner").rename(CANDLE_VALUES)
+    # Match the original offline extractor's Float64 numeric representation;
+    # validated archives retain Decimal prices/volumes instead of SQL doubles.
+    raw = raw.with_columns(pl.col(name).cast(pl.Float64) for name in CANDLE_VALUES.values() if name != "trade_count")
     raw = (
         raw.with_columns(
             (pl.col("observed_at") - pl.col("window_start"))
