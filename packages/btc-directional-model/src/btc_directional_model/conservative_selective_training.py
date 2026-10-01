@@ -286,8 +286,10 @@ def fit_model(
     spec: dict[str, Any],
     raw: dict[str, Any],
     seed: int,
+    *,
+    features: tuple[str, ...] | None = None,
 ) -> tuple[Any, Any, tuple[str, ...], float]:
-    features = model_features(spec)
+    features = model_features(spec) if features is None else features
     common = raw["model"]
     estimator = HistGradientBoostingClassifier(
         learning_rate=common["learning_rate"],
