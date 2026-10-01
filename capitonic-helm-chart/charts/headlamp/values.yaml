@@ -1,0 +1,32 @@
+upstream:
+  fullnameOverride: headlamp
+  replicaCount: 1
+  image:
+    tag: "0.45.0"
+  config:
+    baseURL: /system
+    inClusterContextName: rancher-desktop
+    unsafeUseServiceAccountToken: false
+    oidc:
+      secret:
+        create: false
+  clusterRoleBinding:
+    create: false
+  serviceAccount:
+    name: headlamp
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    annotations:
+      traefik.ingress.kubernetes.io/router.entrypoints: web
+    hosts:
+      - host: localhost
+        paths:
+          - path: /system
+            type: Prefix
+  resources:
+    requests: {cpu: 25m, memory: 64Mi}
+    limits: {cpu: 250m, memory: 256Mi}
+
+viewer:
+  serviceAccountName: headlamp-viewer
