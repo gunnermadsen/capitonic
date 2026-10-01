@@ -1,0 +1,15 @@
+{
+  "deployment_scope": "paper_only",
+  "feature_schema_sha256": "5dceedc374621f50e844ddf43cea5f58068c4dc70c36169c037dbb2691c7f39a",
+  "feature_schema_version": "btc-5m-payoff-aware-conservative-price-v1",
+  "golden_vectors_file": "golden-vectors.json",
+  "golden_vectors_sha256": "62b72768b1d59e6c0ca6f3985788bf210cc15e68c5f4e6897d2cd2930fdcea32",
+  "live_capital_allowed": false,
+  "model_file": "model.json",
+  "model_key": "btc-5m-conservative-selective-confidence-080-paper-20261001",
+  "model_sha256": "20af4f42a40827c8751e5fb9f9e94c7d23910a314c82c6a80f901fb88c34b352",
+  "production_qualified": false,
+  "schema_version": "capitonic-btc-directional-runtime-manifest-v1",
+  "source_freeze_manifest_sha256": "88744a1cc1fb0af824a902212906944ea7873433e672111d38a740afc3e01481",
+  "source_training_model_sha256": "88744a1cc1fb0af824a902212906944ea7873433e672111d38a740afc3e01481"
+}
