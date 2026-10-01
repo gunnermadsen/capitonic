@@ -4,6 +4,16 @@ locals {
   cloudflare_tunnel_dns_target = "${var.cloudflare_tunnel_id}.cfargotunnel.com"
 }
 
+resource "cloudflare_dns_record" "apex" {
+  zone_id = var.cloudflare_zone_id
+  name    = var.cloudflare_apex_hostname
+  content = aws_instance.k3s_host.public_ip
+  type    = "A"
+  ttl     = 1
+  proxied = true
+  comment = "Managed by Terraform for the Capitonic apex redirect"
+}
+
 resource "cloudflare_dns_record" "monitor" {
   zone_id = var.cloudflare_zone_id
   name    = var.cloudflare_monitor_hostname
@@ -60,21 +70,38 @@ resource "cloudflare_ruleset" "production_https_redirect" {
   kind    = "zone"
   phase   = "http_request_dynamic_redirect"
 
-  rules = [{
-    ref         = "capitonic_production_https_redirect"
-    description = "Upgrade the four production HTTP hostnames to HTTPS"
-    expression  = "not ssl and http.host in {\"${var.cloudflare_monitor_hostname}\" \"${var.cloudflare_api_hostname}\" \"${var.cloudflare_metrics_hostname}\" \"${var.cloudflare_ops_hostname}\"}"
-    action      = "redirect"
-    action_parameters = {
-      from_value = {
-        status_code           = 308
-        preserve_query_string = true
-        target_url = {
-          expression = "concat(\"https://\", http.host, http.request.uri.path)"
+  rules = [
+    {
+      ref         = "capitonic_apex_monitor_redirect"
+      description = "Redirect the Capitonic apex hostname to Grafana"
+      expression  = "http.host eq \"${var.cloudflare_apex_hostname}\""
+      action      = "redirect"
+      action_parameters = {
+        from_value = {
+          status_code           = 308
+          preserve_query_string = true
+          target_url = {
+            expression = "concat(\"https://${var.cloudflare_monitor_hostname}\", http.request.uri.path)"
+          }
+        }
+      }
+    },
+    {
+      ref         = "capitonic_production_https_redirect"
+      description = "Upgrade the four production HTTP hostnames to HTTPS"
+      expression  = "not ssl and http.host in {\"${var.cloudflare_monitor_hostname}\" \"${var.cloudflare_api_hostname}\" \"${var.cloudflare_metrics_hostname}\" \"${var.cloudflare_ops_hostname}\"}"
+      action      = "redirect"
+      action_parameters = {
+        from_value = {
+          status_code           = 308
+          preserve_query_string = true
+          target_url = {
+            expression = "concat(\"https://\", http.host, http.request.uri.path)"
+          }
         }
       }
     }
-  }]
+  ]
 }
 
 resource "cloudflare_ruleset" "production_hsts" {
@@ -86,7 +113,7 @@ resource "cloudflare_ruleset" "production_hsts" {
   rules = [{
     ref         = "capitonic_production_hsts"
     description = "Require HTTPS on subsequent browser visits to production hosts"
-    expression  = "ssl and http.host in {\"${var.cloudflare_monitor_hostname}\" \"${var.cloudflare_api_hostname}\" \"${var.cloudflare_metrics_hostname}\" \"${var.cloudflare_ops_hostname}\"}"
+    expression  = "ssl and http.host in {\"${var.cloudflare_apex_hostname}\" \"${var.cloudflare_monitor_hostname}\" \"${var.cloudflare_api_hostname}\" \"${var.cloudflare_metrics_hostname}\" \"${var.cloudflare_ops_hostname}\"}"
     action      = "rewrite"
     action_parameters = {
       headers = {

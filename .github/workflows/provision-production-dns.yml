@@ -37,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: production
+          ref: development
       - uses: hashicorp/setup-terraform@v4
       - uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -64,6 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           terraform -chdir="$TF_DIR" plan -input=false -lock-timeout=5m \
+            -target=cloudflare_dns_record.apex \
             -target=cloudflare_dns_record.api \
             -target=cloudflare_dns_record.metrics \
             -target=cloudflare_dns_record.ops \
@@ -74,6 +75,7 @@ jobs:
             [.resource_changes[]? | select(.change.actions != ["no-op"])]
             | all(.[];
                 (.address | IN(
+                  "cloudflare_dns_record.apex",
                   "cloudflare_dns_record.api",
                   "cloudflare_dns_record.metrics",
                   "cloudflare_dns_record.ops",
@@ -93,6 +95,13 @@ jobs:
             rm -f "$headers"
             [[ "$status" == 308 ]]
           done
+          headers="$(mktemp)"
+          status="$(curl -sS --max-time 15 -D "$headers" -o /dev/null -w '%{http_code}' \
+            "https://capitonic.com/capitonic-redirect-check?source=workflow")"
+          tr -d '\r' < "$headers" | grep -Eiq \
+            '^location: https://monitor\.capitonic\.com/capitonic-redirect-check\?source=workflow$'
+          rm -f "$headers"
+          [[ "$status" == 308 ]]
       - name: Verify Argo CD login before removing operations Access
         if: inputs.remove_ops_access == true
         run: |
@@ -139,6 +148,7 @@ jobs:
         run: |
           set -euo pipefail
           terraform -chdir="$TF_DIR" plan -input=false -lock-timeout=5m -detailed-exitcode \
+            -target=cloudflare_dns_record.apex \
             -target=cloudflare_dns_record.api \
             -target=cloudflare_dns_record.metrics \
             -target=cloudflare_dns_record.ops \

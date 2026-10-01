@@ -6,6 +6,7 @@ TF_DIR="${TF_DIR:-infra/production-k3s}"
 : "${CLOUDFLARE_API_TOKEN:?CLOUDFLARE_API_TOKEN is required}"
 : "${TF_VAR_cloudflare_account_id:?TF_VAR_cloudflare_account_id is required}"
 : "${TF_VAR_cloudflare_zone_id:?TF_VAR_cloudflare_zone_id is required}"
+: "${TF_VAR_cloudflare_apex_hostname:?TF_VAR_cloudflare_apex_hostname is required}"
 : "${TF_VAR_cloudflare_monitor_hostname:?TF_VAR_cloudflare_monitor_hostname is required}"
 : "${TF_VAR_cloudflare_ssh_hostname:?TF_VAR_cloudflare_ssh_hostname is required}"
 : "${TF_VAR_cloudflare_api_hostname:?TF_VAR_cloudflare_api_hostname is required}"
@@ -46,6 +47,7 @@ import_record_if_present() {
   esac
 }
 
+import_record_if_present cloudflare_dns_record.apex "$TF_VAR_cloudflare_apex_hostname"
 import_record_if_present cloudflare_dns_record.monitor "$TF_VAR_cloudflare_monitor_hostname"
 import_record_if_present cloudflare_dns_record.ssh_ops "$TF_VAR_cloudflare_ssh_hostname"
 import_record_if_present cloudflare_dns_record.api "$TF_VAR_cloudflare_api_hostname"
