@@ -14,9 +14,10 @@ TF_DIR="${TF_DIR:-infra/production-k3s}"
 : "${TF_VAR_cloudflare_ops_hostname:?TF_VAR_cloudflare_ops_hostname is required}"
 
 import_record_if_present() {
-  local address hostname response count record_id
+  local address hostname record_type response count record_id
   address="$1"
   hostname="$2"
+  record_type="$3"
 
   if terraform -chdir="$TF_DIR" state list | grep -qx "$address"; then
     echo "$address is already managed in Terraform state."
@@ -27,32 +28,32 @@ import_record_if_present() {
     curl -fsS \
       -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
       -H "Content-Type: application/json" \
-      "https://api.cloudflare.com/client/v4/zones/$TF_VAR_cloudflare_zone_id/dns_records?name=$hostname"
+      "https://api.cloudflare.com/client/v4/zones/$TF_VAR_cloudflare_zone_id/dns_records?name=$hostname&type=$record_type"
   )"
 
   count="$(jq -r '.result | length' <<<"$response")"
   case "$count" in
     0)
-      echo "No existing Cloudflare DNS record found for $hostname; Terraform will create it."
+      echo "No existing Cloudflare $record_type record found for $hostname; Terraform will create it."
       ;;
     1)
       record_id="$(jq -r '.result[0].id' <<<"$response")"
-      echo "Importing existing Cloudflare DNS record for $hostname into $address."
+      echo "Importing existing Cloudflare $record_type record for $hostname into $address."
       terraform -chdir="$TF_DIR" import -input=false "$address" "$TF_VAR_cloudflare_zone_id/$record_id"
       ;;
     *)
-      echo "Multiple Cloudflare DNS records found for $hostname; refusing to choose one." >&2
+      echo "Multiple Cloudflare $record_type records found for $hostname; refusing to choose one." >&2
       exit 1
       ;;
   esac
 }
 
-import_record_if_present cloudflare_dns_record.apex "$TF_VAR_cloudflare_apex_hostname"
-import_record_if_present cloudflare_dns_record.monitor "$TF_VAR_cloudflare_monitor_hostname"
-import_record_if_present cloudflare_dns_record.ssh_ops "$TF_VAR_cloudflare_ssh_hostname"
-import_record_if_present cloudflare_dns_record.api "$TF_VAR_cloudflare_api_hostname"
-import_record_if_present cloudflare_dns_record.metrics "$TF_VAR_cloudflare_metrics_hostname"
-import_record_if_present cloudflare_dns_record.ops "$TF_VAR_cloudflare_ops_hostname"
+import_record_if_present cloudflare_dns_record.apex "$TF_VAR_cloudflare_apex_hostname" A
+import_record_if_present cloudflare_dns_record.monitor "$TF_VAR_cloudflare_monitor_hostname" A
+import_record_if_present cloudflare_dns_record.ssh_ops "$TF_VAR_cloudflare_ssh_hostname" CNAME
+import_record_if_present cloudflare_dns_record.api "$TF_VAR_cloudflare_api_hostname" A
+import_record_if_present cloudflare_dns_record.metrics "$TF_VAR_cloudflare_metrics_hostname" A
+import_record_if_present cloudflare_dns_record.ops "$TF_VAR_cloudflare_ops_hostname" CNAME
 
 import_access_if_present() {
   local access_address="$1" hostname="$2" access_response access_count access_id
