@@ -2,7 +2,7 @@ upstream:
   fullnameOverride: headlamp
   replicaCount: 1
   image:
-    tag: "0.45.0"
+    tag: "v0.45.0"
   config:
     baseURL: /system
     inClusterContextName: rancher-desktop
