@@ -84,6 +84,7 @@ spec:
             - {name: INGESTER_BTC_CAPACITY_EXECUTION_SNAPSHOTS_LAKE_ROOT, value: /var/lib/capitonic-data/btc-capacity-execution-snapshots}
             - {name: INGESTER_BTC_FEATURE_SNAPSHOTS_LAKE_ROOT, value: /var/lib/capitonic-data/btc-feature-snapshots}
             - {name: INGESTER_BINANCE_SPOT_L2_SNAPSHOTS_LAKE_ROOT, value: /var/lib/capitonic-data/binance-spot-l2-snapshots}
+            - {name: INGESTER_BINANCE_FUTURES_OPEN_INTEREST_LAKE_ROOT, value: /var/lib/capitonic-data/binance-l2/drains/futures-open-interest}
             - {name: INGESTER_POLYGON_CHAINLINK_ORACLE_ROUNDS_LAKE_ROOT, value: /var/lib/capitonic-data/polygon-chainlink-oracle-rounds}
             - {name: INGESTER_CRYPTOHFT_ARCHIVE_ROOT, value: /var/lib/capitonic-data/binance-l2}
             - {name: INGESTER_CRYPTOHFT_TEMPORARY_DIRECTORY, value: /var/lib/capitonic-data/binance-l2/tmp}
