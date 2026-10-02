@@ -69,10 +69,10 @@ def prepare_headlamp(args):
     secret = json.loads(command('kubectl', '-n', 'capitonic', 'get', 'secret', entry['name'], '-o', 'json'))
     if set(secret['data']) != {'users'} or not base64.b64decode(secret['data']['users']).decode().startswith(username + ':$2'):
         raise RuntimeError('Headlamp target Secret is not the expected bcrypt users entry')
-    root = 'https://' + values['upstream']['ingress']['hosts'][0]['host'] + '/system'
+    root = 'https://' + values['upstream']['ingress']['hosts'][0]['host'] + values['upstream']['config'].get('baseURL', '').rstrip('/')
 
     def get(path, credential=None):
-        headers = {}
+        headers = {'User-Agent': 'Capitonic-Headlamp-Verification/1.0'}
         if credential:
             headers['Authorization'] = 'Basic ' + base64.b64encode(credential.encode()).decode()
         try:

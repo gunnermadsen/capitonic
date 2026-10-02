@@ -29,7 +29,7 @@ DNS and ESO installation; Terraform `plan` skips it.
 For a fresh full-stack bootstrap it passes `deploy_headlamp: false` and invokes
 Headlamp after stack deployment has provisioned the certificate issuer.
 
-Production values expose `https://system.capitonic.com/system/` through existing
+Production values expose `https://system.capitonic.com/` through existing
 Traefik TLS and a chart-ingress certificate issued by `letsencrypt-production`.
 The existing production DNS workflow provisions its Cloudflare-proxied A record
 against the production server IP and includes it in HTTPS and HSTS rules.

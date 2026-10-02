@@ -1,5 +1,6 @@
 upstream:
   config:
+    baseURL: ""
     inClusterContextName: production
   ingress:
     annotations:
@@ -8,7 +9,7 @@ upstream:
     hosts:
       - host: system.capitonic.com
         paths:
-          - path: /system
+          - path: /
             type: Prefix
     tls:
       - secretName: headlamp-tls
