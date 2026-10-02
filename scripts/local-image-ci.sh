@@ -83,6 +83,20 @@ image_inputs_sha256() {
   git ls-tree -r --full-tree "$1" -- "${image_inputs[@]}" | LC_ALL=C shasum -a 256 | awk '{print $1}'
 }
 
+if [[ "$mode" == --build || "$mode" == --next-version ]] && [[ -f infra/production/release.json ]]; then
+  selected_rc="$(python3 -c 'import json,sys; print(json.load(open("infra/production/release.json"))["components"][sys.argv[1]]["rcVersion"])' "$component")"
+  [[ "$selected_rc" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.(0|[1-9][0-9]*)$ ]] || exit 64
+  base_version="${selected_rc#v}"; base_version="${base_version%%-*}"
+  production_release="$(git show origin/production:infra/production/release.json)" || exit 67
+  promoted_version="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["components"][sys.argv[1]]["finalVersion"])' "$component" <<< "$production_release")"
+  promoted_source="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["components"][sys.argv[1]]["sourceRevision"])' "$component" <<< "$production_release")"
+  if python3 -c 'import sys; sys.exit(0 if tuple(map(int,sys.argv[1].split("."))) <= tuple(map(int,sys.argv[2].lstrip("v").split("."))) else 1)' "$base_version" "$promoted_version" &&
+     [[ "$(image_inputs_sha256 HEAD)" != "$(image_inputs_sha256 "$promoted_source")" ]]; then
+    echo "Production $promoted_version closes this version base; select a newer SemVer base in infra/production/release.json before building changed inputs." >&2
+    exit 67
+  fi
+fi
+
 tag_accepted_rc() {
   local accepted checkpoint chart version image id source local_version candidate_tag hash_tag golden_tag rc_tag
   local -a deployments=()
@@ -364,6 +378,7 @@ done < <(git tag --list "image/$component/v*-local.*")
 }
 
 while IFS= read -r existing_tag; do
+  [[ "$existing_tag" == "image/$component/v$base_version-local."* ]] || continue
   prior_revision="$(git rev-list -n 1 "refs/tags/$existing_tag")"
   git merge-base --is-ancestor "$prior_revision" "$git_revision" || continue
   [[ "$(image_inputs_sha256 "$prior_revision")" == "$inputs_sha256" ]] || continue

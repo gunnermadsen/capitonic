@@ -34,6 +34,8 @@ CD updates the chart image and `appVersion`; for ingester it also pins the immut
 
 ## Integration branch: golden checkpoint
 
+Before preparing a release, reconcile outstanding production admission commits into integration, preserving deployed image digests and secret-version pins. Production accepts qualified development promotions and scoped CD admission commits; reconcile generated production commits back into integration after deployment.
+
 Select qualifying branches and merge them into integration under `AGENTS.md`. Compare component image inputs with the tested candidates. Reuse an immutable candidate when its inputs match; do not rebuild it merely to assign an RC alias. Run required component checks once for changed inputs.
 
 For each selected component, invoke CD to alias the tested candidate as the next RC and generate its chart pin. The first RC for a new base version is `rc.0`; subsequent RCs increment on that same base. Review and commit the chart pins, then invoke deployment separately for each component:
@@ -63,6 +65,8 @@ GitHub Actions retains the local CI component boundaries: it runs the bot and in
 - `db-migrate` has its own candidate image and approved one-shot migration process; ordinary bot or ingester deployment does not run migrations.
 
 ## Finishing a version
+
+Once a final version is published, its base is closed: subsequent changed images use the next SemVer base with local.0 and rc.0, after checking remote Git and registry state. Local CI reads the selected base from the release manifest, rejects changed inputs under a promoted base, and only reuses candidates from the selected base.
 
 Production CD selects the committed RC in `infra/production/release.json`, verifies its immutable Ireland ECR digest and `linux/arm64` platform, and creates the final `vMAJOR.MINOR.PATCH` ECR tag against that same manifest. It derives the final version through SemVer validation and shell parameter expansion; text substitution must not guess or strip an arbitrary suffix. CD then writes the exact digest, embedded source revision, and final version into the production Helm overlay and chart `appVersion` before deployment. An existing final tag must already identify the selected RC digest or promotion stops. Choose a new base version per component from the change: patch for a compatible fix, minor for compatible new behavior, or major for a breaking change. On that base, local candidates start at `local.0` and RCs start at `rc.0`; subsequent candidates increment within the same base version.
 

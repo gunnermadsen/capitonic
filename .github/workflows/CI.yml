@@ -6,6 +6,7 @@ on:
       - development
       - feature/**
       - defect/**
+      - fix/**
 
 permissions:
   contents: read
@@ -87,6 +88,17 @@ jobs:
           polymarket_bot_tests="$(changed Cargo.toml Cargo.lock packages/polymarket-bot packages/btc-directional-model/runtime-models common/proto)"
           ingester_tests="$(changed Cargo.toml Cargo.lock packages/market-data-ingester common/proto)"
           db_migrate_tests="$(changed packages/db-migrate)"
+          for component in polymarket-bot ingester db-migrate; do
+            previous="$(git show "$BASE_SHA:infra/production/release.json" | jq -c --arg component "$component" '.components[$component] | {rcVersion,sourceRevision}')"
+            current="$(jq -c --arg component "$component" '.components[$component] | {rcVersion,sourceRevision}' infra/production/release.json)"
+            if [[ "$previous" != "$current" ]]; then
+              case "$component" in
+                polymarket-bot) polymarket_bot=true; polymarket_bot_tests=true ;;
+                ingester) ingester=true; ingester_tests=true ;;
+                db-migrate) db_migrate=true; db_migrate_tests=true ;;
+              esac
+            fi
+          done
           helm_inputs=(
             capitonic-helm-chart
             common/configs/alloy

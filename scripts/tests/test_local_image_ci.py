@@ -202,6 +202,33 @@ state_file.write_text(json.dumps(state))
         self.assertIn("refusing concurrent version allocation", blocked.stderr)
         self.assertEqual(self.count.read_text(), "0")
 
+    def test_promoted_base_blocks_changed_inputs_and_new_base_does_not_reuse_old_candidate(self):
+        promoted_source = self.git("rev-parse", "HEAD")
+        self.assertEqual(self.run_ci("polymarket-bot").returncode, 0)
+        (self.repo / "packages/polymarket-bot/src/main.rs").write_text("new model inputs\n")
+        self.commit()
+        self.assertEqual(self.run_ci("polymarket-bot").returncode, 0)
+        release_path = self.repo / "infra/production/release.json"
+        release_path.parent.mkdir(parents=True)
+        release = {"components": {"polymarket-bot": {
+            "rcVersion": "v3.2.4-rc.1", "finalVersion": "v3.2.4",
+            "sourceRevision": promoted_source,
+        }}}
+        release_path.write_text(json.dumps(release))
+        self.commit()
+        self.git("update-ref", "refs/remotes/origin/production", "HEAD")
+        blocked = self.run_ci("polymarket-bot")
+        self.assertNotEqual(blocked.returncode, 0)
+        self.assertIn("closes this version base", blocked.stderr)
+        self.assertEqual(self.count.read_text(), "2")
+        release["components"]["polymarket-bot"]["rcVersion"] = "v3.2.5-rc.0"
+        release_path.write_text(json.dumps(release))
+        self.commit()
+        corrected = self.run_ci("polymarket-bot")
+        self.assertEqual(corrected.returncode, 0, corrected.stderr)
+        self.assertIn("image/polymarket-bot/v3.2.5-local.0", self.tags("polymarket-bot"))
+        self.assertEqual(self.count.read_text(), "3")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -49,6 +49,8 @@ Think of Capitonic as a vision to generate income through systems with automatio
 
 - Once a branch is merged into integration, do not add commits to it; commit follow-up changes on integration or a new branch from the latest integration tip.
 - `development` contains accepted releases. Do not implement features or fixes directly on it.
+- `production` contains accepted production releases; allow only explicitly authorized promotions from accepted `development` and narrowly scoped CI/CD-generated admission commits, never direct feature or fix implementation.
+- Before preparing another release, merge outstanding production admission commits into the latest integration branch, preserving deployed image and secret pins; never reset or force-push production to erase divergence.
 - Use one active integration branch named `integration-<YYYY-MM-DD>`, created from the accepted `development` tip. An optional annotated `integration-cycle/<YYYY-MM-DD>` tag may record its starting boundary.
 - New feature, defect, and model-training branches use `feature/<name>`, `defect/<name>`, or `training/<name>`, start from the latest integration tip, and merge only into integration. Keep unrelated domains separate; follow-up work starts from its existing feature, training, or integration lineage.
 - Use `docs/<name>` for standalone documentation or repository-policy changes, including `AGENTS.md` and files under `docs/`. Create and work on documentation branches only in the main worktree from the latest integration tip; do not create a separate worktree. Documentation required by a feature or defect remains on its owning branch.
@@ -93,6 +95,7 @@ Migration creation and initial feature or defect validation follow Database Chan
 
 ## Image and Golden Identity
 
+- Before allocating a component version, check origin tags, production release pins, and registry final tags; treat promoted bases as closed, choose the next SemVer base for changed image inputs, and verify candidate, RC, Helm, and release metadata agree before tagging or pushing.
 - An `image/...` tag records build provenance. A `golden/...` tag records an image's first accepted development checkpoint. A `checkpoint/development/...` tag records the complete rollback tuple for that `development` commit. An accepted image may be reused by a later checkpoint when its runtime inputs are unchanged; its embedded source revision and existing provenance tags do not move.
 - The candidate tuple records the Git revision, immutable image identities, embedded revisions, migration state, material runtime configuration, applicable model identity, checks, and limitations. The rollback tuple records the predeployment images and revisions, service set, worker capacity, active realtime and backfill allocations, migration state, and material runtime configuration.
 - Golden status and change detection are component-specific. Shared code or build-input changes affect every image that consumes them.
