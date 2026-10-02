@@ -6,19 +6,22 @@ upstream:
   config:
     baseURL: /system
     inClusterContextName: rancher-desktop
-    unsafeUseServiceAccountToken: false
+    # The password middleware and backend NetworkPolicy must remain enabled.
+    unsafeUseServiceAccountToken: true
     oidc:
       secret:
         create: false
   clusterRoleBinding:
     create: false
   serviceAccount:
-    name: headlamp
+    name: headlamp-viewer
+    create: false
   ingress:
     enabled: true
     ingressClassName: traefik
     annotations:
       traefik.ingress.kubernetes.io/router.entrypoints: web
+      traefik.ingress.kubernetes.io/router.middlewares: capitonic-headlamp-basic-auth@kubernetescrd
     hosts:
       - host: localhost
         paths:
@@ -30,3 +33,9 @@ upstream:
 
 viewer:
   serviceAccountName: headlamp-viewer
+
+# Populated by scripts/helm/provision-headlamp.py from the main .env.headlamp.
+# HEADLAMP_PASSWORD is never passed to Helm; only its derived bcrypt hash is used.
+credentials:
+  HEADLAMP_USERNAME: ""
+  HEADLAMP_PASSWORD_HASH: ""

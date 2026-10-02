@@ -2,7 +2,7 @@ apiVersion: v2
 name: headlamp
 description: Capitonic local Kubernetes system resource viewer
 type: application
-version: 0.1.1
+version: 1.0.0
 appVersion: "0.45.0"
 dependencies:
   - name: headlamp
