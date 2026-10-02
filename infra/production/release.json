@@ -7,8 +7,8 @@
       "repository": "capitonic/polymarket-bot",
       "rcVersion": "v3.2.5-rc.0",
       "sourceRevision": "7985264529918cd75a5c87adc1b7d42616293d55",
-      "finalVersion": "v3.2.4",
-      "digest": "sha256:9ad182a6e61844ce17df132ecc367ed7013a19aa8dd4865f629f80172d392a45"
+      "finalVersion": "v3.2.5",
+      "digest": "sha256:b302c7d54008513241ef658154b6f684864be2e1a649fde928d60459d03cc1eb"
     },
     "ingester": {
       "repository": "capitonic/ingester",
