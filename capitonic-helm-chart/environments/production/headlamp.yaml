@@ -4,14 +4,15 @@ upstream:
   ingress:
     annotations:
       traefik.ingress.kubernetes.io/router.entrypoints: websecure
+      cert-manager.io/cluster-issuer: letsencrypt-production
     hosts:
-      - host: monitor.capitonic.com
+      - host: system.capitonic.com
         paths:
           - path: /system
             type: Prefix
     tls:
-      - secretName: grafana-tls
-        hosts: [monitor.capitonic.com]
+      - secretName: headlamp-tls
+        hosts: [system.capitonic.com]
 externalSecrets:
   enabled: true
   region: eu-west-1

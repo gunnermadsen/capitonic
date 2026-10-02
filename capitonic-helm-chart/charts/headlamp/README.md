@@ -27,10 +27,13 @@ with a committed `revision`. It deploys only Headlamp through the existing AWS
 OIDC role and production SSM runner. The EC2 provisioning workflow calls it after
 DNS and ESO installation; Terraform `plan` skips it.
 For a fresh full-stack bootstrap it passes `deploy_headlamp: false` and invokes
-Headlamp after stack deployment has created the monitoring TLS certificate.
+Headlamp after stack deployment has provisioned the certificate issuer.
 
-Production values expose `https://monitor.capitonic.com/system/` through existing
-Traefik TLS and the monitoring certificate. ESO reads `HEADLAMP_USERNAME` and
+Production values expose `https://system.capitonic.com/system/` through existing
+Traefik TLS and a chart-ingress certificate issued by `letsencrypt-production`.
+The existing production DNS workflow provisions its Cloudflare-proxied A record
+against the production server IP and includes it in HTTPS and HSTS rules.
+ESO reads `HEADLAMP_USERNAME` and
 `HEADLAMP_PASSWORD` from the admitted immutable AWS secret version and creates
 only a bcrypt `users` entry in `headlamp-basic-auth`. Helm does not own that Secret.
 The chart owns the SecretStore, ExternalSecret, middleware and viewer resources.

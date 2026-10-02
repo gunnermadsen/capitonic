@@ -34,6 +34,16 @@ resource "cloudflare_dns_record" "api" {
   comment = "Managed by Terraform for the Capitonic production API ingress"
 }
 
+resource "cloudflare_dns_record" "system" {
+  zone_id = var.cloudflare_zone_id
+  name    = var.cloudflare_system_hostname
+  content = aws_instance.k3s_host.public_ip
+  type    = "A"
+  ttl     = 1
+  proxied = true
+  comment = "Managed by Terraform for the Capitonic production Headlamp ingress"
+}
+
 resource "cloudflare_dns_record" "metrics" {
   zone_id = var.cloudflare_zone_id
   name    = var.cloudflare_metrics_hostname
@@ -88,8 +98,8 @@ resource "cloudflare_ruleset" "production_https_redirect" {
     },
     {
       ref         = "capitonic_production_https_redirect"
-      description = "Upgrade the four production HTTP hostnames to HTTPS"
-      expression  = "not ssl and http.host in {\"${var.cloudflare_monitor_hostname}\" \"${var.cloudflare_api_hostname}\" \"${var.cloudflare_metrics_hostname}\" \"${var.cloudflare_ops_hostname}\"}"
+      description = "Upgrade production HTTP hostnames to HTTPS"
+      expression  = "not ssl and http.host in {\"${var.cloudflare_monitor_hostname}\" \"${var.cloudflare_api_hostname}\" \"${var.cloudflare_metrics_hostname}\" \"${var.cloudflare_ops_hostname}\" \"${var.cloudflare_system_hostname}\"}"
       action      = "redirect"
       action_parameters = {
         from_value = {
@@ -113,7 +123,7 @@ resource "cloudflare_ruleset" "production_hsts" {
   rules = [{
     ref         = "capitonic_production_hsts"
     description = "Require HTTPS on subsequent browser visits to production hosts"
-    expression  = "ssl and http.host in {\"${var.cloudflare_apex_hostname}\" \"${var.cloudflare_monitor_hostname}\" \"${var.cloudflare_api_hostname}\" \"${var.cloudflare_metrics_hostname}\" \"${var.cloudflare_ops_hostname}\"}"
+    expression  = "ssl and http.host in {\"${var.cloudflare_apex_hostname}\" \"${var.cloudflare_monitor_hostname}\" \"${var.cloudflare_api_hostname}\" \"${var.cloudflare_metrics_hostname}\" \"${var.cloudflare_ops_hostname}\" \"${var.cloudflare_system_hostname}\"}"
     action      = "rewrite"
     action_parameters = {
       headers = {

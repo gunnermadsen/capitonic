@@ -8,6 +8,7 @@ TF_DIR="${TF_DIR:-infra/production-k3s}"
 : "${TF_VAR_cloudflare_zone_id:?TF_VAR_cloudflare_zone_id is required}"
 : "${TF_VAR_cloudflare_apex_hostname:?TF_VAR_cloudflare_apex_hostname is required}"
 : "${TF_VAR_cloudflare_monitor_hostname:?TF_VAR_cloudflare_monitor_hostname is required}"
+: "${TF_VAR_cloudflare_system_hostname:?TF_VAR_cloudflare_system_hostname is required}"
 : "${TF_VAR_cloudflare_ssh_hostname:?TF_VAR_cloudflare_ssh_hostname is required}"
 : "${TF_VAR_cloudflare_api_hostname:?TF_VAR_cloudflare_api_hostname is required}"
 : "${TF_VAR_cloudflare_metrics_hostname:?TF_VAR_cloudflare_metrics_hostname is required}"
@@ -50,6 +51,7 @@ import_record_if_present() {
 
 import_record_if_present cloudflare_dns_record.apex "$TF_VAR_cloudflare_apex_hostname" A
 import_record_if_present cloudflare_dns_record.monitor "$TF_VAR_cloudflare_monitor_hostname" A
+import_record_if_present cloudflare_dns_record.system "$TF_VAR_cloudflare_system_hostname" A
 import_record_if_present cloudflare_dns_record.ssh_ops "$TF_VAR_cloudflare_ssh_hostname" CNAME
 import_record_if_present cloudflare_dns_record.api "$TF_VAR_cloudflare_api_hostname" A
 import_record_if_present cloudflare_dns_record.metrics "$TF_VAR_cloudflare_metrics_hostname" A

@@ -138,6 +138,12 @@ variable "cloudflare_monitor_hostname" {
   default     = "monitor.capitonic.com"
 }
 
+variable "cloudflare_system_hostname" {
+  description = "Public Cloudflare-proxied hostname for the production Headlamp ingress."
+  type        = string
+  default     = "system.capitonic.com"
+}
+
 variable "cloudflare_apex_hostname" {
   description = "Public Cloudflare-proxied apex hostname redirected to the Grafana hostname."
   type        = string

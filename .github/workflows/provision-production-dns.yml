@@ -67,6 +67,7 @@ jobs:
             -target=cloudflare_dns_record.apex \
             -target=cloudflare_dns_record.api \
             -target=cloudflare_dns_record.metrics \
+            -target=cloudflare_dns_record.system \
             -target=cloudflare_dns_record.ops \
             -target=cloudflare_ruleset.production_https_redirect \
             -target=cloudflare_ruleset.production_hsts \
@@ -78,6 +79,7 @@ jobs:
                   "cloudflare_dns_record.apex",
                   "cloudflare_dns_record.api",
                   "cloudflare_dns_record.metrics",
+                  "cloudflare_dns_record.system",
                   "cloudflare_dns_record.ops",
                   "cloudflare_ruleset.production_https_redirect",
                   "cloudflare_ruleset.production_hsts"))
@@ -88,7 +90,7 @@ jobs:
       - name: Verify HTTP upgrades at the Cloudflare edge
         run: |
           set -euo pipefail
-          for host in monitor.capitonic.com api.capitonic.com metrics.capitonic.com ops.capitonic.com; do
+          for host in monitor.capitonic.com api.capitonic.com metrics.capitonic.com ops.capitonic.com system.capitonic.com; do
             headers="$(mktemp)"
             status="$(curl -sS --max-time 15 -D "$headers" -o /dev/null -w '%{http_code}' "http://$host/capitonic-https-check?source=workflow")"
             tr -d '\r' < "$headers" | grep -Eiq "^location: https://$host/capitonic-https-check\\?source=workflow$"
@@ -134,7 +136,7 @@ jobs:
         if: inputs.remove_ops_access == true
         run: |
           set -euo pipefail
-          for host in monitor.capitonic.com api.capitonic.com metrics.capitonic.com ops.capitonic.com; do
+          for host in monitor.capitonic.com api.capitonic.com metrics.capitonic.com ops.capitonic.com system.capitonic.com; do
             headers="$(mktemp)"
             curl -sS --max-time 15 -D "$headers" -o /dev/null "https://$host/"
             tr -d '\r' < "$headers" | grep -Eiq '^strict-transport-security: max-age=300$'
@@ -151,6 +153,7 @@ jobs:
             -target=cloudflare_dns_record.apex \
             -target=cloudflare_dns_record.api \
             -target=cloudflare_dns_record.metrics \
+            -target=cloudflare_dns_record.system \
             -target=cloudflare_dns_record.ops \
             -target=cloudflare_ruleset.production_https_redirect \
             -target=cloudflare_ruleset.production_hsts

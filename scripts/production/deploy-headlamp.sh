@@ -7,7 +7,7 @@ scripts/production/install-yq.sh
 [[ -z "$(git status --porcelain --untracked-files=no)" ]]
 kubectl -n external-secrets rollout status deployment/external-secrets --timeout=2m
 kubectl wait --for=condition=Established crd/externalsecrets.external-secrets.io --timeout=2m
-kubectl -n capitonic get secret grafana-tls >/dev/null
+kubectl wait --for=condition=Ready clusterissuer/letsencrypt-production --timeout=2m
 
 configuration="$(python3 scripts/production/prepare-runtime-secrets.py --component headlamp)"
 committed="$(yq -o=json '.externalSecrets' capitonic-helm-chart/environments/production/headlamp.yaml | jq -Sc .)"
@@ -46,6 +46,8 @@ helm upgrade --install headlamp capitonic-helm-chart/charts/headlamp -n capitoni
 kubectl -n capitonic wait --for=condition=Ready secretstore/headlamp-aws --timeout=2m
 kubectl -n capitonic wait --for=condition=Ready externalsecret/headlamp-basic-auth --timeout=2m
 kubectl -n capitonic rollout status deployment/headlamp --timeout=2m
+tls_secret="$(yq -r '.upstream.ingress.tls[0].secretName' capitonic-helm-chart/environments/production/headlamp.yaml)"
+kubectl -n capitonic wait --for=condition=Ready "certificate/$tls_secret" --timeout=5m
 python3 scripts/production/prepare-runtime-secrets.py --verify --component headlamp
 kubectl -n capitonic get deployments,statefulsets,daemonsets -o json |
   jq -S '[.items[] | select(.metadata.name != "headlamp") | {kind, name: .metadata.name, spec}] | sort_by(.kind,.name)' > "$snapshot/workloads-after.json"
