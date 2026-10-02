@@ -7,6 +7,11 @@ on:
         required: false
         type: string
         default: apply
+      deploy_headlamp:
+        description: Deploy Headlamp when the monitoring TLS certificate already exists
+        required: false
+        type: boolean
+        default: true
     outputs:
       instance_id:
         description: Provisioned production EC2 instance ID
@@ -19,6 +24,11 @@ on:
         type: choice
         default: apply
         options: [plan, apply]
+      deploy_headlamp:
+        description: Deploy Headlamp after infrastructure (requires existing monitoring TLS)
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -121,3 +131,9 @@ jobs:
     needs: provision
     if: inputs.terraform_action != 'plan'
     uses: ./.github/workflows/deploy-production-external-secrets.yml
+
+  headlamp:
+    name: Provision production system resource viewer
+    needs: [provision, dns, external-secrets]
+    if: inputs.terraform_action != 'plan' && inputs.deploy_headlamp
+    uses: ./.github/workflows/deploy-production-headlamp.yml

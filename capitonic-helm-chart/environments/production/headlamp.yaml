@@ -1,0 +1,25 @@
+upstream:
+  config:
+    inClusterContextName: production
+  ingress:
+    annotations:
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    hosts:
+      - host: monitor.capitonic.com
+        paths:
+          - path: /system
+            type: Prefix
+    tls:
+      - secretName: grafana-tls
+        hosts: [monitor.capitonic.com]
+externalSecrets:
+  enabled: true
+  region: eu-west-1
+  secretId: capitonic/polymarket-bot/production
+  entries:
+    - name: headlamp-basic-auth
+      version: fc592e54-23b8-4d40-a845-41edc7ee0a10
+      refreshAfter: "2026-10-02T15:40:00Z"
+      properties:
+        HEADLAMP_USERNAME: HEADLAMP_USERNAME
+        HEADLAMP_PASSWORD: HEADLAMP_PASSWORD
