@@ -13,6 +13,7 @@ jobs:
     uses: ./.github/workflows/deploy-production-ec2.yml
     with:
       terraform_action: apply
+      deploy_headlamp: false
 
   secrets:
     name: Bootstrap Kubernetes secrets
@@ -32,3 +33,8 @@ jobs:
     name: Provision Argo CD reconciliation
     needs: deployment
     uses: ./.github/workflows/deploy-production-argocd.yml
+
+  headlamp:
+    name: Provision production system resource viewer
+    needs: deployment
+    uses: ./.github/workflows/deploy-production-headlamp.yml

@@ -186,6 +186,9 @@ jobs:
           python3 scripts/helm/bake-assets.py
           for chart in capitonic-helm-chart/charts/*; do
             name="$(basename "$chart")"
+            if [[ "$name" == headlamp ]]; then
+              helm dependency build "$chart"
+            fi
             values="capitonic-helm-chart/environments/production/$name.yaml"
             extra_values=()
             if [ -f "$values" ]; then

@@ -1,0 +1,21 @@
+{{- if not .Values.externalSecrets.enabled }}
+{{- $username := required "Provision HEADLAMP_USERNAME using scripts/helm/provision-headlamp.py" .Values.credentials.HEADLAMP_USERNAME -}}
+{{- $hash := required "Provision HEADLAMP_PASSWORD_HASH using scripts/helm/provision-headlamp.py" .Values.credentials.HEADLAMP_PASSWORD_HASH -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: headlamp-basic-auth
+type: Opaque
+data:
+  users: {{ printf "%s:%s\n" $username $hash | b64enc | quote }}
+---
+{{- end }}
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: headlamp-basic-auth
+spec:
+  basicAuth:
+    secret: headlamp-basic-auth
+    realm: Headlamp
+    removeHeader: true
