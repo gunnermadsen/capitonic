@@ -39,6 +39,7 @@ recover() {
   exit "$result"
 }
 trap recover EXIT
+helm repo add headlamp https://kubernetes-sigs.github.io/headlamp/ --force-update
 helm dependency build capitonic-helm-chart/charts/headlamp
 helm upgrade --install headlamp capitonic-helm-chart/charts/headlamp -n capitonic \
   -f capitonic-helm-chart/environments/production/headlamp.yaml --wait --timeout 5m

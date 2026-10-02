@@ -187,6 +187,7 @@ jobs:
           for chart in capitonic-helm-chart/charts/*; do
             name="$(basename "$chart")"
             if [[ "$name" == headlamp ]]; then
+              helm repo add headlamp https://kubernetes-sigs.github.io/headlamp/ --force-update
               helm dependency build "$chart"
             fi
             values="capitonic-helm-chart/environments/production/$name.yaml"
