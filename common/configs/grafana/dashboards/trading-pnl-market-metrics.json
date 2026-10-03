@@ -1636,6 +1636,153 @@
     },
     {
       "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "polymarket-bot-runtime"
+      },
+      "description": "All processes shows entry-enabled / total non-completed btc_5m realtime_paper processes: none red, partial yellow, all green, and no processes gray. Selected process retains its regular Enabled/Blocked status. Entry permission includes durable configuration and the existing runtime/live checks; alert_enabled remains unchanged.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "red",
+                  "index": 1,
+                  "text": "Blocked"
+                },
+                "1": {
+                  "color": "green",
+                  "index": 0,
+                  "text": "Enabled"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "noValue": "Status unavailable",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "gray",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 3,
+        "x": 3,
+        "y": 1
+      },
+      "id": 25,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "value",
+              "text": "Trading Entry Status",
+              "type": "number"
+            },
+            {
+              "selector": "text",
+              "text": "Status text",
+              "type": "string"
+            },
+            {
+              "selector": "color",
+              "text": "Status color",
+              "type": "string"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "polymarket-bot-runtime"
+          },
+          "format": "table",
+          "json_options": {
+            "root_is_not_array": false
+          },
+          "parser": "backend",
+          "refId": "A",
+          "root_selector": "(\n  $all := \"${pnl_scope}\" = \"All processes\";\n  $counts := $exists(enabled_count) and $exists(total_count);\n  [{\n    \"value\": alert_enabled,\n    \"text\": $all ? ($counts ? (total_count = 0 ? \"0/0 — No processes\" : $string(enabled_count) & \"/\" & $string(total_count)) : \"Status unavailable\") : (alert_enabled = 1 ? \"Enabled\" : \"Blocked\"),\n    \"color\": $all ? ($counts ? (total_count = 0 ? \"gray\" : enabled_count = 0 ? \"red\" : enabled_count = total_count ? \"green\" : \"yellow\") : \"gray\") : (alert_enabled = 1 ? \"green\" : \"red\")\n  }]\n)",
+          "source": "url",
+          "type": "json",
+          "url": "http://polymarket-bot:8097/admin/strategy/btc-5m/entry-status?scope=${pnl_scope:percentencode}&process_id=${process_id}",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          }
+        }
+      ],
+      "title": "Trading Entry Status",
+      "transformations": [
+        {
+          "id": "configFromData",
+          "options": {
+            "applyTo": {
+              "id": "byName",
+              "options": "Trading Entry Status"
+            },
+            "configRefId": "A",
+            "mappings": [
+              {
+                "fieldName": "Trading Entry Status",
+                "handlerKey": "mappings.value",
+                "reducerId": "allValues"
+              },
+              {
+                "fieldName": "Status text",
+                "handlerKey": "mappings.text",
+                "reducerId": "allValues"
+              },
+              {
+                "fieldName": "Status color",
+                "handlerKey": "mappings.color",
+                "reducerId": "allValues"
+              }
+            ]
+          }
+        },
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "Trading Entry Status"
+              ]
+            }
+          }
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "datasource": {
         "type": "grafana",
         "uid": "grafana"
       },
@@ -1749,9 +1896,9 @@
         ]
       },
       "gridPos": {
-        "h": 15,
-        "w": 12,
-        "x": 3,
+        "h": 10,
+        "w": 10,
+        "x": 6,
         "y": 1
       },
       "hideTimeOverride": true,
@@ -1847,9 +1994,9 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 15,
-        "w": 9,
-        "x": 15,
+        "h": 10,
+        "w": 8,
+        "x": 16,
         "y": 1
       },
       "id": 20,
@@ -2044,6 +2191,145 @@
         "type": "grafana-postgresql-datasource",
         "uid": "postgres"
       },
+      "description": "Lifecycle health derived only from durable trading process state.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Active Sessions"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": 0
+                    },
+                    {
+                      "color": "green",
+                      "value": 1
+                    },
+                    {
+                      "color": "red",
+                      "value": 2
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/^(Lifecycle Mismatch|Failures 24h)$/"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 3,
+        "x": 3,
+        "y": 6
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  COUNT(*) FILTER (\n    WHERE p.enabled\n      AND p.status IN ('starting','running','stopping')\n      AND p.stopped_at IS NULL\n      AND COALESCE(p.heartbeat_at,p.updated_at,p.started_at,p.created_at)>=now()-interval '2 minutes'\n  ) AS \"Active Processes\",\n  COUNT(*) FILTER (\n    WHERE p.enabled\n      AND p.status IN ('starting','running','stopping')\n      AND p.stopped_at IS NULL\n      AND COALESCE(p.heartbeat_at,p.updated_at,p.started_at,p.created_at)<now()-interval '2 minutes'\n  ) AS \"Stale Active Processes\",\n  COUNT(*) FILTER (\n    WHERE p.status='failed' AND p.updated_at>=now()-interval '24 hours'\n  ) AS \"Failures 24h\"\nFROM polymarket.trading_processes p\nWHERE p.process_scope='realtime_paper'\n  AND p.status <> 'completed';",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Realtime Process Health",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "postgres"
+      },
       "description": "Aggregate lifetime net realized PnL for the current PnL scope. Recognized manual live exits use actual net proceeds; other filled entries use official settlement economics.",
       "fieldConfig": {
         "defaults": {
@@ -2128,17 +2414,68 @@
       "type": "stat"
     },
     {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 16
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
       },
-      "id": 14,
-      "panels": [],
-      "title": "BTC 5-Minute Realtime Paper",
-      "type": "row"
+      "description": "Current direct gRPC connection from the trading runtime to its owning ingester worker.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "mappings": [],
+          "max": 8,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 3,
+        "x": 3,
+        "y": 11
+      },
+      "id": 21,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "expr": "max(polymarket_market_data_grpc_connections)",
+          "instant": true,
+          "legendFormat": "Active worker connections",
+          "refId": "A"
+        }
+      ],
+      "title": "Data Pipeline Connection",
+      "type": "stat"
     },
     {
       "datasource": {
@@ -2192,10 +2529,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 7,
-        "w": 24,
-        "x": 0,
-        "y": 17
+        "h": 10,
+        "w": 18,
+        "x": 6,
+        "y": 11
       },
       "id": 24,
       "options": {
@@ -2257,56 +2594,46 @@
     },
     {
       "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "polymarket-bot-runtime"
+        "type": "prometheus",
+        "uid": "prometheus"
       },
-      "description": "All processes shows entry-enabled / total non-completed btc_5m realtime_paper processes: none red, partial yellow, all green, and no processes gray. Selected process retains its regular Enabled/Blocked status. Entry permission includes durable configuration and the existing runtime/live checks; alert_enabled remains unchanged.",
+      "description": "Latest worker-publish to trading-runtime apply latency for each subscribed realtime product. This measures delivery, not provider update cadence or Prometheus scrape age.",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "color": "red",
-                  "index": 1,
-                  "text": "Blocked"
-                },
-                "1": {
-                  "color": "green",
-                  "index": 0,
-                  "text": "Enabled"
-                }
-              },
-              "type": "value"
-            }
-          ],
-          "noValue": "Status unavailable",
+          "decimals": 1,
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "gray",
-                "value": null
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 25
+              },
+              {
+                "color": "red",
+                "value": 100
               }
             ]
-          }
+          },
+          "unit": "ms"
         },
         "overrides": []
       },
       "gridPos": {
         "h": 5,
-        "w": 3,
+        "w": 6,
         "x": 0,
-        "y": 24
+        "y": 16
       },
-      "id": 25,
+      "id": 30,
       "options": {
         "colorMode": "value",
         "graphMode": "none",
-        "justifyMode": "center",
+        "justifyMode": "auto",
         "orientation": "horizontal",
         "percentChangeColorMode": "standard",
         "reduceOptions": {
@@ -2317,90 +2644,51 @@
           "values": false
         },
         "showPercentChange": false,
-        "textMode": "value",
+        "textMode": "value_and_name",
         "wideLayout": true
       },
       "pluginVersion": "12.4.2",
       "targets": [
         {
-          "columns": [
-            {
-              "selector": "value",
-              "text": "Trading Entry Status",
-              "type": "number"
-            },
-            {
-              "selector": "text",
-              "text": "Status text",
-              "type": "string"
-            },
-            {
-              "selector": "color",
-              "text": "Status color",
-              "type": "string"
-            }
-          ],
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "polymarket-bot-runtime"
-          },
-          "format": "table",
-          "json_options": {
-            "root_is_not_array": false
-          },
-          "parser": "backend",
-          "refId": "A",
-          "root_selector": "(\n  $all := \"${pnl_scope}\" = \"All processes\";\n  $counts := $exists(enabled_count) and $exists(total_count);\n  [{\n    \"value\": alert_enabled,\n    \"text\": $all ? ($counts ? (total_count = 0 ? \"0/0 — No processes\" : $string(enabled_count) & \"/\" & $string(total_count)) : \"Status unavailable\") : (alert_enabled = 1 ? \"Enabled\" : \"Blocked\"),\n    \"color\": $all ? ($counts ? (total_count = 0 ? \"gray\" : enabled_count = 0 ? \"red\" : enabled_count = total_count ? \"green\" : \"yellow\") : \"gray\") : (alert_enabled = 1 ? \"green\" : \"red\")\n  }]\n)",
-          "source": "url",
-          "type": "json",
-          "url": "http://polymarket-bot:8097/admin/strategy/btc-5m/entry-status?scope=${pnl_scope:percentencode}&process_id=${process_id}",
-          "url_options": {
-            "data": "",
-            "method": "GET"
-          }
-        }
-      ],
-      "title": "Trading Entry Status",
-      "type": "stat",
-      "transformations": [
-        {
-          "id": "configFromData",
-          "options": {
-            "configRefId": "A",
-            "applyTo": {
-              "id": "byName",
-              "options": "Trading Entry Status"
-            },
-            "mappings": [
-              {
-                "fieldName": "Trading Entry Status",
-                "handlerKey": "mappings.value",
-                "reducerId": "allValues"
-              },
-              {
-                "fieldName": "Status text",
-                "handlerKey": "mappings.text",
-                "reducerId": "allValues"
-              },
-              {
-                "fieldName": "Status color",
-                "handlerKey": "mappings.color",
-                "reducerId": "allValues"
-              }
-            ]
-          }
+          "expr": "1000 * polymarket_market_data_product_publish_apply_latency_seconds{product=\"polymarket_btc_five_minute_orderbooks\"}",
+          "instant": true,
+          "legendFormat": "Polymarket order book",
+          "refId": "A"
         },
         {
-          "id": "filterFieldsByName",
-          "options": {
-            "include": {
-              "names": [
-                "Trading Entry Status"
-              ]
-            }
-          }
+          "expr": "1000 * polymarket_market_data_product_publish_apply_latency_seconds{product=\"polymarket_rtds_chainlink_reference_price\"}",
+          "instant": true,
+          "legendFormat": "Chainlink reference price",
+          "refId": "B"
+        },
+        {
+          "expr": "1000 * polymarket_market_data_product_publish_apply_latency_seconds{product=\"polymarket_chainlink_btcusd_twap\"}",
+          "instant": true,
+          "legendFormat": "Chainlink 60-second TWAP",
+          "refId": "C"
+        },
+        {
+          "expr": "1000 * polymarket_market_data_product_publish_apply_latency_seconds{product=\"binance_spot_btcusdt_one_second_ohlcv\"}",
+          "instant": true,
+          "legendFormat": "Binance BTC/USDT 1-second candle",
+          "refId": "D"
         }
-      ]
+      ],
+      "title": "Realtime Delivery Latency",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "id": 14,
+      "panels": [],
+      "title": "BTC 5-Minute Realtime Paper",
+      "type": "row"
     },
     {
       "datasource": {
@@ -2464,13 +2752,39 @@
           },
           "unit": "currencyUSD"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "__systemRef": "hideSeriesFrom",
+            "matcher": {
+              "id": "byNames",
+              "options": {
+                "mode": "exclude",
+                "names": [
+                  "BTC 5m conservative selective VWAP capacity Q5 paper",
+                  "BTC 5m conservative selective paper"
+                ],
+                "prefix": "All except:",
+                "readOnly": true
+              }
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "legend": false,
+                  "tooltip": true,
+                  "viz": true
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
-        "h": 23,
-        "w": 12,
-        "x": 3,
-        "y": 24
+        "h": 20,
+        "w": 15,
+        "x": 0,
+        "y": 22
       },
       "id": 1,
       "options": {
@@ -2605,10 +2919,10 @@
         ]
       },
       "gridPos": {
-        "h": 23,
+        "h": 20,
         "w": 9,
         "x": 15,
-        "y": 24
+        "y": 22
       },
       "id": 19,
       "options": {
@@ -2667,294 +2981,6 @@
       ],
       "title": "Resolved Entry Forecasts vs Official Outcome",
       "type": "barchart"
-    },
-    {
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "postgres"
-      },
-      "description": "Lifecycle health derived only from durable trading process state.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Active Sessions"
-            },
-            "properties": [
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "red",
-                      "value": 0
-                    },
-                    {
-                      "color": "green",
-                      "value": 1
-                    },
-                    {
-                      "color": "red",
-                      "value": 2
-                    }
-                  ]
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "/^(Lifecycle Mismatch|Failures 24h)$/"
-            },
-            "properties": [
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "green",
-                      "value": 0
-                    },
-                    {
-                      "color": "red",
-                      "value": 1
-                    }
-                  ]
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 3,
-        "x": 0,
-        "y": 29
-      },
-      "id": 3,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "percentChangeColorMode": "standard",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "pluginVersion": "12.4.2",
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-postgresql-datasource",
-            "uid": "postgres"
-          },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT\n  COUNT(*) FILTER (\n    WHERE p.enabled\n      AND p.status IN ('starting','running','stopping')\n      AND p.stopped_at IS NULL\n      AND COALESCE(p.heartbeat_at,p.updated_at,p.started_at,p.created_at)>=now()-interval '2 minutes'\n  ) AS \"Active Processes\",\n  COUNT(*) FILTER (\n    WHERE p.enabled\n      AND p.status IN ('starting','running','stopping')\n      AND p.stopped_at IS NULL\n      AND COALESCE(p.heartbeat_at,p.updated_at,p.started_at,p.created_at)<now()-interval '2 minutes'\n  ) AS \"Stale Active Processes\",\n  COUNT(*) FILTER (\n    WHERE p.status='failed' AND p.updated_at>=now()-interval '24 hours'\n  ) AS \"Failures 24h\"\nFROM polymarket.trading_processes p\nWHERE p.process_scope='realtime_paper'\n  AND p.status <> 'completed';",
-          "refId": "A",
-          "sql": {
-            "columns": [
-              {
-                "parameters": [],
-                "type": "function"
-              }
-            ],
-            "groupBy": [
-              {
-                "property": {
-                  "type": "string"
-                },
-                "type": "groupBy"
-              }
-            ],
-            "limit": 50
-          }
-        }
-      ],
-      "title": "Realtime Process Health",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Current direct gRPC connection from the trading runtime to its owning ingester worker.",
-      "fieldConfig": {
-        "defaults": {
-          "decimals": 0,
-          "mappings": [],
-          "max": 8,
-          "min": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": 0
-              },
-              {
-                "color": "green",
-                "value": 1
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 3,
-        "x": 0,
-        "y": 34
-      },
-      "id": 21,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "auto",
-        "percentChangeColorMode": "standard",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "value_and_name",
-        "wideLayout": true
-      },
-      "pluginVersion": "12.4.2",
-      "targets": [
-        {
-          "expr": "max(polymarket_market_data_grpc_connections)",
-          "instant": true,
-          "legendFormat": "Active worker connections",
-          "refId": "A"
-        }
-      ],
-      "title": "Data Pipeline Connection",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Latest worker-publish to trading-runtime apply latency for each subscribed realtime product. This measures delivery, not provider update cadence or Prometheus scrape age.",
-      "fieldConfig": {
-        "defaults": {
-          "decimals": 1,
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "yellow",
-                "value": 25
-              },
-              {
-                "color": "red",
-                "value": 100
-              }
-            ]
-          },
-          "unit": "ms"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 3,
-        "x": 0,
-        "y": 40
-      },
-      "id": 30,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "horizontal",
-        "percentChangeColorMode": "standard",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "value_and_name",
-        "wideLayout": true
-      },
-      "pluginVersion": "12.4.2",
-      "targets": [
-        {
-          "expr": "1000 * polymarket_market_data_product_publish_apply_latency_seconds{product=\"polymarket_btc_five_minute_orderbooks\"}",
-          "instant": true,
-          "legendFormat": "Polymarket order book",
-          "refId": "A"
-        },
-        {
-          "expr": "1000 * polymarket_market_data_product_publish_apply_latency_seconds{product=\"polymarket_rtds_chainlink_reference_price\"}",
-          "instant": true,
-          "legendFormat": "Chainlink reference price",
-          "refId": "B"
-        },
-        {
-          "expr": "1000 * polymarket_market_data_product_publish_apply_latency_seconds{product=\"polymarket_chainlink_btcusd_twap\"}",
-          "instant": true,
-          "legendFormat": "Chainlink 60-second TWAP",
-          "refId": "C"
-        },
-        {
-          "expr": "1000 * polymarket_market_data_product_publish_apply_latency_seconds{product=\"binance_spot_btcusdt_one_second_ohlcv\"}",
-          "instant": true,
-          "legendFormat": "Binance BTC/USDT 1-second candle",
-          "refId": "D"
-        }
-      ],
-      "title": "Realtime Delivery Latency",
-      "type": "stat"
     },
     {
       "datasource": {
@@ -3192,7 +3218,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 47
+        "y": 42
       },
       "id": 2,
       "options": {
@@ -3325,6 +3351,6 @@
   "timezone": "browser",
   "title": "Trading, PNL & Market Metrics",
   "uid": "polymarket-bot",
-  "version": 46,
+  "version": 54,
   "weekStart": ""
 }
