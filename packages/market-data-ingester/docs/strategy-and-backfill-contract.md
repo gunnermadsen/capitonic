@@ -77,7 +77,17 @@ All control endpoints except health and metrics require the administrative beare
 - `GET /backfills/{job_id}/events`
 - `POST /backfills/{job_id}/cancel`
 - `POST /backfills/{job_id}/retry`
-- `GET /workers`
+- `GET /workers` (existing full JSON response by default)
+  - `?view=compact` returns `{workers: [...]}` with worker identity, lifecycle state,
+    heartbeat freshness, capacity, realtime assignments, and backfill jobs containing
+    their assigned shards. Idle and stale registered workers remain visible; assignments
+    retain the existing current-lease filtering. Realtime assignments are not sharded.
+  - `?format=yaml` returns indented `application/yaml`; `format=json` is the default.
+    Format and view are independent: use `/workers?view=compact&format=yaml` for the
+    compact hierarchy. Unsupported format or view values return HTTP 400.
+  - Compact backfill `job_id` identifies the parent request; each nested `shard_id`
+    identifies the assigned job record, with its `shard_key` and status. A job split
+    across workers appears under each worker with only that worker's current shards.
 
 Internal worker endpoints are under `/internal/workers/...` and are not strategy-specific.
 

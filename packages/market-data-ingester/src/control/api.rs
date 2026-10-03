@@ -35,8 +35,7 @@ use crate::{
     },
     persistence::{
         BackfillJobEvent, BackfillJobRecord, BackfillRepository, ClaimedBackfillJob, DrainJobEvent,
-        DrainJobRecord, DrainRepository, ProfileRepository, WorkerAllocationSummary, WorkerRecord,
-        WorkerRegistration,
+        DrainJobRecord, DrainRepository, ProfileRepository, WorkerRecord, WorkerRegistration,
     },
     runtime::StrategyRegistry,
     strategies::{dataset_for_strategy, STRATEGY_DATASETS},
@@ -576,13 +575,14 @@ async fn get_backfill_events(
 
 async fn list_workers(
     State(state): State<ApiState>,
-) -> Result<Json<Vec<WorkerAllocationSummary>>, ApiError> {
-    state
+    Query(query): Query<super::workers::WorkersQuery>,
+) -> Result<Response, ApiError> {
+    let workers = state
         .backfills
-        .list_worker_allocation_summaries()
+        .list_worker_allocation_summaries_with_shards(query.is_compact())
         .await
-        .map(Json)
-        .map_err(ApiError::internal)
+        .map_err(ApiError::internal)?;
+    super::workers::response(workers, query)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1337,7 +1337,7 @@ mod tests {
     #[test]
     fn worker_allocation_summary_preserves_existing_fields_and_adds_live_allocation() {
         let timestamp = Utc.timestamp_opt(1_788_000_000, 0).single().unwrap();
-        let summary = WorkerAllocationSummary {
+        let summary = crate::persistence::WorkerAllocationSummary {
             worker_id: "worker-1".to_owned(),
             hostname: "ingester-worker-1".to_owned(),
             worker_contract_version: 1,

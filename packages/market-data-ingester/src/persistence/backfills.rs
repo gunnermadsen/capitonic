@@ -509,6 +509,15 @@ impl BackfillRepository {
     }
 
     pub async fn list_worker_allocation_summaries(&self) -> Result<Vec<WorkerAllocationSummary>> {
+        self.list_worker_allocation_summaries_with_shards(false)
+            .await
+    }
+
+    /// Include parent identity only for the compact worker projection.
+    pub async fn list_worker_allocation_summaries_with_shards(
+        &self,
+        include_shards: bool,
+    ) -> Result<Vec<WorkerAllocationSummary>> {
         Ok(sqlx::query_as(
             r#"
             WITH realtime AS (
@@ -536,7 +545,10 @@ impl BackfillRepository {
                   'status', job.status,
                   'allocation_units', job.allocation_units,
                   'lease_expires_at', job.lease_expires_at
-                ) ORDER BY job.job_id) AS assignments
+                ) || CASE WHEN $1 THEN jsonb_build_object(
+                  'parent_job_id', job.parent_job_id,
+                  'shard_key', job.shard_key
+                ) ELSE '{}'::jsonb END ORDER BY job.job_id) AS assignments
               FROM ingester.backfill_jobs job
               WHERE job.assigned_worker_id IS NOT NULL
                 AND job.status IN ('running','cancel_requested')
@@ -557,6 +569,7 @@ impl BackfillRepository {
             ORDER BY worker.worker_id
             "#,
         )
+        .bind(include_shards)
         .fetch_all(&self.pool)
         .await?)
     }
