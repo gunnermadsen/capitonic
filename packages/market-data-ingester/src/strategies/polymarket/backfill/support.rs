@@ -6,7 +6,7 @@ use reqwest::Client;
 use rust_decimal::{Decimal, RoundingStrategy};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use sqlx::{Postgres, QueryBuilder, Row, Transaction};
+use sqlx::{FromRow, Postgres, QueryBuilder, Row, Transaction};
 use uuid::Uuid;
 
 use crate::domain::{
@@ -42,6 +42,9 @@ const CLOB_URL: &str = "https://clob.polymarket.com";
 const MAX_JSON_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SHARDS: usize = 10_080;
 const DATABASE_BATCH_ROWS: usize = 1_000;
+const CAPACITY_EXECUTION_SNAPSHOTS_DRAIN_KEY: &str = "polymarket_btc_capacity_execution_snapshots";
+const CAPACITY_EXECUTION_SNAPSHOTS_RELATION: &str =
+    "polymarket.btc_market_capacity_execution_snapshots";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Kind {
@@ -146,6 +149,114 @@ fn outcome(records: i64, shard: &BackfillShard, summary: Value) -> BackfillOutco
             "records_verified": records,
         }),
         summary,
+    }
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub(super) struct RemovedDrainCoverage {
+    pub(super) object_id: Uuid,
+    pub(super) source_start: DateTime<Utc>,
+    pub(super) source_end: DateTime<Utc>,
+    pub(super) row_count: i64,
+    pub(super) relative_path: String,
+    pub(super) sha256: String,
+    pub(super) byte_size: i64,
+}
+
+async fn removed_execution_snapshot_coverage(
+    context: &BackfillContext,
+    shard: &BackfillShard,
+) -> Result<Option<RemovedDrainCoverage>, BackfillExecutionError> {
+    sqlx::query_as(
+        r#"
+        SELECT object_id,source_start,source_end,row_count,relative_path,
+          sha256::text,byte_size
+        FROM ingester.drain_objects
+        WHERE strategy_key=$1
+          AND source_relation=$2
+          AND status='removed'
+          AND source_start <= $3
+          AND source_end >= $4
+          AND row_count IS NOT NULL
+          AND relative_path IS NOT NULL
+          AND sha256 IS NOT NULL
+          AND byte_size IS NOT NULL
+        ORDER BY source_start DESC,source_end,object_id
+        LIMIT 1
+        "#,
+    )
+    .bind(CAPACITY_EXECUTION_SNAPSHOTS_DRAIN_KEY)
+    .bind(CAPACITY_EXECUTION_SNAPSHOTS_RELATION)
+    .bind(shard.range_start)
+    .bind(shard.range_end)
+    .fetch_optional(&context.pool)
+    .await
+    .map_err(database_error)
+}
+
+async fn close_drained_artifact_attempt(
+    context: &BackfillContext,
+    logical_key: &str,
+    coverage: &RemovedDrainCoverage,
+) -> Result<(), BackfillExecutionError> {
+    let mut tx = context.pool.begin().await.map_err(database_error)?;
+    require_lease(&mut tx, context).await?;
+    sqlx::query(
+        r#"
+        UPDATE ingester.backfill_artifacts SET
+          status='failed',
+          metadata=metadata || jsonb_build_object(
+            'superseded_reason','durable_drain_archive',
+            'drain_object_id',$3::uuid,
+            'drain_relative_path',$4::text,
+            'drain_sha256',$5::text
+          ),
+          updated_at=now()
+        WHERE job_id=$1
+          AND strategy_key=$2
+          AND logical_key=$6
+          AND status <> 'completed'
+        "#,
+    )
+    .bind(context.job_id)
+    .bind(EXECUTION_SNAPSHOTS_BACKFILL_KEY)
+    .bind(coverage.object_id)
+    .bind(&coverage.relative_path)
+    .bind(&coverage.sha256)
+    .bind(logical_key)
+    .execute(&mut *tx)
+    .await
+    .map_err(database_error)?;
+    require_lease(&mut tx, context).await?;
+    tx.commit().await.map_err(database_error)
+}
+
+pub(super) fn removed_drain_outcome(
+    shard: &BackfillShard,
+    coverage: &RemovedDrainCoverage,
+) -> BackfillOutcome {
+    BackfillOutcome {
+        records_verified: 0,
+        verified_coverage: json!({
+            "requested_start": shard.range_start,
+            "requested_end": shard.range_end,
+            "records_verified": 0,
+            "durable_drain_coverage": true,
+            "drain_object_id": coverage.object_id,
+            "drain_source_start": coverage.source_start,
+            "drain_source_end": coverage.source_end,
+        }),
+        summary: json!({
+            "provider": "verified_drain_archive",
+            "already_archived": true,
+            "source_download_skipped": true,
+            "drain_strategy_key": CAPACITY_EXECUTION_SNAPSHOTS_DRAIN_KEY,
+            "drain_object_id": coverage.object_id,
+            "drain_object_row_count": coverage.row_count,
+            "relative_path": coverage.relative_path,
+            "sha256": coverage.sha256,
+            "byte_size": coverage.byte_size,
+        }),
     }
 }
 
@@ -871,12 +982,23 @@ fn invalid_source(code: &'static str, message: impl Into<String>) -> BackfillExe
     BackfillExecutionError::new(BackfillFailureKind::TransientSource, code, message)
 }
 
-fn database_error(error: sqlx::Error) -> BackfillExecutionError {
+pub(super) fn classify_database_message(message: String) -> BackfillExecutionError {
+    if message.contains("historical source chunk has been drained") {
+        return BackfillExecutionError::new(
+            BackfillFailureKind::InvalidRequest,
+            "drained_history_already_archived",
+            message,
+        );
+    }
     BackfillExecutionError::new(
         BackfillFailureKind::TransientDatabase,
         "database_error",
-        error.to_string(),
+        message,
     )
+}
+
+fn database_error(error: sqlx::Error) -> BackfillExecutionError {
+    classify_database_message(error.to_string())
 }
 
 fn integrity(code: &'static str, message: impl Into<String>) -> BackfillExecutionError {
@@ -1562,6 +1684,10 @@ impl BackfillSupport {
         );
         if let Some(outcome) = completed_outcome(context, self.key(), &logical_key).await? {
             return Ok(outcome);
+        }
+        if let Some(coverage) = removed_execution_snapshot_coverage(context, shard).await? {
+            close_drained_artifact_attempt(context, &logical_key, &coverage).await?;
+            return Ok(removed_drain_outcome(shard, &coverage));
         }
         let scope = load_scope(context, shard.range_start, shard.range_end, false).await?;
         if scope.len() != 12 {
