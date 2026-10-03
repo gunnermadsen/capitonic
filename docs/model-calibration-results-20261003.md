@@ -41,7 +41,7 @@ Five diagnostic `-calibration-20261003-v2` model payloads were actually generate
 
 Annotated `calibration/<new-model-key>/git-<full-result-commit>` tags record only the verified v2 artifacts and their failed qualification. Original model artifacts and tags are preserved. No accepted model version exists to select through the API, so database and infrastructure selections must not advance.
 
-Bot local version allocation was inspected with the existing CI `--next-version` command. No image inputs changed: Python tooling and documentation are outside the bot image inputs, and unqualified artifacts remain on the SSD. A bot local/image tag must not be minted until a selected qualified runtime bundle changes those inputs and an actual build is performed. See [calibration procedure](model-calibration.md).
+Bot local version allocation was inspected with the existing CI `--next-version` command, which returned `3.2.5-local.1`. The production pinned digest is published in ECR as `v3.2.5` and `v3.2.5-rc.0`, so repository policy treats that base as closed. A future changed-input candidate must use the next open base (expected `3.2.6-local.0`, subject to registry and remote-tag checks at build time). Do not use the allocator's closed-base suggestion; correcting release tooling is outside this task. No image inputs changed: Python tooling and documentation are outside the bot image inputs, and unqualified artifacts remain on the SSD. A bot local/image tag must not be minted until a selected qualified runtime bundle changes those inputs and an actual build is performed. See [calibration procedure](model-calibration.md).
 
 ## Verification and limitations
 
