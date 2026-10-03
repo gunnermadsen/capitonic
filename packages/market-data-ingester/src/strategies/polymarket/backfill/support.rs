@@ -152,6 +152,18 @@ fn outcome(records: i64, shard: &BackfillShard, summary: Value) -> BackfillOutco
     }
 }
 
+pub(super) fn require_execution_source_records(
+    source_records: u64,
+) -> Result<(), BackfillExecutionError> {
+    if source_records == 0 {
+        return Err(integrity(
+            "pmxt_execution_source_empty",
+            "PMXT seed and current archives contained no matching BTC five-minute execution events",
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, FromRow)]
 pub(super) struct RemovedDrainCoverage {
     pub(super) object_id: Uuid,
@@ -1762,6 +1774,7 @@ impl BackfillSupport {
                 .map_err(|error| integrity("pmxt_execution_parse", error.to_string()))?;
             source_records = source_records.saturating_add(parsed.records);
         }
+        require_execution_source_records(source_records)?;
         let mut snapshots = Vec::with_capacity(scope.len() * EXECUTION_SNAPSHOTS_PER_MARKET);
         reconstructor.finish_before(shard.range_end, &mut snapshots);
         snapshots

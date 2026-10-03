@@ -10,8 +10,8 @@ use crate::domain::{
 use super::{
     support::{
         classify_database_message, normalize_reference_value, parse_gamma_btc_interval_event,
-        reference_fact_matches, removed_drain_outcome, RemovedDrainCoverage,
-        EXECUTION_SNAPSHOTS_BACKFILL_KEY, MARKET_CONTRACTS_BACKFILL_KEY,
+        reference_fact_matches, removed_drain_outcome, require_execution_source_records,
+        RemovedDrainCoverage, EXECUTION_SNAPSHOTS_BACKFILL_KEY, MARKET_CONTRACTS_BACKFILL_KEY,
         ORDERBOOK_EVENTS_BACKFILL_KEY, RESOLUTIONS_BACKFILL_KEY,
     },
     PolymarketBtcExecutionSnapshotsBackfill, PolymarketBtcMarketContractsBackfill,
@@ -119,6 +119,15 @@ fn drained_execution_snapshot_coverage_completes_without_claiming_hourly_rows() 
     assert_eq!(outcome.summary["source_download_skipped"], true);
     assert_eq!(outcome.summary["drain_object_row_count"], 27_648);
     assert_eq!(outcome.verified_coverage["durable_drain_coverage"], true);
+}
+
+#[test]
+fn empty_pmxt_execution_archives_do_not_claim_verified_coverage() {
+    let error = require_execution_source_records(0).unwrap_err();
+    assert_eq!(error.kind, BackfillFailureKind::Integrity);
+    assert_eq!(error.code, "pmxt_execution_source_empty");
+
+    require_execution_source_records(1).unwrap();
 }
 
 #[test]
