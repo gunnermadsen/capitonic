@@ -13,7 +13,7 @@
     "ingester": {
       "repository": "capitonic/ingester",
       "rcVersion": "v1.2.2-rc.0",
-      "sourceRevision": "dc93c77a80efddb138521bee5679cf2f343a39f5",
+      "sourceRevision": "50597659e2050ee1e51b61e6141101b7ff98ec8e",
       "finalVersion": "v1.2.1",
       "digest": "sha256:126e1409904cd20396fb20b4cc8daf4ba53aae6174a053184ff279cba75c28a5"
     },

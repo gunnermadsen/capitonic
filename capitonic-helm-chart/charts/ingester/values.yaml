@@ -1,4 +1,4 @@
-image: capitonic/ingester:v1.2.2-local.4
+image: capitonic/ingester:v1.2.2-rc.0
 environment: development
 imagePullPolicy: Never
 imagePullSecrets: []
