@@ -1,4 +1,6 @@
 import copy
+import json
+from pathlib import Path
 
 import numpy as np
 import polars as pl
@@ -11,6 +13,7 @@ from btc_directional_model.model_calibration import (
     fit_correction,
     independent_markets,
     qualify,
+    temperature_runtime_files,
 )
 
 
@@ -104,3 +107,37 @@ def test_high_confidence_fit_does_not_flatten_optimizer_objective():
     assert corrected(np.array([0.95]), slope, "logit_temperature")[0] == pytest.approx(
         0.7, abs=1e-5
     )
+
+
+def test_small_sample_override_is_explicit_and_does_not_confer_qualification():
+    p = np.full(34, 0.95)
+    y = np.r_[np.ones(23), np.zeros(11)]
+    with pytest.raises(ValueError, match="At least 50"):
+        fit_correction(p, y, "logit_temperature")
+    slope = fit_correction(p, y, "logit_temperature", minimum_markets=30)
+    q = corrected(p, slope, "logit_temperature")
+    assert q[0] == pytest.approx(23 / 34, abs=1e-5)
+    assert not qualify(p, y, q)["probability_passed"]
+
+
+def test_temperature_bundle_preserves_runtime_identity_and_rejects_wrong_source():
+    reference = (
+        Path(__file__).parents[1]
+        / "runtime-models"
+        / ("btc-5m-conservative-selective-vwap-capacity-q5-paper-20260924")
+    )
+    source_bytes = (reference / "model.json").read_bytes()
+    source = json.loads(source_bytes)
+    payload = calibrated_payload(source, "calibrated", 0.3, "logit_temperature", {})
+    files = temperature_runtime_files(reference, source_bytes, payload, 0.3)
+    manifest = json.loads(files["manifest.json"])
+    previous = json.loads((reference / "manifest.json").read_bytes())
+    assert manifest["feature_schema_sha256"] == previous["feature_schema_sha256"]
+    assert manifest["live_capital_allowed"] is False
+    assert manifest["production_qualified"] is False
+    assert (
+        payload["payoff_model"]["definition"]["outcome"]
+        == (source["payoff_model"]["definition"]["outcome"])
+    )
+    with pytest.raises(ValueError, match="source model"):
+        temperature_runtime_files(reference, b"different", payload, 0.3)

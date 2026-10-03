@@ -25,14 +25,20 @@ def corrected(probability: np.ndarray, slope: float, kind: str) -> np.ndarray:
     return expit(slope * value)
 
 
-def fit_correction(probability: np.ndarray, outcome: np.ndarray, kind: str) -> float:
+def fit_correction(
+    probability: np.ndarray, outcome: np.ndarray, kind: str, *, minimum_markets: int = 50
+) -> float:
     """One positive parameter preserves direction and limits calibration capacity."""
     p = np.asarray(probability, dtype=float)
     y = np.asarray(outcome, dtype=float)
     if kind not in {"logit_temperature", "probability_sigmoid"}:
         raise ValueError("Unsupported correction")
-    if len(p) != len(y) or len(p) < 50 or not np.isfinite(p).all():
-        raise ValueError("At least 50 finite, independent market forecasts are required")
+    if minimum_markets < 2:
+        raise ValueError("Minimum fitting support must be at least two markets")
+    if len(p) != len(y) or len(p) < minimum_markets or not np.isfinite(p).all():
+        raise ValueError(
+            f"At least {minimum_markets} finite, independent market forecasts are required"
+        )
     if ((p <= 0) | (p >= 1)).any() or not np.isin(y, [0, 1]).all():
         raise ValueError("Invalid probability or official outcome")
     if len(np.unique(y)) != 2:
@@ -140,6 +146,61 @@ def calibrated_payload(source: dict, key: str, slope: float, kind: str, provenan
     return result
 
 
+def temperature_runtime_files(reference: Path, source_bytes: bytes, payload: dict, slope: float):
+    """Reuse authentic frozen vectors and the existing conservative admission contract."""
+    manifest = json.loads((reference / "manifest.json").read_bytes())
+    golden_bytes = (reference / "golden-vectors.json").read_bytes()
+    if manifest["model_sha256"] != hashlib.sha256(source_bytes).hexdigest():
+        raise ValueError("Runtime reference does not identify the source model")
+    if manifest["golden_vectors_sha256"] != hashlib.sha256(golden_bytes).hexdigest():
+        raise ValueError("Runtime reference vectors changed")
+    definition = payload["payoff_model"]["definition"]
+    if definition["contract"]["adapter"] != "conservative_selective":
+        raise ValueError("Runtime vector correction supports the conservative adapter only")
+    policy = definition["policy"]
+    penalty = definition["calibration"]["reliability_penalty"]
+    names = payload["features"]["names"]
+    vectors = json.loads(golden_bytes)
+    vectors["model_key"] = payload["model_key"]
+    for row in vectors["vectors"]:
+        expected = row["expected"]
+        z = slope * expected["raw_logit"]
+        p = float(expit(z))
+        side = "up" if p >= 0.5 else "down"
+        confidence = max(p, 1 - p)
+        conservative = max(0.5, confidence - penalty)
+        cost = row["feature_values"][names.index(f"{side}_ask_vwap_5")]
+        accepted = bool(
+            policy["start_second"] <= row["seconds_elapsed"] <= policy["end_second"]
+            and cost is not None
+            and 0 < cost <= policy["maximum_share_cost"]
+            and conservative >= policy["minimum_confidence"]
+            and conservative
+            - cost
+            - policy["execution_reserve_per_share"]
+            - policy["stress_slippage_per_share"]
+            >= policy["minimum_stressed_edge"]
+        )
+        row["source"]["accepted"] = accepted
+        row["expected"] = {
+            "probability_up": p,
+            "confidence": confidence,
+            "raw_logit": z,
+            "action": side if accepted else "no_trade",
+        }
+    model_bytes = canonical_json_bytes(payload)
+    golden_bytes = canonical_json_bytes(vectors)
+    manifest.update(
+        model_key=payload["model_key"],
+        model_sha256=hashlib.sha256(model_bytes).hexdigest(),
+        golden_vectors_sha256=hashlib.sha256(golden_bytes).hexdigest(),
+    )
+    return {
+        "manifest.json": canonical_json_bytes(manifest),
+        "golden-vectors.json": golden_bytes,
+    }
+
+
 def run(args: argparse.Namespace) -> dict:
     source_bytes = args.model.read_bytes()
     source = json.loads(source_bytes)
@@ -156,7 +217,8 @@ def run(args: argparse.Namespace) -> dict:
         raise ValueError("Market leakage between fitting and holdout")
     p = fit["probability_up"].to_numpy()
     y = fit["outcome_up"].cast(pl.Int8).to_numpy()
-    slope = fit_correction(p, y, args.method)
+    minimum_markets = getattr(args, "minimum_fit_markets", 50)
+    slope = fit_correction(p, y, args.method, minimum_markets=minimum_markets)
     hp = holdout["probability_up"].to_numpy()
     hy = holdout["outcome_up"].cast(pl.Int8).to_numpy()
     result = qualify(hp, hy, corrected(hp, slope, args.method))
@@ -167,17 +229,24 @@ def run(args: argparse.Namespace) -> dict:
         "holdout_sha256": hashlib.sha256(args.holdout.read_bytes()).hexdigest(),
         "producing_commit": args.commit,
         "fit_markets": fit.height,
+        "minimum_fit_markets": minimum_markets,
         "holdout_markets": holdout.height,
         "qualification": result,
     }
     payload = calibrated_payload(source, args.model_key, slope, args.method, provenance)
-    # Diagnostic bundles are not admitted to the runtime catalog automatically.
+    files = {
+        "model.json": canonical_json_bytes(payload),
+        "calibration-result.json": canonical_json_bytes(dict(**provenance, slope=slope)),
+    }
+    reference = getattr(args, "runtime_reference", None)
+    if reference is not None:
+        if args.method != "logit_temperature":
+            raise ValueError("Runtime reference export requires a logit temperature")
+        files.update(temperature_runtime_files(reference, source_bytes, payload, slope))
+    # Export does not activate a model or admit it to the runtime catalog automatically.
     write_immutable_directory(
         args.output / args.model_key,
-        {
-            "model.json": canonical_json_bytes(payload),
-            "calibration-result.json": canonical_json_bytes(dict(**provenance, slope=slope)),
-        },
+        files,
     )
     return dict(model_key=args.model_key, slope=slope, **result)
 
@@ -188,6 +257,8 @@ def main() -> None:
         parser.add_argument(f"--{name}", type=Path, required=True)
     parser.add_argument("--model-key", required=True)
     parser.add_argument("--commit", required=True)
+    parser.add_argument("--minimum-fit-markets", type=int, default=50)
+    parser.add_argument("--runtime-reference", type=Path)
     parser.add_argument(
         "--method", choices=["logit_temperature", "probability_sigmoid"], required=True
     )
