@@ -57,3 +57,29 @@ Adding this runtime bundle changes bot image inputs. A future authorized local b
 ## Verification
 
 Seven focused calibration tests and two existing conservative export checks passed; Ruff checks and formatting passed. All 256 corrected reference outputs match the frozen sklearn predictor with its composed calibration to maximum probability error below `1e-12`. Model/manifest/golden checksums and equality of every unchanged model field were verified. The existing Rust test `every_umr_package_uses_process_quantity_and_preserves_reference_predictions` checks actual runtime loading, predictions, admission and quantity bindings for every bundled UMR artifact, including this version; it passed (one test, 428 unrelated library tests filtered).
+
+## Broader fitting comparison
+
+A subsequent offline comparison used the same frozen predictor, September 15–21 fitting interval, later 33 settled-trade outcomes and 468 earliest runtime forecasts. Three fitting selections were specified before execution: all confidence levels and executable contract prices; confidence at least 70% with selected contract cost at most 0.80; and confidence at least 80% with selected cost at most 0.70. Both sides needed a valid executable price in `(0, 1]`, elapsed seconds remained 30–210, and each fit used one earliest eligible forecast per market. These are fitting filters, not trading-rule changes.
+
+SSD run: `/Volumes/docker-data/capitonic-btc-directional-model/model-recalibration-vwap-broad-20261003T174637Z`. Comparison: `metrics/comparison.json`; evidence and diagnostic payloads: `datasets/` and `models/`; lifecycle and hashes: `manifests/run-status.md` and `manifests/inventory.sha256`. Producing implementation commit remains `b93d71e886476b31115febf50124c3b470bd72a0`. No holdout outcomes were used to fit coefficients, but this previously examined holdout makes the comparison exploratory rather than prospective.
+
+| Fitting selection | Fit markets | Temperature multiplier | Confidence on 33 trades | Trade-cohort Brier | Broader 468-forecast Brier | Model-admitted opportunity markets |
+|---|---:|---:|---:|---:|---:|---:|
+| Original, no new correction | — | 1.0000 | 92.36% | 0.28752 | 0.22349 | 9 |
+| Previous narrow fit: confidence ≥90%, cost ≤0.55 | 34 | 0.3189 | 69.00% | 0.22225 | 0.23610 | 0 |
+| All confidence levels and contract prices | 1,880 | 0.8250 | 88.70% | 0.27002 | 0.22488 | 2 |
+| Confidence ≥70%, cost ≤0.80 | 1,529 | 0.6430 | 83.33% | 0.24928 | 0.22754 | 0 |
+| Confidence ≥80%, cost ≤0.70 | 442 | 0.4586 | 75.94% | 0.23022 | 0.23176 | 0 |
+
+Actual accuracy on the 33 trade forecasts remains 66.67% for every correction. The all-confidence fit reduces their overconfidence gap from 25.70 to 22.03 percentage points, improves trade-cohort Brier by approximately 6.1%, and keeps 8 of the 33 old trade forecasts above the unchanged confidence gate. Its projection over all retained runtime opportunities admits 4 rows in 2 markets, versus 14 rows in 9 markets originally. The two intermediate fits keep zero old trades above the confidence gate and zero recorded model-admitted opportunities. These projections do not simulate fills or establish prospective activity or profit.
+
+The all-confidence correction is substantially less aggressive than the narrow correction. Its broader Brier deterioration is small (`+0.00139`), with paired-market bootstrap 95% interval `[-0.00049, +0.00314]`, so this sample does not clearly resolve that broader difference. It still leaves considerable traded-cohort overconfidence. The other two fits worsen broader Brier more substantially while removing all recorded opportunities. No tested selection demonstrates both general probability improvement and retained trading activity. The fitter permits a multiplier above one; it does not require conservatism. Here, each fitted multiplier below one follows from the selected historical evidence.
+
+Three new immutable diagnostic artifacts exist only on the SSD:
+
+- `btc-5m-conservative-selective-vwap-capacity-q5-paper-20260924-calibration-20261003-v2` (all-confidence fit), SHA-256 `86f7014db8bfc558517dc94de521ab391ccfcfb1ede8605cb6fceb2fe94b5711`;
+- `btc-5m-conservative-selective-vwap-capacity-q5-paper-20260924-calibration-20261003-v3` (70%/0.80 fit), SHA-256 `20c5135369da958882eb98409ecb7aa2e42228dd282e837c7e451af89e4f4927`;
+- `btc-5m-conservative-selective-vwap-capacity-q5-paper-20260924-calibration-20261003-v4` (80%/0.70 fit), SHA-256 `c741fe77db9f38e5d2971358eaace26c287b134035241c58f6855267700a3058`.
+
+No candidate was selected, copied into the runtime catalog or deployed. The previous prepared v1 infrastructure selection remains unchanged, and the database still selects the original model. Diagnostic provenance tags record the actual SSD artifacts without granting runtime admission or deployment status. No bot local/image version is created because this comparison changes no image inputs. Frozen model fields, source/evidence identities, market independence and fit/holdout separation were verified for all three candidates; no runtime-parity claim is made for these diagnostic-only payloads.
