@@ -35,9 +35,9 @@
     },
     {
       "id": 92,
-      "type": "table",
+      "type": "equansdatahub-tree-panel",
       "title": "Workers and Running Assignments",
-      "description": "Current worker instances (heartbeat within 90 seconds), with one indented line per live realtime, backfill-shard or drain assignment. Workers become Stale after 30 seconds without a heartbeat and disappear after 90 seconds. Idle workers have no child rows. Worker capacity is allocated units / total units; task rows show reported progress or attempt count. Elapsed is time since the recorded start, including retries. Current state refreshes every 10 seconds, independently of the dashboard time range.",
+      "description": "Current worker instances (heartbeat within 90 seconds), with one expandable child node per live realtime, backfill-shard or drain assignment. Workers become Stale after 30 seconds without a heartbeat and disappear after 90 seconds. Idle workers have no children. Click worker chevrons to expand or collapse their assignments. Worker capacity is allocated units / total units; task rows show reported progress or attempt count. Elapsed is time since the recorded start, including retries. Current state refreshes every 10 seconds, independently of the dashboard time range.",
       "gridPos": {
         "h": 18,
         "w": 24,
@@ -48,7 +48,7 @@
         "type": "grafana-postgresql-datasource",
         "uid": "postgres"
       },
-      "pluginVersion": "12.4.2",
+      "pluginVersion": "1.7.7",
       "targets": [
         {
           "refId": "A",
@@ -59,184 +59,39 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH current_workers AS MATERIALIZED (\n  SELECT worker_id, capacity_units, heartbeat_at,\n    CASE WHEN lifecycle_state <> 'active' THEN lifecycle_state\n         WHEN heartbeat_at < now() - interval '30 seconds' THEN 'Stale'\n         ELSE 'Healthy' END AS health\n  FROM ingester.workers\n  WHERE heartbeat_at > now() - interval '90 seconds'\n), assignments AS (\n  SELECT p.lease_owner AS worker_id, 'Realtime' AS kind,\n    p.strategy_key AS task, p.strategy_key AS identity,\n    p.observed_state || ' / ' || p.health_status AS state,\n    2::bigint AS units, p.heartbeat_at, p.source_watermark,\n    p.started_at, ''::text AS progress\n  FROM ingester.profiles p JOIN current_workers w ON w.worker_id = p.lease_owner\n  WHERE p.desired_state = 'running' AND p.lease_expires_at > now()\n  UNION ALL\n  SELECT j.assigned_worker_id, 'Backfill',\n    j.strategy_key || ' · ' || COALESCE(j.shard_key, left(j.job_id::text, 8)),\n    j.job_id::text, j.status, j.allocation_units::bigint,\n    j.heartbeat_at, NULL::timestamptz, j.started_at,\n    'Attempt ' || j.attempt || '/' || j.max_attempts\n  FROM ingester.backfill_jobs j JOIN current_workers w ON w.worker_id = j.assigned_worker_id\n  WHERE j.status IN ('running', 'cancel_requested') AND j.lease_expires_at > now()\n  UNION ALL\n  SELECT j.assigned_worker_id, 'Drain',\n    j.strategy_key || ' · ' || left(j.job_id::text, 8), j.job_id::text,\n    j.status, 0::bigint, j.updated_at, NULL::timestamptz, j.started_at,\n    j.rows_exported || ' rows · ' || j.objects_published || ' objects · ' || pg_size_pretty(j.bytes_written)\n  FROM ingester.drain_jobs j JOIN current_workers w ON w.worker_id = j.assigned_worker_id\n  WHERE j.status IN ('running', 'cancel_requested') AND j.lease_expires_at > now()\n), display_rows AS (\n  SELECT w.worker_id, 0 AS row_order, ''::text AS identity,\n    w.worker_id AS label, w.health AS state,\n    CASE WHEN count(a.identity) = 0 THEN 'Idle'\n         ELSE count(a.identity)::text || CASE WHEN count(a.identity) = 1 THEN ' assignment' ELSE ' assignments' END END AS activity,\n    COALESCE(sum(a.units), 0)::text || '/' || w.capacity_units AS stats,\n    extract(epoch FROM now() - w.heartbeat_at)::double precision AS heartbeat_age,\n    NULL::double precision AS data_age, NULL::double precision AS elapsed\n  FROM current_workers w LEFT JOIN assignments a USING (worker_id)\n  GROUP BY w.worker_id, w.capacity_units, w.heartbeat_at, w.health\n  UNION ALL\n  SELECT worker_id, 1, identity, '    ↳ ' || task, state, kind, progress,\n    extract(epoch FROM now() - heartbeat_at)::double precision,\n    CASE WHEN source_watermark <= now() THEN extract(epoch FROM now() - source_watermark)::double precision END,\n    extract(epoch FROM now() - started_at)::double precision\n  FROM assignments\n)\nSELECT label AS \"Worker / assignment\", state AS \"State\", activity AS \"Activity\",\n  stats AS \"Capacity / progress\", heartbeat_age AS \"Heartbeat age\",\n  data_age AS \"Data age\", elapsed AS \"Elapsed\"\nFROM display_rows ORDER BY worker_id, row_order, activity, identity;"
+          "rawSql": "WITH current_workers AS MATERIALIZED (\n  SELECT worker_id, capacity_units, heartbeat_at,\n    CASE WHEN lifecycle_state <> 'active' THEN lifecycle_state\n         WHEN heartbeat_at < now() - interval '30 seconds' THEN 'Stale'\n         ELSE 'Healthy' END AS health\n  FROM ingester.workers\n  WHERE heartbeat_at > now() - interval '90 seconds'\n), assignments AS (\n  SELECT p.lease_owner AS worker_id, 'Realtime' AS kind,\n    p.strategy_key AS task, p.strategy_key AS identity,\n    p.observed_state || ' / ' || p.health_status AS state,\n    2::bigint AS units, p.heartbeat_at, p.source_watermark,\n    p.started_at, ''::text AS progress\n  FROM ingester.profiles p JOIN current_workers w ON w.worker_id = p.lease_owner\n  WHERE p.desired_state = 'running' AND p.lease_expires_at > now()\n  UNION ALL\n  SELECT j.assigned_worker_id, 'Backfill',\n    j.strategy_key || ' · ' || COALESCE(j.shard_key, left(j.job_id::text, 8)),\n    j.job_id::text, j.status, j.allocation_units::bigint,\n    j.heartbeat_at, NULL::timestamptz, j.started_at,\n    'Attempt ' || j.attempt || '/' || j.max_attempts\n  FROM ingester.backfill_jobs j JOIN current_workers w ON w.worker_id = j.assigned_worker_id\n  WHERE j.status IN ('running', 'cancel_requested') AND j.lease_expires_at > now()\n  UNION ALL\n  SELECT j.assigned_worker_id, 'Drain',\n    j.strategy_key || ' · ' || left(j.job_id::text, 8), j.job_id::text,\n    j.status, 0::bigint, j.updated_at, NULL::timestamptz, j.started_at,\n    j.rows_exported || ' rows · ' || j.objects_published || ' objects · ' || pg_size_pretty(j.bytes_written)\n  FROM ingester.drain_jobs j JOIN current_workers w ON w.worker_id = j.assigned_worker_id\n  WHERE j.status IN ('running', 'cancel_requested') AND j.lease_expires_at > now()\n), display_rows AS (\n  SELECT w.worker_id, 0 AS row_order, ''::text AS identity,\n    w.worker_id AS label, w.health AS state,\n    CASE WHEN count(a.identity) = 0 THEN 'Idle'\n         ELSE count(a.identity)::text || CASE WHEN count(a.identity) = 1 THEN ' assignment' ELSE ' assignments' END END AS activity,\n    COALESCE(sum(a.units), 0)::text || '/' || w.capacity_units AS stats,\n    extract(epoch FROM now() - w.heartbeat_at)::double precision AS heartbeat_age,\n    NULL::double precision AS data_age, NULL::double precision AS elapsed\n  FROM current_workers w LEFT JOIN assignments a USING (worker_id)\n  GROUP BY w.worker_id, w.capacity_units, w.heartbeat_at, w.health\n  UNION ALL\n  SELECT worker_id, 1, identity, task, state, kind, progress,\n    extract(epoch FROM now() - heartbeat_at)::double precision,\n    CASE WHEN source_watermark <= now() THEN extract(epoch FROM now() - source_watermark)::double precision END,\n    extract(epoch FROM now() - started_at)::double precision\n  FROM assignments\n)\nSELECT CASE WHEN row_order = 0 THEN worker_id ELSE worker_id || ':' || activity || ':' || identity END AS id,\n  CASE WHEN row_order = 0 THEN NULL::text ELSE worker_id END AS parent,\n  label, state AS \"State\", activity AS \"Activity\", stats AS \"Capacity / progress\",\n  CASE WHEN heartbeat_age IS NOT NULL THEN round(heartbeat_age::numeric, 1)::text || ' s' ELSE '' END AS \"Heartbeat age\",\n  CASE WHEN data_age IS NOT NULL THEN round(data_age::numeric, 1)::text || ' s' ELSE '' END AS \"Data age\",\n  CASE WHEN elapsed IS NOT NULL THEN round(elapsed::numeric / 60, 1)::text || ' min' ELSE '' END AS \"Elapsed\"\nFROM display_rows ORDER BY worker_id, row_order, activity, identity;"
         }
       ],
       "options": {
-        "cellHeight": "sm",
-        "showHeader": true,
-        "sortBy": []
+        "idColumn": "id",
+        "parentIdColumn": "parent",
+        "labelColumn": "label",
+        "additionalColumns": "State,Activity,Capacity / progress,Heartbeat age,Data age,Elapsed",
+        "displayedTreeDepth": 2,
+        "showItemCount": true,
+        "orderLevels": "source",
+        "showSearch": true,
+        "searchPlaceholder": "Find worker or assignment",
+        "showIconFilter": false,
+        "supportsDisabled": false,
+        "toggleSelectMode": "expandOnly",
+        "clickMode": "SetVariable",
+        "dashboardVariableName": "",
+        "multiSelect": false,
+        "showCheckbox": false,
+        "showGridLines": false,
+        "showColumnHeaders": true,
+        "compactMode": true,
+        "valueMappings": {},
+        "iconMappings": {},
+        "iconColorMappings": {},
+        "parentIconMappings": {},
+        "parentIconColorMappings": {},
+        "iconClickMode": "doNothing"
       },
       "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "left",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "filterable": false,
-            "wrapText": false,
-            "footer": {
-              "reducers": []
-            }
-          },
-          "noValue": "",
-          "mappings": []
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Worker / assignment"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 530
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "State"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 165
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Activity"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 155
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Capacity / progress"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 220
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Heartbeat age"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "s"
-              },
-              {
-                "id": "decimals",
-                "value": 1
-              },
-              {
-                "id": "custom.width",
-                "value": 115
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Data age"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "s"
-              },
-              {
-                "id": "decimals",
-                "value": 1
-              },
-              {
-                "id": "custom.width",
-                "value": 115
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Elapsed"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "s"
-              },
-              {
-                "id": "decimals",
-                "value": 1
-              },
-              {
-                "id": "custom.width",
-                "value": 115
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "State"
-            },
-            "properties": [
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-text"
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "Healthy": {
-                        "text": "Healthy",
-                        "color": "green"
-                      },
-                      "Stale": {
-                        "text": "Stale",
-                        "color": "orange"
-                      },
-                      "running / healthy": {
-                        "text": "Running",
-                        "color": "green"
-                      },
-                      "running": {
-                        "text": "Running",
-                        "color": "green"
-                      },
-                      "cancel_requested": {
-                        "text": "Cancelling",
-                        "color": "orange"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          }
-        ]
+        "defaults": {},
+        "overrides": []
       }
     },
     {
