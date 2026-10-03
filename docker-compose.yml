@@ -498,7 +498,7 @@ services:
       GF_FEATURE_TOGGLES_ENABLE: "alertingCentralAlertHistory"
       GF_LIVE_MAX_CONNECTIONS: "100"
       GF_LIVE_ALLOWED_ORIGINS: "http://localhost:3030,http://127.0.0.1:3030"
-      GF_PLUGINS_PREINSTALL_SYNC: "yesoreyeram-infinity-datasource@3.11.1"
+      GF_PLUGINS_PREINSTALL_SYNC: "yesoreyeram-infinity-datasource@3.11.1,equansdatahub-tree-panel@1.7.7"
       POLYMARKET_HTTP_ADMIN_TOKEN: "${POLYMARKET_HTTP_ADMIN_TOKEN:-dev-polymarket-admin}"
     ports:
       - "127.0.0.1:3030:3000"

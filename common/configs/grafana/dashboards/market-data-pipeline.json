@@ -28,6 +28,80 @@
         "x": 0,
         "y": 0
       },
+      "id": 91,
+      "panels": [],
+      "title": "Live Worker Activity",
+      "type": "row"
+    },
+    {
+      "id": 92,
+      "type": "equansdatahub-tree-panel",
+      "title": "Workers and Running Assignments",
+      "description": "Current worker instances (heartbeat within 90 seconds), with one expandable child node per live realtime, backfill-shard or drain assignment. Workers become Stale after 30 seconds without a heartbeat and disappear after 90 seconds. Idle workers have no children. Click worker chevrons to expand or collapse their assignments. Worker capacity is allocated units / total units; task rows show reported progress or attempt count. Elapsed is time since the recorded start, including retries. Current state refreshes every 10 seconds, independently of the dashboard time range.",
+      "gridPos": {
+        "h": 18,
+        "w": 24,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "postgres"
+      },
+      "pluginVersion": "1.7.7",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH current_workers AS MATERIALIZED (\n  SELECT worker_id, capacity_units, heartbeat_at,\n    CASE WHEN lifecycle_state <> 'active' THEN lifecycle_state\n         WHEN heartbeat_at < now() - interval '30 seconds' THEN 'Stale'\n         ELSE 'Healthy' END AS health\n  FROM ingester.workers\n  WHERE heartbeat_at > now() - interval '90 seconds'\n), assignments AS (\n  SELECT p.lease_owner AS worker_id, 'Realtime' AS kind,\n    p.strategy_key AS task, p.strategy_key AS identity,\n    p.observed_state || ' / ' || p.health_status AS state,\n    2::bigint AS units, p.heartbeat_at, p.source_watermark,\n    p.started_at, ''::text AS progress\n  FROM ingester.profiles p JOIN current_workers w ON w.worker_id = p.lease_owner\n  WHERE p.desired_state = 'running' AND p.lease_expires_at > now()\n  UNION ALL\n  SELECT j.assigned_worker_id, 'Backfill',\n    j.strategy_key || ' · ' || COALESCE(j.shard_key, left(j.job_id::text, 8)),\n    j.job_id::text, j.status, j.allocation_units::bigint,\n    j.heartbeat_at, NULL::timestamptz, j.started_at,\n    'Attempt ' || j.attempt || '/' || j.max_attempts\n  FROM ingester.backfill_jobs j JOIN current_workers w ON w.worker_id = j.assigned_worker_id\n  WHERE j.status IN ('running', 'cancel_requested') AND j.lease_expires_at > now()\n  UNION ALL\n  SELECT j.assigned_worker_id, 'Drain',\n    j.strategy_key || ' · ' || left(j.job_id::text, 8), j.job_id::text,\n    j.status, 0::bigint, j.updated_at, NULL::timestamptz, j.started_at,\n    j.rows_exported || ' rows · ' || j.objects_published || ' objects · ' || pg_size_pretty(j.bytes_written)\n  FROM ingester.drain_jobs j JOIN current_workers w ON w.worker_id = j.assigned_worker_id\n  WHERE j.status IN ('running', 'cancel_requested') AND j.lease_expires_at > now()\n), display_rows AS (\n  SELECT w.worker_id, 0 AS row_order, ''::text AS identity,\n    w.worker_id AS label, w.health AS state,\n    CASE WHEN count(a.identity) = 0 THEN 'Idle'\n         ELSE count(a.identity)::text || CASE WHEN count(a.identity) = 1 THEN ' assignment' ELSE ' assignments' END END AS activity,\n    COALESCE(sum(a.units), 0)::text || '/' || w.capacity_units AS stats,\n    extract(epoch FROM now() - w.heartbeat_at)::double precision AS heartbeat_age,\n    NULL::double precision AS data_age, NULL::double precision AS elapsed\n  FROM current_workers w LEFT JOIN assignments a USING (worker_id)\n  GROUP BY w.worker_id, w.capacity_units, w.heartbeat_at, w.health\n  UNION ALL\n  SELECT worker_id, 1, identity, task, state, kind, progress,\n    extract(epoch FROM now() - heartbeat_at)::double precision,\n    CASE WHEN source_watermark <= now() THEN extract(epoch FROM now() - source_watermark)::double precision END,\n    extract(epoch FROM now() - started_at)::double precision\n  FROM assignments\n)\nSELECT CASE WHEN row_order = 0 THEN worker_id ELSE worker_id || ':' || activity || ':' || identity END AS id,\n  CASE WHEN row_order = 0 THEN NULL::text ELSE worker_id END AS parent,\n  label, state AS \"State\", activity AS \"Activity\", stats AS \"Capacity / progress\",\n  CASE WHEN heartbeat_age IS NOT NULL THEN round(heartbeat_age::numeric, 1)::text || ' s' ELSE '' END AS \"Heartbeat age\",\n  CASE WHEN data_age IS NOT NULL THEN round(data_age::numeric, 1)::text || ' s' ELSE '' END AS \"Data age\",\n  CASE WHEN elapsed IS NOT NULL THEN round(elapsed::numeric / 60, 1)::text || ' min' ELSE '' END AS \"Elapsed\"\nFROM display_rows ORDER BY worker_id, row_order, activity, identity;"
+        }
+      ],
+      "options": {
+        "idColumn": "id",
+        "parentIdColumn": "parent",
+        "labelColumn": "label",
+        "additionalColumns": "State,Activity,Capacity / progress,Heartbeat age,Data age,Elapsed",
+        "displayedTreeDepth": 2,
+        "showItemCount": true,
+        "orderLevels": "source",
+        "showSearch": true,
+        "searchPlaceholder": "Find worker or assignment",
+        "showIconFilter": false,
+        "supportsDisabled": false,
+        "toggleSelectMode": "expandOnly",
+        "clickMode": "SetVariable",
+        "dashboardVariableName": "worker_selection",
+        "multiSelect": false,
+        "showCheckbox": false,
+        "showGridLines": false,
+        "showColumnHeaders": true,
+        "compactMode": true,
+        "valueMappings": {},
+        "iconMappings": {},
+        "iconColorMappings": {},
+        "parentIconMappings": {},
+        "parentIconColorMappings": {},
+        "iconClickMode": "doNothing"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      },
       "id": 31,
       "panels": [],
       "title": "Polymarket Websocket Pipeline",
@@ -80,7 +154,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 1
+        "y": 20
       },
       "id": 38,
       "options": {
@@ -150,7 +224,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 1
+        "y": 20
       },
       "id": 45,
       "options": {
@@ -249,7 +323,7 @@
         "h": 8,
         "w": 16,
         "x": 8,
-        "y": 1
+        "y": 20
       },
       "id": 32,
       "options": {
@@ -337,7 +411,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 5
+        "y": 24
       },
       "id": 44,
       "options": {
@@ -416,7 +490,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 5
+        "y": 24
       },
       "id": 47,
       "options": {
@@ -487,7 +561,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 9
+        "y": 28
       },
       "id": 41,
       "options": {
@@ -557,7 +631,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 9
+        "y": 28
       },
       "id": 39,
       "options": {
@@ -657,7 +731,7 @@
         "h": 8,
         "w": 16,
         "x": 8,
-        "y": 9
+        "y": 28
       },
       "id": 34,
       "options": {
@@ -731,7 +805,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 13
+        "y": 32
       },
       "id": 48,
       "options": {
@@ -798,7 +872,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 13
+        "y": 32
       },
       "id": 43,
       "options": {
@@ -869,7 +943,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 17
+        "y": 36
       },
       "id": 40,
       "options": {
@@ -948,7 +1022,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 17
+        "y": 36
       },
       "id": 46,
       "options": {
@@ -1047,7 +1121,7 @@
         "h": 8,
         "w": 16,
         "x": 8,
-        "y": 17
+        "y": 36
       },
       "id": 36,
       "options": {
@@ -1131,7 +1205,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 21
+        "y": 40
       },
       "id": 42,
       "options": {
@@ -1201,7 +1275,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 21
+        "y": 40
       },
       "id": 49,
       "options": {
@@ -1306,7 +1380,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 25
+        "y": 44
       },
       "id": 33,
       "options": {
@@ -1408,7 +1482,7 @@
         "h": 8,
         "w": 16,
         "x": 8,
-        "y": 25
+        "y": 44
       },
       "id": 37,
       "options": {
@@ -1521,7 +1595,7 @@
         "h": 9,
         "w": 8,
         "x": 0,
-        "y": 33
+        "y": 52
       },
       "id": 35,
       "options": {
@@ -1641,7 +1715,7 @@
         "h": 9,
         "w": 16,
         "x": 8,
-        "y": 33
+        "y": 52
       },
       "id": 50,
       "options": {
@@ -1748,7 +1822,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 42
+        "y": 61
       },
       "id": 67,
       "options": {
@@ -1854,7 +1928,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 42
+        "y": 61
       },
       "id": 68,
       "options": {
@@ -1943,7 +2017,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 42
+        "y": 61
       },
       "id": 69,
       "options": {
@@ -1989,7 +2063,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 50
+        "y": 69
       },
       "id": 51,
       "panels": [],
@@ -2028,7 +2102,7 @@
         "h": 5,
         "w": 6,
         "x": 0,
-        "y": 51
+        "y": 70
       },
       "id": 1,
       "options": {
@@ -2106,7 +2180,7 @@
         "h": 5,
         "w": 4,
         "x": 6,
-        "y": 51
+        "y": 70
       },
       "id": 12,
       "options": {
@@ -2170,7 +2244,7 @@
         "h": 5,
         "w": 4,
         "x": 10,
-        "y": 51
+        "y": 70
       },
       "id": 3,
       "options": {
@@ -2286,7 +2360,7 @@
         "h": 8,
         "w": 10,
         "x": 14,
-        "y": 51
+        "y": 70
       },
       "id": 5,
       "options": {
@@ -2375,7 +2449,7 @@
         "h": 5,
         "w": 3,
         "x": 0,
-        "y": 56
+        "y": 75
       },
       "id": 13,
       "options": {
@@ -2453,7 +2527,7 @@
         "h": 5,
         "w": 3,
         "x": 3,
-        "y": 56
+        "y": 75
       },
       "id": 11,
       "options": {
@@ -2558,7 +2632,7 @@
         "h": 5,
         "w": 4,
         "x": 6,
-        "y": 56
+        "y": 75
       },
       "id": 27,
       "options": {
@@ -2637,7 +2711,7 @@
         "h": 10,
         "w": 4,
         "x": 10,
-        "y": 56
+        "y": 75
       },
       "id": 2,
       "options": {
@@ -2755,7 +2829,7 @@
         "h": 8,
         "w": 10,
         "x": 14,
-        "y": 59
+        "y": 78
       },
       "id": 7,
       "options": {
@@ -2838,7 +2912,7 @@
         "h": 5,
         "w": 3,
         "x": 0,
-        "y": 61
+        "y": 80
       },
       "id": 20,
       "options": {
@@ -2916,7 +2990,7 @@
         "h": 5,
         "w": 3,
         "x": 3,
-        "y": 61
+        "y": 80
       },
       "id": 21,
       "options": {
@@ -3034,7 +3108,7 @@
         "h": 5,
         "w": 4,
         "x": 6,
-        "y": 61
+        "y": 80
       },
       "id": 9,
       "options": {
@@ -3144,7 +3218,7 @@
         "h": 24,
         "w": 7,
         "x": 0,
-        "y": 66
+        "y": 85
       },
       "id": 22,
       "options": {
@@ -3237,7 +3311,7 @@
         "h": 8,
         "w": 7,
         "x": 7,
-        "y": 66
+        "y": 85
       },
       "id": 23,
       "options": {
@@ -3337,7 +3411,7 @@
         "h": 8,
         "w": 10,
         "x": 14,
-        "y": 67
+        "y": 86
       },
       "id": 4,
       "options": {
@@ -3434,7 +3508,7 @@
         "h": 8,
         "w": 7,
         "x": 7,
-        "y": 74
+        "y": 93
       },
       "id": 6,
       "options": {
@@ -3535,7 +3609,7 @@
         "h": 7,
         "w": 10,
         "x": 14,
-        "y": 75
+        "y": 94
       },
       "id": 24,
       "options": {
@@ -3626,7 +3700,7 @@
         "h": 8,
         "w": 7,
         "x": 7,
-        "y": 82
+        "y": 101
       },
       "id": 8,
       "options": {
@@ -3723,7 +3797,7 @@
         "h": 17,
         "w": 10,
         "x": 14,
-        "y": 82
+        "y": 101
       },
       "id": 18,
       "options": {
@@ -3819,7 +3893,7 @@
         "h": 9,
         "w": 14,
         "x": 0,
-        "y": 90
+        "y": 109
       },
       "id": 15,
       "options": {
@@ -3854,7 +3928,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 99
+        "y": 118
       },
       "id": 10,
       "panels": [],
@@ -3928,7 +4002,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 100
+        "y": 119
       },
       "id": 17,
       "options": {
@@ -4028,7 +4102,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 100
+        "y": 119
       },
       "id": 14,
       "options": {
@@ -4128,7 +4202,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 108
+        "y": 127
       },
       "id": 25,
       "options": {
@@ -4231,7 +4305,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 108
+        "y": 127
       },
       "id": 16,
       "options": {
@@ -4266,7 +4340,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 116
+        "y": 135
       },
       "id": 28,
       "panels": [],
@@ -4308,7 +4382,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 117
+        "y": 136
       },
       "id": 29,
       "options": {
@@ -4352,7 +4426,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 117
+        "y": 136
       },
       "id": 30,
       "options": {
@@ -4452,7 +4526,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 126
+        "y": 145
       },
       "id": 52,
       "options": {
@@ -4556,7 +4630,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 126
+        "y": 145
       },
       "id": 53,
       "options": {
@@ -4659,7 +4733,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 133
+        "y": 152
       },
       "id": 54,
       "options": {
@@ -4698,7 +4772,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 140
+        "y": 159
       },
       "id": 60,
       "panels": [],
@@ -4748,7 +4822,7 @@
         "h": 5,
         "w": 6,
         "x": 0,
-        "y": 133
+        "y": 152
       },
       "id": 61,
       "options": {
@@ -4816,7 +4890,7 @@
         "h": 5,
         "w": 6,
         "x": 6,
-        "y": 133
+        "y": 152
       },
       "id": 62,
       "options": {
@@ -4898,7 +4972,7 @@
         "h": 5,
         "w": 6,
         "x": 12,
-        "y": 133
+        "y": 152
       },
       "id": 63,
       "options": {
@@ -4966,7 +5040,7 @@
         "h": 5,
         "w": 6,
         "x": 18,
-        "y": 141
+        "y": 160
       },
       "id": 64,
       "options": {
@@ -5081,7 +5155,7 @@
         "h": 7,
         "w": 16,
         "x": 0,
-        "y": 146
+        "y": 165
       },
       "id": 65,
       "options": {
@@ -5148,7 +5222,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 146
+        "y": 165
       },
       "id": 66,
       "options": {
@@ -5183,7 +5257,7 @@
     },
     {
       "collapsed": false,
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 153},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 172},
       "id": 70,
       "panels": [],
       "title": "Polymarket Resolution Websocket",
@@ -5200,7 +5274,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 154},
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 173},
       "id": 71,
       "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "wideLayout": true},
       "pluginVersion": "12.4.2",
@@ -5219,7 +5293,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 154},
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 173},
       "id": 72,
       "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "value_and_name", "wideLayout": true},
       "pluginVersion": "12.4.2",
@@ -5231,7 +5305,7 @@
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "description": "Provider close events that exactly match the bounded slow-consumer send-buffer-full reason.",
       "fieldConfig": {"defaults": {"color": {"fixedColor": "red", "mode": "fixed"}, "custom": {"drawStyle": "bars", "fillOpacity": 70, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "none"}}, "min": 0, "unit": "short"}, "overrides": []},
-      "gridPos": {"h": 5, "w": 12, "x": 12, "y": 154},
+      "gridPos": {"h": 5, "w": 12, "x": 12, "y": 173},
       "id": 73,
       "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
       "pluginVersion": "12.4.2",
@@ -5243,7 +5317,7 @@
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "description": "Failed resolution websocket sessions grouped by their bounded reconnect reason.",
       "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "bars", "fillOpacity": 35, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "normal"}}, "min": 0, "unit": "short"}, "overrides": []},
-      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 159},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 178},
       "id": 74,
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
       "pluginVersion": "12.4.2",
@@ -5255,7 +5329,7 @@
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "description": "Current raw-frame queue utilization and the highest utilization observed during the previous scrape window.",
       "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 15, "lineWidth": 2, "showPoints": "never", "stacking": {"group": "A", "mode": "none"}}, "max": 1, "min": 0, "unit": "percentunit"}, "overrides": []},
-      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 159},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 178},
       "id": 75,
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
       "pluginVersion": "12.4.2",
@@ -5270,7 +5344,7 @@
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "description": "p99 time raw resolution frames spend in the bounded handoff before processing begins.",
       "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 12, "lineWidth": 2, "showPoints": "never", "stacking": {"group": "A", "mode": "none"}}, "min": 0, "unit": "s"}, "overrides": []},
-      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 166},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 185},
       "id": 76,
       "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
       "pluginVersion": "12.4.2",
@@ -5282,7 +5356,7 @@
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "description": "Resolution websocket data-frame arrival and completed-processing rates.",
       "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 12, "lineWidth": 2, "showPoints": "never", "stacking": {"group": "A", "mode": "none"}}, "min": 0, "unit": "ops"}, "overrides": []},
-      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 166},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 185},
       "id": 77,
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
       "pluginVersion": "12.4.2",
@@ -5297,7 +5371,7 @@
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "description": "Immediate failures to hand a raw resolution frame into the fixed 128-frame queue.",
       "fieldConfig": {"defaults": {"color": {"fixedColor": "red", "mode": "fixed"}, "custom": {"drawStyle": "bars", "fillOpacity": 70, "lineWidth": 1, "showPoints": "never", "stacking": {"group": "A", "mode": "none"}}, "min": 0, "unit": "short"}, "overrides": []},
-      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 173},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 192},
       "id": 78,
       "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
       "pluginVersion": "12.4.2",
@@ -5309,7 +5383,7 @@
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "description": "Latest successful realtime resolution persistence latency.",
       "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 12, "lineWidth": 2, "showPoints": "never", "stacking": {"group": "A", "mode": "none"}}, "min": 0, "unit": "s"}, "overrides": []},
-      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 173},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 192},
       "id": 79,
       "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}},
       "pluginVersion": "12.4.2",
@@ -5321,7 +5395,7 @@
       "datasource": {"type": "loki", "uid": "loki"},
       "description": "Structured resolution websocket terminal events with bounded disconnect reason and session context.",
       "fieldConfig": {"defaults": {}, "overrides": []},
-      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 180},
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 199},
       "id": 80,
       "options": {"cellHeight": "sm", "showHeader": true},
       "pluginVersion": "12.4.2",
@@ -5336,7 +5410,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 204
+        "y": 223
       },
       "id": 81,
       "panels": [],
@@ -5362,7 +5436,7 @@
         "h": 5,
         "w": 6,
         "x": 0,
-        "y": 205
+        "y": 224
       },
       "id": 82,
       "options": {
@@ -5414,7 +5488,7 @@
         "h": 5,
         "w": 6,
         "x": 6,
-        "y": 205
+        "y": 224
       },
       "id": 83,
       "options": {
@@ -5473,7 +5547,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 205
+        "y": 224
       },
       "id": 84,
       "options": {
@@ -5517,7 +5591,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 210
+        "y": 229
       },
       "id": 85,
       "options": {
@@ -5567,7 +5641,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 210
+        "y": 229
       },
       "id": 86,
       "options": {
@@ -5617,7 +5691,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 218
+        "y": 237
       },
       "id": 87,
       "options": {
@@ -5669,7 +5743,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 218
+        "y": 237
       },
       "id": 88,
       "options": {
@@ -5713,7 +5787,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 224
+        "y": 243
       },
       "id": 89,
       "options": {
@@ -5757,7 +5831,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 224
+        "y": 243
       },
       "id": 90,
       "options": {
@@ -5794,6 +5868,7 @@
   ],
   "templating": {
     "list": [
+      {"name": "worker_selection", "type": "textbox", "hide": 2, "query": "", "current": {"text": "", "value": ""}, "options": []},
       {
         "allValue": ".*",
         "current": {
