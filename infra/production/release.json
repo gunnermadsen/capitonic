@@ -6,14 +6,14 @@
     "polymarket-bot": {
       "repository": "capitonic/polymarket-bot",
       "rcVersion": "v3.2.6-rc.0",
-      "sourceRevision": "7985264529918cd75a5c87adc1b7d42616293d55",
+      "sourceRevision": "ed8dc893bd1f81664d7616e8e0626fa18ec3a843",
       "finalVersion": "v3.2.5",
       "digest": "sha256:b302c7d54008513241ef658154b6f684864be2e1a649fde928d60459d03cc1eb"
     },
     "ingester": {
       "repository": "capitonic/ingester",
       "rcVersion": "v1.2.3-rc.0",
-      "sourceRevision": "50597659e2050ee1e51b61e6141101b7ff98ec8e",
+      "sourceRevision": "ed8dc893bd1f81664d7616e8e0626fa18ec3a843",
       "finalVersion": "v1.2.2",
       "digest": "sha256:db100d816e63ae7e4c1d4d9248d85f8fe32eac179cca91fd8c8be3860c8a8bf7"
     },
