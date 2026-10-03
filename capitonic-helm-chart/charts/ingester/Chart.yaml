@@ -2,5 +2,5 @@ apiVersion: v2
 name: ingester
 description: Capitonic ingester master and worker for local Kubernetes
 type: application
-version: 0.4.5
-appVersion: "v1.2.2-local.2"
+version: 0.4.6
+appVersion: "v1.2.2-local.3"
