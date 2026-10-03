@@ -39,8 +39,9 @@ def fit_correction(probability: np.ndarray, outcome: np.ndarray, kind: str) -> f
         raise ValueError("Calibration requires both official outcomes")
 
     def loss(slope: float) -> float:
-        q = np.clip(corrected(p, slope, kind), 1e-6, 1 - 1e-6)
-        return float(np.mean(-y * np.log(q) - (1 - y) * np.log1p(-q)))
+        value = logit(p) if kind == "logit_temperature" else p - 0.5
+        z = slope * value
+        return float(np.mean(np.logaddexp(0.0, z) - y * z))
 
     result = minimize_scalar(loss, bounds=(0.05, 20.0), method="bounded")
     if not result.success:

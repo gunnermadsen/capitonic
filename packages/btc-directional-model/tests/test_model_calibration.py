@@ -95,3 +95,12 @@ def test_existing_temperature_is_composed_and_policy_unchanged():
     assert definition["calibration"]["intercept"] == -0.025
     assert definition["calibration"]["reliability_penalty"] == 0.02
     assert definition["policy"] == source["payoff_model"]["definition"]["policy"]
+
+
+def test_high_confidence_fit_does_not_flatten_optimizer_objective():
+    probability = np.full(100, 0.95)
+    outcomes = np.r_[np.ones(70), np.zeros(30)]
+    slope = fit_correction(probability, outcomes, "logit_temperature")
+    assert corrected(np.array([0.95]), slope, "logit_temperature")[0] == pytest.approx(
+        0.7, abs=1e-5
+    )
