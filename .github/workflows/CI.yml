@@ -404,8 +404,8 @@ jobs:
           [[ "$(git cat-file -t "refs/tags/$rc_git_tag")" == tag ]]
           rc_checkpoint="$(git rev-list -n1 "$rc_git_tag")"
           git merge-base --is-ancestor "$rc_checkpoint" "$GITHUB_SHA"
-          accepted_release="$(git show "$rc_checkpoint:infra/production/release.json" | jq -cer --arg component "$COMPONENT" '.components[$component]')"
-          current_release="$(jq -cer --arg component "$COMPONENT" '.components[$component]' infra/production/release.json)"
+          accepted_release="$(git show "$rc_checkpoint:infra/production/release.json" | jq -cer --arg component "$COMPONENT" '.components[$component] | {repository,rcVersion,sourceRevision}')"
+          current_release="$(jq -cer --arg component "$COMPONENT" '.components[$component] | {repository,rcVersion,sourceRevision}' infra/production/release.json)"
           [[ "$accepted_release" == "$current_release" ]]
           existing_digest="$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$REPOSITORY" \
             --image-ids imageTag="$rc_version" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
