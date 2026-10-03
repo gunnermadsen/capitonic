@@ -20,7 +20,7 @@ use crate::{
     persistence::{ClaimedBackfillJob, WorkerRegistration},
 };
 
-use super::StrategyRegistry;
+use super::{BackfillMetrics, StrategyRegistry};
 
 pub struct BackfillWorkerRuntime {
     registry: StrategyRegistry,
@@ -29,10 +29,15 @@ pub struct BackfillWorkerRuntime {
     master_url: String,
     admin_token: String,
     worker: WorkerRegistration,
+    metrics: BackfillMetrics,
 }
 
 impl BackfillWorkerRuntime {
-    pub fn from_environment(registry: StrategyRegistry, pool: PgPool) -> Result<Self> {
+    pub fn from_environment(
+        registry: StrategyRegistry,
+        pool: PgPool,
+        metrics: BackfillMetrics,
+    ) -> Result<Self> {
         let master_url = required("INGESTER_MASTER_URL")?
             .trim_end_matches('/')
             .to_owned();
@@ -95,6 +100,7 @@ impl BackfillWorkerRuntime {
             master_url,
             admin_token,
             worker,
+            metrics,
         })
     }
 
@@ -238,6 +244,7 @@ impl BackfillWorkerRuntime {
         let heartbeat_shutdown = execution_shutdown.clone();
         let heartbeat = self.heartbeat_loop(&claim, heartbeat_shutdown);
         tokio::pin!(heartbeat);
+        let started = std::time::Instant::now();
         let execution = strategy.execute_backfill(
             BackfillContext {
                 pool: self.pool.clone(),
@@ -265,6 +272,12 @@ impl BackfillWorkerRuntime {
         };
         let result = result.map_err(|error| retry_worker_shutdown(error, &shutdown));
         execution_shutdown.cancel();
+        let outcome = result
+            .as_ref()
+            .map(|_| "completed")
+            .unwrap_or_else(|error| error.kind.as_str());
+        self.metrics
+            .observe(&claim.job.strategy_key, outcome, started.elapsed());
         match result {
             Ok(outcome) => {
                 if let Err(error) = self.complete(&claim, &outcome).await {

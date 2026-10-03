@@ -1,4 +1,9 @@
-use std::{collections::BTreeSet, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeSet,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{bail, Context as _, Result as AnyResult};
 use chrono::{DateTime, Duration as ChronoDuration, Timelike, Utc};
@@ -16,13 +21,11 @@ use crate::domain::{
 
 use super::{
     pmxt::{
-        download_archive, spawn_execution_parser, spawn_parser, PmxtArchiveSpec,
-        DEFAULT_PMXT_ARCHIVE_URL, PMXT_ARCHIVE_PROVIDER, PMXT_COVERAGE_START_EPOCH,
+        archive_exists, download_archive, retain_execution_archives,
+        spawn_execution_reconstruction, spawn_parser, PmxtArchiveSpec, DEFAULT_PMXT_ARCHIVE_URL,
+        PMXT_ARCHIVE_PROVIDER, PMXT_COVERAGE_START_EPOCH,
     },
-    reconstruction::{
-        ExecutionSnapshotReconstructor, EXECUTION_SNAPSHOTS_PER_MARKET,
-        EXECUTION_SNAPSHOT_SCHEMA_VERSION,
-    },
+    reconstruction::EXECUTION_SNAPSHOT_SCHEMA_VERSION,
     types::{
         ArchiveCancellation, ArchiveDownloadLimits, BtcExecutionSnapshot, BtcIntervalMarket,
         BtcOrderbookArchiveEvent, BtcOrderbookMarketScope, BtcOutcome,
@@ -1711,6 +1714,33 @@ impl BackfillSupport {
                 ),
             ));
         }
+        let cancellation = cancellation_for(context);
+        let limits = ArchiveDownloadLimits {
+            maximum_compressed_bytes: 2 * 1024 * 1024 * 1024,
+            request_timeout: Duration::from_secs(30 * 60),
+            chunk_idle_timeout: Duration::from_secs(60),
+        };
+        let specs = [
+            PmxtArchiveSpec::new(&self.pmxt_url, shard.range_start - ChronoDuration::hours(1)),
+            PmxtArchiveSpec::new(&self.pmxt_url, shard.range_start),
+        ]
+        .map(|spec| spec.map_err(|error| invalid_source("pmxt_archive_spec", error.to_string())))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+        let preflight_started = Instant::now();
+        let (seed_exists, current_exists) = tokio::try_join!(
+            archive_exists(&self.client, &specs[0], &limits, &cancellation),
+            archive_exists(&self.client, &specs[1], &limits, &cancellation),
+        )
+        .map_err(|error| invalid_source("pmxt_archive_inspect", format!("{error:#}")))?;
+        let preflight_ms =
+            u64::try_from(preflight_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        if !seed_exists || !current_exists {
+            return Err(invalid_source(
+                "pmxt_archive_missing",
+                "PMXT seed or current archive was absent",
+            ));
+        }
         let artifact_id = create_artifact(
             context,
             self.key(),
@@ -1720,26 +1750,16 @@ impl BackfillSupport {
             "polymarket.btc_market_capacity_execution_snapshots",
         )
         .await?;
-        let mut reconstructor = ExecutionSnapshotReconstructor::new(scope.clone())
-            .map_err(|error| integrity("execution_reconstructor", error.to_string()))?;
-        let cancellation = cancellation_for(context);
-        let mut source_records = 0u64;
+
+        let download_started = Instant::now();
+        let mut archives = Vec::with_capacity(specs.len());
         let mut checksum = Sha256::new();
-        for source_hour in [
-            shard.range_start - ChronoDuration::hours(1),
-            shard.range_start,
-        ] {
-            let spec = PmxtArchiveSpec::new(&self.pmxt_url, source_hour)
-                .map_err(|error| invalid_source("pmxt_archive_spec", error.to_string()))?;
+        for spec in &specs {
             let archive = download_archive(
                 &self.client,
-                &spec,
+                spec,
                 &self.cache_directory,
-                &ArchiveDownloadLimits {
-                    maximum_compressed_bytes: 2 * 1024 * 1024 * 1024,
-                    request_timeout: Duration::from_secs(30 * 60),
-                    chunk_idle_timeout: Duration::from_secs(60),
-                },
+                &limits,
                 &cancellation,
             )
             .await
@@ -1751,49 +1771,68 @@ impl BackfillSupport {
                 )
             })?;
             checksum.update(archive.sha256.as_bytes());
-            let (mut receiver, parser) = spawn_execution_parser(
-                archive.path.clone(),
-                scope.clone(),
-                DATABASE_BATCH_ROWS,
-                cancellation.clone(),
-            );
-            while let Some(batch) = receiver.recv().await {
-                let batch =
-                    batch.map_err(|error| integrity("pmxt_execution_parse", error.to_string()))?;
-                for event in &batch {
-                    reconstructor
-                        .apply(event, &mut Vec::new())
-                        .map_err(|error| {
-                            integrity("execution_reconstruction", error.to_string())
-                        })?;
-                }
-            }
-            let parsed = parser
-                .await
-                .map_err(|error| integrity("pmxt_parser_join", error.to_string()))?
-                .map_err(|error| integrity("pmxt_execution_parse", error.to_string()))?;
-            source_records = source_records.saturating_add(parsed.records);
+            archives.push(archive);
         }
+        let download_ms = u64::try_from(download_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let compressed_bytes = archives
+            .iter()
+            .map(|archive| archive.compressed_bytes)
+            .sum::<u64>();
+        let cache_hits = archives.iter().filter(|archive| archive.cache_hit).count();
+
+        let parse_started = Instant::now();
+        let parsed = spawn_execution_reconstruction(
+            archives
+                .iter()
+                .map(|archive| archive.path.clone())
+                .collect(),
+            scope,
+            shard.range_end,
+            cancellation,
+        )
+        .await
+        .map_err(|error| integrity("pmxt_parser_join", error.to_string()))?
+        .map_err(|error| integrity("pmxt_execution_parse", error.to_string()))?;
+        let parse_reconstruct_ms =
+            u64::try_from(parse_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let source_records = parsed.summary.records;
         require_execution_source_records(source_records)?;
-        let mut snapshots = Vec::with_capacity(scope.len() * EXECUTION_SNAPSHOTS_PER_MARKET);
-        reconstructor.finish_before(shard.range_end, &mut snapshots);
-        snapshots
-            .retain(|row| row.up_source_timestamp.is_some() || row.down_source_timestamp.is_some());
-        let records = persist_execution_snapshots(context, artifact_id, &snapshots).await?;
+
+        let persist_started = Instant::now();
+        let records = persist_execution_snapshots(context, artifact_id, &parsed.snapshots).await?;
+        let persist_ms = u64::try_from(persist_started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let checksum = format!("{:x}", checksum.finalize());
+        let performance = json!({
+            "preflight_ms": preflight_ms,
+            "download_ms": download_ms,
+            "parse_reconstruct_ms": parse_reconstruct_ms,
+            "persist_ms": persist_ms,
+            "compressed_bytes": compressed_bytes,
+            "cache_hits": cache_hits,
+            "parser_batches": parsed.summary.batches,
+            "maximum_batch_records": parsed.summary.maximum_batch_records,
+        });
         complete_artifact(
             context,
             artifact_id,
             records,
             &checksum,
             shard,
-            json!({"source_events_consumed":source_records,"schema_version":EXECUTION_SNAPSHOT_SCHEMA_VERSION}),
+            json!({"source_events_consumed":source_records,"schema_version":EXECUTION_SNAPSHOT_SCHEMA_VERSION,"performance":performance.clone()}),
         )
         .await?;
+        if let Err(error) = retain_execution_archives(&self.cache_directory, &mut archives).await {
+            tracing::warn!(
+                event = "pmxt_execution_cache_retain_failed",
+                error_code = "pmxt_cache_prune",
+                %error,
+                "failed to retain bounded PMXT execution archive cache"
+            );
+        }
         Ok(outcome(
             records,
             shard,
-            json!({"provider":"pmxt_v2_capacity_execution_snapshots_v2","records_verified":records,"source_events_consumed":source_records}),
+            json!({"provider":"pmxt_v2_capacity_execution_snapshots_v2","records_verified":records,"source_events_consumed":source_records,"performance":performance}),
         ))
     }
 
