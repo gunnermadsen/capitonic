@@ -164,8 +164,10 @@ jobs:
             git commit -m 'release: admit production images and secret versions [production-pins]'
             refs=(HEAD:production)
             for path in "${chart_paths[@]}"; do
+              previous_version="$(git show "HEAD^:$path" | yq -r .version -)"
               component="${path%/Chart.yaml}"; component="${component##*/}"
               version="$(yq -r .version "$path")"
+              [[ "$version" != "$previous_version" ]] || continue
               tag="helm/$component/v$version"
               git tag -a "$tag" HEAD -m "Chart: ${path%/Chart.yaml}; admit exact production image pin and appVersion; production Helm lint/render passed."
               refs+=("refs/tags/$tag")

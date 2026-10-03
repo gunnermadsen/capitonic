@@ -64,13 +64,7 @@ for component in "${components[@]}"; do
       '.imageDigest = strenv(DIGEST) | .gitRevision = strenv(REVISION)' "$overlay"
   fi
   chart="capitonic-helm-chart/charts/$component/Chart.yaml"
-  if [[ "$(yq -r .appVersion "$chart")" != "$final_version" ]]; then
-    chart_version="$(yq -r .version "$chart")"
-    [[ "$chart_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
-    IFS=. read -r chart_major chart_minor chart_patch <<< "$chart_version"
-    CHART_VERSION="$chart_major.$chart_minor.$((chart_patch+1))" yq -i '.version = strenv(CHART_VERSION)' "$chart"
-  fi
-  VERSION="$final_version" yq -i '.appVersion = strenv(VERSION)' "capitonic-helm-chart/charts/$component/Chart.yaml"
+  VERSION="$final_version" yq -i '.appVersion = strenv(VERSION)' "$chart"
   release_tmp="$(mktemp)"
   jq --arg component "$component" --arg version "$final_version" --arg digest "$digest" \
     '.components[$component].finalVersion = $version | .components[$component].digest = $digest' \
