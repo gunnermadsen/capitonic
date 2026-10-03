@@ -173,10 +173,21 @@ pub struct DownloadedArchive {
     pub path: PathBuf,
     pub sha256: String,
     pub compressed_bytes: u64,
+    pub cache_hit: bool,
+    pub retained: bool,
+}
+
+impl DownloadedArchive {
+    pub fn retain(&mut self) {
+        self.retained = true;
+    }
 }
 
 impl Drop for DownloadedArchive {
     fn drop(&mut self) {
+        if self.retained {
+            return;
+        }
         match std::fs::remove_file(&self.path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

@@ -427,7 +427,7 @@ if [[ "$1" == prepare-ingester ]]; then
     exit 0
   fi
   rollout_epoch="$(date -u +%s)"
-  if ! helm upgrade --install ingester "$chart" -n "$namespace" --wait --timeout 15m; then
+  if ! helm upgrade --install ingester "$chart" -n "$namespace" --reset-values --wait --timeout 15m; then
     rollback_release "worker strategy upgrade failed" || exit 71
     exit 70
   fi
@@ -471,7 +471,7 @@ if [[ "$1" == deploy ]]; then
     exit 0
   fi
   rollout_epoch="$(date -u +%s)"
-  if ! helm upgrade --install "$component" "$chart" -n "$namespace" --wait --timeout 15m; then
+  if ! helm upgrade --install "$component" "$chart" -n "$namespace" --reset-values --wait --timeout 15m; then
     rollback_release "Helm upgrade failed" || exit 71
     exit 70
   fi

@@ -2,19 +2,24 @@ use std::{
     collections::HashSet,
     fs::File,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use anyhow::{bail, Context, Result};
+use arrow_array::{
+    Array, BinaryArray, Decimal128Array, FixedSizeBinaryArray, LargeBinaryArray, LargeStringArray,
+    RecordBatch, StringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+};
 use chrono::{DateTime, Timelike, Utc};
 use md5::Md5;
 use parquet::{
+    arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ProjectionMask},
     data_type::Decimal as ParquetDecimal,
     file::{
         metadata::RowGroupMetaData,
         reader::{FileReader, SerializedFileReader},
     },
     record::{Field, Row},
-    schema::types::Type as SchemaType,
 };
 use rust_decimal::Decimal;
 use sha2::{Digest, Sha256};
@@ -27,9 +32,10 @@ use tokio::{
 };
 use uuid::Uuid;
 
+use super::reconstruction::ExecutionSnapshotReconstructor;
 use super::types::{
-    ArchiveCancellation, ArchiveDownloadLimits, ArchiveParseSummary, BtcOrderbookArchiveEvent,
-    BtcOrderbookMarketScope, DownloadedArchive,
+    ArchiveCancellation, ArchiveDownloadLimits, ArchiveParseSummary, BtcExecutionSnapshot,
+    BtcOrderbookArchiveEvent, BtcOrderbookMarketScope, DownloadedArchive,
 };
 
 pub const PMXT_ARCHIVE_PROVIDER: &str = "pmxt_v2";
@@ -54,15 +60,15 @@ struct PmxtObjectIdentity {
 struct PmxtArchiveDigest {
     sha256: String,
     bytes: u64,
-    single_md5: String,
-    multipart_md5: String,
+    single_md5: Option<String>,
+    multipart_md5: Option<String>,
     multipart_parts: usize,
 }
 
 struct PmxtDigestAccumulator {
     sha256: Sha256,
-    whole_md5: Md5,
-    part_md5: Md5,
+    whole_md5: Option<Md5>,
+    part_md5: Option<Md5>,
     part_bytes: usize,
     part_digests: Vec<[u8; 16]>,
     bytes: u64,
@@ -93,11 +99,15 @@ impl PmxtArchiveSpec {
 }
 
 impl PmxtDigestAccumulator {
-    fn new() -> Self {
+    fn new(etag: Option<&PmxtEtag>) -> Self {
         Self {
             sha256: Sha256::new(),
-            whole_md5: Md5::new(),
-            part_md5: Md5::new(),
+            whole_md5: etag
+                .filter(|value| value.parts.is_none())
+                .map(|_| Md5::new()),
+            part_md5: etag
+                .filter(|value| value.parts.is_some())
+                .map(|_| Md5::new()),
             part_bytes: 0,
             part_digests: Vec::new(),
             bytes: 0,
@@ -110,12 +120,20 @@ impl PmxtDigestAccumulator {
             .checked_add(u64::try_from(bytes.len()).context("PMXT archive size overflow")?)
             .context("PMXT archive size overflow")?;
         self.sha256.update(bytes);
-        self.whole_md5.update(bytes);
+        if let Some(whole_md5) = &mut self.whole_md5 {
+            whole_md5.update(bytes);
+        }
+        if self.part_md5.is_none() {
+            return Ok(());
+        }
         let mut remaining = bytes;
         while !remaining.is_empty() {
             let available = PMXT_MULTIPART_CHUNK_BYTES.saturating_sub(self.part_bytes);
             let take = available.min(remaining.len());
-            self.part_md5.update(&remaining[..take]);
+            self.part_md5
+                .as_mut()
+                .expect("multipart digest exists")
+                .update(&remaining[..take]);
             self.part_bytes += take;
             remaining = &remaining[take..];
             if self.part_bytes == PMXT_MULTIPART_CHUNK_BYTES {
@@ -126,24 +144,34 @@ impl PmxtDigestAccumulator {
     }
 
     fn finish_part(&mut self) {
-        let digest: [u8; 16] = self.part_md5.finalize_reset().into();
+        let digest: [u8; 16] = self
+            .part_md5
+            .as_mut()
+            .expect("multipart digest exists")
+            .finalize_reset()
+            .into();
         self.part_digests.push(digest);
         self.part_bytes = 0;
     }
 
     fn finish(mut self) -> PmxtArchiveDigest {
-        if self.part_bytes > 0 || self.part_digests.is_empty() {
+        if self.part_md5.is_some() && (self.part_bytes > 0 || self.part_digests.is_empty()) {
             self.finish_part();
         }
-        let mut multipart = Md5::new();
-        for digest in &self.part_digests {
-            multipart.update(digest);
-        }
+        let multipart_md5 = self.part_md5.map(|_| {
+            let mut multipart = Md5::new();
+            for digest in &self.part_digests {
+                multipart.update(digest);
+            }
+            format!("{:x}", multipart.finalize())
+        });
         PmxtArchiveDigest {
             sha256: format!("{:x}", self.sha256.finalize()),
             bytes: self.bytes,
-            single_md5: format!("{:x}", self.whole_md5.finalize()),
-            multipart_md5: format!("{:x}", multipart.finalize()),
+            single_md5: self
+                .whole_md5
+                .map(|digest| format!("{:x}", digest.finalize())),
+            multipart_md5,
             multipart_parts: self.part_digests.len(),
         }
     }
@@ -178,9 +206,10 @@ impl PmxtObjectIdentity {
         if let Some(expected) = &self.etag {
             let matches = match expected.parts {
                 Some(parts) => {
-                    parts == digest.multipart_parts && expected.digest == digest.multipart_md5
+                    parts == digest.multipart_parts
+                        && digest.multipart_md5.as_deref() == Some(expected.digest.as_str())
                 }
-                None => expected.digest == digest.single_md5,
+                None => digest.single_md5.as_deref() == Some(expected.digest.as_str()),
             };
             if !matches {
                 bail!("PMXT archive ETag mismatch");
@@ -188,6 +217,388 @@ impl PmxtObjectIdentity {
         }
         Ok(())
     }
+}
+
+pub async fn archive_exists(
+    client: &reqwest::Client,
+    spec: &PmxtArchiveSpec,
+    limits: &ArchiveDownloadLimits,
+    cancellation: &ArchiveCancellation,
+) -> Result<bool> {
+    Ok(fetch_object_identity(client, spec, limits, cancellation)
+        .await?
+        .is_some())
+}
+
+pub async fn retain_execution_archives(
+    cache_directory: &Path,
+    archives: &mut [DownloadedArchive],
+) -> Result<()> {
+    let retained = archives
+        .iter()
+        .map(|archive| archive.path.clone())
+        .collect::<HashSet<_>>();
+    let mut entries = fs::read_dir(cache_directory).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if name.starts_with("polymarket_orderbook_")
+            && name.ends_with(".parquet")
+            && !retained.contains(&path)
+        {
+            fs::remove_file(&path)
+                .await
+                .with_context(|| format!("failed to prune {}", path.display()))?;
+        }
+    }
+    for archive in archives {
+        archive.retain();
+    }
+    Ok(())
+}
+
+pub struct ExecutionParseOutput {
+    pub summary: ArchiveParseSummary,
+    pub snapshots: Vec<BtcExecutionSnapshot>,
+}
+
+pub fn spawn_execution_reconstruction(
+    paths: Vec<PathBuf>,
+    markets: Vec<BtcOrderbookMarketScope>,
+    range_end: DateTime<Utc>,
+    cancellation: ArchiveCancellation,
+) -> JoinHandle<Result<ExecutionParseOutput>> {
+    tokio::task::spawn_blocking(move || {
+        let conditions = markets
+            .iter()
+            .map(|market| market.condition_id.clone())
+            .collect::<HashSet<_>>();
+        let assets = markets
+            .iter()
+            .flat_map(|market| [market.up_token_id.clone(), market.down_token_id.clone()])
+            .collect::<HashSet<_>>();
+        let mut reconstructor = ExecutionSnapshotReconstructor::new(markets)?;
+        let mut summary = ArchiveParseSummary::default();
+        for path in paths {
+            parse_execution_archive(
+                &path,
+                &conditions,
+                &assets,
+                &cancellation,
+                &mut reconstructor,
+                &mut summary,
+            )?;
+        }
+        let mut snapshots = Vec::new();
+        reconstructor.finish_before(range_end, &mut snapshots);
+        snapshots
+            .retain(|row| row.up_source_timestamp.is_some() || row.down_source_timestamp.is_some());
+        Ok(ExecutionParseOutput { summary, snapshots })
+    })
+}
+
+fn parse_execution_archive(
+    path: &Path,
+    conditions: &HashSet<String>,
+    assets: &HashSet<String>,
+    cancellation: &ArchiveCancellation,
+    reconstructor: &mut ExecutionSnapshotReconstructor,
+    summary: &mut ArchiveParseSummary,
+) -> Result<()> {
+    let file = File::open(path)
+        .with_context(|| format!("failed to open PMXT archive {}", path.display()))?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)
+        .context("failed to initialize PMXT Arrow reader")?;
+    let fields = builder.schema().fields();
+    let expected = [
+        "timestamp_received",
+        "timestamp",
+        "market",
+        "event_type",
+        "asset_id",
+        "bids",
+        "asks",
+        "price",
+        "size",
+        "side",
+    ];
+    if fields.len() < expected.len()
+        || fields
+            .iter()
+            .take(expected.len())
+            .zip(expected)
+            .any(|(field, expected)| field.name() != expected)
+    {
+        bail!("PMXT execution archive did not expose the expected leading columns");
+    }
+    let condition_bytes = conditions
+        .iter()
+        .map(|condition| condition.as_bytes().to_vec())
+        .collect::<Vec<_>>();
+    let mut global_base = 0i64;
+    let mut selected_groups = Vec::new();
+    for row_group_index in 0..builder.metadata().num_row_groups() {
+        let metadata = builder.metadata().row_group(row_group_index);
+        let records = metadata.num_rows();
+        if row_group_may_contain_condition(metadata, &condition_bytes) {
+            selected_groups.push((row_group_index, global_base, records));
+        }
+        global_base = global_base
+            .checked_add(records)
+            .context("PMXT source row base overflow")?;
+    }
+    if selected_groups.is_empty() {
+        return Ok(());
+    }
+    let projection = ProjectionMask::roots(builder.parquet_schema(), 0..expected.len());
+    let row_groups = selected_groups
+        .iter()
+        .map(|(index, _, _)| *index)
+        .collect::<Vec<_>>();
+    let reader = builder
+        .with_projection(projection)
+        .with_row_groups(row_groups)
+        .with_batch_size(8_192)
+        .build()
+        .context("failed to build PMXT Arrow reader")?;
+    let mut selected_group = 0usize;
+    let mut ordinal_in_group = 0i64;
+    for batch in reader {
+        let batch = batch.context("failed to decode PMXT Arrow batch")?;
+        parse_execution_batch(
+            &batch,
+            &selected_groups,
+            &mut selected_group,
+            &mut ordinal_in_group,
+            conditions,
+            assets,
+            cancellation,
+            reconstructor,
+            summary,
+        )?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_execution_batch(
+    batch: &RecordBatch,
+    selected_groups: &[(usize, i64, i64)],
+    selected_group: &mut usize,
+    ordinal_in_group: &mut i64,
+    conditions: &HashSet<String>,
+    assets: &HashSet<String>,
+    cancellation: &ArchiveCancellation,
+    reconstructor: &mut ExecutionSnapshotReconstructor,
+    summary: &mut ArchiveParseSummary,
+) -> Result<()> {
+    let schema = batch.schema();
+    let received = TimestampColumn::new(
+        batch.column(schema.index_of("timestamp_received")?),
+        "timestamp_received",
+    )?;
+    let source = TimestampColumn::new(batch.column(schema.index_of("timestamp")?), "timestamp")?;
+    let condition = TextColumn::new(batch.column(schema.index_of("market")?), "market")?;
+    let event_type = TextColumn::new(batch.column(schema.index_of("event_type")?), "event_type")?;
+    let asset = TextColumn::new(batch.column(schema.index_of("asset_id")?), "asset_id")?;
+    let bids = TextColumn::new(batch.column(schema.index_of("bids")?), "bids")?;
+    let asks = TextColumn::new(batch.column(schema.index_of("asks")?), "asks")?;
+    let price = DecimalColumn::new(batch.column(schema.index_of("price")?), "price")?;
+    let size = DecimalColumn::new(batch.column(schema.index_of("size")?), "size")?;
+    let side = TextColumn::new(batch.column(schema.index_of("side")?), "side")?;
+
+    for row in 0..batch.num_rows() {
+        if cancellation.is_cancelled() {
+            bail!("archive operation was cancelled");
+        }
+        while *selected_group < selected_groups.len()
+            && *ordinal_in_group == selected_groups[*selected_group].2
+        {
+            *selected_group += 1;
+            *ordinal_in_group = 0;
+        }
+        let Some((_, source_base, _)) = selected_groups.get(*selected_group) else {
+            bail!("PMXT Arrow reader exceeded selected row-group coverage");
+        };
+        let source_row_number = source_base
+            .checked_add(*ordinal_in_group)
+            .context("PMXT source row number overflow")?;
+        *ordinal_in_group = ordinal_in_group
+            .checked_add(1)
+            .context("PMXT row-group ordinal overflow")?;
+
+        let condition_id = condition.required(row)?;
+        let asset_id = asset.required(row)?;
+        if !conditions.contains(condition_id) || !assets.contains(asset_id) {
+            continue;
+        }
+        let event_type = event_type.required(row)?;
+        if matches!(event_type, "last_trade_price" | "tick_size_change") {
+            continue;
+        }
+        if !matches!(event_type, "book" | "price_change") {
+            bail!("PMXT row had unsupported event type {event_type}");
+        }
+        let provider_received_at = received.required(row)?;
+        let source_timestamp = source.required(row)?;
+        let bids = json_value(&bids, row, "bids")?;
+        let asks = json_value(&asks, row, "asks")?;
+        if event_type == "book"
+            && (!bids.as_ref().is_some_and(serde_json::Value::is_array)
+                || !asks.as_ref().is_some_and(serde_json::Value::is_array))
+        {
+            bail!("PMXT book event did not contain bid and ask arrays");
+        }
+        reconstructor.apply_components(
+            source_row_number,
+            provider_received_at,
+            source_timestamp,
+            condition_id,
+            asset_id,
+            event_type,
+            bids.as_ref(),
+            asks.as_ref(),
+            price.optional(row)?,
+            size.optional(row)?,
+            side.optional(row)?,
+        )?;
+        summary.records = summary.records.saturating_add(1);
+        summary.minimum_timestamp = Some(
+            summary
+                .minimum_timestamp
+                .map_or(source_timestamp, |value| value.min(source_timestamp)),
+        );
+        summary.maximum_timestamp = Some(
+            summary
+                .maximum_timestamp
+                .map_or(source_timestamp, |value| value.max(source_timestamp)),
+        );
+    }
+    summary.batches = summary.batches.saturating_add(1);
+    summary.maximum_batch_records = summary.maximum_batch_records.max(batch.num_rows());
+    Ok(())
+}
+
+enum TextColumn<'a> {
+    Utf8(&'a StringArray),
+    LargeUtf8(&'a LargeStringArray),
+    Binary(&'a BinaryArray),
+    LargeBinary(&'a LargeBinaryArray),
+    FixedBinary(&'a FixedSizeBinaryArray),
+}
+
+impl<'a> TextColumn<'a> {
+    fn new(array: &'a Arc<dyn Array>, name: &str) -> Result<Self> {
+        if let Some(values) = array.as_any().downcast_ref::<StringArray>() {
+            return Ok(Self::Utf8(values));
+        }
+        if let Some(values) = array.as_any().downcast_ref::<LargeStringArray>() {
+            return Ok(Self::LargeUtf8(values));
+        }
+        if let Some(values) = array.as_any().downcast_ref::<BinaryArray>() {
+            return Ok(Self::Binary(values));
+        }
+        if let Some(values) = array.as_any().downcast_ref::<LargeBinaryArray>() {
+            return Ok(Self::LargeBinary(values));
+        }
+        if let Some(values) = array.as_any().downcast_ref::<FixedSizeBinaryArray>() {
+            return Ok(Self::FixedBinary(values));
+        }
+        bail!("PMXT {name} column had an unsupported Arrow type")
+    }
+
+    fn optional(&self, row: usize) -> Result<Option<&str>> {
+        let value = match self {
+            Self::Utf8(values) if !values.is_null(row) => Some(values.value(row)),
+            Self::LargeUtf8(values) if !values.is_null(row) => Some(values.value(row)),
+            Self::Binary(values) if !values.is_null(row) => {
+                Some(std::str::from_utf8(values.value(row))?)
+            }
+            Self::LargeBinary(values) if !values.is_null(row) => {
+                Some(std::str::from_utf8(values.value(row))?)
+            }
+            Self::FixedBinary(values) if !values.is_null(row) => {
+                Some(std::str::from_utf8(values.value(row))?)
+            }
+            _ => None,
+        };
+        Ok(value)
+    }
+
+    fn required(&self, row: usize) -> Result<&str> {
+        self.optional(row)?
+            .context("PMXT required text column contained null")
+    }
+}
+
+enum TimestampColumn<'a> {
+    Millis(&'a TimestampMillisecondArray),
+    Micros(&'a TimestampMicrosecondArray),
+}
+
+impl<'a> TimestampColumn<'a> {
+    fn new(array: &'a Arc<dyn Array>, name: &str) -> Result<Self> {
+        if let Some(values) = array.as_any().downcast_ref::<TimestampMillisecondArray>() {
+            return Ok(Self::Millis(values));
+        }
+        if let Some(values) = array.as_any().downcast_ref::<TimestampMicrosecondArray>() {
+            return Ok(Self::Micros(values));
+        }
+        bail!("PMXT {name} column was not an Arrow timestamp")
+    }
+
+    fn required(&self, row: usize) -> Result<DateTime<Utc>> {
+        match self {
+            Self::Millis(values) if !values.is_null(row) => {
+                DateTime::from_timestamp_millis(values.value(row))
+                    .context("PMXT timestamp was out of range")
+            }
+            Self::Micros(values) if !values.is_null(row) => {
+                DateTime::from_timestamp_micros(values.value(row))
+                    .context("PMXT timestamp was out of range")
+            }
+            _ => bail!("PMXT required timestamp column contained null"),
+        }
+    }
+}
+
+struct DecimalColumn<'a> {
+    values: &'a Decimal128Array,
+    scale: u32,
+}
+
+impl<'a> DecimalColumn<'a> {
+    fn new(array: &'a Arc<dyn Array>, name: &str) -> Result<Self> {
+        let values = array
+            .as_any()
+            .downcast_ref::<Decimal128Array>()
+            .with_context(|| format!("PMXT {name} column was not decimal128"))?;
+        let arrow_schema::DataType::Decimal128(_, scale) = values.data_type() else {
+            bail!("PMXT {name} column was not decimal128");
+        };
+        let scale = u32::try_from(*scale).context("PMXT decimal scale was negative")?;
+        Ok(Self { values, scale })
+    }
+
+    fn optional(&self, row: usize) -> Result<Option<Decimal>> {
+        Ok((!self.values.is_null(row))
+            .then(|| Decimal::from_i128_with_scale(self.values.value(row), self.scale)))
+    }
+}
+
+fn json_value(
+    column: &TextColumn<'_>,
+    row: usize,
+    name: &str,
+) -> Result<Option<serde_json::Value>> {
+    column
+        .optional(row)?
+        .map(|value| {
+            serde_json::from_str(value).with_context(|| format!("PMXT {name} JSON was invalid"))
+        })
+        .transpose()
 }
 
 fn parse_etag(value: &str) -> Result<PmxtEtag> {
@@ -228,12 +639,20 @@ pub async fn download_archive(
                 .with_context(|| format!("failed to remove {}", final_path.display()))?;
             return Ok(None);
         };
-        let digest = hash_file(&final_path, limits.maximum_compressed_bytes, cancellation).await?;
+        let digest = hash_file(
+            &final_path,
+            limits.maximum_compressed_bytes,
+            cancellation,
+            identity.etag.as_ref(),
+        )
+        .await?;
         if identity.validate(&digest).is_ok() {
             return Ok(Some(DownloadedArchive {
                 path: final_path,
                 sha256: digest.sha256,
                 compressed_bytes: digest.bytes,
+                cache_hit: true,
+                retained: false,
             }));
         }
         fs::remove_file(&final_path)
@@ -255,6 +674,8 @@ pub async fn download_archive(
                     path: final_path,
                     sha256: digest.sha256,
                     compressed_bytes: digest.bytes,
+                    cache_hit: false,
+                    retained: false,
                 }));
             }
             Err(error) => {
@@ -342,7 +763,7 @@ async fn download_archive_once(
     let mut output = fs::File::create(partial_path)
         .await
         .with_context(|| format!("failed to create {}", partial_path.display()))?;
-    let mut digest = PmxtDigestAccumulator::new();
+    let mut digest = PmxtDigestAccumulator::new(identity.etag.as_ref());
     loop {
         if cancellation.is_cancelled() {
             bail!("archive operation was cancelled");
@@ -362,10 +783,6 @@ async fn download_archive_once(
     }
     let digest = digest.finish();
     identity.validate(&digest)?;
-    output
-        .sync_all()
-        .await
-        .context("failed to sync PMXT archive cache")?;
     drop(output);
     Ok(Some(digest))
 }
@@ -375,31 +792,6 @@ pub fn spawn_parser(
     markets: Vec<BtcOrderbookMarketScope>,
     batch_rows: usize,
     cancellation: ArchiveCancellation,
-) -> (
-    mpsc::Receiver<Result<Vec<BtcOrderbookArchiveEvent>>>,
-    JoinHandle<Result<ArchiveParseSummary>>,
-) {
-    spawn_parser_inner(path, markets, batch_rows, cancellation, false)
-}
-
-pub fn spawn_execution_parser(
-    path: PathBuf,
-    markets: Vec<BtcOrderbookMarketScope>,
-    batch_rows: usize,
-    cancellation: ArchiveCancellation,
-) -> (
-    mpsc::Receiver<Result<Vec<BtcOrderbookArchiveEvent>>>,
-    JoinHandle<Result<ArchiveParseSummary>>,
-) {
-    spawn_parser_inner(path, markets, batch_rows, cancellation, true)
-}
-
-fn spawn_parser_inner(
-    path: PathBuf,
-    markets: Vec<BtcOrderbookMarketScope>,
-    batch_rows: usize,
-    cancellation: ArchiveCancellation,
-    execution_projection: bool,
 ) -> (
     mpsc::Receiver<Result<Vec<BtcOrderbookArchiveEvent>>>,
     JoinHandle<Result<ArchiveParseSummary>>,
@@ -423,9 +815,6 @@ fn spawn_parser_inner(
             .with_context(|| format!("failed to open PMXT archive {}", path.display()))?;
         let reader =
             SerializedFileReader::new(file).context("failed to initialize PMXT Parquet reader")?;
-        let projection = execution_projection
-            .then(|| leading_column_projection(&reader, 10))
-            .transpose()?;
         let mut summary = ArchiveParseSummary::default();
         let mut batch = Vec::with_capacity(batch_rows);
         let mut source_row_base = 0i64;
@@ -437,11 +826,9 @@ fn spawn_parser_inner(
                 let row_group = reader.get_row_group(row_group_index).with_context(|| {
                     format!("failed to initialize PMXT Parquet row group {row_group_index}")
                 })?;
-                let rows = row_group
-                    .get_row_iter(projection.clone())
-                    .with_context(|| {
-                        format!("failed to stream PMXT Parquet row group {row_group_index}")
-                    })?;
+                let rows = row_group.get_row_iter(None).with_context(|| {
+                    format!("failed to stream PMXT Parquet row group {row_group_index}")
+                })?;
                 for (row_group_ordinal, row) in rows.enumerate() {
                     if cancellation.is_cancelled() {
                         bail!("archive operation was cancelled");
@@ -457,11 +844,7 @@ fn spawn_parser_inner(
                              source row {source_row_number}: {error}"
                         )
                     })?;
-                    let record = if execution_projection {
-                        parse_execution_row(row, source_row_number, &conditions, &assets)?
-                    } else {
-                        parse_row(row, source_row_number, &conditions, &assets)?
-                    };
+                    let record = parse_row(row, source_row_number, &conditions, &assets)?;
                     let Some(record) = record else {
                         continue;
                     };
@@ -508,24 +891,6 @@ fn spawn_parser_inner(
     (receiver, handle)
 }
 
-fn leading_column_projection(
-    reader: &SerializedFileReader<File>,
-    column_count: usize,
-) -> Result<SchemaType> {
-    let root = reader.metadata().file_metadata().schema();
-    let fields = root.get_fields();
-    if fields.len() < column_count {
-        bail!(
-            "PMXT schema exposed {} columns; expected at least {column_count}",
-            fields.len()
-        );
-    }
-    SchemaType::group_type_builder(root.name())
-        .with_fields(fields[..column_count].to_vec())
-        .build()
-        .context("failed to build PMXT execution projection")
-}
-
 fn row_group_may_contain_condition(metadata: &RowGroupMetaData, condition_ids: &[Vec<u8>]) -> bool {
     let Some(statistics) = metadata.column(2).statistics() else {
         return true;
@@ -544,59 +909,6 @@ fn condition_range_overlaps(condition_ids: &[Vec<u8>], minimum: &[u8], maximum: 
     condition_ids
         .iter()
         .any(|condition| condition.as_slice() >= minimum && condition.as_slice() <= maximum)
-}
-
-fn parse_execution_row(
-    row: Row,
-    source_row_number: i64,
-    conditions: &HashSet<&str>,
-    assets: &HashSet<&str>,
-) -> Result<Option<BtcOrderbookArchiveEvent>> {
-    let columns = row.into_columns();
-    if columns.len() != 10 {
-        bail!("PMXT execution row did not have the projected 10-column schema");
-    }
-    let provider_received_at = timestamp_field(&columns[0].1, "timestamp_received")?;
-    let source_timestamp = timestamp_field(&columns[1].1, "timestamp")?;
-    let condition_id = bytes_field(&columns[2].1, "market")?;
-    let event_type = string_field(&columns[3].1, "event_type")?;
-    let asset_id = string_field(&columns[4].1, "asset_id")?;
-    if !conditions.contains(condition_id.as_str()) || !assets.contains(asset_id.as_str()) {
-        return Ok(None);
-    }
-    if matches!(event_type.as_str(), "last_trade_price" | "tick_size_change") {
-        return Ok(None);
-    }
-    if !matches!(event_type.as_str(), "book" | "price_change") {
-        bail!("PMXT row had unsupported event type {event_type}");
-    }
-    let bids = json_field(&columns[5].1, "bids")?;
-    let asks = json_field(&columns[6].1, "asks")?;
-    if event_type == "book"
-        && (!bids.as_ref().is_some_and(serde_json::Value::is_array)
-            || !asks.as_ref().is_some_and(serde_json::Value::is_array))
-    {
-        bail!("PMXT book event did not contain bid and ask arrays");
-    }
-    Ok(Some(BtcOrderbookArchiveEvent {
-        source_row_number,
-        provider_received_at,
-        source_timestamp,
-        condition_id,
-        asset_id,
-        event_type,
-        bids,
-        asks,
-        price: decimal_field(&columns[7].1)?,
-        size: decimal_field(&columns[8].1)?,
-        side: optional_string_field(&columns[9].1, "side")?.map(|side| side.to_ascii_lowercase()),
-        best_bid: None,
-        best_ask: None,
-        fee_rate_bps: None,
-        transaction_hash: None,
-        old_tick_size: None,
-        new_tick_size: None,
-    }))
 }
 
 fn parse_row(
@@ -724,9 +1036,10 @@ async fn hash_file(
     path: &Path,
     maximum_bytes: u64,
     cancellation: &ArchiveCancellation,
+    etag: Option<&PmxtEtag>,
 ) -> Result<PmxtArchiveDigest> {
     let mut input = fs::File::open(path).await?;
-    let mut digest = PmxtDigestAccumulator::new();
+    let mut digest = PmxtDigestAccumulator::new(etag);
     let mut buffer = vec![0u8; 1024 * 1024];
     loop {
         if cancellation.is_cancelled() {
@@ -746,9 +1059,12 @@ async fn hash_file(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{sync::Arc, time::Duration};
 
+    use arrow_array::{Decimal128Array, RecordBatch, StringArray, TimestampMillisecondArray};
+    use arrow_schema::{DataType, Field as ArrowField, Schema, TimeUnit};
     use chrono::TimeZone;
+    use parquet::arrow::ArrowWriter;
     use parquet::data_type::ByteArray;
     use tempfile::TempDir;
     use tokio::{net::TcpListener, time::sleep};
@@ -789,7 +1105,8 @@ mod tests {
 
     #[test]
     fn multipart_etag_validation_matches_r2_layout() {
-        let mut accumulator = PmxtDigestAccumulator::new();
+        let etag = parse_etag("\"15c088024dc2b3017cad9ee6965f364a-2\"").unwrap();
+        let mut accumulator = PmxtDigestAccumulator::new(Some(&etag));
         accumulator
             .update(&vec![b'a'; PMXT_MULTIPART_CHUNK_BYTES])
             .unwrap();
@@ -797,8 +1114,11 @@ mod tests {
         let digest = accumulator.finish();
         assert_eq!(digest.bytes, 8_388_609);
         assert_eq!(digest.multipart_parts, 2);
-        assert_eq!(digest.multipart_md5, "15c088024dc2b3017cad9ee6965f364a");
-        assert_eq!(digest.single_md5, "6012c8a1ea54f0626ea128968f6583dd");
+        assert_eq!(
+            digest.multipart_md5.as_deref(),
+            Some("15c088024dc2b3017cad9ee6965f364a")
+        );
+        assert_eq!(digest.single_md5, None);
         let identity = PmxtObjectIdentity {
             content_length: Some(8_388_609),
             etag: Some(parse_etag("\"15c088024dc2b3017cad9ee6965f364a-2\"").unwrap()),
@@ -870,8 +1190,139 @@ mod tests {
                 path: path.clone(),
                 sha256: "0".repeat(64),
                 compressed_bytes: 8,
+                cache_hit: false,
+                retained: false,
             };
         }
         assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn retained_execution_archives_prune_older_cache_files() {
+        let directory = TempDir::new().unwrap();
+        let old = directory
+            .path()
+            .join("polymarket_orderbook_2026-04-17T10.parquet");
+        let seed = directory
+            .path()
+            .join("polymarket_orderbook_2026-04-17T11.parquet");
+        let current = directory
+            .path()
+            .join("polymarket_orderbook_2026-04-17T12.parquet");
+        for path in [&old, &seed, &current] {
+            std::fs::write(path, b"complete").unwrap();
+        }
+        let mut archives = vec![
+            DownloadedArchive {
+                path: seed.clone(),
+                sha256: "0".repeat(64),
+                compressed_bytes: 8,
+                cache_hit: true,
+                retained: false,
+            },
+            DownloadedArchive {
+                path: current.clone(),
+                sha256: "1".repeat(64),
+                compressed_bytes: 8,
+                cache_hit: false,
+                retained: false,
+            },
+        ];
+        retain_execution_archives(directory.path(), &mut archives)
+            .await
+            .unwrap();
+        drop(archives);
+        assert!(!old.exists());
+        assert!(seed.exists());
+        assert!(current.exists());
+    }
+
+    #[tokio::test]
+    async fn arrow_execution_parser_reconstructs_matching_books_without_row_materialization() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("execution.parquet");
+        let schema = Arc::new(Schema::new(vec![
+            ArrowField::new(
+                "timestamp_received",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                false,
+            ),
+            ArrowField::new(
+                "timestamp",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                false,
+            ),
+            ArrowField::new("market", DataType::Utf8, false),
+            ArrowField::new("event_type", DataType::Utf8, false),
+            ArrowField::new("asset_id", DataType::Utf8, false),
+            ArrowField::new("bids", DataType::Utf8, true),
+            ArrowField::new("asks", DataType::Utf8, true),
+            ArrowField::new("price", DataType::Decimal128(10, 4), true),
+            ArrowField::new("size", DataType::Decimal128(10, 4), true),
+            ArrowField::new("side", DataType::Utf8, true),
+        ]));
+        let start = Utc.with_ymd_and_hms(2026, 4, 17, 12, 0, 0).unwrap();
+        let received = start.timestamp_millis() + 900;
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(TimestampMillisecondArray::from(vec![received; 3])),
+                Arc::new(TimestampMillisecondArray::from(vec![received - 1; 3])),
+                Arc::new(StringArray::from(vec![
+                    "condition",
+                    "condition",
+                    "unrelated",
+                ])),
+                Arc::new(StringArray::from(vec!["book", "book", "book"])),
+                Arc::new(StringArray::from(vec!["up", "down", "other"])),
+                Arc::new(StringArray::from(vec![
+                    Some("[[\"0.40\",\"10\"]]"),
+                    Some("[[\"0.40\",\"10\"]]"),
+                    Some("[]"),
+                ])),
+                Arc::new(StringArray::from(vec![
+                    Some("[[\"0.45\",\"4\"],[\"0.50\",\"216\"]]"),
+                    Some("[[\"0.45\",\"4\"],[\"0.50\",\"216\"]]"),
+                    Some("[]"),
+                ])),
+                Arc::new(
+                    Decimal128Array::from(vec![None, None, None])
+                        .with_precision_and_scale(10, 4)
+                        .unwrap(),
+                ),
+                Arc::new(
+                    Decimal128Array::from(vec![None, None, None])
+                        .with_precision_and_scale(10, 4)
+                        .unwrap(),
+                ),
+                Arc::new(StringArray::from(vec![None::<&str>, None, None])),
+            ],
+        )
+        .unwrap();
+        let output = File::create(&path).unwrap();
+        let mut writer = ArrowWriter::try_new(output, schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let scope = BtcOrderbookMarketScope {
+            market_id: "market".to_owned(),
+            condition_id: "condition".to_owned(),
+            up_token_id: "up".to_owned(),
+            down_token_id: "down".to_owned(),
+            window_start: start,
+            window_end: start + chrono::Duration::minutes(5),
+        };
+        let parsed = spawn_execution_reconstruction(
+            vec![path],
+            vec![scope],
+            start + chrono::Duration::minutes(5),
+            ArchiveCancellation::default(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(parsed.summary.records, 2);
+        assert_eq!(parsed.snapshots.len(), 96);
+        assert_eq!(parsed.snapshots[0].quality_flags, 0);
+        assert_eq!(parsed.snapshots[0].up_best_ask, Some(Decimal::new(45, 2)));
     }
 }

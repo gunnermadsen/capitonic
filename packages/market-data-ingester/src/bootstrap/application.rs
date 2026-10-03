@@ -11,8 +11,8 @@ use crate::{
     control::{ControlApi, ControlReadiness},
     persistence::ProfileRepository,
     runtime::{
-        BackfillWorkerRuntime, DrainWorkerRuntime, KubernetesWorkerScaler, StrategyRegistry,
-        StrategySupervisor, SupervisorSettings,
+        BackfillMetrics, BackfillWorkerRuntime, DrainWorkerRuntime, KubernetesWorkerScaler,
+        StrategyRegistry, StrategySupervisor, SupervisorSettings,
     },
     streaming::Publisher,
 };
@@ -219,9 +219,11 @@ impl Application {
             self.settings.service_instance.clone(),
             SupervisorSettings::default(),
         )?;
+        let backfill_metrics = BackfillMetrics::default();
         let backfills = BackfillWorkerRuntime::from_environment(
             self.registry.clone(),
             self.strategy_pool.clone(),
+            backfill_metrics.clone(),
         )?;
         let drains = DrainWorkerRuntime::from_environment(
             self.registry,
@@ -269,6 +271,7 @@ impl Application {
         let metrics_bind = self.settings.worker_metrics_bind;
         components.spawn(async move {
             let metrics_publisher = publisher.clone();
+            let backfill_metrics = backfill_metrics.clone();
             let worker_readiness = readiness.clone();
             let metrics_readiness = readiness.clone();
             let app = Router::new()
@@ -290,11 +293,13 @@ impl Application {
                     "/prometheus/metrics",
                     get(move || {
                         let publisher = metrics_publisher.clone();
+                        let backfill_metrics = backfill_metrics.clone();
                         let readiness = metrics_readiness.clone();
                         async move {
                             format!(
-                                "{}# HELP market_data_ingester_worker_readiness Whether realtime assignment reconciliation is currently healthy.\n# TYPE market_data_ingester_worker_readiness gauge\nmarket_data_ingester_worker_readiness {}\n",
+                                "{}{}# HELP market_data_ingester_worker_readiness Whether realtime assignment reconciliation is currently healthy.\n# TYPE market_data_ingester_worker_readiness gauge\nmarket_data_ingester_worker_readiness {}\n",
                                 publisher.render_metrics(),
+                                backfill_metrics.render().unwrap_or_default(),
                                 u8::from(readiness.is_ready())
                             )
                         }

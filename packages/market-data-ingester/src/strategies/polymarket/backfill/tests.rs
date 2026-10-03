@@ -3,12 +3,15 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{json, Value};
 
-use crate::domain::{BackfillRequest, BackfillWorkerStrategy, StrategyCapability};
+use crate::domain::{
+    BackfillFailureKind, BackfillRequest, BackfillShard, BackfillWorkerStrategy, StrategyCapability,
+};
 
 use super::{
     support::{
-        normalize_reference_value, parse_gamma_btc_interval_event, reference_fact_matches,
-        EXECUTION_SNAPSHOTS_BACKFILL_KEY, MARKET_CONTRACTS_BACKFILL_KEY,
+        classify_database_message, normalize_reference_value, parse_gamma_btc_interval_event,
+        reference_fact_matches, removed_drain_outcome, require_execution_source_records,
+        RemovedDrainCoverage, EXECUTION_SNAPSHOTS_BACKFILL_KEY, MARKET_CONTRACTS_BACKFILL_KEY,
         ORDERBOOK_EVENTS_BACKFILL_KEY, RESOLUTIONS_BACKFILL_KEY,
     },
     PolymarketBtcExecutionSnapshotsBackfill, PolymarketBtcMarketContractsBackfill,
@@ -88,6 +91,56 @@ fn pmxt_rejects_partial_hour_ranges() {
         ))
         .unwrap_err();
     assert_eq!(error.code, "range_alignment_invalid");
+}
+
+#[test]
+fn drained_execution_snapshot_coverage_completes_without_claiming_hourly_rows() {
+    let start: DateTime<Utc> = "2026-08-01T00:00:00Z".parse().unwrap();
+    let shard = BackfillShard {
+        shard_key: "1785542400-1785546000".to_owned(),
+        range_start: start,
+        range_end: start + Duration::hours(1),
+        parameters: json!({}),
+    };
+    let coverage = RemovedDrainCoverage {
+        object_id: "dc820676-a0b5-4356-968a-b2d39c30e092".parse().unwrap(),
+        source_start: start,
+        source_end: start + Duration::days(1),
+        row_count: 27_648,
+        relative_path: "verified-chunks-v1/year=2026/month=08/day=01/object.parquet".to_owned(),
+        sha256: "c6faa46a8796556a745da4d98eac62d1c4624d0878383569e101d285d717a584".to_owned(),
+        byte_size: 4_469_203,
+    };
+
+    let outcome = removed_drain_outcome(&shard, &coverage);
+
+    assert_eq!(outcome.records_verified, 0);
+    assert_eq!(outcome.summary["already_archived"], true);
+    assert_eq!(outcome.summary["source_download_skipped"], true);
+    assert_eq!(outcome.summary["drain_object_row_count"], 27_648);
+    assert_eq!(outcome.verified_coverage["durable_drain_coverage"], true);
+}
+
+#[test]
+fn empty_pmxt_execution_archives_do_not_claim_verified_coverage() {
+    let error = require_execution_source_records(0).unwrap_err();
+    assert_eq!(error.kind, BackfillFailureKind::Integrity);
+    assert_eq!(error.code, "pmxt_execution_source_empty");
+
+    require_execution_source_records(1).unwrap();
+}
+
+#[test]
+fn drained_history_trigger_is_a_permanent_backfill_failure() {
+    let error = classify_database_message(
+        "database error: historical source chunk has been drained".to_owned(),
+    );
+    assert_eq!(error.kind, BackfillFailureKind::InvalidRequest);
+    assert_eq!(error.code, "drained_history_already_archived");
+
+    let transient = classify_database_message("database connection closed".to_owned());
+    assert_eq!(transient.kind, BackfillFailureKind::TransientDatabase);
+    assert_eq!(transient.code, "database_error");
 }
 
 #[test]

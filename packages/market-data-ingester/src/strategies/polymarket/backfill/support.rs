@@ -1,4 +1,9 @@
-use std::{collections::BTreeSet, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeSet,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{bail, Context as _, Result as AnyResult};
 use chrono::{DateTime, Duration as ChronoDuration, Timelike, Utc};
@@ -6,7 +11,7 @@ use reqwest::Client;
 use rust_decimal::{Decimal, RoundingStrategy};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use sqlx::{Postgres, QueryBuilder, Row, Transaction};
+use sqlx::{FromRow, Postgres, QueryBuilder, Row, Transaction};
 use uuid::Uuid;
 
 use crate::domain::{
@@ -16,13 +21,11 @@ use crate::domain::{
 
 use super::{
     pmxt::{
-        download_archive, spawn_execution_parser, spawn_parser, PmxtArchiveSpec,
-        DEFAULT_PMXT_ARCHIVE_URL, PMXT_ARCHIVE_PROVIDER, PMXT_COVERAGE_START_EPOCH,
+        archive_exists, download_archive, retain_execution_archives,
+        spawn_execution_reconstruction, spawn_parser, PmxtArchiveSpec, DEFAULT_PMXT_ARCHIVE_URL,
+        PMXT_ARCHIVE_PROVIDER, PMXT_COVERAGE_START_EPOCH,
     },
-    reconstruction::{
-        ExecutionSnapshotReconstructor, EXECUTION_SNAPSHOTS_PER_MARKET,
-        EXECUTION_SNAPSHOT_SCHEMA_VERSION,
-    },
+    reconstruction::EXECUTION_SNAPSHOT_SCHEMA_VERSION,
     types::{
         ArchiveCancellation, ArchiveDownloadLimits, BtcExecutionSnapshot, BtcIntervalMarket,
         BtcOrderbookArchiveEvent, BtcOrderbookMarketScope, BtcOutcome,
@@ -42,6 +45,9 @@ const CLOB_URL: &str = "https://clob.polymarket.com";
 const MAX_JSON_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SHARDS: usize = 10_080;
 const DATABASE_BATCH_ROWS: usize = 1_000;
+const CAPACITY_EXECUTION_SNAPSHOTS_DRAIN_KEY: &str = "polymarket_btc_capacity_execution_snapshots";
+const CAPACITY_EXECUTION_SNAPSHOTS_RELATION: &str =
+    "polymarket.btc_market_capacity_execution_snapshots";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Kind {
@@ -146,6 +152,126 @@ fn outcome(records: i64, shard: &BackfillShard, summary: Value) -> BackfillOutco
             "records_verified": records,
         }),
         summary,
+    }
+}
+
+pub(super) fn require_execution_source_records(
+    source_records: u64,
+) -> Result<(), BackfillExecutionError> {
+    if source_records == 0 {
+        return Err(integrity(
+            "pmxt_execution_source_empty",
+            "PMXT seed and current archives contained no matching BTC five-minute execution events",
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub(super) struct RemovedDrainCoverage {
+    pub(super) object_id: Uuid,
+    pub(super) source_start: DateTime<Utc>,
+    pub(super) source_end: DateTime<Utc>,
+    pub(super) row_count: i64,
+    pub(super) relative_path: String,
+    pub(super) sha256: String,
+    pub(super) byte_size: i64,
+}
+
+async fn removed_execution_snapshot_coverage(
+    context: &BackfillContext,
+    shard: &BackfillShard,
+) -> Result<Option<RemovedDrainCoverage>, BackfillExecutionError> {
+    sqlx::query_as(
+        r#"
+        SELECT object_id,source_start,source_end,row_count,relative_path,
+          sha256::text,byte_size
+        FROM ingester.drain_objects
+        WHERE strategy_key=$1
+          AND source_relation=$2
+          AND status='removed'
+          AND source_start <= $3
+          AND source_end >= $4
+          AND row_count IS NOT NULL
+          AND relative_path IS NOT NULL
+          AND sha256 IS NOT NULL
+          AND byte_size IS NOT NULL
+        ORDER BY source_start DESC,source_end,object_id
+        LIMIT 1
+        "#,
+    )
+    .bind(CAPACITY_EXECUTION_SNAPSHOTS_DRAIN_KEY)
+    .bind(CAPACITY_EXECUTION_SNAPSHOTS_RELATION)
+    .bind(shard.range_start)
+    .bind(shard.range_end)
+    .fetch_optional(&context.pool)
+    .await
+    .map_err(database_error)
+}
+
+async fn close_drained_artifact_attempt(
+    context: &BackfillContext,
+    logical_key: &str,
+    coverage: &RemovedDrainCoverage,
+) -> Result<(), BackfillExecutionError> {
+    let mut tx = context.pool.begin().await.map_err(database_error)?;
+    require_lease(&mut tx, context).await?;
+    sqlx::query(
+        r#"
+        UPDATE ingester.backfill_artifacts SET
+          status='failed',
+          metadata=metadata || jsonb_build_object(
+            'superseded_reason','durable_drain_archive',
+            'drain_object_id',$3::uuid,
+            'drain_relative_path',$4::text,
+            'drain_sha256',$5::text
+          ),
+          updated_at=now()
+        WHERE job_id=$1
+          AND strategy_key=$2
+          AND logical_key=$6
+          AND status <> 'completed'
+        "#,
+    )
+    .bind(context.job_id)
+    .bind(EXECUTION_SNAPSHOTS_BACKFILL_KEY)
+    .bind(coverage.object_id)
+    .bind(&coverage.relative_path)
+    .bind(&coverage.sha256)
+    .bind(logical_key)
+    .execute(&mut *tx)
+    .await
+    .map_err(database_error)?;
+    require_lease(&mut tx, context).await?;
+    tx.commit().await.map_err(database_error)
+}
+
+pub(super) fn removed_drain_outcome(
+    shard: &BackfillShard,
+    coverage: &RemovedDrainCoverage,
+) -> BackfillOutcome {
+    BackfillOutcome {
+        records_verified: 0,
+        verified_coverage: json!({
+            "requested_start": shard.range_start,
+            "requested_end": shard.range_end,
+            "records_verified": 0,
+            "durable_drain_coverage": true,
+            "drain_object_id": coverage.object_id,
+            "drain_source_start": coverage.source_start,
+            "drain_source_end": coverage.source_end,
+        }),
+        summary: json!({
+            "provider": "verified_drain_archive",
+            "already_archived": true,
+            "source_download_skipped": true,
+            "drain_strategy_key": CAPACITY_EXECUTION_SNAPSHOTS_DRAIN_KEY,
+            "drain_object_id": coverage.object_id,
+            "drain_object_row_count": coverage.row_count,
+            "relative_path": coverage.relative_path,
+            "sha256": coverage.sha256,
+            "byte_size": coverage.byte_size,
+        }),
     }
 }
 
@@ -871,12 +997,23 @@ fn invalid_source(code: &'static str, message: impl Into<String>) -> BackfillExe
     BackfillExecutionError::new(BackfillFailureKind::TransientSource, code, message)
 }
 
-fn database_error(error: sqlx::Error) -> BackfillExecutionError {
+pub(super) fn classify_database_message(message: String) -> BackfillExecutionError {
+    if message.contains("historical source chunk has been drained") {
+        return BackfillExecutionError::new(
+            BackfillFailureKind::InvalidRequest,
+            "drained_history_already_archived",
+            message,
+        );
+    }
     BackfillExecutionError::new(
         BackfillFailureKind::TransientDatabase,
         "database_error",
-        error.to_string(),
+        message,
     )
+}
+
+fn database_error(error: sqlx::Error) -> BackfillExecutionError {
+    classify_database_message(error.to_string())
 }
 
 fn integrity(code: &'static str, message: impl Into<String>) -> BackfillExecutionError {
@@ -1563,6 +1700,10 @@ impl BackfillSupport {
         if let Some(outcome) = completed_outcome(context, self.key(), &logical_key).await? {
             return Ok(outcome);
         }
+        if let Some(coverage) = removed_execution_snapshot_coverage(context, shard).await? {
+            close_drained_artifact_attempt(context, &logical_key, &coverage).await?;
+            return Ok(removed_drain_outcome(shard, &coverage));
+        }
         let scope = load_scope(context, shard.range_start, shard.range_end, false).await?;
         if scope.len() != 12 {
             return Err(integrity(
@@ -1571,6 +1712,33 @@ impl BackfillSupport {
                     "expected 12 valid BTC five-minute markets, found {}",
                     scope.len()
                 ),
+            ));
+        }
+        let cancellation = cancellation_for(context);
+        let limits = ArchiveDownloadLimits {
+            maximum_compressed_bytes: 2 * 1024 * 1024 * 1024,
+            request_timeout: Duration::from_secs(30 * 60),
+            chunk_idle_timeout: Duration::from_secs(60),
+        };
+        let specs = [
+            PmxtArchiveSpec::new(&self.pmxt_url, shard.range_start - ChronoDuration::hours(1)),
+            PmxtArchiveSpec::new(&self.pmxt_url, shard.range_start),
+        ]
+        .map(|spec| spec.map_err(|error| invalid_source("pmxt_archive_spec", error.to_string())))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+        let preflight_started = Instant::now();
+        let (seed_exists, current_exists) = tokio::try_join!(
+            archive_exists(&self.client, &specs[0], &limits, &cancellation),
+            archive_exists(&self.client, &specs[1], &limits, &cancellation),
+        )
+        .map_err(|error| invalid_source("pmxt_archive_inspect", format!("{error:#}")))?;
+        let preflight_ms =
+            u64::try_from(preflight_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        if !seed_exists || !current_exists {
+            return Err(invalid_source(
+                "pmxt_archive_missing",
+                "PMXT seed or current archive was absent",
             ));
         }
         let artifact_id = create_artifact(
@@ -1582,26 +1750,16 @@ impl BackfillSupport {
             "polymarket.btc_market_capacity_execution_snapshots",
         )
         .await?;
-        let mut reconstructor = ExecutionSnapshotReconstructor::new(scope.clone())
-            .map_err(|error| integrity("execution_reconstructor", error.to_string()))?;
-        let cancellation = cancellation_for(context);
-        let mut source_records = 0u64;
+
+        let download_started = Instant::now();
+        let mut archives = Vec::with_capacity(specs.len());
         let mut checksum = Sha256::new();
-        for source_hour in [
-            shard.range_start - ChronoDuration::hours(1),
-            shard.range_start,
-        ] {
-            let spec = PmxtArchiveSpec::new(&self.pmxt_url, source_hour)
-                .map_err(|error| invalid_source("pmxt_archive_spec", error.to_string()))?;
+        for spec in &specs {
             let archive = download_archive(
                 &self.client,
-                &spec,
+                spec,
                 &self.cache_directory,
-                &ArchiveDownloadLimits {
-                    maximum_compressed_bytes: 2 * 1024 * 1024 * 1024,
-                    request_timeout: Duration::from_secs(30 * 60),
-                    chunk_idle_timeout: Duration::from_secs(60),
-                },
+                &limits,
                 &cancellation,
             )
             .await
@@ -1613,48 +1771,68 @@ impl BackfillSupport {
                 )
             })?;
             checksum.update(archive.sha256.as_bytes());
-            let (mut receiver, parser) = spawn_execution_parser(
-                archive.path.clone(),
-                scope.clone(),
-                DATABASE_BATCH_ROWS,
-                cancellation.clone(),
-            );
-            while let Some(batch) = receiver.recv().await {
-                let batch =
-                    batch.map_err(|error| integrity("pmxt_execution_parse", error.to_string()))?;
-                for event in &batch {
-                    reconstructor
-                        .apply(event, &mut Vec::new())
-                        .map_err(|error| {
-                            integrity("execution_reconstruction", error.to_string())
-                        })?;
-                }
-            }
-            let parsed = parser
-                .await
-                .map_err(|error| integrity("pmxt_parser_join", error.to_string()))?
-                .map_err(|error| integrity("pmxt_execution_parse", error.to_string()))?;
-            source_records = source_records.saturating_add(parsed.records);
+            archives.push(archive);
         }
-        let mut snapshots = Vec::with_capacity(scope.len() * EXECUTION_SNAPSHOTS_PER_MARKET);
-        reconstructor.finish_before(shard.range_end, &mut snapshots);
-        snapshots
-            .retain(|row| row.up_source_timestamp.is_some() || row.down_source_timestamp.is_some());
-        let records = persist_execution_snapshots(context, artifact_id, &snapshots).await?;
+        let download_ms = u64::try_from(download_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let compressed_bytes = archives
+            .iter()
+            .map(|archive| archive.compressed_bytes)
+            .sum::<u64>();
+        let cache_hits = archives.iter().filter(|archive| archive.cache_hit).count();
+
+        let parse_started = Instant::now();
+        let parsed = spawn_execution_reconstruction(
+            archives
+                .iter()
+                .map(|archive| archive.path.clone())
+                .collect(),
+            scope,
+            shard.range_end,
+            cancellation,
+        )
+        .await
+        .map_err(|error| integrity("pmxt_parser_join", error.to_string()))?
+        .map_err(|error| integrity("pmxt_execution_parse", error.to_string()))?;
+        let parse_reconstruct_ms =
+            u64::try_from(parse_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let source_records = parsed.summary.records;
+        require_execution_source_records(source_records)?;
+
+        let persist_started = Instant::now();
+        let records = persist_execution_snapshots(context, artifact_id, &parsed.snapshots).await?;
+        let persist_ms = u64::try_from(persist_started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let checksum = format!("{:x}", checksum.finalize());
+        let performance = json!({
+            "preflight_ms": preflight_ms,
+            "download_ms": download_ms,
+            "parse_reconstruct_ms": parse_reconstruct_ms,
+            "persist_ms": persist_ms,
+            "compressed_bytes": compressed_bytes,
+            "cache_hits": cache_hits,
+            "parser_batches": parsed.summary.batches,
+            "maximum_batch_records": parsed.summary.maximum_batch_records,
+        });
         complete_artifact(
             context,
             artifact_id,
             records,
             &checksum,
             shard,
-            json!({"source_events_consumed":source_records,"schema_version":EXECUTION_SNAPSHOT_SCHEMA_VERSION}),
+            json!({"source_events_consumed":source_records,"schema_version":EXECUTION_SNAPSHOT_SCHEMA_VERSION,"performance":performance.clone()}),
         )
         .await?;
+        if let Err(error) = retain_execution_archives(&self.cache_directory, &mut archives).await {
+            tracing::warn!(
+                event = "pmxt_execution_cache_retain_failed",
+                error_code = "pmxt_cache_prune",
+                %error,
+                "failed to retain bounded PMXT execution archive cache"
+            );
+        }
         Ok(outcome(
             records,
             shard,
-            json!({"provider":"pmxt_v2_capacity_execution_snapshots_v2","records_verified":records,"source_events_consumed":source_records}),
+            json!({"provider":"pmxt_v2_capacity_execution_snapshots_v2","records_verified":records,"source_events_consumed":source_records,"performance":performance}),
         ))
     }
 

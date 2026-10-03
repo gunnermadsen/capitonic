@@ -47,19 +47,46 @@ struct BookState {
 }
 
 impl BookState {
+    #[allow(dead_code)]
     fn apply(&mut self, event: &BtcOrderbookArchiveEvent) -> Result<()> {
-        match event.event_type.as_str() {
+        self.apply_components(
+            event.source_row_number,
+            event.provider_received_at,
+            event.source_timestamp,
+            &event.event_type,
+            event.bids.as_ref(),
+            event.asks.as_ref(),
+            event.price,
+            event.size,
+            event.side.as_deref(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_components(
+        &mut self,
+        source_row_number: i64,
+        provider_received_at: DateTime<Utc>,
+        source_timestamp: DateTime<Utc>,
+        event_type: &str,
+        bids: Option<&Value>,
+        asks: Option<&Value>,
+        price: Option<Decimal>,
+        size: Option<Decimal>,
+        side: Option<&str>,
+    ) -> Result<()> {
+        match event_type {
             "book" => {
-                self.bids = parse_levels(event.bids.as_ref(), "bids")?;
-                self.asks = parse_levels(event.asks.as_ref(), "asks")?;
+                self.bids = parse_levels(bids, "bids")?;
+                self.asks = parse_levels(asks, "asks")?;
                 self.initialized = true;
             }
             "price_change" if self.initialized => {
-                let price = event.price.context("price_change is missing price")?;
-                let size = event.size.context("price_change is missing size")?;
-                let levels = match event.side.as_deref() {
-                    Some("buy") => &mut self.bids,
-                    Some("sell") => &mut self.asks,
+                let price = price.context("price_change is missing price")?;
+                let size = size.context("price_change is missing size")?;
+                let levels = match side {
+                    Some(value) if value.eq_ignore_ascii_case("buy") => &mut self.bids,
+                    Some(value) if value.eq_ignore_ascii_case("sell") => &mut self.asks,
                     _ => bail!("price_change is missing a supported side"),
                 };
                 if size.is_zero() {
@@ -71,9 +98,9 @@ impl BookState {
             "price_change" | "last_trade_price" | "tick_size_change" => return Ok(()),
             other => bail!("unsupported PMXT orderbook event type {other}"),
         }
-        self.source_row_number = Some(event.source_row_number);
-        self.source_timestamp = Some(event.source_timestamp);
-        self.provider_received_at = Some(event.provider_received_at);
+        self.source_row_number = Some(source_row_number);
+        self.source_timestamp = Some(source_timestamp);
+        self.provider_received_at = Some(provider_received_at);
         Ok(())
     }
 }
@@ -104,18 +131,57 @@ impl OutcomeState {
         }
     }
 
+    #[allow(dead_code)]
     fn apply(&mut self, event: &BtcOrderbookArchiveEvent, window_end: DateTime<Utc>) -> Result<()> {
+        self.apply_components(
+            event.source_row_number,
+            event.provider_received_at,
+            event.source_timestamp,
+            &event.event_type,
+            event.bids.as_ref(),
+            event.asks.as_ref(),
+            event.price,
+            event.size,
+            event.side.as_deref(),
+            window_end,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_components(
+        &mut self,
+        source_row_number: i64,
+        provider_received_at: DateTime<Utc>,
+        source_timestamp: DateTime<Utc>,
+        event_type: &str,
+        bids: Option<&Value>,
+        asks: Option<&Value>,
+        price: Option<Decimal>,
+        size: Option<Decimal>,
+        side: Option<&str>,
+        window_end: DateTime<Utc>,
+    ) -> Result<()> {
         if self
             .last_event_received_at
-            .is_some_and(|previous| event.provider_received_at < previous)
+            .is_some_and(|previous| provider_received_at < previous)
         {
             bail!("PMXT events for one outcome token are not ordered by provider receipt time");
         }
-        if self.last_event_received_at != Some(event.provider_received_at) {
-            self.emit_before(event.provider_received_at, window_end);
-            self.last_event_received_at = Some(event.provider_received_at);
+        if self.last_event_received_at != Some(provider_received_at) {
+            self.emit_before(provider_received_at, window_end);
+            self.last_event_received_at = Some(provider_received_at);
         }
-        self.book.apply(event)
+        self.book.apply_components(
+            source_row_number,
+            provider_received_at,
+            source_timestamp,
+            event_type,
+            bids,
+            asks,
+            price,
+            size,
+            side,
+        )
     }
 
     #[allow(dead_code)]
@@ -193,6 +259,7 @@ impl ExecutionSnapshotReconstructor {
         })
     }
 
+    #[allow(dead_code)]
     pub fn apply(
         &mut self,
         event: &BtcOrderbookArchiveEvent,
@@ -208,6 +275,57 @@ impl ExecutionSnapshotReconstructor {
                 BtcOutcome::Down => market
                     .down
                     .apply(event, decision_window_end(&market.scope))?,
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_components(
+        &mut self,
+        source_row_number: i64,
+        provider_received_at: DateTime<Utc>,
+        source_timestamp: DateTime<Utc>,
+        condition_id: &str,
+        asset_id: &str,
+        event_type: &str,
+        bids: Option<&Value>,
+        asks: Option<&Value>,
+        price: Option<Decimal>,
+        size: Option<Decimal>,
+        side: Option<&str>,
+    ) -> Result<()> {
+        if let Some((market_index, outcome)) = self.asset_index.get(asset_id).copied() {
+            let market = &mut self.markets[market_index];
+            if condition_id != market.scope.condition_id {
+                bail!("PMXT token was associated with an unexpected condition");
+            }
+            let window_end = decision_window_end(&market.scope);
+            match outcome {
+                BtcOutcome::Up => market.up.apply_components(
+                    source_row_number,
+                    provider_received_at,
+                    source_timestamp,
+                    event_type,
+                    bids,
+                    asks,
+                    price,
+                    size,
+                    side,
+                    window_end,
+                )?,
+                BtcOutcome::Down => market.down.apply_components(
+                    source_row_number,
+                    provider_received_at,
+                    source_timestamp,
+                    event_type,
+                    bids,
+                    asks,
+                    price,
+                    size,
+                    side,
+                    window_end,
+                )?,
             }
         }
         Ok(())

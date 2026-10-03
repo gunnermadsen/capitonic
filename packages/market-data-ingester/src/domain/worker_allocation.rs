@@ -38,7 +38,9 @@ pub fn backfill_profile(strategy_key: &str) -> WorkloadProfile {
             capacity_units: 4,
             isolation: IsolationClass::Exclusive,
         },
-        "binance_spot_btcusdt_aggregate_trades_backfill" => WorkloadProfile {
+        "binance_spot_btcusdt_aggregate_trades_backfill"
+        | "binance_spot_btcusdt_l2_one_second_features_backfill"
+        | "binance_futures_btcusdt_l2_one_second_features_backfill" => WorkloadProfile {
             capacity_units: 3,
             isolation: IsolationClass::Heavy,
         },
@@ -152,5 +154,30 @@ mod tests {
         let candidate = backfill_profile("binance_spot_btcusdt_aggregate_trades_backfill");
         assert_eq!(candidate.capacity_units, 3);
         assert_eq!(candidate.isolation, IsolationClass::Heavy);
+    }
+
+    #[test]
+    fn binance_l2_feature_backfills_are_heavy_and_do_not_share_a_worker() {
+        for strategy_key in [
+            "binance_spot_btcusdt_l2_one_second_features_backfill",
+            "binance_futures_btcusdt_l2_one_second_features_backfill",
+        ] {
+            let candidate = backfill_profile(strategy_key);
+            assert_eq!(candidate.capacity_units, 3, "{strategy_key}");
+            assert_eq!(candidate.isolation, IsolationClass::Heavy, "{strategy_key}");
+            assert!(admits_backfill(4, None, 0, candidate), "{strategy_key}");
+            assert!(!admits_backfill(4, None, 3, candidate), "{strategy_key}");
+            assert!(
+                !admits_backfill(
+                    4,
+                    Some(realtime_profile(
+                        IngesterStrategyKey::BinanceSpotBtcusdtOneSecondOhlcv
+                    )),
+                    0,
+                    candidate,
+                ),
+                "{strategy_key}"
+            );
+        }
     }
 }

@@ -2131,6 +2131,15 @@ struct BaseSecondState {
     ask_quote_churn_1s: Decimal,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct TopBookSummary {
+    best: (Decimal, Decimal),
+    twentieth_price: Decimal,
+    depth_5: Decimal,
+    depth_10: Decimal,
+    depth_20: Decimal,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 struct QuoteFlow {
     bid_replenishment: Decimal,
@@ -2678,26 +2687,27 @@ impl DayReplay {
         if current.second_start < self.target_start || current.second_start >= self.target_end {
             return Ok(None);
         }
-        let mut prior = Vec::with_capacity(ROLLING_HORIZONS_SECONDS.len());
-        for horizon in ROLLING_HORIZONS_SECONDS {
+        let mut changes = [(Decimal::ZERO, Decimal::ZERO, Decimal::ZERO, Decimal::ZERO);
+            ROLLING_HORIZONS_SECONDS.len()];
+        for (index, horizon) in ROLLING_HORIZONS_SECONDS.into_iter().enumerate() {
             let expected = current
                 .second_start
                 .checked_sub_signed(TimeDelta::seconds(horizon))
                 .context("CryptoHFT rolling horizon underflow")?;
+            let horizon =
+                usize::try_from(horizon).context("CryptoHFT rolling horizon exceeded usize")?;
+            let Some(rolling_index) = self.rolling.len().checked_sub(horizon) else {
+                return Ok(None);
+            };
             let Some(state) = self
                 .rolling
-                .iter()
-                .rev()
-                .find(|candidate| candidate.second_start == expected)
+                .get(rolling_index)
+                .filter(|candidate| candidate.second_start == expected)
             else {
                 return Ok(None);
             };
-            prior.push(state);
+            changes[index] = rolling_changes(current, state)?;
         }
-        let changes = prior
-            .iter()
-            .map(|state| rolling_changes(current, state))
-            .collect::<Result<Vec<_>>>()?;
         let feature = BinanceL2OneSecondFeature {
             symbol: CRYPTOHFT_SYMBOL.to_owned(),
             second_start: current.second_start,
@@ -2758,24 +2768,14 @@ impl DayReplay {
         available_at: DateTime<Utc>,
         source_update_id: i64,
     ) -> Result<Option<BaseSecondState>> {
-        let bids = self
-            .bids
-            .iter()
-            .rev()
-            .take(20)
-            .map(|(price, quantity)| (*price, *quantity))
-            .collect::<Vec<_>>();
-        let asks = self
-            .asks
-            .iter()
-            .take(20)
-            .map(|(price, quantity)| (*price, *quantity))
-            .collect::<Vec<_>>();
-        if bids.len() < 20 || asks.len() < 20 {
+        let Some(bids) = summarize_top_book(self.bids.iter().rev())? else {
             return Ok(None);
-        }
-        let best_bid = bids[0];
-        let best_ask = asks[0];
+        };
+        let Some(asks) = summarize_top_book(self.asks.iter())? else {
+            return Ok(None);
+        };
+        let best_bid = bids.best;
+        let best_ask = asks.best;
         if best_bid.0 >= best_ask.0 || best_bid.1 <= Decimal::ZERO || best_ask.1 <= Decimal::ZERO {
             return Ok(None);
         }
@@ -2795,18 +2795,20 @@ impl DayReplay {
             "microprice division",
         )?;
         let spread_bps = basis_points_delta(best_ask.0, best_bid.0, midpoint)?;
-        let (bid_depth_5, bid_depth_10, bid_depth_20) = tier_depths(&bids)?;
-        let (ask_depth_5, ask_depth_10, ask_depth_20) = tier_depths(&asks)?;
+        let (bid_depth_5, bid_depth_10, bid_depth_20) =
+            (bids.depth_5, bids.depth_10, bids.depth_20);
+        let (ask_depth_5, ask_depth_10, ask_depth_20) =
+            (asks.depth_5, asks.depth_10, asks.depth_20);
         let imbalance_5 = imbalance(bid_depth_5, ask_depth_5)?;
         let imbalance_10 = imbalance(bid_depth_10, ask_depth_10)?;
         let imbalance_20 = imbalance(bid_depth_20, ask_depth_20)?;
         let bid_depth_slope_20 = checked_div(
-            basis_points_delta(best_bid.0, bids[19].0, best_bid.0)?,
+            basis_points_delta(best_bid.0, bids.twentieth_price, best_bid.0)?,
             bid_depth_20,
             "bid depth slope",
         )?;
         let ask_depth_slope_20 = checked_div(
-            basis_points_delta(asks[19].0, best_ask.0, best_ask.0)?,
+            basis_points_delta(asks.twentieth_price, best_ask.0, best_ask.0)?,
             ask_depth_20,
             "ask depth slope",
         )?;
@@ -3124,11 +3126,21 @@ fn apply_absolute_level(book: &mut BTreeMap<Decimal, Decimal>, level: &PriceLeve
     Ok(())
 }
 
-fn tier_depths(levels: &[(Decimal, Decimal)]) -> Result<(Decimal, Decimal, Decimal)> {
+fn summarize_top_book<'a>(
+    levels: impl Iterator<Item = (&'a Decimal, &'a Decimal)>,
+) -> Result<Option<TopBookSummary>> {
+    let mut best = None;
+    let mut twentieth_price = None;
     let mut depth_5 = Decimal::ZERO;
     let mut depth_10 = Decimal::ZERO;
     let mut depth_20 = Decimal::ZERO;
-    for (index, (_, quantity)) in levels.iter().take(20).enumerate() {
+    for (index, (price, quantity)) in levels.take(20).enumerate() {
+        if index == 0 {
+            best = Some((*price, *quantity));
+        }
+        if index == 19 {
+            twentieth_price = Some(*price);
+        }
         depth_20 = checked_add(depth_20, *quantity, "depth-20 addition")?;
         if index < 10 {
             depth_10 = checked_add(depth_10, *quantity, "depth-10 addition")?;
@@ -3137,10 +3149,19 @@ fn tier_depths(levels: &[(Decimal, Decimal)]) -> Result<(Decimal, Decimal, Decim
             depth_5 = checked_add(depth_5, *quantity, "depth-5 addition")?;
         }
     }
+    let (Some(best), Some(twentieth_price)) = (best, twentieth_price) else {
+        return Ok(None);
+    };
     if depth_5 <= Decimal::ZERO || depth_10 <= Decimal::ZERO || depth_20 <= Decimal::ZERO {
         bail!("CryptoHFT book depth was not positive");
     }
-    Ok((depth_5, depth_10, depth_20))
+    Ok(Some(TopBookSummary {
+        best,
+        twentieth_price,
+        depth_5,
+        depth_10,
+        depth_20,
+    }))
 }
 
 fn imbalance(bid: Decimal, ask: Decimal) -> Result<Decimal> {
