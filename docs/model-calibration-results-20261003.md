@@ -1,5 +1,7 @@
 # Model calibration result — October 3, 2026
 
+This report covers the initial multi-model run only. The subsequent [VWAP Q5 correction](model-calibration-vwap-q5-20261003.md) produced a prepared runtime bundle and infrastructure selection, with improved traded-cohort confidence, broader-probability and admission limitations, and no activation.
+
 **No candidate qualified for deployment.** Database model selections and `infra/processes` remain unchanged. No bot image build or deployment occurred.
 
 Branch: `training/model-recalibration`, based on `integration-2026-10-02` at `1c2fb1a06491d8440bc8fc79c3288b0faf7f77ea`. Fitting implementation: `f531e034` (full revision in artifact provenance).

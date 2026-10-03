@@ -37,8 +37,8 @@
                 "member_id": "primary",
                 "selection": {
                   "type": "btc_directional_model",
-                  "model_key": "btc-5m-conservative-selective-vwap-capacity-q5-paper-20260924",
-                  "artifact_sha256": "61c895293a6532e63d9dd6b6b6e1e58869b825a218523c2d181b6f6da1a4a54e",
+                  "model_key": "btc-5m-conservative-selective-vwap-capacity-q5-paper-20260924-calibration-20261003-v1",
+                  "artifact_sha256": "0003781497b587713b310cfb0a33b4af8227a8c7b0f2c25374e375afad4b25ad",
                   "feature_schema_sha256": "5dceedc374621f50e844ddf43cea5f58068c4dc70c36169c037dbb2691c7f39a"
                 }
               }
@@ -90,8 +90,8 @@
   },
   "metadata": {
     "strategy_family": "btc_5m_directional_model",
-    "model_key": "btc-5m-conservative-selective-vwap-capacity-q5-paper-20260924",
-    "model_artifact_sha256": "61c895293a6532e63d9dd6b6b6e1e58869b825a218523c2d181b6f6da1a4a54e",
+    "model_key": "btc-5m-conservative-selective-vwap-capacity-q5-paper-20260924-calibration-20261003-v1",
+    "model_artifact_sha256": "0003781497b587713b310cfb0a33b4af8227a8c7b0f2c25374e375afad4b25ad",
     "model_feature_schema_version": "btc-5m-payoff-aware-conservative-price-v1",
     "model_feature_schema_sha256": "5dceedc374621f50e844ddf43cea5f58068c4dc70c36169c037dbb2691c7f39a",
     "deployment_scope": "paper_only",
