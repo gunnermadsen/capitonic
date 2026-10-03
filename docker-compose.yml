@@ -270,6 +270,8 @@ services:
       INGESTER_BTC_CAPACITY_EXECUTION_SNAPSHOTS_LAKE_ROOT: "/var/lib/btc-capacity-execution-snapshots"
       INGESTER_BTC_FEATURE_SNAPSHOTS_LAKE_ROOT: "/var/lib/btc-feature-snapshots"
       INGESTER_BINANCE_SPOT_L2_SNAPSHOTS_LAKE_ROOT: "/var/lib/binance-spot-l2-snapshots"
+      INGESTER_BINANCE_SPOT_L2_FEATURES_LAKE_ROOT: "/var/lib/binance-l2/drains/spot-one-second-features"
+      INGESTER_BINANCE_FUTURES_L2_FEATURES_LAKE_ROOT: "/var/lib/binance-l2/drains/futures-one-second-features"
       INGESTER_POLYGON_CHAINLINK_ORACLE_ROUNDS_LAKE_ROOT: "/var/lib/polygon-chainlink-oracle-rounds"
       INGESTER_CRYPTOHFT_ARCHIVE_ROOT: "/var/lib/binance-l2"
       INGESTER_CRYPTOHFT_TEMPORARY_DIRECTORY: "/var/lib/binance-l2/tmp"
