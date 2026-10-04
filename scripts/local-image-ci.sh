@@ -51,7 +51,7 @@ case "$component" in
     revision_arg="POLYMARKET_GIT_REVISION"
     base_version="3.2.4"
     checks_description="local formatting, Clippy, and component tests passed"
-    image_inputs=(.dockerignore Cargo.toml Cargo.lock packages/polymarket-bot/Cargo.toml packages/market-data-ingester/Cargo.toml packages/polymarket-bot/build.rs common/proto packages/polymarket-bot/src packages/btc-directional-model/runtime-models "$dockerfile")
+    image_inputs=(.dockerignore Cargo.toml Cargo.lock packages/polymarket-bot/Cargo.toml packages/market-data-ingester/Cargo.toml packages/polymarket-bot/build.rs common/proto packages/polymarket-bot/src packages/polymarket-bot/scripts/package_models.py "$dockerfile")
     ;;
   ingester)
     dockerfile="packages/market-data-ingester/Dockerfile.production"
@@ -80,7 +80,13 @@ repository_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 cd "$repository_root"
 
 image_inputs_sha256() {
-  git ls-tree -r --full-tree "$1" -- "${image_inputs[@]}" | LC_ALL=C shasum -a 256 | awk '{print $1}'
+  local -a selected_inputs=("${image_inputs[@]}")
+  local model_paths model_path
+  if [[ "$component" == polymarket-bot ]]; then
+    model_paths="$(python3 packages/polymarket-bot/scripts/package_models.py inputs "$1")" || return 1
+    while IFS= read -r model_path; do selected_inputs+=("$model_path"); done <<< "$model_paths"
+  fi
+  git ls-tree -r --full-tree "$1" -- "${selected_inputs[@]}" | LC_ALL=C shasum -a 256 | awk '{print $1}'
 }
 
 if [[ "$mode" == --build || "$mode" == --next-version ]] && [[ -f infra/production/release.json ]]; then
@@ -279,6 +285,7 @@ if [[ -f scripts/tests/test_local_image_ci.py ]]; then
 fi
 case "$component" in
   polymarket-bot)
+    PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s packages/polymarket-bot/tests -p 'test_model_packaging.py'
     cargo +1.92.0 fmt --all -- --check
     cargo +1.92.0 clippy --locked --package polymarket-bot --all-targets -- -D warnings
     cargo +1.92.0 test --locked --package polymarket-bot --all-targets
@@ -448,6 +455,10 @@ if [[ "$(next_local_version)" != "$version" ]] || git show-ref --verify --quiet 
   exit 69
 fi
 tagger_identity="$(git var GIT_COMMITTER_IDENT)"
+model_provenance=""
+if [[ "$component" == polymarket-bot && -f packages/polymarket-bot/model-manifest.json ]]; then
+  model_provenance="model_manifest_sha256: $(shasum -a 256 packages/polymarket-bot/model-manifest.json | awk '{print $1}')"
+fi
 version_tag_object="$(git mktag <<EOF
 object $git_revision
 type commit
@@ -459,6 +470,7 @@ version: v$version
 image: $image
 image_id: $image_id
 inputs_sha256: $inputs_sha256
+$model_provenance
 source_branch: $source_branch
 source_revision: $git_revision
 checks: $checks_description
@@ -476,6 +488,7 @@ version: v$version
 image: $image
 image_id: $image_id
 inputs_sha256: $inputs_sha256
+$model_provenance
 source_branch: $source_branch
 source_revision: $git_revision
 checks: $checks_description

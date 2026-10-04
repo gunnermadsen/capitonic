@@ -6,7 +6,7 @@ FROM rust:${RUST_VERSION}-bookworm AS builder
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends pkg-config ca-certificates \
+    && apt-get install -y --no-install-recommends pkg-config ca-certificates python3 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY Cargo.toml Cargo.lock ./
@@ -25,7 +25,10 @@ RUN mkdir -p packages/polymarket-bot/src/bin \
 RUN cargo build --locked --release --package polymarket-bot
 
 COPY packages/polymarket-bot/src packages/polymarket-bot/src
-COPY packages/btc-directional-model/runtime-models /opt/polymarket-models
+COPY packages/polymarket-bot/scripts/package_models.py /app/packages/polymarket-bot/scripts/package_models.py
+COPY packages/polymarket-bot/model-manifest.json /app/packages/polymarket-bot/model-manifest.json
+RUN --mount=type=bind,source=packages/btc-directional-model/runtime-models,target=/app/packages/btc-directional-model/runtime-models \
+    python3 packages/polymarket-bot/scripts/package_models.py package /opt/polymarket-models
 
 RUN chmod -R u=rwX,go=rX /opt/polymarket-models \
     && cargo clean --release -p polymarket-bot \

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "models": [
+    {
+      "model_key": "btc-5m-conservative-selective-paper-20260917",
+      "artifact_sha256": "4868c518fff440e7ca7405132dae171e32e99b6848f6479f7d62215f30f13793"
+    },
+    {
+      "model_key": "btc-5m-conservative-selective-development-live-pilot-20260921-v1",
+      "artifact_sha256": "a26e1a7fbc014c362ec20251b6242c1953e8a59a0c34dfab2912a90c459405c7"
+    }
+  ]
+}

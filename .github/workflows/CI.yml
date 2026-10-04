@@ -82,7 +82,12 @@ jobs:
               echo true
             fi
           }
-          polymarket_bot="$(changed Cargo.toml Cargo.lock packages/polymarket-bot packages/btc-directional-model/runtime-models common/proto)"
+          polymarket_bot="$(changed Cargo.toml Cargo.lock packages/polymarket-bot common/proto)"
+          previous_models="$(python3 packages/polymarket-bot/scripts/package_models.py fingerprint "$BASE_SHA")"
+          current_models="$(python3 packages/polymarket-bot/scripts/package_models.py fingerprint "$CURRENT_SHA")"
+          if [[ "$previous_models" != "$current_models" ]]; then
+            polymarket_bot=true
+          fi
           ingester="$(changed Cargo.toml Cargo.lock packages/market-data-ingester common/proto)"
           db_migrate="$(changed packages/db-migrate)"
           polymarket_bot_tests="$(changed Cargo.toml Cargo.lock packages/polymarket-bot packages/btc-directional-model/runtime-models common/proto)"
@@ -266,6 +271,9 @@ jobs:
 
       - name: Run Rust tests
         run: cargo +"$RUST_TOOLCHAIN" test --locked --package polymarket-bot --all-targets
+
+      - name: Verify model manifest packaging
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s packages/polymarket-bot/tests -p 'test_model_packaging.py'
 
   market-data-ingester-tests:
     name: Market data ingester tests

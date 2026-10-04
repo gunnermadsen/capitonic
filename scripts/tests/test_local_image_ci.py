@@ -23,6 +23,15 @@ class LocalImageCiTest(unittest.TestCase):
         self.bin.mkdir()
         (self.repo / "scripts").mkdir()
         shutil.copy2(SCRIPT, self.repo / "scripts/local-image-ci.sh")
+        model_scripts = self.repo / "packages/polymarket-bot/scripts"
+        model_scripts.mkdir(parents=True)
+        shutil.copy2(SCRIPT.parent.parent / "packages/polymarket-bot/scripts/package_models.py",
+                     model_scripts / "package_models.py")
+        (self.repo / "packages/polymarket-bot/tests").mkdir()
+        (self.repo / "packages/polymarket-bot/tests/test_model_packaging.py").write_text(
+            "import unittest\nclass PackagingFixture(unittest.TestCase):\n"
+            "    def test_fixture(self): pass\n"
+        )
         for path in (
             "Cargo.toml",
             "Cargo.lock",

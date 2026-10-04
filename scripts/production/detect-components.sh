@@ -17,7 +17,7 @@ chart() {
 while IFS= read -r path; do
   case "$path" in
     Cargo.toml|Cargo.lock|common/proto/*) image polymarket-bot; image ingester ;;
-    packages/polymarket-bot/*|packages/btc-directional-model/runtime-models/*) image polymarket-bot ;;
+    packages/polymarket-bot/*) image polymarket-bot ;;
     packages/market-data-ingester/*) image ingester ;;
     packages/db-migrate/*) image db-migrate ;;
     common/configs/grafana/*) chart grafana ;;
@@ -34,6 +34,13 @@ while IFS= read -r path; do
       ;;
   esac
 done < <(git diff --name-only "$base" "$candidate")
+
+model_packager=packages/polymarket-bot/scripts/package_models.py
+previous_models="$(python3 "$model_packager" fingerprint "$base")"
+current_models="$(python3 "$model_packager" fingerprint "$candidate")"
+if [[ "$previous_models" != "$current_models" ]]; then
+  image polymarket-bot
+fi
 
 # Release metadata is component-owned. A new accepted RC requires promotion even
 # when its source commit predates this production push.
