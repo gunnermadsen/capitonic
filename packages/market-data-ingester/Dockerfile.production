@@ -23,7 +23,8 @@ RUN mkdir -p packages/market-data-ingester/src \
 COPY packages/market-data-ingester/src packages/market-data-ingester/src
 RUN find packages/market-data-ingester/src -type f -exec touch {} + \
     && cargo build --locked --release --package market-data-ingester \
-    && cp target/release/ingester /usr/local/bin/ingester
+    && cp target/release/ingester /usr/local/bin/ingester \
+    && cargo clean --release -p market-data-ingester
 
 FROM debian:bookworm-slim AS runtime
 
