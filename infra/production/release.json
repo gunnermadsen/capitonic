@@ -7,22 +7,22 @@
       "repository": "capitonic/polymarket-bot",
       "rcVersion": "v3.2.7-rc.1",
       "sourceRevision": "f2b064d2f151d267c015bca03f6340df674ce153",
-      "finalVersion": "v3.2.6",
-      "digest": "sha256:80c8596c159147d029b97be3b43b77de3142b457be33a21d95a43c88ee7e8426"
+      "finalVersion": "v3.2.7",
+      "digest": "sha256:be1770fc449d04826beb7698cac7e45b13982c57d746a86c7b283cda8f49a3c6"
     },
     "ingester": {
       "repository": "capitonic/ingester",
       "rcVersion": "v1.3.0-rc.0",
       "sourceRevision": "633b5e897a365e9444b14ce9ce4b3d522e0b5fc2",
-      "finalVersion": "v1.2.3",
-      "digest": "sha256:b0cb1e40e052bee7b97e578a60812074c9f1b42a2847d5daf90625f792c27074"
+      "finalVersion": "v1.3.0",
+      "digest": "sha256:fef65d3f9429e143f5ae7442d202807399444d0a76537ad079a1ad937549099c"
     },
     "db-migrate": {
       "repository": "capitonic/db-migrate",
       "rcVersion": "v0.3.0-rc.0",
       "sourceRevision": "345fbccb0937ef64f72c166aaa4ace1edc087b90",
-      "finalVersion": "v0.2.0",
-      "digest": "sha256:6b1fe310d1e67481695623adeb5bbc6f6efa2d6b36aa7aaed9d465e986c08188"
+      "finalVersion": "v0.3.0",
+      "digest": "sha256:a9973bdfa163538e7f16bafe87358f0f63d4ac18286debf9d30cf7d78f3fd8a0"
     }
   }
 }

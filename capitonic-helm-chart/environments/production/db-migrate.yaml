@@ -1,10 +1,10 @@
 environment: production
-image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/db-migrate@sha256:6b1fe310d1e67481695623adeb5bbc6f6efa2d6b36aa7aaed9d465e986c08188
+image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/db-migrate@sha256:a9973bdfa163538e7f16bafe87358f0f63d4ac18286debf9d30cf7d78f3fd8a0
 imagePullPolicy: IfNotPresent
 imagePullSecrets:
   - name: ecr-registry
 postgresHost: timescaledb-0.timescaledb-headless
 release:
-  version: v0.2.0
-  digest: sha256:6b1fe310d1e67481695623adeb5bbc6f6efa2d6b36aa7aaed9d465e986c08188
-  sourceRevision: 61ace8bd58ba479d6bef089e30642aee559298a1
+  version: v0.3.0
+  digest: sha256:a9973bdfa163538e7f16bafe87358f0f63d4ac18286debf9d30cf7d78f3fd8a0
+  sourceRevision: 345fbccb0937ef64f72c166aaa4ace1edc087b90

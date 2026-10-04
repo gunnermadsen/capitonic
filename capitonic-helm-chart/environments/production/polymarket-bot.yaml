@@ -1,12 +1,12 @@
 environment: production
-image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/polymarket-bot@sha256:80c8596c159147d029b97be3b43b77de3142b457be33a21d95a43c88ee7e8426
+image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/polymarket-bot@sha256:be1770fc449d04826beb7698cac7e45b13982c57d746a86c7b283cda8f49a3c6
 imagePullPolicy: IfNotPresent
 imagePullSecrets:
   - name: ecr-registry
 release:
-  version: v3.2.6
-  digest: sha256:80c8596c159147d029b97be3b43b77de3142b457be33a21d95a43c88ee7e8426
-  sourceRevision: ed8dc893bd1f81664d7616e8e0626fa18ec3a843
+  version: v3.2.7
+  digest: sha256:be1770fc449d04826beb7698cac7e45b13982c57d746a86c7b283cda8f49a3c6
+  sourceRevision: f2b064d2f151d267c015bca03f6340df674ce153
 apiIngress:
   enabled: true
   host: api.capitonic.com
