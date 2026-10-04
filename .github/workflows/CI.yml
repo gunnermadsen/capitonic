@@ -436,7 +436,6 @@ jobs:
     if: >-
       always() &&
       github.ref == 'refs/heads/development' &&
-      github.event_name == 'push' &&
       needs.changes.outputs.any_image == 'true' &&
       needs.repository-layout.result == 'success' &&
       (needs.helm-lint.result == 'success' || needs.helm-lint.result == 'skipped') &&
@@ -469,8 +468,22 @@ jobs:
         env:
           COMPONENT: ${{ matrix.name }}
           REPOSITORY: ${{ matrix.repository }}
+          TEST_REVISION: ${{ inputs.test_revision }}
+          TEST_PUBLICATION: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           set -euo pipefail
+          if [[ "$TEST_PUBLICATION" == true ]]; then
+            [[ "$COMPONENT" == polymarket-bot || "$COMPONENT" == ingester ]]
+            [[ "$TEST_REVISION" =~ ^[0-9a-f]{40}$ ]]
+            test_tag="test-$TEST_REVISION-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            {
+              echo "rc_version=$test_tag"
+              echo "source_revision=$TEST_REVISION"
+              echo "existing_rc=false"
+              echo "tags=$ECR_REGISTRY/$REPOSITORY:$test_tag"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           rc_version="$(jq -er --arg component "$COMPONENT" '.components[$component].rcVersion' infra/production/release.json)"
           source_revision="$(jq -er --arg component "$COMPONENT" '.components[$component].sourceRevision' infra/production/release.json)"
           [[ "$rc_version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.(0|[1-9][0-9]*)$ ]]
@@ -517,7 +530,9 @@ jobs:
             ${{ matrix.revision_arg }}=${{ steps.release.outputs.source_revision }}
             ${{ matrix.name == 'polymarket-bot' && 'POLYMARKET_MODEL_PACKAGING=production' || '' }}
           tags: ${{ steps.release.outputs.tags }}
-          cache-from: type=gha,scope=${{ matrix.cache_scope }}-arm64
+          cache-from: |
+            type=gha,scope=${{ matrix.cache_scope }}-arm64
+            ${{ github.event_name == 'workflow_dispatch' && format('type=gha,scope={0}-ci-test-arm64', matrix.cache_scope) || '' }}
           cache-to: type=gha,scope=${{ matrix.cache_scope }}-arm64,mode=max
       - name: Verify published ARM64 image and embedded revision
         env:
@@ -526,68 +541,3 @@ jobs:
           RC_VERSION: ${{ steps.release.outputs.rc_version }}
           SOURCE_REVISION: ${{ steps.release.outputs.source_revision }}
         run: scripts/production/verify-ecr-arm64-image.sh "$REPOSITORY" "$RC_VERSION" "$SOURCE_REVISION" >/dev/null
-
-  test-image-publication:
-    name: Publish ${{ matrix.name }} CI test image
-    if: >-
-      always() && github.event_name == 'workflow_dispatch' &&
-      github.ref == 'refs/heads/development' &&
-      needs.changes.result == 'success' &&
-      needs.repository-layout.result == 'success' &&
-      (needs.helm-lint.result == 'success' || needs.helm-lint.result == 'skipped') &&
-      (needs.rust-tests.result == 'success' || needs.rust-tests.result == 'skipped') &&
-      (needs.market-data-ingester-tests.result == 'success' || needs.market-data-ingester-tests.result == 'skipped')
-    needs: [changes, repository-layout, helm-lint, rust-tests, market-data-ingester-tests]
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 45
-    strategy:
-      matrix:
-        include: ${{ fromJSON(needs.changes.outputs.image_matrix) }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.test_revision }}
-      - uses: docker/setup-buildx-action@v4
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-      - name: Log in to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v2
-      - name: Build and publish ARM64 test image
-        id: build
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          platforms: linux/arm64
-          push: true
-          provenance: mode=max
-          sbom: true
-          build-args: |
-            RUST_VERSION=${{ env.RUST_TOOLCHAIN }}
-            ${{ matrix.revision_arg }}=${{ inputs.test_revision }}
-            ${{ matrix.name == 'polymarket-bot' && 'POLYMARKET_MODEL_PACKAGING=production' || '' }}
-          tags: ${{ env.ECR_REGISTRY }}/${{ matrix.repository }}:test-${{ inputs.test_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
-          cache-from: type=gha,scope=${{ matrix.cache_scope }}-ci-test-arm64
-          cache-to: type=gha,scope=${{ matrix.cache_scope }}-ci-test-arm64,mode=max
-      - name: Verify published test image
-        env:
-          REPOSITORY: ${{ matrix.repository }}
-          SOURCE_REVISION: ${{ inputs.test_revision }}
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
-          TEST_TAG: test-${{ inputs.test_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          [[ "$REPOSITORY" == capitonic/polymarket-bot || "$REPOSITORY" == capitonic/ingester ]]
-          [[ "$TEST_TAG" =~ ^test-[0-9a-f]{40}-[0-9]+-[0-9]+$ ]]
-          published_digest="$(aws ecr describe-images --repository-name "$REPOSITORY" --image-ids imageTag="$TEST_TAG" --query 'imageDetails[0].imageDigest' --output text)"
-          [[ "$published_digest" == "$IMAGE_DIGEST" ]]
-          root="$(aws ecr batch-get-image --repository-name "$REPOSITORY" --image-ids imageDigest="$IMAGE_DIGEST" --query 'images[0].imageManifest' --output text)"
-          arm_digest="$(jq -er '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest] | if length == 1 then .[0] else error("expected one ARM64 image") end' <<<"$root")"
-          manifest="$(aws ecr batch-get-image --repository-name "$REPOSITORY" --image-ids imageDigest="$arm_digest" --query 'images[0].imageManifest' --output text)"
-          config_digest="$(jq -er '.config.digest' <<<"$manifest")"
-          config_url="$(aws ecr get-download-url-for-layer --repository-name "$REPOSITORY" --layer-digest "$config_digest" --query downloadUrl --output text)"
-          curl -fsSL "$config_url" | jq -e --arg revision "$SOURCE_REVISION" '.os == "linux" and .architecture == "arm64" and .config.Labels["org.opencontainers.image.revision"] == $revision' >/dev/null
-          printf 'Test image: `%s/%s:%s`\n\nDigest: `%s`\n\nSource: `%s`\n' "$ECR_REGISTRY" "$REPOSITORY" "$TEST_TAG" "$IMAGE_DIGEST" "$SOURCE_REVISION" >> "$GITHUB_STEP_SUMMARY"
