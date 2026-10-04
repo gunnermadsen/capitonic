@@ -6,7 +6,7 @@ FROM rust:${RUST_VERSION}-bookworm AS builder
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends pkg-config ca-certificates python3 \
+    && apt-get install -y --no-install-recommends pkg-config ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY Cargo.toml Cargo.lock ./
@@ -25,17 +25,24 @@ RUN mkdir -p packages/polymarket-bot/src/bin \
 RUN cargo build --locked --release --package polymarket-bot
 
 COPY packages/polymarket-bot/src packages/polymarket-bot/src
+RUN cargo clean --release -p polymarket-bot \
+    && cargo build --locked --release --package polymarket-bot \
+    && cp /app/target/release/polymarket-bot /usr/local/bin/polymarket-bot \
+    && cp /app/target/release/derive-clob-creds /usr/local/bin/derive-clob-creds \
+    && cargo clean --release -p polymarket-bot
+
+# Model changes and packaging tools must not invalidate Rust compilation layers.
+FROM debian:bookworm-slim AS models
+WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/*
 COPY packages/polymarket-bot/scripts/package_models.py /app/packages/polymarket-bot/scripts/package_models.py
 ARG POLYMARKET_MODEL_PACKAGING=development
 RUN --mount=type=bind,source=packages/btc-directional-model/runtime-models,target=/app/packages/btc-directional-model/runtime-models \
     --mount=type=bind,source=packages/polymarket-bot/model-manifest.json,target=/app/packages/polymarket-bot/model-manifest.json \
-    python3 packages/polymarket-bot/scripts/package_models.py package /opt/polymarket-models --environment "$POLYMARKET_MODEL_PACKAGING"
-
-RUN chmod -R u=rwX,go=rX /opt/polymarket-models \
-    && cargo clean --release -p polymarket-bot \
-    && cargo build --locked --release --package polymarket-bot \
-    && cp /app/target/release/polymarket-bot /usr/local/bin/polymarket-bot \
-    && cp /app/target/release/derive-clob-creds /usr/local/bin/derive-clob-creds
+    python3 packages/polymarket-bot/scripts/package_models.py package /opt/polymarket-models --environment "$POLYMARKET_MODEL_PACKAGING" \
+    && chmod -R u=rwX,go=rX /opt/polymarket-models
 
 FROM debian:bookworm-slim
 
@@ -64,7 +71,7 @@ LABEL org.opencontainers.image.source="https://github.com/gunnermadsen/polymarke
 
 COPY --from=builder /usr/local/bin/polymarket-bot /usr/local/bin/polymarket-bot
 COPY --from=builder /usr/local/bin/derive-clob-creds /usr/local/bin/derive-clob-creds
-COPY --from=builder /opt/polymarket-models /usr/local/share/polymarket-bot/models
+COPY --from=models /opt/polymarket-models /usr/local/share/polymarket-bot/models
 
 USER polymarket
 ENV RUST_LOG=info
