@@ -1,4 +1,3 @@
-// CI cache verification changes source identity without changing runtime behavior.
 #![forbid(unsafe_code)]
 
 pub mod bootstrap;
