@@ -1,6 +1,17 @@
 name: Verify and Publish Images
 
 on:
+  workflow_dispatch:
+    inputs:
+      test_component:
+        description: Component to publish with a test-only ECR tag
+        type: choice
+        options: [polymarket-bot, ingester]
+        required: true
+      test_revision:
+        description: Full committed source revision from the CI optimization branch
+        type: string
+        required: true
   push:
     branches:
       - development
@@ -31,6 +42,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.test_revision || github.sha }}
 
       - name: Reject vendored Rust crates
         shell: bash
@@ -57,15 +70,24 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.test_revision || github.sha }}
           fetch-depth: 0
       - name: Detect affected images
         id: filter
         shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          CURRENT_SHA: ${{ github.sha }}
+          CURRENT_SHA: ${{ inputs.test_revision || github.sha }}
+          TEST_COMPONENT: ${{ inputs.test_component }}
+          TEST_PUBLICATION: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           set -euo pipefail
+          if [[ "$TEST_PUBLICATION" == true ]]; then
+            [[ "$CURRENT_SHA" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$(git rev-parse HEAD)" == "$CURRENT_SHA" ]]
+            git merge-base --is-ancestor "$CURRENT_SHA" origin/defect/ci-rust-cache-validation
+            BASE_SHA="$(git rev-parse "$CURRENT_SHA^")"
+          fi
           if [ -z "$BASE_SHA" ] \
             || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
             if [ "$GITHUB_REF" = 'refs/heads/development' ]; then
@@ -104,6 +126,16 @@ jobs:
               esac
             fi
           done
+          if [[ "$TEST_PUBLICATION" == true ]]; then
+            polymarket_bot=false; polymarket_bot_tests=false
+            ingester=false; ingester_tests=false
+            db_migrate=false; db_migrate_tests=false
+            case "$TEST_COMPONENT" in
+              polymarket-bot) polymarket_bot=true; polymarket_bot_tests=true ;;
+              ingester) ingester=true; ingester_tests=true ;;
+              *) exit 64 ;;
+            esac
+          fi
           helm_inputs=(
             capitonic-helm-chart
             common/configs/alloy
@@ -177,6 +209,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.test_revision || github.sha }}
 
       - name: Restore validated chart hash
         id: helm-lint-cache
@@ -238,12 +272,19 @@ jobs:
       always() && needs.repository-layout.result == 'success' &&
       (needs.helm-lint.result == 'success' || needs.helm-lint.result == 'skipped') &&
       needs.changes.outputs.polymarket_bot_tests == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
+    env:
+      # Keep debug assertions, but avoid large debug symbols and incremental archives.
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_INCREMENTAL: 0
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.test_revision || github.sha }}
 
       - name: Install Rust
         run: >-
@@ -252,16 +293,24 @@ jobs:
           --component rustfmt
           --component clippy
 
-      - name: Cache Cargo registry and build output
+      - name: Cache Cargo downloads
         uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: polymarket-bot-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+          key: cargo-downloads-v1-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}-polymarket-bot
           restore-keys: |
-            polymarket-bot-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-
+            cargo-downloads-v1-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}-
+            cargo-downloads-v1-${{ runner.os }}-
+
+      - name: Cache polymarket-bot build output
+        uses: actions/cache@v5
+        with:
+          path: target
+          key: rust-target-v2-polymarket-bot-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-debug0-incremental0-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'packages/*/Cargo.toml') }}-${{ hashFiles('packages/polymarket-bot/src/**', 'packages/polymarket-bot/tests/**', 'packages/polymarket-bot/build.rs', 'common/proto/**') }}
+          restore-keys: |
+            rust-target-v2-polymarket-bot-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-debug0-incremental0-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'packages/*/Cargo.toml') }}-
 
       - name: Check Rust formatting
         run: cargo +"$RUST_TOOLCHAIN" fmt --all -- --check
@@ -282,12 +331,19 @@ jobs:
       always() && needs.repository-layout.result == 'success' &&
       (needs.helm-lint.result == 'success' || needs.helm-lint.result == 'skipped') &&
       needs.changes.outputs.ingester_tests == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
+    env:
+      # Keep debug assertions, but avoid large debug symbols and incremental archives.
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_INCREMENTAL: 0
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.test_revision || github.sha }}
 
       - name: Install Rust
         run: >-
@@ -296,16 +352,24 @@ jobs:
           --component rustfmt
           --component clippy
 
-      - name: Cache Cargo registry and ingester build output
+      - name: Cache Cargo downloads
         uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: market-data-ingester-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+          key: cargo-downloads-v1-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}-market-data-ingester
           restore-keys: |
-            market-data-ingester-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-
+            cargo-downloads-v1-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}-
+            cargo-downloads-v1-${{ runner.os }}-
+
+      - name: Cache market-data-ingester build output
+        uses: actions/cache@v5
+        with:
+          path: target
+          key: rust-target-v2-market-data-ingester-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-debug0-incremental0-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'packages/*/Cargo.toml') }}-${{ hashFiles('packages/market-data-ingester/src/**', 'packages/market-data-ingester/tests/**', 'packages/market-data-ingester/build.rs', 'common/proto/**') }}
+          restore-keys: |
+            rust-target-v2-market-data-ingester-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-debug0-incremental0-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'packages/*/Cargo.toml') }}-
 
       - name: Check Rust formatting
         run: >-
@@ -353,6 +417,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.test_revision || github.sha }}
       - name: Install Node.js
         uses: actions/setup-node@v6
         with:
@@ -370,6 +436,7 @@ jobs:
     if: >-
       always() &&
       github.ref == 'refs/heads/development' &&
+      github.event_name == 'push' &&
       needs.changes.outputs.any_image == 'true' &&
       needs.repository-layout.result == 'success' &&
       (needs.helm-lint.result == 'success' || needs.helm-lint.result == 'skipped') &&
@@ -386,6 +453,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.test_revision || github.sha }}
           fetch-depth: 0
       - uses: docker/setup-buildx-action@v4
       - name: Configure AWS credentials
@@ -458,3 +526,68 @@ jobs:
           RC_VERSION: ${{ steps.release.outputs.rc_version }}
           SOURCE_REVISION: ${{ steps.release.outputs.source_revision }}
         run: scripts/production/verify-ecr-arm64-image.sh "$REPOSITORY" "$RC_VERSION" "$SOURCE_REVISION" >/dev/null
+
+  test-image-publication:
+    name: Publish ${{ matrix.name }} CI test image
+    if: >-
+      always() && github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/development' &&
+      needs.changes.result == 'success' &&
+      needs.repository-layout.result == 'success' &&
+      (needs.helm-lint.result == 'success' || needs.helm-lint.result == 'skipped') &&
+      (needs.rust-tests.result == 'success' || needs.rust-tests.result == 'skipped') &&
+      (needs.market-data-ingester-tests.result == 'success' || needs.market-data-ingester-tests.result == 'skipped')
+    needs: [changes, repository-layout, helm-lint, rust-tests, market-data-ingester-tests]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        include: ${{ fromJSON(needs.changes.outputs.image_matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.test_revision }}
+      - uses: docker/setup-buildx-action@v4
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build and publish ARM64 test image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          build-args: |
+            RUST_VERSION=${{ env.RUST_TOOLCHAIN }}
+            ${{ matrix.revision_arg }}=${{ inputs.test_revision }}
+            ${{ matrix.name == 'polymarket-bot' && 'POLYMARKET_MODEL_PACKAGING=production' || '' }}
+          tags: ${{ env.ECR_REGISTRY }}/${{ matrix.repository }}:test-${{ inputs.test_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          cache-from: type=gha,scope=${{ matrix.cache_scope }}-ci-test-arm64
+          cache-to: type=gha,scope=${{ matrix.cache_scope }}-ci-test-arm64,mode=max
+      - name: Verify published test image
+        env:
+          REPOSITORY: ${{ matrix.repository }}
+          SOURCE_REVISION: ${{ inputs.test_revision }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          TEST_TAG: test-${{ inputs.test_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          [[ "$REPOSITORY" == capitonic/polymarket-bot || "$REPOSITORY" == capitonic/ingester ]]
+          [[ "$TEST_TAG" =~ ^test-[0-9a-f]{40}-[0-9]+-[0-9]+$ ]]
+          published_digest="$(aws ecr describe-images --repository-name "$REPOSITORY" --image-ids imageTag="$TEST_TAG" --query 'imageDetails[0].imageDigest' --output text)"
+          [[ "$published_digest" == "$IMAGE_DIGEST" ]]
+          root="$(aws ecr batch-get-image --repository-name "$REPOSITORY" --image-ids imageDigest="$IMAGE_DIGEST" --query 'images[0].imageManifest' --output text)"
+          arm_digest="$(jq -er '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest] | if length == 1 then .[0] else error("expected one ARM64 image") end' <<<"$root")"
+          manifest="$(aws ecr batch-get-image --repository-name "$REPOSITORY" --image-ids imageDigest="$arm_digest" --query 'images[0].imageManifest' --output text)"
+          config_digest="$(jq -er '.config.digest' <<<"$manifest")"
+          config_url="$(aws ecr get-download-url-for-layer --repository-name "$REPOSITORY" --layer-digest "$config_digest" --query downloadUrl --output text)"
+          curl -fsSL "$config_url" | jq -e --arg revision "$SOURCE_REVISION" '.os == "linux" and .architecture == "arm64" and .config.Labels["org.opencontainers.image.revision"] == $revision' >/dev/null
+          printf 'Test image: `%s/%s:%s`\n\nDigest: `%s`\n\nSource: `%s`\n' "$ECR_REGISTRY" "$REPOSITORY" "$TEST_TAG" "$IMAGE_DIGEST" "$SOURCE_REVISION" >> "$GITHUB_STEP_SUMMARY"
