@@ -1,10 +1,10 @@
-# Online-source data product certification
+# Drainable data product certification
 
-One data product represents one online-source dataset table, whether its collection mode is realtime, backfill, or both. Internally generated bot, trading, accounting, job, and model-training tables are outside this inventory. The source-to-table and table-to-SSD contracts remain the registered dataset, strategy, drain-job, and receipt contracts; this file records evidence, not a second registry.
+One data product represents one accumulating system table and a specifically qualified row or payload drain scope. Online-source and internal bot, trading, accounting, job, and model-training tables are eligible when their existing readers, references, and recovery evidence are preserved. Internal products use their existing application writer instead of a new ingestion strategy. The source-to-table and table-to-SSD contracts remain the registered dataset, strategy, drain-job, and receipt contracts; this file records evidence, not a second registry.
 
-Certification requires all seven checks for that row: **T** working pathway tests; **I** schedulable realtime or backfill collection through the ingester API; **D** schedulable drain through `POST /drains`; **W** safe observed table writes; **P** enforced source-to-Parquet integrity and verified source removal; **M** strategy and worker health/progress instrumentation; **B** a configured buffer of at most five days. A completed real move job and a collection/write check under the selected image are the practical evidence for D, W, and P. The shared chunk drain in ingester `e1e409c0` compares every source field with the Parquet file before removal; earlier move receipts establish row-count and file-hash verification but cannot retroactively prove value parity after their source chunks are gone. A failed or absent check leaves the row pending.
+Certification requires all seven checks for that row: **T** working pathway tests; **I** schedulable realtime/backfill collection or verified existing application writes; **D** schedulable drain through `POST /drains`; **W** safe observed table writes; **P** enforced source-to-Parquet integrity and verified source removal; **M** strategy and worker health/progress instrumentation; **B** a 12-hour cutoff and eligible-data drain age of at most 24 hours for newly certified scopes; historical longer buffers remain explicitly recorded. A completed real move job and a collection/write check under the selected image are the practical evidence for D, W, and P. The shared chunk drain in ingester `e1e409c0` compares every source field with the Parquet file before removal; earlier move receipts establish row-count and file-hash verification but cannot retroactively prove value parity after their source chunks are gone. A failed or absent check leaves the row pending.
 
-In the table, `R` means realtime, `B` backfill, `C` implemented and tested in code but awaiting selected-image live validation, `L` live evidence, `?` not yet proven, and `—` absent. The buffer is the source policy in this branch, not a claim that the image with that policy is deployed. A receipt job ID proves at least one completed historical source removal for that table; it does not certify the whole path. IDs below were read from the drain job and object ledgers on 2026-09-25.
+In the table, `R` means realtime, `B` backfill, `C` implemented and tested in code but awaiting selected-image live validation, `L` live evidence, `?` not yet proven, and `—` absent, and `A` an existing application writer. The buffer is the source policy in this branch, not a claim that the image with that policy is deployed. A receipt job ID proves at least one completed historical source removal for that table; it does not certify the whole path. IDs below were read from the drain job and object ledgers on 2026-09-25.
 
 | Online-source table | I | T | D | W | P | M | B | Completed move evidence | Certification status and missing check |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -30,4 +30,31 @@ In the table, `R` means realtime, `B` backfill, `C` implemented and tested in co
 
 \* The Polygon oracle realtime strategy reads the latest fact as a durable restart cursor. Its drain can remove older eligible chunks but preserves the chunk containing that fact until a newer durable fact moves the cursor. The five-day cutoff does not guarantee that the final fact-bearing chunk physically disappears after five days of source inactivity.
 
-All 19 in-scope online-source products are runtime certified. The direct Chainlink Data Streams reference-price product and the PMData TWAP/reference-price products are outside this certification scope while paid subscriptions are unavailable. This excludes them from the count; it does not delete their registered strategies, historical receipts, or database tables. Previously verified PMData moves remain valid historical evidence. Restore them to this inventory only when access is available and a live collection/write check can be run. Tables with no drain registration remain pending rather than being treated as drainable by assumption.
+The original 19 in-scope online-source products have historical runtime certification. With the decision archive added, the inventory has 19 historically certified products and one pending product; old buffers above 24 hours are not new short-buffer certifications. The direct Chainlink Data Streams reference-price product and the PMData TWAP/reference-price products are outside this certification scope while paid subscriptions are unavailable. This excludes them from the count; it does not delete their registered strategies, historical receipts, or database tables. Previously verified PMData moves remain valid historical evidence. Restore them to this inventory only when access is available and a live collection/write check can be run. Tables with no drain registration remain pending rather than being treated as drainable by assumption.
+
+## Strategy decision archive
+
+| Table and qualified scope | I | T | D | W | P | M | B | Evidence | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `polymarket.btc_strategy_decisions`: only `action=no_trade`, `status=rejected`, `order_plan_id IS NULL` | A | C | C | ? | C | ? | 12h | Rust 1.92.0: 498 library and 18 contract tests passed (one existing ignored); Clippy, formatting, docs, 11 migration tests, Helm lint/render passed. | Pending local image deployment, real SSD move, recovery evidence, and backlog/age validation |
+
+Preserve all `buy` decisions, non-rejected decisions, and order-plan-linked records. Those exclusions preserve duplicate-entry protection, loss-regime admission, execution monitoring, and historical buy-decision dashboards. This certifies the rejected no-trade subset, not whole-table disposal. The bot writer and all trading queries remain unchanged.
+
+Strategy: `polymarket_btc_strategy_decisions`. SSD root: `/Volumes/docker-data/polymarket-bot/verified-drains/polymarket/btc-strategy-decisions`; k3s root: `/var/lib/capitonic-data/verified-drains/polymarket/btc-strategy-decisions`. Files follow the existing `verified-rows-v1/year=YYYY/month=MM/day=DD/<object-id>.parquet` contract. Each contains the full source JSON plus all 24 named source fields. Five-minute source windows and at most one hour of backlog per job bound database work. Move removal locks only eligible rows and checks the actual deleted content against the receipt in the same transaction. Concurrent changes, corrupt output, cancellation, and parity failure prevent unverified removal. PostgreSQL deletion frees reusable table space, not guaranteed filesystem shrinkage.
+
+## Other accumulating tables awaiting qualification
+
+Read-only catalog sizes on 2026-10-03; these are assessment candidates, not approved drains or certifications. No additional table is registered or mutated by this change.
+
+| Candidate | Total storage | Required preservation boundary |
+| --- | --- | --- |
+| `polymarket.account_position_snapshots` | 439 MiB | Keep current account/reconciliation anchors and snapshots referenced by recovery. |
+| `polymarket.live_reconciliation_runs` | 126 MiB | Keep current and unresolved execution/accounting evidence; qualify terminal historical runs only. |
+| `polymarket.account_reconciliation_runs` | 117 MiB | Keep current reconciled state and unresolved runs. |
+| `ingester.backfill_job_events` | 39 MiB | Keep active/retryable jobs and required job history. |
+| `ingester.backfill_artifacts` | 443 MiB | Keep artifact identities and manifests required by replay, coverage, and existing Parquet readers; payload-only archive may be appropriate. |
+| `ingester.backfill_jobs` | 114 MiB | Preserve the sole scheduling/history ledger and parent/shard references; assess bulky terminal payloads only. |
+| `ingester.capture_artifacts` | 73 MiB | Preserve artifact identities, file paths, and publication/replay receipts. |
+| `ingester.data_gaps` | 44 MiB | Keep open gaps and scheduling/continuity evidence; assess closed historical records. |
+
+Weather coverage ledgers (`goes_abi_window_coverage`, 67 MiB; `hrrr_environment_window_coverage`, 37 MiB) also accumulate, but prove that drained-source coverage and replay detection remain intact before admitting a removal scope. Orders, fills, settlements, and durable process configuration are not first-choice drains because they hold authoritative trading/accounting state.

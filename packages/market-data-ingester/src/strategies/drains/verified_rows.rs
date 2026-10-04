@@ -9,7 +9,7 @@ use std::{
 use arrow_array::{Array, ArrayRef, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
-use chrono::{DateTime, Duration, TimeZone, Utc};
+use chrono::{DateTime, Duration, Utc};
 use futures_util::TryStreamExt;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde_json::{json, Value};
@@ -30,6 +30,34 @@ use super::common::{
 
 const BATCH_ROWS: usize = 1_000;
 
+const DECISION_COLUMNS: &[&str] = &[
+    "decision_id",
+    "decision_at",
+    "run_id",
+    "process_id",
+    "market_id",
+    "snapshot_id",
+    "strategy_version",
+    "config_hash",
+    "action",
+    "outcome",
+    "token_id",
+    "fair_probability",
+    "executable_price",
+    "gross_edge_per_share",
+    "fee_per_share",
+    "reserve_per_share",
+    "net_edge_per_share",
+    "size",
+    "status",
+    "reject_reason",
+    "order_plan_id",
+    "execution_mode",
+    "metadata",
+    "created_at",
+];
+const DECISION_FILTER: &str = "t.decision_at >= $1 AND t.decision_at < $2 AND t.action = 'no_trade' AND t.status = 'rejected' AND t.order_plan_id IS NULL";
+
 const MARKET_COLUMNS: &[&str] = &["market_id", "raw_payload", "validation_errors"];
 const FACT_COLUMNS: &[&str] = &["fact_id", "evidence"];
 const CONTRACT_COLUMNS: &[&str] = &["market_id", "revision_sha256", "source_payload"];
@@ -43,11 +71,13 @@ pub enum VerifiedRowKind {
     ReferenceEvidence,
     ContractPayload,
     ResolutionPayload,
+    StrategyDecisions,
 }
 
 impl VerifiedRowKind {
     fn key(self) -> &'static str {
         match self {
+            Self::StrategyDecisions => "polymarket_btc_strategy_decisions",
             Self::Goes => "goes_abi_features",
             Self::Hrrr => "hrrr_environment_features",
             Self::MarketPayload => "polymarket_btc_interval_market_payload",
@@ -59,6 +89,7 @@ impl VerifiedRowKind {
 
     fn relation(self) -> &'static str {
         match self {
+            Self::StrategyDecisions => "polymarket.btc_strategy_decisions",
             Self::Goes => "weather.goes_abi_features",
             Self::Hrrr => "weather.hrrr_environment_features",
             Self::MarketPayload => "polymarket.btc_interval_markets",
@@ -71,13 +102,14 @@ impl VerifiedRowKind {
     fn schema(self) -> &'static str {
         match self {
             Self::Goes | Self::Hrrr => "weather",
-            Self::MarketPayload | Self::ReferenceEvidence => "polymarket",
+            Self::MarketPayload | Self::ReferenceEvidence | Self::StrategyDecisions => "polymarket",
             Self::ContractPayload | Self::ResolutionPayload => "market_data",
         }
     }
 
     fn columns(self) -> &'static [&'static str] {
         match self {
+            Self::StrategyDecisions => DECISION_COLUMNS,
             Self::Goes => GOES_COLUMNS,
             Self::Hrrr => HRRR_COLUMNS,
             Self::MarketPayload => MARKET_COLUMNS,
@@ -89,14 +121,42 @@ impl VerifiedRowKind {
 
     fn retention_days(self) -> i64 {
         match self {
+            Self::StrategyDecisions => 0,
             Self::Goes | Self::Hrrr => 0,
             Self::MarketPayload | Self::ContractPayload | Self::ResolutionPayload => 5,
             Self::ReferenceEvidence => 3,
         }
     }
 
+    fn retention(self) -> Duration {
+        match self {
+            Self::StrategyDecisions => Duration::hours(12),
+            _ => Duration::days(self.retention_days()),
+        }
+    }
+
+    fn window(self) -> Duration {
+        match self {
+            Self::StrategyDecisions => Duration::minutes(5),
+            _ => Duration::days(1),
+        }
+    }
+
+    fn closed_cutoff(self, cutoff: DateTime<Utc>) -> DateTime<Utc> {
+        let seconds = self.window().num_seconds();
+        DateTime::from_timestamp(cutoff.timestamp().div_euclid(seconds) * seconds, 0).unwrap()
+    }
+
+    fn window_name(self, start: DateTime<Utc>) -> String {
+        match self {
+            Self::StrategyDecisions => start.format("%Y-%m-%dT%H:%MZ").to_string(),
+            _ => start.format("%Y-%m-%d").to_string(),
+        }
+    }
+
     fn root_env(self) -> &'static str {
         match self {
+            Self::StrategyDecisions => "INGESTER_BTC_STRATEGY_DECISIONS_LAKE_ROOT",
             Self::Goes => "INGESTER_GOES_ABI_FEATURES_LAKE_ROOT",
             Self::Hrrr => "INGESTER_HRRR_ENVIRONMENT_FEATURES_LAKE_ROOT",
             Self::MarketPayload => "INGESTER_BTC_INTERVAL_MARKET_PAYLOAD_LAKE_ROOT",
@@ -108,6 +168,7 @@ impl VerifiedRowKind {
 
     fn default_root(self) -> &'static str {
         match self {
+            Self::StrategyDecisions => "/var/lib/verified-drains/polymarket/btc-strategy-decisions",
             Self::Goes => "/var/lib/weather/curated/drains/goes-abi-features",
             Self::Hrrr => "/var/lib/weather/curated/drains/hrrr-environment-features",
             Self::MarketPayload => {
@@ -127,6 +188,7 @@ impl VerifiedRowKind {
 
     fn row_json_sql(self) -> &'static str {
         match self {
+            Self::StrategyDecisions => "to_jsonb(t)::text",
             Self::Goes | Self::Hrrr => "to_jsonb(t)::text",
             Self::MarketPayload => "jsonb_build_object('market_id',t.market_id,'raw_payload',t.raw_payload,'validation_errors',t.validation_errors)::text",
             Self::ReferenceEvidence => "jsonb_build_object('fact_id',t.fact_id,'evidence',t.evidence)::text",
@@ -137,6 +199,7 @@ impl VerifiedRowKind {
 
     fn where_sql(self) -> &'static str {
         match self {
+            Self::StrategyDecisions => DECISION_FILTER,
             Self::Goes | Self::Hrrr => "t.decision_time >= $1 AND t.decision_time < $2",
             Self::MarketPayload => "t.window_start >= $1 AND t.window_start < $2 AND t.official_outcome IS NOT NULL AND NOT EXISTS (SELECT 1 FROM polymarket.btc_official_resolution_watches watch WHERE watch.market_id=t.market_id AND watch.status IN ('pending','expired')) AND (t.raw_payload <> '{}'::jsonb OR t.validation_errors <> '[]'::jsonb)",
             Self::ReferenceEvidence => "t.source_effective_at >= $1 AND t.source_effective_at < $2 AND market.official_outcome IS NOT NULL AND t.evidence <> '{}'::jsonb",
@@ -155,6 +218,7 @@ impl VerifiedRowKind {
 
     fn time_column(self) -> &'static str {
         match self {
+            Self::StrategyDecisions => "decision_at",
             Self::Goes | Self::Hrrr => "decision_time",
             Self::MarketPayload | Self::ContractPayload | Self::ResolutionPayload => "window_start",
             Self::ReferenceEvidence => "source_effective_at",
@@ -220,6 +284,12 @@ impl VerifiedRowsDrain {
     }
 
     fn days_query(&self) -> String {
+        if matches!(self.kind, VerifiedRowKind::StrategyDecisions) {
+            return format!(
+                "WITH earliest AS (SELECT date_bin('5 minutes',t.decision_at,'1970-01-01'::timestamptz) AS start FROM {} t WHERE {} ORDER BY t.decision_at,t.decision_id LIMIT 1) SELECT date_bin('5 minutes',t.decision_at,'1970-01-01'::timestamptz) AS day, sum(pg_column_size(t))::bigint AS size_bytes FROM {} t CROSS JOIN earliest WHERE {} AND t.decision_at >= earliest.start AND t.decision_at < earliest.start + interval '1 hour' GROUP BY day ORDER BY day",
+                self.kind.relation(), self.kind.where_sql(), self.kind.relation(), self.kind.where_sql(),
+            );
+        }
         format!(
             "SELECT (date_trunc('day',t.{} AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') AS day, sum(pg_column_size(t))::bigint AS size_bytes FROM {} t {} WHERE {} GROUP BY day ORDER BY day",
             self.kind.time_column(), self.kind.relation(), self.kind.join_sql(),
@@ -469,8 +539,7 @@ impl DrainWorkerStrategy for VerifiedRowsDrain {
             .execution
             .validate()
             .map_err(|error| invalid("drain_execution_selector_invalid", error.to_string()))?;
-        if request.mode.removes_source_data()
-            && request.cutoff > Utc::now() - Duration::days(self.kind.retention_days())
+        if request.mode.removes_source_data() && request.cutoff > Utc::now() - self.kind.retention()
         {
             return Err(invalid(
                 "drain_retention_violation",
@@ -493,7 +562,7 @@ impl DrainWorkerStrategy for VerifiedRowsDrain {
                 .await
                 .map_err(db_error)?;
         let cutoff = request.cutoff.min(requested_at);
-        let closed = Utc.from_utc_datetime(&cutoff.date_naive().and_hms_opt(0, 0, 0).unwrap());
+        let closed = self.kind.closed_cutoff(cutoff);
         let query = self.days_query();
         let days: Vec<(DateTime<Utc>, i64)> = sqlx::query_as(&query)
             .bind(DateTime::<Utc>::from_timestamp(0, 0).unwrap())
@@ -507,7 +576,7 @@ impl DrainWorkerStrategy for VerifiedRowsDrain {
                 rows_removed: 0,
                 objects_published: 0,
                 bytes_written: 0,
-                summary: json!({"eligible_days":days.len(),"days":days.iter().map(|(day,_)|day).collect::<Vec<_>>(),"relation":self.kind.relation(),"cutoff":request.cutoff,"retention_days":self.kind.retention_days(),"mode":request.mode}),
+                summary: json!({"eligible_days":days.len(),"days":days.iter().map(|(day,_)|day).collect::<Vec<_>>(),"relation":self.kind.relation(),"cutoff":request.cutoff,"retention_days":self.kind.retention().num_hours() as f64 / 24.0,"retention_hours":self.kind.retention().num_hours(),"mode":request.mode}),
             });
         }
         preflight_lake_root(&self.root, 0).await?;
@@ -527,9 +596,9 @@ impl DrainWorkerStrategy for VerifiedRowsDrain {
             }
             let chunk = Chunk {
                 chunk_schema: self.kind.schema().into(),
-                chunk_name: day.format("%Y-%m-%d").to_string(),
+                chunk_name: self.kind.window_name(day),
                 range_start: day,
-                range_end: day + Duration::days(1),
+                range_end: day + self.kind.window(),
                 size_bytes: source_size,
             };
             let publication = match existing_publication(&context, self.kind.key(), &chunk).await? {
@@ -575,7 +644,7 @@ impl DrainWorkerStrategy for VerifiedRowsDrain {
             }
         }
         outcome.summary = json!({"relation":self.kind.relation(),"cutoff":request.cutoff,
-            "days_processed":outcome.objects_published,"retention_days":self.kind.retention_days(),
+            "days_processed":outcome.objects_published,"retention_days":self.kind.retention().num_hours() as f64 / 24.0,"retention_hours":self.kind.retention().num_hours(),
             "mode":request.mode});
         Ok(outcome)
     }
@@ -585,6 +654,86 @@ impl DrainWorkerStrategy for VerifiedRowsDrain {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn decisions_preserve_trading_evidence_and_bound_source_windows() {
+        let kind = VerifiedRowKind::StrategyDecisions;
+        assert_eq!(kind.retention(), Duration::hours(12));
+        assert_eq!(kind.window(), Duration::minutes(5));
+        assert_eq!(kind.columns().len(), 24);
+        assert!(kind.where_sql().contains("t.action = 'no_trade'"));
+        assert!(kind.where_sql().contains("t.status = 'rejected'"));
+        assert!(kind.where_sql().contains("t.order_plan_id IS NULL"));
+        let cutoff = DateTime::parse_from_rfc3339("2026-10-03T13:04:59Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let closed = kind.closed_cutoff(cutoff);
+        assert_eq!(kind.window_name(closed), "2026-10-03T13:00Z");
+        let drain = VerifiedRowsDrain::new(kind).unwrap();
+        assert!(drain.days_query().contains("interval '1 hour'"));
+        assert!(drain
+            .days_query()
+            .contains("ORDER BY t.decision_at,t.decision_id LIMIT 1"));
+        let mut request = DrainRequest {
+            strategy_key: kind.key().into(),
+            cutoff: Utc::now() - Duration::hours(11),
+            dry_run: false,
+            mode: DrainMode::Drain,
+            execution: Default::default(),
+        };
+        assert_eq!(
+            drain.validate_request(&request).unwrap_err().code,
+            "drain_retention_violation"
+        );
+        request.cutoff = Utc::now() - Duration::hours(12) - Duration::seconds(1);
+        drain.validate_request(&request).unwrap();
+        let daily = VerifiedRowKind::MarketPayload;
+        assert_eq!(daily.window_name(daily.closed_cutoff(cutoff)), "2026-10-03");
+    }
+
+    #[tokio::test]
+    async fn decision_parquet_preserves_all_fields_and_rejects_corruption() {
+        let drain = VerifiedRowsDrain::new(VerifiedRowKind::StrategyDecisions).unwrap();
+        let mut row = serde_json::Map::new();
+        for name in DECISION_COLUMNS {
+            row.insert((*name).into(), Value::Null);
+        }
+        row.insert("decision_id".into(), json!("decision-1"));
+        row.insert("process_id".into(), json!("process-1"));
+        row.insert("action".into(), json!("no_trade"));
+        row.insert(
+            "metadata".into(),
+            json!({"feature": 1.25, "nested": [null, true]}),
+        );
+        let source = Value::Object(row).to_string();
+        let expected = format!("{:x}", Sha256::digest(source.as_bytes()));
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("decisions.parquet");
+        let (sender, writer) = start_writer(path.clone(), drain.schema());
+        sender
+            .send(drain.batch(vec![source]).unwrap())
+            .await
+            .unwrap();
+        finish_writer(sender, writer).await.unwrap();
+        verify_source_rows(&path, DECISION_COLUMNS, &expected)
+            .await
+            .unwrap();
+        assert_eq!(
+            verify_source_rows(&path, DECISION_COLUMNS, &"0".repeat(64))
+                .await
+                .unwrap_err()
+                .code,
+            "drain_source_payload_mismatch"
+        );
+        std::fs::write(&path, b"corrupt").unwrap();
+        assert_eq!(
+            verify_source_rows(&path, DECISION_COLUMNS, &expected)
+                .await
+                .unwrap_err()
+                .code,
+            "drain_parquet_invalid"
+        );
+    }
 
     #[test]
     fn row_schema_keeps_the_source_and_each_named_field() {
@@ -597,6 +746,7 @@ mod tests {
             VerifiedRowKind::ReferenceEvidence,
             VerifiedRowKind::ContractPayload,
             VerifiedRowKind::ResolutionPayload,
+            VerifiedRowKind::StrategyDecisions,
         ] {
             let drain = VerifiedRowsDrain::new(kind).unwrap();
             let schema = drain.schema();
