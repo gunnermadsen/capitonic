@@ -1,17 +1,6 @@
 name: Verify and Publish Images
 
 on:
-  workflow_dispatch:
-    inputs:
-      test_component:
-        description: Component to publish with a test-only ECR tag
-        type: choice
-        options: [polymarket-bot, ingester]
-        required: true
-      test_revision:
-        description: Full committed source revision from the CI optimization branch
-        type: string
-        required: true
   push:
     branches:
       - development
@@ -42,8 +31,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.test_revision || github.sha }}
 
       - name: Reject vendored Rust crates
         shell: bash
@@ -70,24 +57,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.test_revision || github.sha }}
           fetch-depth: 0
       - name: Detect affected images
         id: filter
         shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          CURRENT_SHA: ${{ inputs.test_revision || github.sha }}
-          TEST_COMPONENT: ${{ inputs.test_component }}
-          TEST_PUBLICATION: ${{ github.event_name == 'workflow_dispatch' }}
+          CURRENT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if [[ "$TEST_PUBLICATION" == true ]]; then
-            [[ "$CURRENT_SHA" =~ ^[0-9a-f]{40}$ ]]
-            [[ "$(git rev-parse HEAD)" == "$CURRENT_SHA" ]]
-            git merge-base --is-ancestor "$CURRENT_SHA" origin/defect/ci-rust-cache-validation
-            BASE_SHA="$(git rev-parse "$CURRENT_SHA^")"
-          fi
           if [ -z "$BASE_SHA" ] \
             || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
             if [ "$GITHUB_REF" = 'refs/heads/development' ]; then
@@ -112,8 +90,8 @@ jobs:
           fi
           ingester="$(changed Cargo.toml Cargo.lock packages/market-data-ingester common/proto)"
           db_migrate="$(changed packages/db-migrate)"
-          polymarket_bot_tests="$(changed Cargo.toml Cargo.lock packages/polymarket-bot packages/btc-directional-model/runtime-models common/proto)"
-          ingester_tests="$(changed Cargo.toml Cargo.lock packages/market-data-ingester common/proto)"
+          polymarket_bot_tests="$(changed .github/workflows/CI.yml Cargo.toml Cargo.lock packages/polymarket-bot packages/btc-directional-model/runtime-models common/proto)"
+          ingester_tests="$(changed .github/workflows/CI.yml Cargo.toml Cargo.lock packages/market-data-ingester common/proto)"
           db_migrate_tests="$(changed packages/db-migrate)"
           for component in polymarket-bot ingester db-migrate; do
             previous="$(git show "$BASE_SHA:infra/production/release.json" | jq -c --arg component "$component" '.components[$component] | {rcVersion,sourceRevision}')"
@@ -126,16 +104,6 @@ jobs:
               esac
             fi
           done
-          if [[ "$TEST_PUBLICATION" == true ]]; then
-            polymarket_bot=false; polymarket_bot_tests=false
-            ingester=false; ingester_tests=false
-            db_migrate=false; db_migrate_tests=false
-            case "$TEST_COMPONENT" in
-              polymarket-bot) polymarket_bot=true; polymarket_bot_tests=true ;;
-              ingester) ingester=true; ingester_tests=true ;;
-              *) exit 64 ;;
-            esac
-          fi
           helm_inputs=(
             capitonic-helm-chart
             common/configs/alloy
@@ -209,8 +177,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.test_revision || github.sha }}
 
       - name: Restore validated chart hash
         id: helm-lint-cache
@@ -283,8 +249,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.test_revision || github.sha }}
 
       - name: Install Rust
         run: >-
@@ -342,8 +306,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.test_revision || github.sha }}
 
       - name: Install Rust
         run: >-
@@ -417,8 +379,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.test_revision || github.sha }}
       - name: Install Node.js
         uses: actions/setup-node@v6
         with:
@@ -452,7 +412,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.test_revision || github.sha }}
           fetch-depth: 0
       - uses: docker/setup-buildx-action@v4
       - name: Configure AWS credentials
@@ -468,22 +427,8 @@ jobs:
         env:
           COMPONENT: ${{ matrix.name }}
           REPOSITORY: ${{ matrix.repository }}
-          TEST_REVISION: ${{ inputs.test_revision }}
-          TEST_PUBLICATION: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           set -euo pipefail
-          if [[ "$TEST_PUBLICATION" == true ]]; then
-            [[ "$COMPONENT" == polymarket-bot || "$COMPONENT" == ingester ]]
-            [[ "$TEST_REVISION" =~ ^[0-9a-f]{40}$ ]]
-            test_tag="test-$TEST_REVISION-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-            {
-              echo "rc_version=$test_tag"
-              echo "source_revision=$TEST_REVISION"
-              echo "existing_rc=false"
-              echo "tags=$ECR_REGISTRY/$REPOSITORY:$test_tag"
-            } >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
           rc_version="$(jq -er --arg component "$COMPONENT" '.components[$component].rcVersion' infra/production/release.json)"
           source_revision="$(jq -er --arg component "$COMPONENT" '.components[$component].sourceRevision' infra/production/release.json)"
           [[ "$rc_version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.(0|[1-9][0-9]*)$ ]]
@@ -530,9 +475,7 @@ jobs:
             ${{ matrix.revision_arg }}=${{ steps.release.outputs.source_revision }}
             ${{ matrix.name == 'polymarket-bot' && 'POLYMARKET_MODEL_PACKAGING=production' || '' }}
           tags: ${{ steps.release.outputs.tags }}
-          cache-from: |
-            type=gha,scope=${{ matrix.cache_scope }}-arm64
-            ${{ github.event_name == 'workflow_dispatch' && format('type=gha,scope={0}-ci-test-arm64', matrix.cache_scope) || '' }}
+          cache-from: type=gha,scope=${{ matrix.cache_scope }}-arm64
           cache-to: type=gha,scope=${{ matrix.cache_scope }}-arm64,mode=max
       - name: Verify published ARM64 image and embedded revision
         env:
