@@ -1,3 +1,4 @@
+// CI cache verification changes source identity without changing runtime behavior.
 #![recursion_limit = "256"]
 
 pub mod account_reconcile;
