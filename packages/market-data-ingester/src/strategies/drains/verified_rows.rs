@@ -564,7 +564,7 @@ impl DrainWorkerStrategy for VerifiedRowsDrain {
         let cutoff = request.cutoff.min(requested_at);
         let closed = self.kind.closed_cutoff(cutoff);
         let query = self.days_query();
-        let days: Vec<(DateTime<Utc>, i64)> = sqlx::query_as(&query)
+        let mut days: Vec<(DateTime<Utc>, i64)> = sqlx::query_as(&query)
             .bind(DateTime::<Utc>::from_timestamp(0, 0).unwrap())
             .bind(closed)
             .fetch_all(&context.pool)
@@ -590,58 +590,78 @@ impl DrainWorkerStrategy for VerifiedRowsDrain {
             bytes_written: 0,
             summary: json!({}),
         };
-        for (day, source_size) in days {
-            if context.shutdown.is_cancelled() {
-                return Err(cancelled());
-            }
-            let chunk = Chunk {
-                chunk_schema: self.kind.schema().into(),
-                chunk_name: self.kind.window_name(day),
-                range_start: day,
-                range_end: day + self.kind.window(),
-                size_bytes: source_size,
-            };
-            let publication = match existing_publication(&context, self.kind.key(), &chunk).await? {
-                Some(existing) => {
-                    let stored_sha: Option<String> = sqlx::query_scalar(
+        loop {
+            let next_start = days.last().map(|(start, _)| *start + self.kind.window());
+            for (day, source_size) in days {
+                if context.shutdown.is_cancelled() {
+                    return Err(cancelled());
+                }
+                let chunk = Chunk {
+                    chunk_schema: self.kind.schema().into(),
+                    chunk_name: self.kind.window_name(day),
+                    range_start: day,
+                    range_end: day + self.kind.window(),
+                    size_bytes: source_size,
+                };
+                let publication = match existing_publication(&context, self.kind.key(), &chunk)
+                    .await?
+                {
+                    Some(existing) => {
+                        let stored_sha: Option<String> = sqlx::query_scalar(
                         "SELECT source_rows_sha256 FROM ingester.drain_objects WHERE object_id=$1",
                     )
                     .bind(existing.object_id)
                     .fetch_one(&context.pool)
                     .await
                     .map_err(db_error)?;
-                    let (count, source_sha): (i64,String) = sqlx::query_as("SELECT row_count,source_rows_sha256 FROM ingester.verified_row_source_fingerprint($1,$2,$3)")
+                        let (count, source_sha): (i64,String) = sqlx::query_as("SELECT row_count,source_rows_sha256 FROM ingester.verified_row_source_fingerprint($1,$2,$3)")
                         .bind(self.kind.key()).bind(day).bind(chunk.range_end)
                         .fetch_one(&context.pool).await.map_err(db_error)?;
-                    if count != existing.row_count
-                        || stored_sha.as_deref() != Some(source_sha.as_str())
-                        || verify_existing(&self.root, &existing).await.is_err()
-                        || verify_source_rows(
-                            &self.root.join(&existing.relative_path),
-                            self.kind.columns(),
-                            &source_sha,
-                        )
-                        .await
-                        .is_err()
-                    {
-                        preflight_lake_root(&self.root, source_size.saturating_mul(2)).await?;
-                        reset_publication(&context, &existing).await?;
-                        self.export_day(&context, &chunk).await?
-                    } else {
-                        existing
+                        if count != existing.row_count
+                            || stored_sha.as_deref() != Some(source_sha.as_str())
+                            || verify_existing(&self.root, &existing).await.is_err()
+                            || verify_source_rows(
+                                &self.root.join(&existing.relative_path),
+                                self.kind.columns(),
+                                &source_sha,
+                            )
+                            .await
+                            .is_err()
+                        {
+                            preflight_lake_root(&self.root, source_size.saturating_mul(2)).await?;
+                            reset_publication(&context, &existing).await?;
+                            self.export_day(&context, &chunk).await?
+                        } else {
+                            existing
+                        }
                     }
+                    None => {
+                        preflight_lake_root(&self.root, source_size.saturating_mul(2)).await?;
+                        self.export_day(&context, &chunk).await?
+                    }
+                };
+                outcome.rows_exported += publication.row_count;
+                outcome.objects_published += 1;
+                outcome.bytes_written += publication.byte_size;
+                if request.mode == DrainMode::Drain {
+                    outcome.rows_removed += self.remove_day(&context, &publication).await?;
                 }
-                None => {
-                    preflight_lake_root(&self.root, source_size.saturating_mul(2)).await?;
-                    self.export_day(&context, &chunk).await?
-                }
-            };
-            outcome.rows_exported += publication.row_count;
-            outcome.objects_published += 1;
-            outcome.bytes_written += publication.byte_size;
-            if request.mode == DrainMode::Drain {
-                outcome.rows_removed += self.remove_day(&context, &publication).await?;
             }
+            if !matches!(self.kind, VerifiedRowKind::StrategyDecisions) {
+                break;
+            }
+            let Some(next_start) = next_start else {
+                break;
+            };
+            if context.shutdown.is_cancelled() {
+                return Err(cancelled());
+            }
+            days = sqlx::query_as(&query)
+                .bind(next_start)
+                .bind(closed)
+                .fetch_all(&context.pool)
+                .await
+                .map_err(db_error)?;
         }
         outcome.summary = json!({"relation":self.kind.relation(),"cutoff":request.cutoff,
             "days_processed":outcome.objects_published,"retention_days":self.kind.retention().num_hours() as f64 / 24.0,"retention_hours":self.kind.retention().num_hours(),
