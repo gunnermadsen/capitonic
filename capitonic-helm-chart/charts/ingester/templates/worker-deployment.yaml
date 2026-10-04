@@ -97,6 +97,7 @@ spec:
             - {name: INGESTER_WEATHER_CURATED_ROOT, value: /var/lib/capitonic-data/temperature-expectancy/curated}
             - {name: INGESTER_GOES_ABI_FEATURES_LAKE_ROOT, value: /var/lib/capitonic-data/temperature-expectancy/curated/drains/goes-abi-features}
             - {name: INGESTER_HRRR_ENVIRONMENT_FEATURES_LAKE_ROOT, value: /var/lib/capitonic-data/temperature-expectancy/curated/drains/hrrr-environment-features}
+            - {name: INGESTER_BTC_STRATEGY_DECISIONS_LAKE_ROOT, value: /var/lib/capitonic-data/verified-drains/polymarket/btc-strategy-decisions}
             - {name: INGESTER_BTC_INTERVAL_MARKET_PAYLOAD_LAKE_ROOT, value: /var/lib/capitonic-data/verified-drains/polymarket/btc-interval-market-payload}
             - {name: INGESTER_BTC_MARKET_REFERENCE_EVIDENCE_LAKE_ROOT, value: /var/lib/capitonic-data/verified-drains/polymarket/btc-market-reference-evidence}
             - {name: INGESTER_BTC_FIVE_MINUTE_CONTRACT_PAYLOAD_LAKE_ROOT, value: /var/lib/capitonic-data/verified-drains/market-data/btc-five-minute-contract-payload}

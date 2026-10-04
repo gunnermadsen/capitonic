@@ -314,6 +314,10 @@ pub fn registry() -> Result<StrategyRegistry, StrategyFactoryError> {
                 .map_err(|error| StrategyFactoryError::Construction(error.to_string()))?,
         ),
         Arc::new(
+            drains::VerifiedRowsDrain::new(drains::VerifiedRowKind::StrategyDecisions)
+                .map_err(|error| StrategyFactoryError::Construction(error.to_string()))?,
+        ),
+        Arc::new(
             drains::VerifiedRowsDrain::new(drains::VerifiedRowKind::Goes)
                 .map_err(|error| StrategyFactoryError::Construction(error.to_string()))?,
         ),
@@ -434,6 +438,7 @@ mod tests {
                 "polymarket_btc_interval_market_payload",
                 "polymarket_btc_market_reference_fact_evidence",
                 "polymarket_btc_orderbook_archive_events",
+                "polymarket_btc_strategy_decisions",
                 "polymarket_chainlink_btcusd_twap",
                 "polymarket_reference_price_ticks",
             ]

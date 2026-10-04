@@ -1,9 +1,9 @@
-image: capitonic/ingester:v1.2.3-rc.0
+image: capitonic/ingester:v1.3.0-local.1
 environment: development
 imagePullPolicy: Never
 imagePullSecrets: []
-imageDigest: sha256:60c26c4bd51a1480149381f543b7a144700b937d2f9c6939bf1cd5d02f160122
-gitRevision: ed8dc893bd1f81664d7616e8e0626fa18ec3a843
+imageDigest: sha256:9eba20ca179c240af6a01448b518c6fc96702461ce7472f1919c5fb81d85d397
+gitRevision: 7ff2b1d281b349f21a91e1e9abf3456c65227c6a
 deploymentId: capitonic-k3s-dev
 master:
   replicaCount: 1
@@ -32,7 +32,6 @@ apiIngress:
   tls:
     enabled: false
     secretName: grafana-tls
-
 externalSecrets:
   enabled: false
 credentialRevisions: {}
