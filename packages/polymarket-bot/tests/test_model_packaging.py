@@ -62,6 +62,29 @@ class ModelPackagingTest(unittest.TestCase):
         for name in ("model.json", "manifest.json", "golden-vectors.json"):
             self.assertEqual((self.output / "selected" / name).read_bytes(), (self.bundle / name).read_bytes())
 
+    def test_development_ignores_manifest_and_preserves_full_catalog(self):
+        self.manifest.write_text("invalid production manifest has no effect on development")
+        result = subprocess.run(
+            ["python3", str(ROOT / "packages/polymarket-bot/scripts/package_models.py"),
+             "package", str(self.output), "--root", str(self.root)],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.output / "model-manifest.json").exists())
+        self.assertEqual({p.name for p in self.output.iterdir()}, {"selected", "unused"})
+        for source in (self.root / packager.CATALOG).rglob("*"):
+            if source.is_file():
+                self.assertEqual(source.read_bytes(), (self.output / source.relative_to(self.root / packager.CATALOG)).read_bytes())
+
+    def test_production_cli_uses_manifest_explicitly(self):
+        result = subprocess.run(
+            ["python3", str(ROOT / "packages/polymarket-bot/scripts/package_models.py"),
+             "package", str(self.output), "--root", str(self.root), "--environment", "production"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual({p.name for p in self.output.iterdir() if p.is_dir()}, {"selected"})
+
     def test_missing_bundle_and_hash_mismatch_fail_before_writing(self):
         for name in ("model.json", "golden-vectors.json"):
             with self.subTest(name=name):

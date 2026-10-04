@@ -447,6 +447,7 @@ jobs:
           build-args: |
             RUST_VERSION=${{ env.RUST_TOOLCHAIN }}
             ${{ matrix.revision_arg }}=${{ steps.release.outputs.source_revision }}
+            ${{ matrix.name == 'polymarket-bot' && 'POLYMARKET_MODEL_PACKAGING=production' || '' }}
           tags: ${{ steps.release.outputs.tags }}
           cache-from: type=gha,scope=${{ matrix.cache_scope }}-arm64
           cache-to: type=gha,scope=${{ matrix.cache_scope }}-arm64,mode=max

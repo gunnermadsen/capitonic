@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shutil
 import subprocess
 
 
@@ -48,7 +49,14 @@ def bundle_files(model, raw):
     return names, [None, model["artifact_sha256"], bundle["golden_vectors_sha256"]]
 
 
-def package(root, destination):
+def package(root, destination, environment="production"):
+    if environment == "development":
+        if destination.exists() and any(destination.iterdir()):
+            raise ValueError("Packaging destination must be empty")
+        shutil.copytree(root / CATALOG, destination, dirs_exist_ok=True)
+        return None
+    if environment != "production":
+        raise ValueError(f"Unknown packaging environment: {environment}")
     raw = (root / MANIFEST).read_bytes()
     payload = {"model-manifest.json": raw}
     for model in entries(raw):
@@ -100,10 +108,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["package", "inputs", "fingerprint"])
     parser.add_argument("target", help="Output directory, or Git revision for input inspection")
+    parser.add_argument("--environment", choices=["development", "production"], default="development",
+                        help="Only production packaging applies the model manifest")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[3])
     args = parser.parse_args()
     if args.command == "package":
-        print(f"model_manifest_sha256: {package(args.root, Path(args.target))}")
+        digest = package(args.root, Path(args.target), args.environment)
+        print(f"model_manifest_sha256: {digest}" if digest else "Packaged complete development model catalog")
     elif args.command == "inputs":
         print("\n".join(input_paths(args.root, args.target)))
     else:

@@ -26,9 +26,10 @@ RUN cargo build --locked --release --package polymarket-bot
 
 COPY packages/polymarket-bot/src packages/polymarket-bot/src
 COPY packages/polymarket-bot/scripts/package_models.py /app/packages/polymarket-bot/scripts/package_models.py
-COPY packages/polymarket-bot/model-manifest.json /app/packages/polymarket-bot/model-manifest.json
+ARG POLYMARKET_MODEL_PACKAGING=development
 RUN --mount=type=bind,source=packages/btc-directional-model/runtime-models,target=/app/packages/btc-directional-model/runtime-models \
-    python3 packages/polymarket-bot/scripts/package_models.py package /opt/polymarket-models
+    --mount=type=bind,source=packages/polymarket-bot/model-manifest.json,target=/app/packages/polymarket-bot/model-manifest.json \
+    python3 packages/polymarket-bot/scripts/package_models.py package /opt/polymarket-models --environment "$POLYMARKET_MODEL_PACKAGING"
 
 RUN chmod -R u=rwX,go=rX /opt/polymarket-models \
     && cargo clean --release -p polymarket-bot \
