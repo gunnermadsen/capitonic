@@ -13,14 +13,14 @@
     "ingester": {
       "repository": "capitonic/ingester",
       "rcVersion": "v1.3.0-rc.0",
-      "sourceRevision": "ed8dc893bd1f81664d7616e8e0626fa18ec3a843",
+      "sourceRevision": "633b5e897a365e9444b14ce9ce4b3d522e0b5fc2",
       "finalVersion": "v1.2.3",
       "digest": "sha256:b0cb1e40e052bee7b97e578a60812074c9f1b42a2847d5daf90625f792c27074"
     },
     "db-migrate": {
       "repository": "capitonic/db-migrate",
       "rcVersion": "v0.3.0-rc.0",
-      "sourceRevision": "61ace8bd58ba479d6bef089e30642aee559298a1",
+      "sourceRevision": "345fbccb0937ef64f72c166aaa4ace1edc087b90",
       "finalVersion": "v0.2.0",
       "digest": "sha256:6b1fe310d1e67481695623adeb5bbc6f6efa2d6b36aa7aaed9d465e986c08188"
     }

@@ -1,4 +1,4 @@
-image: capitonic/db-migrate:v0.3.0-local.0
+image: capitonic/db-migrate:v0.3.0-rc.0
 environment: development
 imagePullPolicy: Never
 imagePullSecrets: []
