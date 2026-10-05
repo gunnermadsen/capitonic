@@ -1,6 +1,6 @@
 #  Ingester
 
-The ingester continuously records causal source facts and executes historical backfills. It does not construct features, labels, datasets, predictions, or trading decisions.
+The  ingester continuously records causal source facts and executes historical backfills. It does not construct features, labels, datasets, predictions, or trading decisions.
 
 The service is an independent Cargo package and container. It connects directly to public provider feeds in parallel with the trading bot; neither process depends on the other for live market data.
 
