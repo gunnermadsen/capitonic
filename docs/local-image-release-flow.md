@@ -58,6 +58,34 @@ The command checks every accepted chart, running image ID, and provenance before
 
 GitHub Actions retains the local CI component boundaries: it runs the bot and ingester formatting, Clippy, unit/integration tests, the existing Docker-backed outage-recovery integration workflow, ingester documentation checks, and the db-migrate TypeScript build/tests. Every production image publication depends on all of those checks. It builds only components whose image inputs changed or whose accepted RC selection changed. Production images are built by GitHub CI from the accepted component source as `linux/arm64`, then published under immutable component-source-revision and SemVer RC tags from `infra/production/release.json`; no mutable `production` image tag is permitted. CI verifies the matching accepted `rc/<component>/<version>` Git provenance before publishing an absent ECR RC, and verifies an existing ECR RC's architecture and embedded revision without rebuilding or overwriting it. Local CI qualifies the local k3s image and publishes Git provenance only; it must not stage or push the production ECR image. An independently rebuilt CI image does not inherit local golden status merely because it has the same source.
 
+### Current production CD execution boundaries
+
+The following describes the current `.github/workflows/CD.yml` execution, not authorization to run it. `AGENTS.md` remains authoritative for agent actions. Workflow filenames, job names, triggers, permissions, commands, and execution order are unchanged; only the eight existing step labels have been clarified. Checkout, AWS authentication, and tool installation retain their existing positions between the operations below.
+
+| Order | Visible CD step | Existing owner | State access and actual behavior |
+| --- | --- | --- | --- |
+| 1 | Select release components | `CD.yml` and `scripts/production/detect-components.sh` | Read Git and successful workflow history; write runner-local outputs identifying images and charts. |
+| 2 | Validate release scope | `CD.yml` | Read and validate scope variables. The workflow currently includes both ingester and bot in application reconciliation even when image selection is narrower. |
+| 3 | Locate production server | `CD.yml` | Read AWS instance metadata; write the selected instance ID to runner-local outputs. |
+| 4 | Resolve runtime secret pins | `scripts/production/run-ssm-command.sh`, `checkout-revision.sh`, and `prepare-runtime-secrets.py` | Mixed: dispatch an SSM command that writes temporary files and checks out the revision on the production host; read secret and runtime evidence; update secret-version and credential pins in runner-local overlays. Grafana can be added to deployment scope. |
+| 5 | Promote images and prepare release pins | `scripts/production/promote-production-images.sh` | Mixed: verify ECR image architecture and source revision; create absent final registry tags; update runner-local production overlays, release metadata, and chart `appVersion`. No image rebuild occurs. |
+| 6 | Commit production release pins | `CD.yml` | Lint and render changed chart metadata, then create and push the generated production-pin commit and applicable chart tags. These Git changes precede runtime deployment. |
+| 7 | Deploy and verify production release | `run-ssm-command.sh`, `checkout-revision.sh`, and `deploy-k3s.sh` | Mixed: check out the admitted revision on the host, inspect runtime state, deploy through existing owners, and verify. The selected-component path's internal ordering is detailed below; verification is not a separate Actions step. |
+| 8 | Record observability provisioning | `CD.yml` | Read and hash selected observability configuration; create and push a provenance tag when observability was provisioned. No tag is created when no observability component was selected. |
+
+Within step 7, the normal selected-component path currently executes in this order:
+
+| Order | Existing helper | Actual boundary |
+| --- | --- | --- |
+| 7.1 | `deploy-selected-components.sh` and `refresh-ecr-pull-secret.sh` | Refresh registry pull credentials before application reconciliation. |
+| 7.2 | `reconcile-application-charts.sh` | Capture Argo targets, deployments, enabled processes, and capacity evidence; check worker capacity; reconcile ingester followed by bot. Read and verify selected credentials, and update Grafana through its Helm owner when its credential revision changed. |
+| 7.3 | `reconcile-application-charts.sh` and `verify-production.sh` | Run full production verification inside the Argo coordinator, before the remaining selected Helm components. Some coordinator failures perform documented rollback; a full-verifier failure preserves evidence and stops for attribution. |
+| 7.4 | `deploy-selected-components.sh` | Snapshot remaining selected Helm releases; check migration-ledger equality when db-migrate is selected; check applicable capacity and process evidence; deploy the remaining selected components, including the migration-runner Job, through Helm and run component-specific checks. This path requires new migrations to have been separately approved and applied already. |
+
+The separate `full-stack` path in `deploy-k3s.sh` retains its existing provisioning and verification sequence; it does not use the selected-component sequence above. No deployment helper or recovery behavior has been changed by this labeling and documentation update.
+
+PR-only live execution, reviewed production pins before merge, and manual dry-run are approved future requirements for the CD implementation. Agent restrictions are already recorded in `AGENTS.md`, but the current workflow still accepts manual live dispatch and generates production-pin commits. It does not implement a dry-run or enforce PR origin. Do not treat a manual run of the current workflow as a safe preview.
+
 ## Outside this image version sequence
 
 - Model training retains the existing `model/...` tag for a newly produced, verifiable immutable model artifact. Training, activation, or reuse of an existing model does not mint a bot or ingester image version. Packaging changed model runtime inputs into an image does enter the affected image's normal CI/CD flow.

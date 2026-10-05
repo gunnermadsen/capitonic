@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Compare with the last successful production deployment
+      - name: Select release components
         id: components
         env:
           GH_TOKEN: ${{ github.token }}
@@ -74,7 +74,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'push' && github.sha || 'production' }}
-      - name: Validate selected components
+      - name: Validate release scope
         run: |
           [[ "$DEPLOYMENT_SCOPE" == full-stack || "$DEPLOYMENT_SCOPE" == selected ]]
           if [[ "$DEPLOYMENT_SCOPE" == selected ]]; then
@@ -94,7 +94,7 @@ jobs:
           [ -n "$expected" ]
           echo "$expected  /tmp/yq" | sha256sum -c -
           sudo install -m 0755 /tmp/yq /usr/local/bin/yq
-      - name: Resolve the single production node
+      - name: Locate production server
         id: host
         shell: bash
         run: |
@@ -104,7 +104,7 @@ jobs:
             --query 'Reservations[].Instances[].InstanceId' --output text)"
           [ "$(wc -w <<< "$instance_id")" -eq 1 ]
           echo "instance_id=$instance_id" >> "$GITHUB_OUTPUT"
-      - name: Select immutable runtime secret versions
+      - name: Resolve runtime secret pins
         env:
           INSTANCE_ID: ${{ steps.host.outputs.instance_id }}
         run: |
@@ -125,13 +125,13 @@ jobs:
           if ! git diff --quiet -- capitonic-helm-chart/environments/production/grafana.yaml; then
             echo "DEPLOY_COMPONENTS=$DEPLOY_COMPONENTS,grafana" >> "$GITHUB_ENV"
           fi
-      - name: Promote accepted RC digests and write exact Helm pins
+      - name: Promote images and prepare release pins
         run: scripts/production/promote-production-images.sh
       - name: Install Helm for chart provenance checks
         uses: azure/setup-helm@v4
         with:
           version: v3.18.6
-      - name: Commit generated production pins
+      - name: Commit production release pins
         id: pins
         shell: bash
         run: |
@@ -175,7 +175,7 @@ jobs:
             git push --atomic origin "${refs[@]}"
             echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           fi
-      - name: Deploy exact revision through SSM
+      - name: Deploy and verify production release
         env:
           INSTANCE_ID: ${{ steps.host.outputs.instance_id }}
           DEPLOY_REVISION: ${{ steps.pins.outputs.revision }}
@@ -185,7 +185,7 @@ jobs:
           checkout_payload="$(base64 -w0 scripts/production/checkout-revision.sh)"
           command="install -d -m 0700 /run/capitonic && printf '%s' '$checkout_payload' | base64 -d > /run/capitonic/checkout-revision.sh && chmod 0700 /run/capitonic/checkout-revision.sh && /run/capitonic/checkout-revision.sh $DEPLOY_REVISION && rm -f /run/capitonic/checkout-revision.sh && cd /opt/polymarket-bot && DEPLOYMENT_SCOPE=$DEPLOYMENT_SCOPE DEPLOY_COMPONENTS=$DEPLOY_COMPONENTS scripts/production/deploy-k3s.sh"
           scripts/production/run-ssm-command.sh "$INSTANCE_ID" 3300 'Deploy and verify Capitonic production' "$command"
-      - name: Record observability provisioning provenance
+      - name: Record observability provisioning
         env:
           DEPLOY_REVISION: ${{ steps.pins.outputs.revision }}
         run: |
