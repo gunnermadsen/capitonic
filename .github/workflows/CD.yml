@@ -57,30 +57,51 @@ jobs:
           [[ "$baseline" =~ ^[0-9a-f]{40}$ ]]
           scripts/production/detect-components.sh "$baseline" "$GITHUB_SHA"
 
-  deploy:
-    name: Promote, pin, deploy, and verify
+  validate:
+    name: Validate release scope
     needs: detect
     if: >-
       always() &&
       (inputs.full_stack || github.event_name == 'workflow_dispatch' || needs.detect.result == 'success')
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    outputs:
+      deployment_scope: ${{ steps.scope.outputs.deployment_scope }}
+      deploy_components: ${{ steps.scope.outputs.deploy_components }}
+      promote_components: ${{ steps.scope.outputs.promote_components }}
     env:
       DEPLOYMENT_SCOPE: ${{ inputs.full_stack && 'full-stack' || 'selected' }}
       DEPLOY_COMPONENTS: ${{ needs.detect.outputs.charts && format('{0},ingester,polymarket-bot', needs.detect.outputs.charts) || 'ingester,polymarket-bot' }}
       PROMOTE_COMPONENTS: ${{ needs.detect.outputs.images }}
     steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event_name == 'push' && github.sha || 'production' }}
       - name: Validate release scope
+        id: scope
         run: |
           [[ "$DEPLOYMENT_SCOPE" == full-stack || "$DEPLOYMENT_SCOPE" == selected ]]
           if [[ "$DEPLOYMENT_SCOPE" == selected ]]; then
             [[ "$DEPLOY_COMPONENTS" =~ ^[a-z0-9,-]+$ ]]
             [[ "$PROMOTE_COMPONENTS" =~ ^[a-z0-9,-]*$ ]]
           fi
+          {
+            echo "deployment_scope=$DEPLOYMENT_SCOPE"
+            echo "deploy_components=$DEPLOY_COMPONENTS"
+            echo "promote_components=$PROMOTE_COMPONENTS"
+          } >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Promote, pin, deploy, and verify
+    needs: validate
+    if: always() && needs.validate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DEPLOYMENT_SCOPE: ${{ needs.validate.outputs.deployment_scope }}
+      DEPLOY_COMPONENTS: ${{ needs.validate.outputs.deploy_components }}
+      PROMOTE_COMPONENTS: ${{ needs.validate.outputs.promote_components }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'push' && github.sha || 'production' }}
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
