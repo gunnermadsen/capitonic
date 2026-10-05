@@ -1,4 +1,4 @@
-# polymarket-bot
+#  polymarket-bot
 
 Rust microservice for Polymarket negative-risk arbitrage scanning, execution-state management, and Postgres/Timescale persistence.
 

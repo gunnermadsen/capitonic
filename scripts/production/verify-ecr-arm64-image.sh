@@ -14,7 +14,7 @@ AWS_REGION="${AWS_REGION:-eu-west-1}"
 
 [[ "$AWS_REGION" == "eu-west-1" ]]
 [[ "$repository" =~ ^capitonic/(polymarket-bot|ingester|db-migrate)$ ]]
-[[ "$image_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]
+[[ "$image_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(rc|test)\.[0-9]+)?$ ]]
 [[ "$source_revision" =~ ^[0-9a-f]{40}$ ]]
 
 accepted_media_types=(

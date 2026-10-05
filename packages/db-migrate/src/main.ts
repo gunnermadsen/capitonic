@@ -3,7 +3,7 @@ import { AppDataSource } from './datasource';
 import { FreshInstallDataSource } from './fresh-install-datasource';
 
 async function establishFreshInstallBaseline(): Promise<void> {
-  console.log('[db-migrate] Checking for an existing migration ledger');
+  console.log('[db-migrate]  Checking for an existing migration ledger');
   await AppDataSource.initialize();
 
   let hasMigrationLedger: boolean;

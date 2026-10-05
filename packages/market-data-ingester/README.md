@@ -1,4 +1,4 @@
-# Ingester
+#  Ingester
 
 The ingester continuously records causal source facts and executes historical backfills. It does not construct features, labels, datasets, predictions, or trading decisions.
 
