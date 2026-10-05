@@ -453,13 +453,21 @@ jobs:
           FINGERPRINT: ${{ matrix.fingerprint }}
         run: |
           set -euo pipefail
-          test_tags="$(git tag --points-at "$GITHUB_SHA" --list "ci/$COMPONENT/v*-test.*")"
+          test_tags=''
+          while IFS= read -r tag; do
+            [[ "$(git cat-file -t "refs/tags/$tag")" == tag ]] || continue
+            candidate="$(git rev-list -n1 "$tag")"
+            git merge-base --is-ancestor "$candidate" "$GITHUB_SHA" || continue
+            [[ "$(python3 scripts/ci/component-fingerprint.py "$COMPONENT" "$candidate")" == "$FINGERPRINT" ]] || continue
+            test_tags="$tag"
+            break
+          done < <(git tag --list "ci/$COMPONENT/v*-test.*" --sort=-version:refname)
           if [[ -n "$test_tags" ]]; then
             [[ "$(wc -l <<< "$test_tags")" -eq 1 ]]
             [[ "$(git cat-file -t "refs/tags/$test_tags")" == tag ]]
             rc_version="${test_tags##*/}"
             [[ "$rc_version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-test\.(0|[1-9][0-9]*)$ ]]
-            source_revision="$GITHUB_SHA"
+            source_revision="$(git rev-list -n1 "$test_tags")"
           else
             source_revision=''
             while IFS= read -r tag; do
