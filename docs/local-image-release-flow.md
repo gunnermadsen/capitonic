@@ -82,6 +82,13 @@ writes `release.json`, commits metadata, or creates/pushes Git tags. Unselected
 component pins are preserved. Existing helpers and unrelated workflows keep their
 owners. Live selected execution still uses ECR credential refresh and existing
 Argo/Helm reconciliation; planning does not promise those commands are no-ops.
+Selected-release scope, migration-ledger, worker-capacity, chart-rendering, tunnel
+and Argo/shared-credential preflight checks complete before credential refresh or
+cluster reconciliation. Argo advances and rolls back only explicitly selected
+applications. Changed shared-secret references require every declared consumer's
+owner to be selected; missing bot or Grafana dependencies fail before deployment
+instead of silently expanding scope. The same Argo helper supports a read-only
+`--preflight-only` check, without a separate deployment implementation.
 
 Production provisioning installs `yq` through its existing installer. Deployment
 checks for version v4.47.2 and fails if missing or incompatible; it does not install
