@@ -14,6 +14,23 @@ use uuid::Uuid;
 const MAX_PROCESSES: usize = 256;
 const MAX_PENDING: usize = 2048;
 const LATENCY_BUCKETS: [f64; 9] = [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0];
+const TOKEN_BUCKETS: [u64; 9] = [1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000, 256000];
+#[derive(Clone, Default)]
+struct AgentUsage {
+    market: String,
+    attempts: BTreeMap<Uuid, Option<super::agent::UsageReport>>,
+    finalized: bool,
+    partial: bool,
+    tokens: BTreeMap<&'static str, u64>,
+    reports: BTreeMap<&'static str, u64>,
+    markets: BTreeMap<&'static str, u64>,
+    last_tokens: BTreeMap<&'static str, u64>,
+    last_timestamp: f64,
+    last_complete: bool,
+    buckets: [u64; 9],
+    count: u64,
+    sum: u64,
+}
 #[derive(Clone, Default)]
 struct Histogram {
     buckets: [u64; 9],
@@ -119,6 +136,7 @@ pub struct SettlementTelemetrySnapshot {
 }
 #[derive(Clone, Default)]
 struct Process {
+    agent_usage: Option<AgentUsage>,
     members: BTreeMap<String, RouterMember>,
     identity: Option<RuntimeModelSelection>,
     risk_identity: Option<RiskStrategySelection>,
@@ -172,6 +190,107 @@ fn update(id: Uuid, f: impl FnOnce(&mut Process)) {
 fn increment(p: &mut Process, metric: &'static str, reason: &str) {
     *p.counters.entry((metric, reason.into())).or_default() += 1;
 }
+pub fn agent_usage_start(request: &super::agent::EvaluationRequest, partial: bool) {
+    update(request.process_id, |p| {
+        let Some(a) = p.agent_usage.as_mut() else {
+            return;
+        };
+        if a.market != request.market_id {
+            finish_agent_market(a);
+            a.market.clone_from(&request.market_id);
+            a.attempts.clear();
+            a.finalized = false;
+            a.partial = partial;
+        }
+        if !a.finalized && a.attempts.len() < super::agent::profile().attempts_seconds.len() {
+            a.attempts.entry(request.request_id).or_insert(None);
+        }
+    });
+}
+pub fn agent_usage_report(id: Uuid, request: Uuid, report: &super::agent::UsageReport) {
+    update(id, |p| {
+        let Some(a) = p.agent_usage.as_mut() else {
+            return;
+        };
+        let Some(slot) = a.attempts.get_mut(&request) else {
+            return;
+        };
+        if slot.is_some() || a.finalized {
+            return;
+        }
+        *slot = Some(report.clone());
+        *a.reports.entry(report.status()).or_default() += 1;
+        if let super::agent::UsageReport::Reported(usage) = report {
+            for (kind, value) in usage.values() {
+                if let Some(value) = value {
+                    *a.tokens.entry(kind).or_default() += value;
+                }
+            }
+        }
+    });
+}
+pub fn agent_usage_finish(id: Uuid) {
+    update(id, |p| {
+        if let Some(a) = p.agent_usage.as_mut() {
+            finish_agent_market(a);
+        }
+    });
+}
+fn finish_agent_market(a: &mut AgentUsage) {
+    if a.finalized || a.attempts.is_empty() {
+        return;
+    }
+    a.finalized = true;
+    a.last_tokens.clear();
+    let mut complete = !a.partial;
+    let mut details = [true; 5];
+    for report in a.attempts.values_mut() {
+        if report.is_none() {
+            *report = Some(super::agent::UsageReport::Missing);
+            *a.reports.entry("missing").or_default() += 1;
+        }
+        match report.as_ref().unwrap() {
+            super::agent::UsageReport::Reported(usage) => {
+                for (index, (kind, value)) in usage.values().into_iter().enumerate() {
+                    if let Some(value) = value {
+                        *a.last_tokens.entry(kind).or_default() += value;
+                    } else {
+                        details[index] = false;
+                    }
+                }
+            }
+            _ => {
+                complete = false;
+            }
+        }
+    }
+    a.last_complete = complete;
+    a.last_timestamp = Utc::now().timestamp_millis() as f64 / 1000.0;
+    *a.markets
+        .entry(if complete { "complete" } else { "incomplete" })
+        .or_default() += 1;
+    // Unknown markets are not zero-token observations or misleading complete totals.
+    if complete {
+        for (index, kind) in ["input", "output", "total", "cached_input", "reasoning"]
+            .iter()
+            .enumerate()
+        {
+            if !details[index] {
+                a.last_tokens.remove(kind);
+            }
+        }
+        let total = a.last_tokens["total"];
+        a.count += 1;
+        a.sum += total;
+        for (index, bound) in TOKEN_BUCKETS.iter().enumerate() {
+            if total <= *bound {
+                a.buckets[index] += 1;
+            }
+        }
+    } else {
+        a.last_tokens.clear();
+    }
+}
 pub fn register(
     id: Uuid,
     run: Uuid,
@@ -189,6 +308,16 @@ pub fn register(
         p.mode = mode.into();
         p.enabled = true;
         if selection.is_some_and(|s| s.model_key == super::agent::PROFILE_KEY) {
+            let usage = p.agent_usage.get_or_insert_with(AgentUsage::default);
+            for kind in ["input", "output", "total"] {
+                usage.tokens.entry(kind).or_default();
+            }
+            for status in ["reported", "missing", "invalid"] {
+                usage.reports.entry(status).or_default();
+            }
+            for status in ["complete", "incomplete"] {
+                usage.markets.entry(status).or_default();
+            }
             for reason in [
                 "started",
                 "completed",
@@ -1149,6 +1278,7 @@ pub fn prometheus_metrics() -> String {
                     last_observation: p.last_observation,
                     last_success: p.last_success,
                     counters: p.counters.clone(),
+                    agent_usage: p.agent_usage.clone(),
                     model_policy_failed_checks: p.model_policy_failed_checks.clone(),
                     confidence_rejection_outcomes: p.confidence_rejection_outcomes.clone(),
                     submission_risk_counters: p.submission_risk_counters.clone(),
@@ -1425,6 +1555,62 @@ pub fn prometheus_metrics() -> String {
                 "polymarket_umr_live_submission_risk_checks_total{{{labels},outcome=\"{outcome}\",reason=\"{reason}\"}} {value}"
             );
         }
+        if let Some(a) = p.agent_usage {
+            for (name, label, values) in [
+                ("agent_tokens", "kind", a.tokens),
+                ("agent_usage_reports", "status", a.reports),
+                ("agent_usage_markets", "status", a.markets),
+            ] {
+                if declared.insert(name.into()) {
+                    let _ = writeln!(out, "# HELP polymarket_umr_{name}_total Session-scoped provider-reported agent usage; unknown is not zero.\n# TYPE polymarket_umr_{name}_total counter");
+                }
+                for (key, value) in values {
+                    let _ = writeln!(
+                        out,
+                        "polymarket_umr_{name}_total{{{labels},{label}=\"{key}\"}} {value}"
+                    );
+                }
+            }
+            for (name, help) in [
+                (
+                    "agent_last_market_tokens",
+                    "Last complete finalized market tokens; absent for incomplete markets.",
+                ),
+                (
+                    "agent_last_market_timestamp_seconds",
+                    "Last attempted market finalization timestamp; zero before evidence.",
+                ),
+                (
+                    "agent_last_market_usage_complete",
+                    "Whether last attempted market usage is complete; session-scoped.",
+                ),
+            ] {
+                if declared.insert(name.into()) {
+                    let _ = writeln!(
+                        out,
+                        "# HELP polymarket_umr_{name} {help}\n# TYPE polymarket_umr_{name} gauge"
+                    );
+                }
+            }
+            for (kind, value) in a.last_tokens {
+                let _ = writeln!(
+                    out,
+                    "polymarket_umr_agent_last_market_tokens{{{labels},kind=\"{kind}\"}} {value}"
+                );
+            }
+            let _ = writeln!(out, "polymarket_umr_agent_last_market_timestamp_seconds{{{labels}}} {}\npolymarket_umr_agent_last_market_usage_complete{{{labels}}} {}", a.last_timestamp, u8::from(a.last_complete));
+            if declared.insert("agent_market_tokens".into()) {
+                out.push_str("# HELP polymarket_umr_agent_market_tokens Tokens per fully reported attempted market, including retries; excludes incomplete markets.\n# TYPE polymarket_umr_agent_market_tokens histogram\n");
+            }
+            for (index, bound) in TOKEN_BUCKETS.iter().enumerate() {
+                let _ = writeln!(
+                    out,
+                    "polymarket_umr_agent_market_tokens_bucket{{{labels},le=\"{bound}\"}} {}",
+                    a.buckets[index]
+                );
+            }
+            let _ = writeln!(out, "polymarket_umr_agent_market_tokens_bucket{{{labels},le=\"+Inf\"}} {}\npolymarket_umr_agent_market_tokens_count{{{labels}}} {}\npolymarket_umr_agent_market_tokens_sum{{{labels}}} {}", a.count, a.count, a.sum);
+        }
         for (stage, h) in p.histograms {
             if declared.insert("stage_duration_seconds".into()) {
                 out.push_str("# HELP polymarket_umr_stage_duration_seconds UMR stage latency in seconds.\n# TYPE polymarket_umr_stage_duration_seconds histogram\n");
@@ -1459,6 +1645,72 @@ pub fn prometheus_metrics() -> String {
 #[cfg(test)]
 mod router_tests {
     use super::*;
+    #[test]
+    fn agent_usage_counts_retries_once_and_excludes_unknown_markets() {
+        use super::super::agent::{TokenUsage, UsageReport};
+        let id = Uuid::new_v4();
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        update(id, |p| {
+            let mut a = AgentUsage::default();
+            a.attempts.insert(first, None);
+            a.attempts.insert(second, None);
+            p.agent_usage = Some(a);
+        });
+        let report = UsageReport::Reported(TokenUsage {
+            input: 100,
+            output: 20,
+            total: 120,
+            cached_input: None,
+            reasoning: Some(10),
+        });
+        agent_usage_report(id, first, &report);
+        agent_usage_report(id, first, &report);
+        agent_usage_report(id, second, &report);
+        agent_usage_finish(id);
+        agent_usage_finish(id);
+        let guard = registry().lock().unwrap();
+        let a = guard.processes[&id].agent_usage.as_ref().unwrap();
+        assert_eq!(a.tokens["total"], 240);
+        assert_eq!(a.reports["reported"], 2);
+        assert_eq!(a.count, 1);
+        assert_eq!(a.sum, 240);
+        assert_eq!(a.last_tokens["total"], 240);
+        assert!(!a.last_tokens.contains_key("cached_input"));
+        drop(guard);
+        let metrics = prometheus_metrics();
+        assert!(metrics.contains(&format!(
+            "polymarket_umr_agent_tokens_total{{process_id=\"{id}\",kind=\"total\"}} 240"
+        )));
+        assert!(metrics.contains(&format!(
+            "polymarket_umr_agent_market_tokens_count{{process_id=\"{id}\"}} 1"
+        )));
+        update(id, |p| {
+            let a = p.agent_usage.as_mut().unwrap();
+            a.attempts.clear();
+            a.attempts.insert(Uuid::new_v4(), None);
+            a.finalized = false;
+        });
+        agent_usage_finish(id);
+        let guard = registry().lock().unwrap();
+        let a = guard.processes[&id].agent_usage.as_ref().unwrap();
+        assert_eq!(a.count, 1);
+        assert_eq!(a.reports["missing"], 1);
+        assert!(!a.last_complete);
+        assert!(a.last_tokens.is_empty());
+        drop(guard);
+        update(id, |p| {
+            let mut a = AgentUsage {
+                partial: true,
+                ..Default::default()
+            };
+            a.attempts.insert(first, Some(report));
+            finish_agent_market(&mut a);
+            assert_eq!(a.count, 0);
+            assert_eq!(a.markets["incomplete"], 1);
+            p.agent_usage = Some(a);
+        });
+    }
     #[test]
     fn model_policy_checks_count_once_per_inference_and_keep_models_separate() {
         let id = Uuid::new_v4();

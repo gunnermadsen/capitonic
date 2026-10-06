@@ -12,9 +12,12 @@ pub struct AgentSession {
     pending: Option<JoinHandle<EvaluationResult>>,
     completed: Option<EvaluationResult>,
     cancellation: CancellationToken,
+    usage_process: Option<uuid::Uuid>,
+    created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 impl AgentSession {
     pub fn observe_market(&mut self, market: &str) {
+        self.created_at.get_or_insert_with(chrono::Utc::now);
         if self.market != market {
             self.cancel();
             self.market = market.into();
@@ -35,6 +38,11 @@ impl AgentSession {
     }
     pub fn start(&mut self, request: EvaluationRequest) -> Result<()> {
         let provider = OpenAiProvider::new()?;
+        super::super::telemetry::agent_usage_start(
+            &request,
+            self.created_at.is_some_and(|at| at > request.window_start),
+        );
+        self.usage_process = Some(request.process_id);
         let cancellation = self.cancellation.child_token();
         self.pending = Some(tokio::spawn(async move {
             provider.evaluate(request, cancellation).await
@@ -52,12 +60,18 @@ impl AgentSession {
         self.pending.take()?.await.ok()
     }
     pub fn accept(&mut self) {
+        if let Some(id) = self.usage_process {
+            super::super::telemetry::agent_usage_finish(id);
+        }
         self.accepted = true;
     }
     pub fn defer(&mut self, result: EvaluationResult) {
         self.completed = Some(result);
     }
     pub fn cancel(&mut self) {
+        if let Some(id) = self.usage_process.take() {
+            super::super::telemetry::agent_usage_finish(id);
+        }
         self.cancellation.cancel();
         self.completed = None;
         if let Some(task) = self.pending.take() {
@@ -119,6 +133,7 @@ mod tests {
             inference_seconds: 1.0,
             response_id: None,
             model: None,
+            usage: super::super::UsageReport::Missing,
             prediction: Err(ProviderFailure::Transport),
         };
         session.defer(result.clone());

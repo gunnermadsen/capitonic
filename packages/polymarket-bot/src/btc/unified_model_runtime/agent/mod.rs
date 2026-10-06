@@ -3,6 +3,7 @@ pub mod auth;
 mod context;
 mod provider;
 mod session;
+mod usage;
 use anyhow::{ensure, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -13,6 +14,7 @@ use serde_json::Value;
 pub use session::AgentSession;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
+pub use usage::{TokenUsage, UsageReport};
 use uuid::Uuid;
 
 pub const BRIDGE_VERSION: &str = "capitonic-umr-async-evaluation-v1";
@@ -172,6 +174,7 @@ pub struct EvaluationResult {
     pub inference_seconds: f64,
     pub response_id: Option<String>,
     pub model: Option<String>,
+    pub usage: UsageReport,
     pub prediction: Result<Prediction, ProviderFailure>,
 }
 

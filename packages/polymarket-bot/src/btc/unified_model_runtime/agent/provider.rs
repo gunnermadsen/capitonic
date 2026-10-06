@@ -17,6 +17,7 @@ impl OpenAiProvider {
     async fn infer(
         &self,
         request: &EvaluationRequest,
+        usage: &mut UsageReport,
     ) -> Result<(Prediction, String, String), ProviderFailure> {
         let token = auth::access_token(&self.client)
             .await
@@ -67,8 +68,12 @@ impl OpenAiProvider {
                     Some("response.output_text.delta") => {
                         append_text_delta(&mut streamed_text, &event)?;
                     }
-                    Some("response.completed") => return parse_completed(&event, &streamed_text),
+                    Some("response.completed") => {
+                        *usage = UsageReport::from_event(&event);
+                        return parse_completed(&event, &streamed_text);
+                    }
                     Some("response.failed") => {
+                        *usage = UsageReport::from_event(&event);
                         let code = event
                             .pointer("/response/error/code")
                             .and_then(Value::as_str)
@@ -80,7 +85,8 @@ impl OpenAiProvider {
                         });
                     }
                     Some("response.incomplete" | "error") => {
-                        return Err(ProviderFailure::InvalidResponse)
+                        *usage = UsageReport::from_event(&event);
+                        return Err(ProviderFailure::InvalidResponse);
                     }
                     _ => {}
                 }
@@ -159,10 +165,12 @@ impl AsyncDecisionProvider for OpenAiProvider {
     ) -> EvaluationResult {
         let started = Instant::now();
         let remaining = (request.deadline - Utc::now()).to_std().unwrap_or_default();
+        let mut usage = UsageReport::Missing;
         let result = tokio::select! {
             _ = cancellation.cancelled() => Err(ProviderFailure::Cancelled),
-            result = tokio::time::timeout(remaining, self.infer(&request)) => result.unwrap_or(Err(ProviderFailure::Timeout)),
+            result = tokio::time::timeout(remaining, self.infer(&request, &mut usage)) => result.unwrap_or(Err(ProviderFailure::Timeout)),
         };
+        super::super::telemetry::agent_usage_report(request.process_id, request.request_id, &usage);
         let (prediction, response_id, model) = match result {
             Ok((p, id, model)) => (Ok(p), Some(id), Some(model)),
             Err(error) => (Err(error), None, None),
@@ -173,6 +181,7 @@ impl AsyncDecisionProvider for OpenAiProvider {
             inference_seconds: started.elapsed().as_secs_f64(),
             response_id,
             model,
+            usage,
             prediction,
         }
     }
