@@ -1,6 +1,54 @@
 use crate::btc::{strategy::BtcFeatureSnapshot, types::RealtimeState};
 use serde_json::{json, Value};
 
+/// Settlement evidence is optional context, never a new execution/readiness gate.
+pub fn build_settlement_context(
+    state: &RealtimeState,
+    snapshot: &BtcFeatureSnapshot,
+    sources: &[crate::market_data_stream::SourceSelector],
+) -> Value {
+    let at = snapshot.observed_at;
+    let selected = sources
+        .iter()
+        .find(|source| source.key == crate::market_data_stream::PRODUCT_TWAP);
+    let causal = |point: &&crate::btc::types::ChainlinkTwap60Point| {
+        selected.is_some()
+            && point.price > rust_decimal::Decimal::ZERO
+            && point.source_timestamp <= at
+            && point.available_at <= at
+    };
+    let opening = state
+        .chainlink_twap_60
+        .iter()
+        .filter(causal)
+        .find(|point| point.source_timestamp == snapshot.window_start);
+    let current = state
+        .chainlink_twap_60
+        .iter()
+        .filter(causal)
+        .filter(|point| {
+            selected.is_some_and(|source| {
+                (at - point.source_timestamp).num_milliseconds()
+                    <= source.effective_maximum_age_ms() as i64
+            })
+        })
+        .max_by_key(|point| point.source_timestamp);
+    let observation = |point: &crate::btc::types::ChainlinkTwap60Point| json!({"price":point.price,"source_timestamp":point.source_timestamp,"available_at":point.available_at});
+    let mut context = build_context(state, snapshot, sources);
+    context["version"] = json!(super::SETTLEMENT_CONTEXT_VERSION);
+    context["resolution_rule"] = json!(super::SETTLEMENT_RULE);
+    context["twap_context"] = json!({"source":crate::market_data_stream::PRODUCT_TWAP,"window_seconds":60,
+        "opening":opening.map(observation),"current":current.map(observation)});
+    context["twap_context_status"] = json!(if selected.is_none() {
+        "not_selected"
+    } else if opening.is_none() || current.is_none() {
+        "incomplete_unknown_observations"
+    } else {
+        "available"
+    });
+    context
+}
+
 /// Read existing bounded repositories at the immutable observation boundary.
 /// No historical SSD access, additional subscriptions or consumer-owned caches.
 pub fn build_context(

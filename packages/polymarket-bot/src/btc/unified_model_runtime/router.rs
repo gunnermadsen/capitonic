@@ -208,7 +208,8 @@ impl RouterDefinition {
             } = &mut member.selection
             {
                 if profile_sha256.is_empty() {
-                    *profile_sha256 = super::agent::hash(&super::agent::profile())?;
+                    *profile_sha256 =
+                        super::agent::hash(&super::agent::profile_for_key(profile_key)?)?;
                 }
                 super::agent::AgentSelection {
                     profile_key: profile_key.clone(),
@@ -277,7 +278,11 @@ impl RouterDefinition {
                     let mut strategy = base.clone();
                     strategy.decision_strategy = Some(member.selection.compiled());
                     strategy.strategy_version = super::agent::STRATEGY_VERSION.into();
-                    strategy.feature_schema_version = super::agent::CONTEXT_VERSION.into();
+                    strategy.feature_schema_version = strategy
+                        .agent_selection()
+                        .context("missing agent selection")?
+                        .context_version()
+                        .into();
                     strategy.unified_model = None;
                     strategy.min_seconds_after_open = base.min_seconds_after_open.max(45);
                     strategy.min_seconds_before_close = base.min_seconds_before_close.max(180);

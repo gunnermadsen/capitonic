@@ -1401,7 +1401,11 @@ impl BtcProcessRunner {
                     .context("agent sources missing from frozen configuration")?
                     .clone(),
             )?;
-            let context = agent::build_context(&observation.state, &snapshot, &sources);
+            let context = if selection.profile_key == agent::SETTLEMENT_PROFILE_KEY {
+                agent::build_settlement_context(&observation.state, &snapshot, &sources)
+            } else {
+                agent::build_context(&observation.state, &snapshot, &sources)
+            };
             let request = agent::EvaluationRequest {
                 version: agent::BRIDGE_VERSION.into(),
                 request_id: Uuid::new_v4(),

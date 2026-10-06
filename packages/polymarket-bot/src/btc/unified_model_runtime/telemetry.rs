@@ -307,7 +307,7 @@ pub fn register(
         p.config_hash = config.into();
         p.mode = mode.into();
         p.enabled = true;
-        if selection.is_some_and(|s| s.model_key == super::agent::PROFILE_KEY) {
+        if selection.is_some_and(|s| super::agent::profile_for_key(&s.model_key).is_ok()) {
             let usage = p.agent_usage.get_or_insert_with(AgentUsage::default);
             for kind in ["input", "output", "total"] {
                 usage.tokens.entry(kind).or_default();

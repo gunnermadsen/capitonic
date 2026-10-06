@@ -1468,7 +1468,7 @@ fn validate_config(config: &BtcStrategyConfig) -> Result<(), BtcRejectReason> {
     let strategy_contract_valid = if let Some(selection) = config.agent_selection() {
         selection.validate().is_ok()
             && config.strategy_version == super::unified_model_runtime::agent::STRATEGY_VERSION
-            && config.feature_schema_version == super::unified_model_runtime::agent::CONTEXT_VERSION
+            && config.feature_schema_version == selection.context_version()
             && config.unified_model.is_none()
             && config.min_seconds_after_open >= 45
             && 300 - config.min_seconds_before_close <= 120
@@ -2312,6 +2312,28 @@ mod tests {
             decision.reject_reason
         );
         assert_eq!(decision.action, BtcDecisionAction::BuyUp);
+        let mut settlement_config = config.clone();
+        settlement_config.feature_schema_version = agent::SETTLEMENT_CONTEXT_VERSION.into();
+        settlement_config.decision_strategy = Some(BtcDecisionStrategyConfig::OpenaiAgent {
+            profile_key: agent::SETTLEMENT_PROFILE_KEY.into(),
+            profile_sha256: agent::hash(
+                &agent::profile_for_key(agent::SETTLEMENT_PROFILE_KEY).unwrap(),
+            )
+            .unwrap(),
+        });
+        settlement_config.validate().unwrap();
+        let mut settlement_data = data.clone();
+        settlement_data.feature_schema_version = agent::SETTLEMENT_CONTEXT_VERSION.into();
+        let settlement_decision = evaluate_agent_prediction(
+            &settlement_config,
+            &settlement_data,
+            0.6,
+            BtcDirectionalModelEntryPolicy::ExecuteDirectionalPrediction,
+        )
+        .unwrap();
+        let mut expected_intent = decision.approved_intent.clone().unwrap();
+        expected_intent.feature_schema_version = agent::SETTLEMENT_CONTEXT_VERSION.into();
+        assert_eq!(settlement_decision.approved_intent, Some(expected_intent));
         let intent = decision.approved_intent.as_ref().unwrap();
         let request = OrderRequest {
             client_order_id: Uuid::new_v4(),
@@ -2447,6 +2469,82 @@ mod tests {
         let context = agent::build_context(&state, &data, &sources);
         assert_eq!(
             context["polygon_oracle"]["price"],
+            serde_json::json!(dec!(100000))
+        );
+    }
+
+    #[test]
+    fn agent_settlement_context_is_optional_and_causal() {
+        use crate::btc::{
+            types::{ChainlinkTwap60Point, RealtimeState},
+            unified_model_runtime::agent,
+        };
+        use crate::market_data_stream::PRODUCT_TWAP;
+        let data = snapshot();
+        let at = data.observed_at;
+        let mut state = RealtimeState::default();
+        let sources = vec![serde_json::from_value(serde_json::json!({
+            "key": PRODUCT_TWAP, "required": false, "maximum_age_ms": 5000
+        }))
+        .unwrap()];
+        let missing = agent::build_settlement_context(&state, &data, &sources);
+        assert!(missing["twap_context"]["opening"].is_null());
+        assert!(missing["twap_context"]["current"].is_null());
+        assert_eq!(
+            missing["twap_context_status"],
+            "incomplete_unknown_observations"
+        );
+        for (source_timestamp, available_at, price) in [
+            (
+                data.window_start,
+                data.window_start + Duration::seconds(1),
+                dec!(100000),
+            ),
+            (at - Duration::seconds(2), at, dec!(100010)),
+            (
+                at - Duration::seconds(1),
+                at + Duration::milliseconds(1),
+                dec!(200000),
+            ),
+            (at + Duration::milliseconds(1), at, dec!(300000)),
+        ] {
+            state.chainlink_twap_60.observe(ChainlinkTwap60Point {
+                price,
+                source_timestamp,
+                available_at,
+            });
+        }
+        let context = agent::build_settlement_context(&state, &data, &sources);
+        assert_eq!(context["twap_context_status"], "available");
+        assert_eq!(
+            context["twap_context"]["opening"]["price"],
+            serde_json::json!(dec!(100000))
+        );
+        assert_eq!(
+            context["twap_context"]["current"]["price"],
+            serde_json::json!(dec!(100010))
+        );
+        let original = agent::build_context(&state, &data, &sources);
+        for key in [
+            "execution_snapshot",
+            "rtds_last_60_seconds",
+            "binance_closed_one_second_candles",
+            "polygon_oracle",
+            "binance_futures_open_interest",
+        ] {
+            assert_eq!(context[key], original[key]);
+        }
+        assert!(original["twap_context"].is_null());
+        let unselected = agent::build_settlement_context(&state, &data, &[]);
+        assert_eq!(unselected["twap_context_status"], "not_selected");
+        assert!(unselected["twap_context"]["opening"].is_null());
+        assert!(unselected["twap_context"]["current"].is_null());
+        let mut later = data;
+        later.observed_at += Duration::seconds(10);
+        let stale = agent::build_settlement_context(&state, &later, &sources);
+        assert!(stale["twap_context"]["current"].is_null());
+        assert_eq!(
+            stale["twap_context"]["opening"]["price"],
             serde_json::json!(dec!(100000))
         );
     }

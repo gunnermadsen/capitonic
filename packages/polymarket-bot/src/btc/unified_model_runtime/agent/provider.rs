@@ -19,12 +19,14 @@ impl OpenAiProvider {
         request: &EvaluationRequest,
         usage: &mut UsageReport,
     ) -> Result<(Prediction, String, String), ProviderFailure> {
+        let selected = profile_for_key(&request.selection.profile_key)
+            .map_err(|_| ProviderFailure::InvalidResponse)?;
         let token = auth::access_token(&self.client)
             .await
             .map_err(|_| ProviderFailure::Authentication)?;
         let response = self.client.post("https://api.openai.com/v1/responses").bearer_auth(token)
             .json(&serde_json::json!({
-                "model": profile().model, "instructions": profile().instructions,
+                "model": selected.model, "instructions": selected.instructions,
                 "store": false, "stream": true,
                 "input": [{"role":"user", "content":serde_json::to_string(&request.context).map_err(|_| ProviderFailure::InvalidResponse)?}],
                 "text": {"format": {"type":"json_schema", "name":"btc_prediction", "strict":true,
