@@ -3923,7 +3923,11 @@ fn decision_edge_projection(decision: &BtcDecision) -> Result<BtcDecisionEdgePro
                 || (*entry_policy == BtcDirectionalModelEntryPolicy::RequirePositiveDirectEdge
                     && net_edge_per_share <= Decimal::ZERO)
                 || (*entry_policy == BtcDirectionalModelEntryPolicy::ExecuteDirectionalPrediction
-                    && intent.strategy_version != BTC_DIRECTIONAL_MODEL_STRATEGY_VERSION)
+                    && !matches!(
+                        intent.strategy_version.as_str(),
+                        BTC_DIRECTIONAL_MODEL_STRATEGY_VERSION
+                            | super::unified_model_runtime::agent::STRATEGY_VERSION
+                    ))
                 || gross_edge_per_share - fee_per_share != net_edge_per_share
                 || intent.expected_net_edge_per_share != net_edge_per_share
                 || intent.expected_net_edge != net_edge_per_share * edge.size
@@ -4781,6 +4785,16 @@ mod tests {
             assert_eq!(projection.gross_edge_per_share, Some(dec!(-0.03)));
             assert_eq!(projection.fee_per_share, Some(dec!(0.002)));
             assert_eq!(projection.net_edge_per_share, Some(dec!(-0.032)));
+
+            let mut agent_decision = decision.clone();
+            agent_decision
+                .approved_intent
+                .as_mut()
+                .unwrap()
+                .strategy_version =
+                super::super::unified_model_runtime::agent::STRATEGY_VERSION.to_string();
+            let agent_projection = decision_edge_projection(&agent_decision).unwrap();
+            assert_eq!(agent_projection.net_edge_per_share, Some(dec!(-0.032)));
 
             let mut default_policy = decision.clone();
             let Some(BtcStrategyPrediction::DirectionalPrediction { entry_policy, .. }) =
