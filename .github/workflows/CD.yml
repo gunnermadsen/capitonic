@@ -110,7 +110,6 @@ jobs:
     env:
       DEPLOY_COMPONENTS: ${{ needs.validate.outputs.deploy_components }}
       BASELINE_REVISION: ${{ needs.validate.outputs.baseline }}
-      PIN_REPORT: ${{ runner.temp }}/production-pin-diagnostics/report.md
       PROMETHEUS_BASIC_AUTH_USER: diagnostic
     steps:
       - uses: actions/checkout@v6
@@ -133,13 +132,15 @@ jobs:
         with:
           version: v3.18.6
       - name: Verify pins and render selected charts
+        env:
+          PIN_REPORT: ${{ runner.temp }}/production-pin-diagnostics/report.md
         run: scripts/production/validate-release-pins.sh
       - name: Preserve diagnostic output
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: production-pin-diagnostics
-          path: ${{ env.PIN_REPORT }}
+          path: ${{ runner.temp }}/production-pin-diagnostics/report.md
           if-no-files-found: warn
 
   diagnostics:
