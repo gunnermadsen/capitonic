@@ -33,13 +33,14 @@ for component in "${components[@]}"; do
   version="$(yq -r '.release.version' "$values")"
   digest="$(yq -r '.release.digest' "$values")"
   source_revision="$(yq -r '.release.sourceRevision' "$values")"
-  [[ "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+  [[ "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?$ ]]
   [[ "$image" == "192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/$component:$version" ]]
   [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
   [[ "$digest" != sha256:0000000000000000000000000000000000000000000000000000000000000000 ]]
   [[ "$source_revision" =~ ^[0-9a-f]{40}$ ]]
   [[ "$(yq -r '.appVersion' "capitonic-helm-chart/charts/$component/Chart.yaml")" == "$version" ]]
-  # CD verifies this version's immutable registry digest before invoking the host.
+  [[ "$(yq -r .environment "$values")" == production ]]
+  # CD verifies the production-rendered version's immutable registry digest before invoking the host.
 done
 
 deploy_chart() {

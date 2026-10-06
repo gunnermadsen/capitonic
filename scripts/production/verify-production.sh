@@ -20,11 +20,11 @@ unhealthy="$(kubectl -n "$NAMESPACE" get pods -o json | jq '[.items[] | select(.
 [[ "$unhealthy" == "0" ]]
 kubectl -n "$NAMESPACE" get job db-migrate -o json | jq -e '.status.succeeded == 1 and (.status.failed // 0) == 0' >/dev/null
 
-expected_bot="$(yq -r .image "$APP_DIRECTORY/capitonic-helm-chart/environments/production/polymarket-bot.yaml")"
-expected_ingester="$(yq -r .image "$APP_DIRECTORY/capitonic-helm-chart/environments/production/ingester.yaml")"
-expected_migrate="$(yq -r .image "$APP_DIRECTORY/capitonic-helm-chart/environments/production/db-migrate.yaml")"
+expected_bot="$(yq -r '.image | sub("-rc\\.[0-9]+$", "")' "$APP_DIRECTORY/capitonic-helm-chart/environments/production/polymarket-bot.yaml")"
+expected_ingester="$(yq -r '.image | sub("-rc\\.[0-9]+$", "")' "$APP_DIRECTORY/capitonic-helm-chart/environments/production/ingester.yaml")"
+expected_migrate="$(yq -r '.image | sub("-rc\\.[0-9]+$", "")' "$APP_DIRECTORY/capitonic-helm-chart/environments/production/db-migrate.yaml")"
 for image in "$expected_bot" "$expected_ingester" "$expected_migrate"; do
-  [[ "$image" =~ ^192200846560\.dkr\.ecr\.eu-west-1\.amazonaws\.com/.+@sha256:[0-9a-f]{64}$ ]]
+  [[ "$image" =~ ^192200846560\.dkr\.ecr\.eu-west-1\.amazonaws\.com/(polymarket-bot|ingester|db-migrate)(@sha256:[0-9a-f]{64}|:v[0-9]+\.[0-9]+\.[0-9]+)$ ]]
   [[ "$image" != *sha256:0000000000000000000000000000000000000000000000000000000000000000 ]]
 done
 [[ "$(kubectl -n "$NAMESPACE" get deployment polymarket-bot -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$expected_bot" ]]

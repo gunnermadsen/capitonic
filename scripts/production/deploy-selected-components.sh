@@ -19,19 +19,19 @@ selected_release_ready() {
   local component="$1" expected_image
   case "$component" in
     polymarket-bot)
-      expected_image="$(yq -r .image capitonic-helm-chart/environments/production/polymarket-bot.yaml)"
+      expected_image="$(yq -r '.image | sub("-rc\\.[0-9]+$", "")' capitonic-helm-chart/environments/production/polymarket-bot.yaml)"
       kubectl -n "$NAMESPACE" rollout status deployment/polymarket-bot --timeout=5m &&
         [[ "$(kubectl -n "$NAMESPACE" get deployment polymarket-bot -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$expected_image" ]]
       ;;
     ingester)
-      expected_image="$(yq -r .image capitonic-helm-chart/environments/production/ingester.yaml)"
+      expected_image="$(yq -r '.image | sub("-rc\\.[0-9]+$", "")' capitonic-helm-chart/environments/production/ingester.yaml)"
       kubectl -n "$NAMESPACE" rollout status deployment/ingester-master --timeout=5m &&
         kubectl -n "$NAMESPACE" rollout status deployment/ingester-worker --timeout=5m &&
         [[ "$(kubectl -n "$NAMESPACE" get deployment ingester-master -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$expected_image" ]] &&
         [[ "$(kubectl -n "$NAMESPACE" get deployment ingester-worker -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$expected_image" ]]
       ;;
     db-migrate)
-      expected_image="$(yq -r .image capitonic-helm-chart/environments/production/db-migrate.yaml)"
+      expected_image="$(yq -r '.image | sub("-rc\\.[0-9]+$", "")' capitonic-helm-chart/environments/production/db-migrate.yaml)"
       kubectl -n "$NAMESPACE" wait --for=condition=complete job/db-migrate --timeout=5m &&
         [[ "$(kubectl -n "$NAMESPACE" get job db-migrate -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$expected_image" ]]
       ;;

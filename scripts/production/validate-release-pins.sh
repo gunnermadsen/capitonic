@@ -22,20 +22,29 @@ for component in ingester polymarket-bot db-migrate; do
   values="capitonic-helm-chart/environments/production/$component.yaml"
   chart="capitonic-helm-chart/charts/$component/Chart.yaml"
   version="$(yq -r '.release.version' "$values")"
+  final_version="${version%-rc.*}"
   expected_digest="$(yq -r '.release.digest' "$values")"
   source_revision="$(yq -r '.release.sourceRevision' "$values")"
   image="$(yq -r '.image' "$values")"
   chart_version="$(yq -r '.version' "$chart")"
   app_version="$(yq -r '.appVersion' "$chart")"
-  [[ "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
-    echo "Invalid production version for $component; test and RC tags are not final pins." >&2; exit 1;
+  [[ "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?$ ]] || {
+    echo "Invalid release version for $component." >&2; exit 1;
   }
   [[ "$chart_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
   [[ "$app_version" == "$version" ]]
   [[ "$image" == "$ECR_REGISTRY/capitonic/$component:$version" ]]
   [[ "$expected_digest" =~ ^sha256:[0-9a-f]{64}$ && "$source_revision" =~ ^[0-9a-f]{40}$ ]]
+  [[ "$(yq -r '.environment' "$values")" == production ]]
+  selected=false
+  rc_version=''
+  if [[ ",${DEPLOY_COMPONENTS:-}," == *,$component,* ]]; then
+    selected=true
+    rc_version="$(jq -r --arg component "$component" '.components[$component].rcVersion' infra/production/release.json)"
+  fi
   qualified=false
   while IFS= read -r tag; do
+    [[ "$selected" != true || "$tag" == "rc/$component/$rc_version" ]] || continue
     [[ "$(git cat-file -t "refs/tags/$tag")" == tag ]] || continue
     checkpoint="$(git rev-list -n1 "$tag")"
     git merge-base --is-ancestor "$checkpoint" "$revision" || continue
@@ -46,11 +55,11 @@ for component in ingester polymarket-bot db-migrate; do
     [[ "$(git cat-file -t "refs/tags/$golden_tag" 2>/dev/null)" == tag ]] || continue
     qualified=true
     break
-  done < <(git tag --list "rc/$component/$version-rc.*" --sort=-version:refname)
+  done < <(git tag --list "rc/$component/$final_version-rc.*" --sort=-version:refname)
   [[ "$qualified" == true ]] || { echo "No accepted RC provenance for $component:$version." >&2; exit 1; }
   actual_digest="$expected_digest"
-  if [[ "$task" != pins ]]; then
-  actual_digest="$(scripts/production/verify-ecr-arm64-image.sh "capitonic/$component" "$version" "$source_revision")"
+  if [[ "$task" != pins && "$selected" != true ]]; then
+  actual_digest="$(scripts/production/verify-ecr-arm64-image.sh "capitonic/$component" "$final_version" "$source_revision")"
   [[ "$actual_digest" == "$expected_digest" ]] || { echo "Registry digest mismatch for $component:$version." >&2; exit 1; }
   fi
   if [[ "$component" == ingester ]]; then
@@ -68,6 +77,14 @@ for component in ingester polymarket-bot db-migrate; do
     migration_inputs="$(git ls-tree -r --name-only "$source_revision" -- packages/db-migrate/src/migrations packages/db-migrate/src/fresh-install | wc -l | tr -d ' ')"
   fi
 done
+if [[ "$task" != pins ]]; then
+  promotion_components=''
+  for component in ingester polymarket-bot db-migrate; do
+    [[ ",${DEPLOY_COMPONENTS:-}," != *,$component,* ]] || promotion_components+="${promotion_components:+,}$component"
+  done
+  DEPLOYMENT_SCOPE=selected PROMOTE_COMPONENTS="$promotion_components" \
+    scripts/production/promote-production-images.sh --check >> "$report"
+fi
 fi
 
 if [[ "$task" == all || "$task" == charts ]]; then
@@ -88,7 +105,7 @@ for component in "${selected[@]}"; do
   rendered="$(mktemp)"
   helm template "$component" "$chart" -f "$values" "${options[@]}" > "$rendered"
   if [[ "$component" == ingester || "$component" == polymarket-bot || "$component" == db-migrate ]]; then
-    wanted="$(yq -r '.image' "$values")"
+    wanted="$(yq -r '.image | sub("-rc\\.[0-9]+$", "")' "$values")"
     [[ "$(yq -r -N '.. | select(has("image")) | .image' "$rendered" | sort -u)" == "$wanted" ]]
   fi
   rm -f "$rendered"

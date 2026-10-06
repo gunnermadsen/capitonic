@@ -32,7 +32,7 @@ spec:
         runAsGroup: 1000
       containers:
         - name: db-migrate
-          image: {{ .Values.image | quote }}
+          image: {{ include "db-migrate.image" . | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
 {{- with .Values.command }}
           command: {{ toJson . }}
