@@ -294,6 +294,7 @@ done
 - Do not add high-frequency observability that competes with socket intake. Preserve explicit bounded-channel overflow, continuity-gap recording, fresh-epoch recovery, and automatic restart behavior.
 
 ## Observability deployment provenance
+- Production CD records observability deployment provenance in its GitHub Actions summary and retained workflow logs/artifacts; it must not create or push Git tags or commits. The tagging rules below apply to provisioning outside production CD.
 - After provisioning Grafana, Prometheus, Loki, or Alloy configuration, create one annotated tag on the exact source commit. For the local development environment, use `provisioned/observability/<YYYYMMDDTHHMMSSZ>`; development is implicit in that name. For other environments, use `provisioned/observability/<environment>/<YYYYMMDDTHHMMSSZ>`.
 - Record the target environment, provisioning timestamp, originating branch, deployment result, configuration hash, and every component and configuration path provisioned.
 - Create one tag per provisioning event, including when multiple observability components are deployed together. Do not create separate component tags for the same event.

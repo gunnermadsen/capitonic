@@ -14,6 +14,7 @@ on:
 permissions:
   actions: read
   contents: read
+  pull-requests: read
   id-token: write
 
 concurrency:
@@ -98,16 +99,59 @@ jobs:
             echo "promote_components=$PROMOTE_COMPONENTS"
           } >> "$GITHUB_OUTPUT"
 
-  pins:
-    name: Validate committed release pins
+  admission:
+    name: Verify release authorization
+    needs: validate
+    runs-on: ubuntu-latest
+    outputs:
+      live: ${{ steps.admission.outputs.live }}
+    steps:
+      - name: Admit approved merged release or planning only
+        id: admission
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_APPROVER: gunnermadsen
+        run: |
+          set -euo pipefail
+          echo 'live=false' >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_EVENT_NAME" != push || "$GITHUB_REF" != refs/heads/production || "$GITHUB_RUN_ATTEMPT" != 1 || "$GITHUB_WORKFLOW_REF" != "$GITHUB_REPOSITORY/.github/workflows/CD.yml@refs/heads/production" ]]; then
+            echo 'Planning only: manual calls, internal calls and reruns cannot authorize deployment.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/production" --jq .object.sha)" == "$GITHUB_SHA" ]]
+          prs="$(gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" | jq -s 'add')"
+          release="$(jq -ce --arg revision "$GITHUB_SHA" --arg approver "$RELEASE_APPROVER" --arg repository "$GITHUB_REPOSITORY" '
+            [.[] | select(.merged_at != null and .merge_commit_sha == $revision and
+              .base.ref == "production" and .head.ref == "development" and
+              .head.repo.full_name == $repository)] |
+            if length == 1 then .[0] else error("Require exactly one user-merged development release PR") end
+          ' <<< "$prs")"
+          number="$(jq -r .number <<< "$release")"
+          release="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number")"
+          jq -e --arg approver "$RELEASE_APPROVER" --arg revision "$GITHUB_SHA" '
+            .merged == true and .merged_by.login == $approver and .merge_commit_sha == $revision
+          ' <<< "$release" >/dev/null
+          head="$(jq -r .head.sha <<< "$release")"
+          merged_at="$(jq -r .merged_at <<< "$release")"
+          reviews="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$number/reviews" | jq -s 'add')"
+          jq -e --arg approver "$RELEASE_APPROVER" --arg head "$head" --arg merged_at "$merged_at" '
+            [.[] | select(.user.login == $approver and .state != "COMMENTED" and .state != "PENDING")] |
+            sort_by(.id) | last | .state == "APPROVED" and .commit_id == $head and .submitted_at <= $merged_at
+          ' <<< "$reviews" >/dev/null
+          echo 'live=true' >> "$GITHUB_OUTPUT"
+          echo "Authorized release PR #$number; exact merged revision $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"
+
+  checks:
+    name: Validate release ${{ matrix.task }}
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    outputs:
-      deployment_scope: ${{ needs.validate.outputs.deployment_scope }}
-      deploy_components: ${{ needs.validate.outputs.deploy_components }}
-      promote_components: ${{ needs.validate.outputs.promote_components }}
+    strategy:
+      fail-fast: false
+      matrix:
+        task: [pins, images, charts]
     env:
+      VALIDATION_TASK: ${{ matrix.task }}
       DEPLOY_COMPONENTS: ${{ needs.validate.outputs.deploy_components }}
       BASELINE_REVISION: ${{ needs.validate.outputs.baseline }}
       PROMETHEUS_BASIC_AUTH_USER: diagnostic
@@ -116,6 +160,7 @@ jobs:
         with:
           fetch-depth: 0
       - uses: aws-actions/configure-aws-credentials@v6
+        if: matrix.task == 'images'
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -129,57 +174,74 @@ jobs:
           echo "$expected  /tmp/yq" | sha256sum -c -
           sudo install -m 0755 /tmp/yq /usr/local/bin/yq
       - uses: azure/setup-helm@v4
+        if: matrix.task == 'charts'
         with:
           version: v3.18.6
-      - name: Verify pins and render selected charts
+      - name: Validate committed ${{ matrix.task }}
         env:
-          PIN_REPORT: ${{ runner.temp }}/production-pin-diagnostics/report.md
+          PIN_REPORT: ${{ runner.temp }}/production-pin-diagnostics/${{ matrix.task }}.md
         run: scripts/production/validate-release-pins.sh
       - name: Preserve diagnostic output
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: production-pin-diagnostics
-          path: ${{ runner.temp }}/production-pin-diagnostics/report.md
+          name: production-pin-diagnostics-${{ matrix.task }}
+          path: ${{ runner.temp }}/production-pin-diagnostics/${{ matrix.task }}.md
           if-no-files-found: warn
 
   diagnostics:
-    name: Log release diagnostics
-    needs: pins
+    name: Report deployment plan
+    needs: [validate, admission, checks]
     if: always()
     runs-on: ubuntu-latest
-    outputs:
-      deployment_scope: ${{ needs.pins.outputs.deployment_scope }}
-      deploy_components: ${{ needs.pins.outputs.deploy_components }}
-      promote_components: ${{ needs.pins.outputs.promote_components }}
     steps:
       - uses: actions/download-artifact@v4
         continue-on-error: true
         with:
-          name: production-pin-diagnostics
+          pattern: production-pin-diagnostics-*
+          merge-multiple: true
           path: ${{ runner.temp }}/production-pin-diagnostics
-      - name: Log inspected pins and deployment boundary
+      - name: Report inspected release and planned actions
         env:
-          VALIDATION_RESULT: ${{ needs.pins.result }}
+          VALIDATION_RESULT: ${{ needs.checks.result }}
+          SCOPE_RESULT: ${{ needs.validate.result }}
+          ADMISSION_RESULT: ${{ needs.admission.result }}
+          LIVE_RELEASE: ${{ needs.admission.outputs.live }}
+          DEPLOY_COMPONENTS: ${{ needs.validate.outputs.deploy_components }}
         run: |
           set -euo pipefail
-          report="$RUNNER_TEMP/production-pin-diagnostics/report.md"
-          if [[ -f "$report" ]]; then
-            cat "$report"
-            cat "$report" >> "$GITHUB_STEP_SUMMARY"
-          fi
-          echo "Pin validation result: $VALIDATION_RESULT; production deployment skipped." | tee -a "$GITHUB_STEP_SUMMARY"
+          {
+            echo "Inspected revision: $GITHUB_SHA"
+            echo "Selected components: ${DEPLOY_COMPONENTS:-none (no-op)}"
+            for report in "$RUNNER_TEMP"/production-pin-diagnostics/*.md; do
+              [[ ! -f "$report" ]] || cat "$report"
+            done
+            if [[ "$LIVE_RELEASE" == true && -n "$DEPLOY_COMPONENTS" && "$VALIDATION_RESULT" == success && "$SCOPE_RESULT" == success && "$ADMISSION_RESULT" == success ]]; then
+              echo 'Approved live release: host checkout followed by selected-component deployment and verification.'
+            else
+              echo 'Planning only or empty/invalid release: production execution skipped.'
+            fi
+            echo 'Planned selected execution uses existing ECR pull-secret refresh, Argo reconciliation for application charts, or Helm for other selected charts. A selected migration Job may be recreated; pending migrations require their separate approval.'
+            echo 'Configuration and secret-version changes are the committed values compared with the reported baseline; no new pins are generated.'
+            echo 'Live readiness, secret availability, migration ledger, worker capacity and rollback remain UNVERIFIED by planning.'
+            echo "Validation=$VALIDATION_RESULT; scope=$SCOPE_RESULT; admission=$ADMISSION_RESULT."
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          [[ "$VALIDATION_RESULT" == success && "$SCOPE_RESULT" == success && "$ADMISSION_RESULT" == success ]]
 
   deploy:
     name: Promote, pin, deploy, and verify
-    needs: diagnostics
-    # Temporary diagnostic boundary: no entry point can enable production writes.
-    if: ${{ false }}
+    needs: [validate, admission, checks, diagnostics]
+    if: >-
+      ${{ github.event_name == 'push' && github.ref == 'refs/heads/production' &&
+          github.run_attempt == 1 &&
+          github.workflow_ref == format('{0}/.github/workflows/CD.yml@refs/heads/production', github.repository) &&
+          needs.admission.outputs.live == 'true' &&
+          needs.validate.outputs.deploy_components != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      DEPLOYMENT_SCOPE: ${{ needs.diagnostics.outputs.deployment_scope }}
-      DEPLOY_COMPONENTS: ${{ needs.diagnostics.outputs.deploy_components }}
+      DEPLOYMENT_SCOPE: selected
+      DEPLOY_COMPONENTS: ${{ needs.validate.outputs.deploy_components }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -209,35 +271,14 @@ jobs:
           checkout_payload="$(base64 -w0 scripts/production/checkout-revision.sh)"
           command="install -d -m 0700 /run/capitonic && printf '%s' '$checkout_payload' | base64 -d > /run/capitonic/checkout-revision.sh && chmod 0700 /run/capitonic/checkout-revision.sh && /run/capitonic/checkout-revision.sh $DEPLOY_REVISION && rm -f /run/capitonic/checkout-revision.sh && cd /opt/polymarket-bot && DEPLOYMENT_SCOPE=$DEPLOYMENT_SCOPE DEPLOY_COMPONENTS=$DEPLOY_COMPONENTS scripts/production/deploy-k3s.sh"
           scripts/production/run-ssm-command.sh "$INSTANCE_ID" 3300 'Deploy and verify Capitonic production' "$command"
-      - name: Record observability provisioning
+      - name: Record deployment evidence
+        if: always()
         env:
-          DEPLOY_REVISION: ${{ github.sha }}
+          DEPLOYMENT_RESULT: ${{ job.status }}
         run: |
-          set -euo pipefail
-          timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-          selected=()
-          if [[ "$DEPLOYMENT_SCOPE" == full-stack ]]; then
-            selected=(grafana prometheus loki alloy)
-          else
-            IFS=, read -ra requested <<< "$DEPLOY_COMPONENTS"
-            for component in "${requested[@]}"; do
-              case "$component" in grafana|prometheus|loki|alloy) selected+=("$component") ;; esac
-            done
-          fi
-          ((${#selected[@]})) || exit 0
-          paths=()
-          for component in "${selected[@]}"; do
-            paths+=("common/configs/$component" "capitonic-helm-chart/charts/$component" "capitonic-helm-chart/environments/production/$component.yaml")
-          done
-          config_hash="$(find "${paths[@]}" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
-          components="$(IFS=,; echo "${selected[*]}")"
-          path_list="$(IFS=';'; echo "${paths[*]}")"
-          tag="provisioned/observability/production/$timestamp"
-          git tag -a "$tag" "$DEPLOY_REVISION" -m "Target: production
-          Provisioned at: $timestamp
-          Originating ref: ${GITHUB_REF_NAME:-production}
-          Result: success
-          Configuration SHA-256: $config_hash
-          Components: $components
-          Paths: $path_list"
-          git push origin "refs/tags/$tag"
+          {
+            echo "Deployment result: $DEPLOYMENT_RESULT"
+            echo "Revision: $GITHUB_SHA"
+            echo "Components: $DEPLOY_COMPONENTS"
+            echo 'Workflow logs retain deployment and verification evidence; CD publishes no Git refs.'
+          } >> "$GITHUB_STEP_SUMMARY"
