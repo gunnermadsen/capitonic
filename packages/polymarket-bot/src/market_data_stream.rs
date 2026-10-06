@@ -140,7 +140,7 @@ impl SourceSelector {
         Ok(())
     }
 
-    fn effective_maximum_age_ms(&self) -> u64 {
+    pub(crate) fn effective_maximum_age_ms(&self) -> u64 {
         self.maximum_age_ms.unwrap_or(match self.key.as_str() {
             PRODUCT_BOOKS | PRODUCT_CHAINLINK | PRODUCT_BINANCE_1S => 10_000,
             PRODUCT_BINANCE_OPEN_INTEREST => 360_000,

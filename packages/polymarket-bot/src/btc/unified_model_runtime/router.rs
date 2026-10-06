@@ -62,6 +62,11 @@ pub struct Member {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Selection {
+    OpenaiAgent {
+        profile_key: String,
+        #[serde(default)]
+        profile_sha256: String,
+    },
     BtcDirectionalModel {
         model_key: String,
         #[serde(default)]
@@ -80,6 +85,14 @@ pub enum Selection {
 impl Selection {
     pub fn identity(&self) -> RuntimeModelSelection {
         match self {
+            Self::OpenaiAgent {
+                profile_key,
+                profile_sha256,
+            } => super::agent::AgentSelection {
+                profile_key: profile_key.clone(),
+                profile_sha256: profile_sha256.clone(),
+            }
+            .identity(),
             Self::BtcDirectionalModel {
                 model_key,
                 artifact_sha256,
@@ -98,6 +111,7 @@ impl Selection {
     }
     fn pin(&mut self, identity: RuntimeModelSelection) {
         match self {
+            Self::OpenaiAgent { profile_sha256, .. } => *profile_sha256 = identity.artifact_sha256,
             Self::BtcDirectionalModel {
                 artifact_sha256,
                 feature_schema_sha256,
@@ -120,6 +134,13 @@ impl Selection {
             feature_schema_sha256,
         } = self.identity();
         match self {
+            Self::OpenaiAgent {
+                profile_key,
+                profile_sha256,
+            } => BtcDecisionStrategyConfig::OpenaiAgent {
+                profile_key: profile_key.clone(),
+                profile_sha256: profile_sha256.clone(),
+            },
             Self::BtcDirectionalModel { .. } => BtcDecisionStrategyConfig::BtcDirectionalModel {
                 model_key,
                 artifact_sha256,
@@ -169,6 +190,9 @@ impl RouterDefinition {
     pub fn resolve_pins(&mut self) -> Result<()> {
         self.validate()?;
         let needs_catalog = self.models.iter().any(|m| {
+            if matches!(m.selection, Selection::OpenaiAgent { .. }) {
+                return false;
+            }
             let s = m.selection.identity();
             s.artifact_sha256.is_empty() && s.feature_schema_sha256.is_empty()
         });
@@ -178,6 +202,21 @@ impl RouterDefinition {
             Vec::new()
         };
         for member in &mut self.models {
+            if let Selection::OpenaiAgent {
+                profile_key,
+                profile_sha256,
+            } = &mut member.selection
+            {
+                if profile_sha256.is_empty() {
+                    *profile_sha256 = super::agent::hash(&super::agent::profile())?;
+                }
+                super::agent::AgentSelection {
+                    profile_key: profile_key.clone(),
+                    profile_sha256: profile_sha256.clone(),
+                }
+                .validate()?;
+                continue;
+            }
             let identity = member.selection.identity();
             ensure!(
                 identity.artifact_sha256.is_empty() == identity.feature_schema_sha256.is_empty(),
@@ -215,6 +254,36 @@ impl RouterDefinition {
         self.models
             .iter()
             .map(|member| {
+                if let Selection::OpenaiAgent {
+                    profile_key,
+                    profile_sha256,
+                } = &member.selection
+                {
+                    ensure!(
+                        self.models.len() == 1,
+                        "agent router currently requires exactly one member"
+                    );
+                    super::agent::AgentSelection {
+                        profile_key: profile_key.clone(),
+                        profile_sha256: profile_sha256.clone(),
+                    }
+                    .validate()?;
+                    for product in super::agent::REQUIRED_PRODUCTS {
+                        ensure!(
+                            source_keys.contains(product),
+                            "agent requires process source {product}"
+                        );
+                    }
+                    let mut strategy = base.clone();
+                    strategy.decision_strategy = Some(member.selection.compiled());
+                    strategy.strategy_version = super::agent::STRATEGY_VERSION.into();
+                    strategy.feature_schema_version = super::agent::CONTEXT_VERSION.into();
+                    strategy.unified_model = None;
+                    strategy.min_seconds_after_open = base.min_seconds_after_open.max(45);
+                    strategy.min_seconds_before_close = base.min_seconds_before_close.max(180);
+                    strategy.validate()?;
+                    return Ok((member.member_id.clone(), strategy, member.entry_order_type));
+                }
                 let selection = member.selection.identity();
                 ensure!(
                     !selection.artifact_sha256.is_empty()

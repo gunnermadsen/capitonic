@@ -2759,6 +2759,19 @@ impl BtcRepository {
             .context("failed to check existing BTC process entry")
     }
 
+    /// Rehydrate the first valid async prediction through the existing decision ledger.
+    pub async fn process_has_agent_prediction(
+        &self,
+        process_id: Uuid,
+        market_id: &str,
+        window_start: DateTime<Utc>,
+    ) -> Result<bool> {
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM polymarket.btc_strategy_decisions WHERE process_id=$1 AND market_id=$2 AND strategy_version=$3 AND decision_at >= $4 AND decision_at < $4 + interval '120 seconds' AND metadata #> '{agent_evaluation,prediction,Ok}' IS NOT NULL)")
+            .bind(process_id).bind(market_id).bind(super::unified_model_runtime::agent::STRATEGY_VERSION)
+            .bind(window_start)
+            .fetch_one(&self.pool).await.context("failed to restore agent prediction ownership")
+    }
+
     pub async fn load_resolved_loss_regime_candidates(
         &self,
         process_id: Uuid,
@@ -2960,9 +2973,19 @@ impl BtcRepository {
             process_id,
             decision.feature_snapshot_id,
         ) {
+            if let Some(evidence) = record
+                .admission
+                .as_ref()
+                .and_then(|value| value.get("agent_evaluation"))
+            {
+                metadata["agent_evaluation"] = evidence.clone();
+            }
             metadata["model_evaluation"] = serde_json::to_value(record)?;
         }
         if let Some(entry_admission_evidence) = entry_admission_evidence {
+            if let Some(evidence) = entry_admission_evidence.get("agent_evaluation") {
+                metadata["agent_evaluation"] = evidence.clone();
+            }
             metadata
                 .as_object_mut()
                 .context("serialized BTC decision metadata must be an object")?

@@ -16,3 +16,8 @@ resources:
 externalSecrets:
   enabled: false
 credentialRevisions: {}
+openaiAgent:
+  enabled: false
+  secretName: polymarket-openai-auth
+  storageSize: 64Mi
+  storageClass: local-path

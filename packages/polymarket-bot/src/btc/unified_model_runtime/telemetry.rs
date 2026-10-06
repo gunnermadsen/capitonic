@@ -188,6 +188,25 @@ pub fn register(
         p.config_hash = config.into();
         p.mode = mode.into();
         p.enabled = true;
+        if selection.is_some_and(|s| s.model_key == super::agent::PROFILE_KEY) {
+            for reason in [
+                "started",
+                "completed",
+                "authentication",
+                "capacity",
+                "transport",
+                "invalid_response",
+                "timeout",
+                "cancelled",
+                "superseded",
+            ] {
+                p.counters
+                    .entry(("agent_requests", reason.into()))
+                    .or_default();
+            }
+            p.gauges.entry("agent_pending").or_default();
+            p.gauges.entry("agent_decision_second").or_default();
+        }
         for (metric, reasons) in [
             ("opportunities", &["scheduled"][..]),
             (

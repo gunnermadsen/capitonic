@@ -1,6 +1,6 @@
 # OpenAI Agent Paper Trading
 
-Status: frozen implementation scope. Authentication qualification passed on 2026-10-01; trading-runtime implementation has not started.
+Status: implementation in `feature/umr-openai-agent`; authentication qualification passed on 2026-10-01. Runtime acceptance requires fresh installation authorization and an actual paper order/fill through the existing harness.
 
 ## Objective
 
@@ -41,7 +41,13 @@ No database migration or administrative database mutation is expected. Agent evi
 
 ## Deployment and release
 
-Implementation is isolated on `feature/openai-agent-paper-trading` in the `openai-agent-paper-trading` worktree. Runtime deployment changes are limited to the Polymarket bot Helm chart. Docker Compose is outside scope. Image, application, chart, and Git provenance are created only through the repository's authorized golden image workflow.
+Implementation is isolated on `feature/umr-openai-agent` in the `openai-agent-paper-trading` worktree. Bot SemVer base is `3.3.0`; local CI derives this from the package version without modifying production release pins, and local CD pins the exact built candidate and embedded revision. Runtime changes use the bot and Grafana owning charts. Docker Compose and database migrations are outside scope. Feature verification deployment does not confer golden status or authorize integration merging or production promotion.
+
+The v5 router selects `openai_agent` with `profile_key: btc-5m-openai-agent-v1`; definition writes resolve its immutable `profile_sha256`. Required sources are market contracts, orderbooks, resolutions, RTDS Chainlink and Binance one-second OHLCV. Polygon Chainlink oracle and Binance futures open interest are optional causal context. TWAP is not an inference input: its existing runtime window is display-only. Context is bounded to available RTDS observations and closed Binance candles over the preceding 60 seconds, plus the market/execution snapshot and optional last available oracle/open-interest observations. No SSD query or extra stream subscription is created.
+
+Installation bootstrap uses the maintained `openai-agent-auth` executable with `POLYMARKET_OPENAI_CREDENTIAL_PATH` pointing to the credential volume and `POLYMARKET_OPENAI_CREDENTIAL_KEY` inherited from the main runtime `.env`. It prints a loopback authorization URL for manual browser approval, validates identity and scopes, checks the pinned model and atomically saves encrypted credentials. `--check` verifies credentials and model access. Helm `openaiAgent.enabled` mounts the retained credential PVC and its encryption-key Secret; credentials never enter a process definition. Runtime refresh is serialized and survives cancellation of a market request.
+
+Agent requests, provider failures, pending work, inference latency and decision timing use process-scoped UMR metrics. The existing UMR dashboard and provisioned Grafana alert rules cover authentication, capacity, sustained absence of predictions, latency and deadline violations. Paper orders, fills, settlement and P&L remain on existing instrumentation.
 
 ## Authentication qualification gate
 

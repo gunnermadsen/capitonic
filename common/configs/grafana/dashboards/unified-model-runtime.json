@@ -5349,6 +5349,23 @@
       }],
       "fieldConfig": { "defaults": { "unit": "ops", "decimals": 3 }, "overrides": [] },
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 98, "title": "Agent subscription requests", "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 379, "w": 12, "h": 8 },
+      "targets": [{ "refId": "A", "expr": "sum by(process_id,reason)(increase(polymarket_umr_agent_requests_total{process_id=~\"$process\"}[$__rate_interval]))", "legendFormat": "{{process_id}} · {{reason}}", "range": true }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] }
+    },
+    {
+      "id": 99, "title": "Agent inference latency and decision timing", "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 379, "w": 12, "h": 8 },
+      "targets": [
+        { "refId": "A", "expr": "rate(polymarket_umr_stage_duration_seconds_sum{stage=\"agent_inference\",process_id=~\"$process\"}[$__rate_interval]) / rate(polymarket_umr_stage_duration_seconds_count{stage=\"agent_inference\",process_id=~\"$process\"}[$__rate_interval])", "legendFormat": "{{process_id}} · inference latency", "range": true },
+        { "refId": "B", "expr": "polymarket_umr_agent_decision_second{process_id=~\"$process\"}", "legendFormat": "{{process_id}} · decision second", "range": true }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 1 }, "overrides": [] }
     }
   ]
 }
