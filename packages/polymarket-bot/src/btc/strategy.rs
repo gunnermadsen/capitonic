@@ -1595,6 +1595,36 @@ fn validate_snapshot(
         {
             return Err(BtcRejectReason::OutsideEntryWindow);
         }
+        // Agents use the existing reference execution guard, not ML feature evidence.
+        // Reject incomplete transient inputs before constructing an executable intent.
+        for (id, source_at, received_at, sequence) in [
+            (
+                snapshot.lineage.chainlink_open_tick_id,
+                snapshot.lineage.chainlink_open_source_timestamp,
+                snapshot.lineage.chainlink_open_received_at,
+                snapshot.lineage.chainlink_open_ingest_sequence,
+            ),
+            (
+                snapshot.lineage.chainlink_tick_id,
+                snapshot.lineage.chainlink_source_timestamp,
+                snapshot.lineage.chainlink_received_at,
+                snapshot.lineage.chainlink_ingest_sequence,
+            ),
+        ] {
+            if id.is_none_or(|id| id.is_nil()) || sequence.is_none_or(|sequence| sequence == 0) {
+                return Err(BtcRejectReason::MissingLineage);
+            }
+            let source_at = source_at.ok_or(BtcRejectReason::MissingLineage)?;
+            let received_at = received_at.ok_or(BtcRejectReason::MissingLineage)?;
+            if source_at > snapshot.observed_at || received_at > snapshot.observed_at {
+                return Err(BtcRejectReason::FutureInputTimestamp);
+            }
+        }
+        validate_age(
+            snapshot.chainlink_age_ms,
+            config.max_reference_age_ms,
+            BtcRejectReason::StaleChainlinkFeed,
+        )?;
     } else {
         let resolved = ResolvedBtcDecisionStrategy::resolve(config)?;
         let (model_key, artifact_sha256, feature_schema_sha256) = match resolved {
@@ -2267,6 +2297,8 @@ mod tests {
         data.lineage.binance_source_timestamp =
             Some(data.observed_at - Duration::milliseconds(100));
         data.lineage.binance_received_at = data.lineage.binance_source_timestamp;
+        data.lineage.chainlink_source_timestamp = data.lineage.binance_source_timestamp;
+        data.lineage.chainlink_received_at = data.lineage.chainlink_source_timestamp;
         let decision = evaluate_agent_prediction(
             &config,
             &data,
@@ -2280,6 +2312,58 @@ mod tests {
             decision.reject_reason
         );
         assert_eq!(decision.action, BtcDecisionAction::BuyUp);
+        let intent = decision.approved_intent.as_ref().unwrap();
+        let request = OrderRequest {
+            client_order_id: Uuid::new_v4(),
+            process_id: Some(data.process_id),
+            market_id: data.market_id.clone(),
+            token_id: intent.token_id.clone(),
+            side: OrderSide::Buy,
+            order_type: OrderType::Fok,
+            price: intent.limit_price,
+            size: intent.size,
+            metadata: serde_json::json!({}),
+        };
+        BtcReferenceExecutionGuard::from_snapshot(
+            &data,
+            &decision,
+            intent,
+            &request,
+            &"a".repeat(64),
+            data.fee_rate.unwrap(),
+            BtcExecutionFreshnessBounds {
+                max_reference_age_ms: config.max_reference_age_ms,
+                max_directional_feature_age_ms: None,
+            },
+        )
+        .unwrap();
+        let mut missing_reference = data.clone();
+        missing_reference.lineage.chainlink_tick_id = None;
+        let rejected = evaluate_agent_prediction(
+            &config,
+            &missing_reference,
+            0.6,
+            BtcDirectionalModelEntryPolicy::ExecuteDirectionalPrediction,
+        )
+        .unwrap();
+        assert_eq!(
+            rejected.reject_reason,
+            Some(BtcRejectReason::MissingLineage)
+        );
+        assert!(rejected.approved_intent.is_none());
+        let mut stale_reference = data.clone();
+        stale_reference.chainlink_age_ms = Some(config.max_reference_age_ms + 1);
+        assert_eq!(
+            evaluate_agent_prediction(
+                &config,
+                &stale_reference,
+                0.6,
+                BtcDirectionalModelEntryPolicy::ExecuteDirectionalPrediction,
+            )
+            .unwrap()
+            .reject_reason,
+            Some(BtcRejectReason::StaleChainlinkFeed)
+        );
         let tie = evaluate_agent_prediction(
             &config,
             &data,
