@@ -41,11 +41,15 @@ impl OpenAiProvider {
         }
         let mut stream = response.bytes_stream();
         let mut buffer = Vec::new();
+        let mut streamed_text = String::new();
+        let mut received_bytes = 0usize;
         while let Some(chunk) = stream.next().await {
-            buffer.extend_from_slice(&chunk.map_err(|_| ProviderFailure::Transport)?);
-            if buffer.len() > 1_048_576 {
+            let chunk = chunk.map_err(|_| ProviderFailure::Transport)?;
+            received_bytes += chunk.len();
+            if received_bytes > 1_048_576 {
                 return Err(ProviderFailure::InvalidResponse);
             }
+            buffer.extend_from_slice(&chunk);
             while let Some(end) = buffer.iter().position(|b| *b == b'\n') {
                 let line: Vec<u8> = buffer.drain(..=end).collect();
                 let line = std::str::from_utf8(&line)
@@ -60,7 +64,10 @@ impl OpenAiProvider {
                 let event: Value = serde_json::from_str(data.trim())
                     .map_err(|_| ProviderFailure::InvalidResponse)?;
                 match event["type"].as_str() {
-                    Some("response.completed") => return parse_completed(&event),
+                    Some("response.output_text.delta") => {
+                        append_text_delta(&mut streamed_text, &event)?;
+                    }
+                    Some("response.completed") => return parse_completed(&event, &streamed_text),
                     Some("response.failed") => {
                         let code = event
                             .pointer("/response/error/code")
@@ -82,7 +89,20 @@ impl OpenAiProvider {
         Err(ProviderFailure::InvalidResponse)
     }
 }
-fn parse_completed(event: &Value) -> Result<(Prediction, String, String), ProviderFailure> {
+fn append_text_delta(text: &mut String, event: &Value) -> Result<(), ProviderFailure> {
+    let delta = event["delta"]
+        .as_str()
+        .ok_or(ProviderFailure::InvalidResponse)?;
+    if text.len() + delta.len() > 8192 {
+        return Err(ProviderFailure::InvalidResponse);
+    }
+    text.push_str(delta);
+    Ok(())
+}
+fn parse_completed(
+    event: &Value,
+    streamed_text: &str,
+) -> Result<(Prediction, String, String), ProviderFailure> {
     let response = &event["response"];
     let output = response["output"]
         .as_array()
@@ -104,6 +124,11 @@ fn parse_completed(event: &Value) -> Result<(Prediction, String, String), Provid
                 );
             }
         }
+    }
+    // Subscription streams may omit messages from the completed response's output array.
+    // Deltas become eligible only after the provider sends response.completed.
+    if text.is_empty() {
+        text.push_str(streamed_text);
     }
     if text.len() > 8192 {
         return Err(ProviderFailure::InvalidResponse);
@@ -158,7 +183,27 @@ mod tests {
     #[test]
     fn only_completed_valid_output_becomes_prediction() {
         let event = serde_json::json!({"response":{"id":"resp_test","model":"test","output":[{"type":"message","content":[{"type":"output_text","text":"{\"direction\":\"up\",\"probability_up\":0.6,\"confidence\":0.2,\"reason_codes\":[\"momentum\"]}"}]}]}});
-        assert!(parse_completed(&event).is_ok());
-        assert!(parse_completed(&serde_json::json!({"response":{"output":[]}})).is_err());
+        assert!(parse_completed(&event, "").is_ok());
+        assert!(parse_completed(&serde_json::json!({"response":{"output":[]}}), "").is_err());
+    }
+    #[test]
+    fn completed_subscription_response_accepts_bounded_streamed_prediction() {
+        let mut text = String::new();
+        for delta in [
+            "{\"direction\":\"up\",\"probability_up\":0.6,",
+            "\"confidence\":0.2,\"reason_codes\":[\"momentum\"]}",
+        ] {
+            append_text_delta(&mut text, &serde_json::json!({"delta":delta})).unwrap();
+        }
+        let event =
+            serde_json::json!({"response":{"id":"resp_test","model":"gpt-6-astra","output":[]}});
+        assert!(parse_completed(&event, &text).is_ok());
+        assert!(parse_completed(&event, "{\"direction\":\"up\"}").is_err());
+    }
+    #[test]
+    fn streamed_prediction_rejects_missing_or_oversized_delta() {
+        let mut text = "x".repeat(8192);
+        assert!(append_text_delta(&mut text, &serde_json::json!({"delta":"x"})).is_err());
+        assert!(append_text_delta(&mut String::new(), &serde_json::json!({})).is_err());
     }
 }
