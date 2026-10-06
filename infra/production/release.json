@@ -5,7 +5,7 @@
   "components": {
     "polymarket-bot": {
       "repository": "capitonic/polymarket-bot",
-      "rcVersion": "v3.2.7-rc.1",
+      "rcVersion": "v3.3.0-rc.0",
       "sourceRevision": "f2b064d2f151d267c015bca03f6340df674ce153",
       "finalVersion": "v3.2.7",
       "digest": "sha256:be1770fc449d04826beb7698cac7e45b13982c57d746a86c7b283cda8f49a3c6"
