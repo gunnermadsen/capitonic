@@ -90,6 +90,8 @@ spec:
             failureThreshold: 3
           resources:
 {{ toYaml .Values.resources | indent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
 {{- if .Values.openaiAgent.enabled }}
           volumeMounts:
             - {name: openai-credentials, mountPath: /var/lib/polymarket/openai}
@@ -97,5 +99,3 @@ spec:
         - name: openai-credentials
           persistentVolumeClaim: {claimName: polymarket-openai-credentials}
 {{- end }}
-          securityContext:
-            allowPrivilegeEscalation: false
