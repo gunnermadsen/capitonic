@@ -68,7 +68,9 @@ Live production CD is temporarily unavailable. The existing `CD.yml` workflow re
 | 2 | Validate release scope | Preserve the detected component list, including an empty no-op. Never implicitly add bot or ingester. |
 | 3 | Validate committed release pins | Read all three application pins; verify final SemVer tags, accepted RC/golden provenance, registry digest, ARM64 architecture and embedded source revision. Validate committed secret-version declarations. Lint/render selected charts on the runner. |
 | 4 | Log release diagnostics | Publish the inspected revision, baseline, selected components, versions, chart metadata, verified image identities and unavailable live checks in logs, the job summary and `production-pin-diagnostics` artifact. Failed validation remains a workflow failure. |
-| 5 | Promote, pin, deploy, and verify | Unconditionally skipped, including host checkout, SSM, secret selection, registry promotion, Git commits/tags/pushes, deployment, provisioning and rollback. |
+| 5 | Promote, pin, deploy, and verify | Unconditionally skipped: host checkout, deployment SSM, deployment/verification/rollback and observability provenance. The historical job name remains for deployed-baseline lookup. |
+
+CD no longer selects runtime secret versions, rewrites production Helm values or chart `appVersion`, writes `release.json`, publishes ECR final tags, generates deployment-pin commits/pushes, creates Helm Git tags, or calls secret preparation through SSM. The remaining disabled deployment steps consume the inspected workflow Git revision directly. Shared helpers and other workflows remain unchanged; observability provenance remains in its existing disabled step.
 
 Production Helm values are the committed desired release inputs. `.image` uses an existing immutable version tag, `.release.version` agrees with chart `appVersion`, and `.release.digest` / `.release.sourceRevision` remain verification evidence. The image bytes and application versions do not change when an existing digest reference becomes its verified version reference. Chart `version` receives its required independent patch bump and provenance tag before workflow execution; the workflow creates neither.
 
@@ -94,13 +96,13 @@ Remove the hard stop only in a separately authorized change after the live path 
 
 Once a final version is published, its base is closed: subsequent changed images use the next SemVer base with local.0 and rc.0, after checking remote Git and registry state. Local CI reads the selected base from the release manifest, rejects changed inputs under a promoted base, and only reuses candidates from the selected base.
 
-Production CD selects the committed RC in `infra/production/release.json`, verifies its immutable Ireland ECR digest and `linux/arm64` platform, and creates the final `vMAJOR.MINOR.PATCH` ECR tag against that same manifest. It derives the final version through SemVer validation and shell parameter expansion; text substitution must not guess or strip an arbitrary suffix. CD then writes the exact digest, embedded source revision, and final version into the production Helm overlay and chart `appVersion` before deployment. An existing final tag must already identify the selected RC digest or promotion stops. Choose a new base version per component from the change: patch for a compatible fix, minor for compatible new behavior, or major for a breaking change. On that base, local candidates start at `local.0` and RCs start at `rc.0`; subsequent candidates increment within the same base version.
+Final ECR version tags and matching production chart pins must already exist in the reviewed release revision. CD validates those immutable identities rather than promoting RCs or rewriting release metadata. Choose a new base version per component from the change: patch for a compatible fix, minor for compatible new behavior, or major for a breaking change. On that base, local candidates start at `local.0` and RCs start at `rc.0`; subsequent candidates increment within the same base version.
 
 ## Production chart and runtime secret ownership
 
 Argo CD reconciles the existing bot and ingester resources at the immutable Git
-revision admitted by production CD. Actions retains image qualification, ECR
-promotion, release pins, and full functional verification. Direct Helm deployment
+revision admitted by production CD. CD validates committed release pins and retains
+full functional verification in its disabled deployment path. Direct Helm deployment
 of those applications stops after adoption; other releases and separately approved
 migrations retain their existing owners. Pruning and replacement syncs are disabled.
 The ingester master remains the owner of worker scaling.
@@ -115,8 +117,9 @@ reconciliation. Neither workflow provisions or replaces EC2.
 
 On clean EC2 provisioning, the node workflow installs ESO after k3s readiness.
 The full-stack workflow then bootstraps existing Kubernetes secrets and infrastructure
-before configuring Argo. Before first Argo sync, production CD must select immutable
-AWS versions through `prepare-runtime-secrets.py`; empty version references fail closed.
+before configuring Argo. Before first Argo sync, immutable AWS version references
+must already be committed in the reviewed production values; empty version
+references fail closed.
 Do not execute EC2 provisioning to update ESO or Argo on an existing host.
 
 AWS stores one JSON object. Explicit property mappings populate the existing
@@ -124,18 +127,15 @@ AWS stores one JSON object. Explicit property mappings populate the existing
 `polymarket-live-auth` Secrets. ESO uses immutable version IDs, OnChange refresh,
 Orphan creation, and Retain deletion. Database, monitoring, ECR, and Argo bootstrap
 credentials remain outside this ownership transfer. Existing administrative secret
-refresh skips ESO-owned Secrets and Argo-owned workload restarts. Manual runtime
-refresh dispatches ordinary production CD, using the same admission mechanism.
+refresh skips ESO-owned Secrets and Argo-owned workload restarts. Runtime
+secret pin updates require reviewed production values; CD does not discover newer versions.
 
-CD compares projected property values with Kubernetes without printing credentials.
-Only changed consumers receive a new opaque credential revision. Grafana also consumes
-the bot admin token and is refreshed through its existing Helm owner when that token
-changes; its credential revision is provisioned in chart values. Image pins and
-credential revisions enter one admitted pod template. Argo waits for each
+Credential revisions and immutable secret-version references are committed release
+inputs. CD does not compute new revisions or edit these values. Argo waits for each
 ExternalSecret's successful refresh after its requested timestamp before applying
-later workload waves. Full verification checks actual selected AWS/Kubernetes value
-parity. Unchanged projections retain references and rollout tokens, so reconciliation
-does not restart pods. Independent AWS changes remain unapplied until admitted by CD.
+later workload waves. The disabled deployment path retains verification of selected
+AWS/Kubernetes value parity. Independent AWS changes remain unapplied until a reviewed
+release changes the committed pins.
 
 ### Cutover acceptance contract
 
