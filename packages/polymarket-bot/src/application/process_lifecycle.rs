@@ -727,16 +727,8 @@ impl BtcProcessManager {
             })?;
         let config_hash = manifest.config_hash;
         let frozen_process_config_value = manifest.frozen_process_config;
-        let current_frozen_process_config =
-            serde_json::to_value(&prepared.frozen_process_config)
-                .map_err(|error| HttpError::internal(error.to_string()))?;
-        if resume_process_contract_projection(current_frozen_process_config)
-            != resume_process_contract_projection(frozen_process_config_value.clone())
-        {
-            return Err(HttpError::conflict(
-                "durable BTC run parameters changed and cannot be resumed by this process definition",
-            ));
-        }
+        // Reattach the existing run without making frozen configuration equality a restart gate.
+        // Preserve its manifest and hash; resume events record the current definition separately.
         let PreparedBtcStartDefinition {
             run_id,
             run_key,
