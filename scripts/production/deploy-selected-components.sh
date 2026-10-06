@@ -128,6 +128,10 @@ deploy_selected_components() {
   if [[ "$has_applications" == true ]]; then
     scripts/production/reconcile-application-charts.sh || return $?
   fi
+  if [[ ",$DEPLOY_COMPONENTS," == *,polymarket-bot,* ]]; then
+    scripts/production/deploy-pilot-pair.sh || return $?
+    scripts/production/verify-production.sh || return $?
+  fi
   ((${#selected[@]})) || return 0
   started="$(date -u +%s)"
   for component in ${selected[@]+"${selected[@]}"}; do

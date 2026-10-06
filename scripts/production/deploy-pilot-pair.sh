@@ -5,8 +5,8 @@ set +x
 NAMESPACE="${CAPITONIC_NAMESPACE:-capitonic}"
 APP_DIRECTORY="${APP_DIRECTORY:-/opt/polymarket-bot}"
 PORT="${BOT_LOCAL_PORT:-18097}"
-PAPER_DEFINITION="$APP_DIRECTORY/infra/processes/btc-5m-conservative-selective-paper-20260917.json"
-LIVE_DEFINITION="$APP_DIRECTORY/infra/processes/btc-5m-conservative-selective-live-pilot-20260921.json"
+PAPER_DEFINITION="$APP_DIRECTORY/infra/processes/btc-5m-conservative-selective-confidence-075-paper-20261001.json"
+LIVE_DEFINITION="$APP_DIRECTORY/infra/processes/btc-5m-conservative-selective-confidence-075-live-pilot-20261006.json"
 
 jq -e '.config.execution.mode == "paper" and .config.execution.live_capital == false' "$PAPER_DEFINITION" >/dev/null
 jq -e '
@@ -37,7 +37,7 @@ process_id_by_key() {
   list_processes | jq -r --arg key "$key" '.processes[] | select(.process_key == $key) | .process_id' | head -n1
 }
 upsert_if_missing() {
-  local definition="$1" key process_id request
+  local definition="$1" key process_id request expected_selection
   key="$(jq -r .process_key "$definition")"
   process_id="$(process_id_by_key "$key")"
   if [[ -z "$process_id" ]]; then
@@ -45,6 +45,10 @@ upsert_if_missing() {
     process_id="$(api PUT "/admin/trading-processes/by-key/$key" -H 'Content-Type: application/json' --data "$request" | jq -r '.process.process_id')"
   fi
   [[ "$process_id" =~ ^[0-9a-f-]{36}$ ]]
+  expected_selection="$(jq -c '.config.raw.btc_realtime_paper.strategy.decision_strategy.models[0].selection' "$definition")"
+  api GET "/admin/trading-processes/$process_id" | jq -e --argjson selection "$expected_selection" '
+    .process.config.raw.btc_realtime_paper.strategy.decision_strategy.models[0].selection == $selection
+  ' >/dev/null
   printf '%s' "$process_id"
 }
 ensure_started() {
@@ -92,6 +96,13 @@ paper_expected_sha="$(jq -r .metadata.model_artifact_sha256 "$PAPER_DEFINITION")
 jq -e --arg sha "$paper_expected_sha" '.process.metadata.model_artifact_sha256 == $sha' \
   <<<"$(api GET "/admin/trading-processes/$paper_id")" >/dev/null
 
+token_id="$(jq -r '.status.btc_runtime.runtime.readiness.books[] | select(.bootstrapped == true and (.best_ask != null or .best_bid != null)) | .token_id' <<<"$paper_status" | head -n1)"
+[ -n "$token_id" ]
+dry_run="$(api POST /admin/live/order-dry-run -H 'Content-Type: application/json' \
+  --data "$(jq -n --arg token "$token_id" '{token_id:$token,side:"buy",order_type:"fak",price:"0.50",size:"1"}')")"
+jq -e '.mode == "live" and .owner_redacted == true and .signature_redacted == true and (.signed_order | type == "object")' <<<"$dry_run" >/dev/null
+
+
 live_id="$(upsert_if_missing "$LIVE_DEFINITION")"
 live_process="$(api GET "/admin/trading-processes/$live_id")"
 if [[ "$(jq -r '.process.enabled' <<<"$live_process")" != "true" ]]; then
@@ -99,19 +110,14 @@ if [[ "$(jq -r '.process.enabled' <<<"$live_process")" != "true" ]]; then
 
   authorization_patch="$(jq '{
     config: (.config | .execution.execute_signals = true | .execution.live_capital = true),
-    metadata: (.metadata | .production_qualified = true | .credential_validation_only = false |
-      .live_execution_authorized = true | .deployment_scope = "production_live_pilot")
+    metadata: (.metadata | .credential_validation_only = false |
+      .live_execution_authorized = true)
   }' "$LIVE_DEFINITION")"
   api PATCH "/admin/trading-processes/$live_id" -H 'Content-Type: application/json' --data "$authorization_patch" >/dev/null
   ensure_started "$live_id"
 fi
 
 live_status="$(wait_running "$live_id")"
-token_id="$(jq -r '.status.btc_runtime.runtime.readiness.books[] | select(.bootstrapped == true and (.best_ask != null or .best_bid != null)) | .token_id' <<<"$live_status" | head -n1)"
-[ -n "$token_id" ]
-dry_run="$(api POST /admin/live/order-dry-run -H 'Content-Type: application/json' \
-  --data "$(jq -n --arg token "$token_id" '{token_id:$token,side:"buy",order_type:"fak",price:"0.50",size:"1"}')")"
-jq -e '.mode == "live" and .owner_redacted == true and .signature_redacted == true and (.signed_order | type == "object")' <<<"$dry_run" >/dev/null
 
 entry_status="$(api POST "/admin/trading-processes/$live_id/live/entries/enable")"
 jq -e '

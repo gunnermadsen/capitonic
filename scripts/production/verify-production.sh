@@ -90,8 +90,8 @@ done
 [[ "$profiles_ready" == "true" ]]
 
 processes="$(curl -fsS -H "Authorization: Bearer $bot_token" "http://127.0.0.1:$BOT_PORT/admin/trading-processes?limit=100")"
-paper_id="$(jq -r '.processes[] | select(.process_key == "btc-5m-conservative-selective-paper-20260917") | .process_id' <<<"$processes")"
-live_id="$(jq -r '.processes[] | select(.process_key == "btc-5m-conservative-selective-live-pilot-20260921") | .process_id' <<<"$processes")"
+paper_id="$(jq -r '.processes[] | select(.process_key == "btc-5m-conservative-selective-confidence-075-paper-20261001") | .process_id' <<<"$processes")"
+live_id="$(jq -r '.processes[] | select(.process_key == "btc-5m-conservative-selective-confidence-075-live-pilot-20261006") | .process_id' <<<"$processes")"
 [[ "$paper_id" =~ ^[0-9a-f-]{36}$ && "$live_id" =~ ^[0-9a-f-]{36}$ ]]
 for process_id in "$paper_id" "$live_id"; do
   process_status="$(curl -fsS -H "Authorization: Bearer $bot_token" "http://127.0.0.1:$BOT_PORT/admin/trading-processes/$process_id/status")"
