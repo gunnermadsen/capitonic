@@ -1058,6 +1058,36 @@ pub fn prediction_record(id: Uuid, snapshot_id: Uuid) -> Option<PredictionRecord
         .find(|v| v.feature_snapshot_id == snapshot_id)
         .cloned()
 }
+/// Attach retained inference evidence to a new execution snapshot without counting
+/// another inference, token report, or calibration observation.
+pub fn retained_agent_prediction(
+    id: Uuid,
+    snapshot: Uuid,
+    result: &super::agent::EvaluationResult,
+    score: RuntimeModelScore,
+) {
+    update(id, |p| {
+        p.records.push_back(PredictionRecord {
+            contract_version: EVALUATION_VERSION,
+            process_id: id,
+            model: result.request.selection.identity(),
+            member_id: None,
+            router_disposition: None,
+            run_id: p.run_id,
+            config_hash: p.config_hash.clone(),
+            execution_mode: p.mode.clone(),
+            feature_snapshot_id: snapshot,
+            feature_as_of: result.request.observed_at,
+            input_sha256: result.request.input_sha256.clone(),
+            score,
+            inference_seconds: result.inference_seconds,
+            admission: Some(serde_json::json!({"agent_evaluation":result,"uncalibrated":true})),
+        });
+        while p.records.len() > 64 {
+            p.records.pop_front();
+        }
+    });
+}
 /// Resolutions are official observed facts. Remove pending predictions once so repeated
 /// delivery cannot double count. Counters cover this instrumentation session only.
 pub fn resolve(market: &str, up: bool) {
@@ -1645,6 +1675,74 @@ pub fn prometheus_metrics() -> String {
 #[cfg(test)]
 mod router_tests {
     use super::*;
+    #[test]
+    fn retained_agent_evidence_does_not_inflate_inference_or_calibration_counts() {
+        use super::super::agent::{
+            AgentSelection, EvaluationRequest, EvaluationResult, UsageReport,
+        };
+        let id = Uuid::new_v4();
+        let at = Utc::now();
+        let result = EvaluationResult {
+            request: EvaluationRequest {
+                version: super::super::agent::BRIDGE_VERSION.into(),
+                request_id: Uuid::new_v4(),
+                process_id: id,
+                run_id: Uuid::new_v4(),
+                config_hash: "a".repeat(64),
+                selection: AgentSelection {
+                    profile_key: "agent".into(),
+                    profile_sha256: "b".repeat(64),
+                },
+                market_id: "market".into(),
+                window_start: at,
+                snapshot_id: Uuid::new_v4(),
+                observed_at: at,
+                deadline: at + chrono::Duration::seconds(120),
+                attempt: 45,
+                input_sha256: "c".repeat(64),
+                context: serde_json::json!({}),
+            },
+            completed_at: at,
+            inference_seconds: 1.0,
+            response_id: None,
+            model: None,
+            usage: UsageReport::Missing,
+            prediction: Err(super::super::agent::ProviderFailure::Transport),
+        };
+        let score = RuntimeModelScore {
+            raw_logit: 0.0,
+            probability_up: 0.6,
+            confidence: 0.4,
+            action: crate::btc::directional_model::RuntimeModelAction::Up,
+            accepted: true,
+        };
+        let original = Uuid::new_v4();
+        prediction(
+            id,
+            original,
+            "market",
+            &result.request.selection.identity(),
+            at,
+            &result.request.input_sha256,
+            score,
+            1.0,
+            None,
+        );
+        let retry = Uuid::new_v4();
+        retained_agent_prediction(id, retry, &result, score);
+        let record = prediction_record(id, retry).unwrap();
+        assert_eq!(record.feature_as_of, at);
+        assert_eq!(record.feature_snapshot_id, retry);
+        assert_eq!(
+            record.admission.unwrap()["agent_evaluation"]["request"]["request_id"],
+            result.request.request_id.to_string()
+        );
+        let guard = registry().lock().unwrap();
+        let p = &guard.processes[&id];
+        assert_eq!(p.counters[&("inferences", "success".into())], 1);
+        assert_eq!(p.pending.len(), 1);
+        assert!(p.agent_usage.is_none());
+    }
     #[test]
     fn agent_usage_counts_retries_once_and_excludes_unknown_markets() {
         use super::super::agent::{TokenUsage, UsageReport};

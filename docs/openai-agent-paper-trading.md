@@ -26,7 +26,9 @@ A valid agent direction follows the existing entry-admission, risk, decision aut
 
 - Every eligible market receives an attempt.
 - The provider must return `up` or `down`, probability, confidence, and bounded reason codes.
-- The first valid response wins. Later configured attempts are retries only after a transport, authentication, capacity, timeout, or response-validation failure.
+- The latest valid response remains actionable until the first confirmed fill (including a partial fill) or the process entry deadline. Evaluations at profile seconds 45, 75 and 105 can update it before a fill; failures retain the previous valid forecast.
+- The existing process `runtime.strategy_interval_ms` controls execution opportunity checks independently of inference cadence. Every attempt uses a fresh shared execution snapshot and the unchanged router/order pathway, with the member's configured FAK/FOK type. Definitive zero-fill results permit subsequent attempts; unresolved orders remain owned by existing authorization and reconciliation.
+- Restart restores the latest compatible forecast from existing decision metadata and checks process-owned orders/fills before attempting execution. Reusing a forecast does not count another inference or token report.
 - No request starts after second 120.
 - One provider request may be in flight for a process and market, and existing process/market entry uniqueness remains authoritative.
 - The cloud request contains a bounded, versioned, causal snapshot rather than a continuous raw stream.

@@ -2759,17 +2759,34 @@ impl BtcRepository {
             .context("failed to check existing BTC process entry")
     }
 
-    /// Rehydrate the first valid async prediction through the existing decision ledger.
-    pub async fn process_has_agent_prediction(
+    /// Restore the latest forecast from the process-owned decision ledger.
+    pub async fn load_agent_prediction(
+        &self,
+        process_id: Uuid,
+        run_id: Uuid,
+        config_hash: &str,
+        market_id: &str,
+        window_start: DateTime<Utc>,
+    ) -> Result<Option<super::unified_model_runtime::agent::EvaluationResult>> {
+        let value = sqlx::query_scalar::<_, serde_json::Value>("SELECT metadata->'agent_evaluation' FROM polymarket.btc_strategy_decisions WHERE process_id=$1 AND market_id=$2 AND strategy_version=$3 AND decision_at >= $4 AND decision_at < $4 + interval '120 seconds' AND run_id=$5 AND config_hash=$6 AND metadata #> '{agent_evaluation,prediction,Ok}' IS NOT NULL ORDER BY decision_at DESC LIMIT 1")
+            .bind(process_id).bind(market_id).bind(super::unified_model_runtime::agent::STRATEGY_VERSION)
+            .bind(window_start).bind(run_id).bind(config_hash)
+            .fetch_optional(&self.pool).await.context("failed to restore agent prediction ownership")?;
+        value
+            .map(serde_json::from_value)
+            .transpose()
+            .context("invalid persisted agent evaluation")
+    }
+
+    pub async fn process_has_entry_fill(
         &self,
         process_id: Uuid,
         market_id: &str,
         window_start: DateTime<Utc>,
     ) -> Result<bool> {
-        sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM polymarket.btc_strategy_decisions WHERE process_id=$1 AND market_id=$2 AND strategy_version=$3 AND decision_at >= $4 AND decision_at < $4 + interval '120 seconds' AND metadata #> '{agent_evaluation,prediction,Ok}' IS NOT NULL)")
-            .bind(process_id).bind(market_id).bind(super::unified_model_runtime::agent::STRATEGY_VERSION)
-            .bind(window_start)
-            .fetch_one(&self.pool).await.context("failed to restore agent prediction ownership")
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM polymarket.orders o JOIN polymarket.fills f ON f.process_id=o.process_id AND f.order_id=o.order_id WHERE o.process_id=$1 AND o.market_id=$2 AND o.created_at >= $3 AND o.created_at < $3 + interval '300 seconds' AND f.timestamp_utc >= $3 AND f.timestamp_utc < $3 + interval '300 seconds' AND o.raw_payload #>> '{request,metadata,execution_intent}'='entry' AND f.source IN ('paper','live') AND f.size > 0)")
+            .bind(process_id).bind(market_id).bind(window_start).fetch_one(&self.pool).await
+            .context("failed to check process entry fills")
     }
 
     pub async fn load_resolved_loss_regime_candidates(

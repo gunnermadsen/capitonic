@@ -1259,28 +1259,64 @@ impl BtcProcessRunner {
         let mut session = member.agent.lock().await;
         session.observe_market(&market.market_id);
         if elapsed >= 300 - member.strategy.min_seconds_before_close {
-            session.cancel();
+            if !session.finished() {
+                umr_telemetry::event(
+                    self.config.process_id,
+                    "execution_opportunity",
+                    "agent_deadline",
+                );
+                session.accept();
+            }
             umr_telemetry::gauge(self.config.process_id, "agent_pending", 0.0);
             return Ok(None);
         }
-        let result = session.poll().await;
-        if result.is_none() && !session.due(elapsed) {
+        if session.finished() || elapsed < member.strategy.min_seconds_after_open {
             return Ok(None);
         }
-        if self
-            .repository
-            .process_has_entry(self.config.process_id, &market.market_id)
-            .await?
-            || self
+        if !session.restored {
+            if let Some(result) = self
                 .repository
-                .process_has_agent_prediction(
+                .load_agent_prediction(
                     self.config.process_id,
+                    self.config.run_id,
+                    &self.config.config_hash,
                     &market.market_id,
                     market.window_start,
                 )
                 .await?
+            {
+                session.retain(result);
+            }
+            session.restored = true;
+        }
+        if self
+            .repository
+            .process_has_entry_fill(
+                self.config.process_id,
+                &market.market_id,
+                market.window_start,
+            )
+            .await?
         {
             session.accept();
+            umr_telemetry::gauge(self.config.process_id, "agent_pending", 0.0);
+            umr_telemetry::event(
+                self.config.process_id,
+                "execution_opportunity",
+                "agent_filled",
+            );
+            return Ok(None);
+        }
+        // The shared durable authorization/reconciliation path owns unresolved orders.
+        if self
+            .repository
+            .process_has_entry(self.config.process_id, &market.market_id)
+            .await?
+        {
+            return Ok(None);
+        }
+        let result = session.poll().await;
+        if result.is_none() && session.latest().is_none() && !session.due(elapsed) {
             return Ok(None);
         }
         let readiness = process_runtime_readiness(&member.strategy, &observation.readiness);
@@ -1320,16 +1356,19 @@ impl BtcProcessRunner {
             .cloned();
         // Keep one completed forecast until fresh shared execution evidence arrives.
         // The market deadline and rollover checks above still expire it automatically.
-        if result
+        if (result
             .as_ref()
             .is_some_and(|result| result.prediction.is_ok())
+            || session.latest().is_some())
             && (inputs.chainlink_current.is_none()
                 || inputs.chainlink_open.is_none()
                 || inputs.up_book.is_none()
                 || inputs.down_book.is_none()
                 || !readiness.ready)
         {
-            session.defer(result.expect("completed forecast checked above"));
+            if let Some(result) = result {
+                session.defer(result);
+            }
             return Ok(None);
         }
         let mut snapshot = build_snapshot(
@@ -1347,7 +1386,7 @@ impl BtcProcessRunner {
             .strategy
             .agent_selection()
             .context("missing agent selection")?;
-        let Some(result) = result else {
+        if result.is_none() && session.due(elapsed) {
             if inputs.chainlink_open.is_none()
                 || inputs.chainlink_current.is_none()
                 || inputs.up_book.is_none()
@@ -1364,12 +1403,12 @@ impl BtcProcessRunner {
             )?;
             let context = agent::build_context(&observation.state, &snapshot, &sources);
             let request = agent::EvaluationRequest {
-                version: agent::BRIDGE_VERSION,
+                version: agent::BRIDGE_VERSION.into(),
                 request_id: Uuid::new_v4(),
                 process_id: self.config.process_id,
                 run_id: self.config.run_id,
                 config_hash: self.config.config_hash.clone(),
-                selection,
+                selection: selection.clone(),
                 market_id: market.market_id.clone(),
                 window_start: market.window_start,
                 snapshot_id: snapshot.snapshot_id,
@@ -1384,15 +1423,25 @@ impl BtcProcessRunner {
             umr_telemetry::eligible_market(self.config.process_id, &market.market_id);
             umr_telemetry::event(self.config.process_id, "agent_requests", "started");
             umr_telemetry::gauge(self.config.process_id, "agent_pending", 1.0);
+        }
+        let fresh_result = result.is_some();
+        let Some(result) = result.or_else(|| session.latest().cloned()) else {
             return Ok(None);
         };
-        umr_telemetry::gauge(self.config.process_id, "agent_pending", 0.0);
-        umr_telemetry::duration(
+        umr_telemetry::gauge(
             self.config.process_id,
-            "agent_inference",
-            result.inference_seconds,
+            "agent_pending",
+            if session.pending() { 1.0 } else { 0.0 },
         );
-        if result.request.process_id != self.config.process_id
+        if fresh_result {
+            umr_telemetry::duration(
+                self.config.process_id,
+                "agent_inference",
+                result.inference_seconds,
+            );
+        }
+        if result.request.version != agent::BRIDGE_VERSION
+            || result.request.process_id != self.config.process_id
             || result.request.run_id != self.config.run_id
             || result.request.config_hash != self.config.config_hash
             || result.request.selection != selection
@@ -1428,12 +1477,14 @@ impl BtcProcessRunner {
             }
         };
         prediction.validate()?;
-        umr_telemetry::event(self.config.process_id, "agent_requests", "completed");
-        umr_telemetry::gauge(
-            self.config.process_id,
-            "agent_decision_second",
-            elapsed as f64,
-        );
+        if fresh_result {
+            umr_telemetry::event(self.config.process_id, "agent_requests", "completed");
+            umr_telemetry::gauge(
+                self.config.process_id,
+                "agent_decision_second",
+                elapsed as f64,
+            );
+        }
         let score = RuntimeModelScore {
             raw_logit: 0.0,
             probability_up: prediction.probability_up,
@@ -1445,17 +1496,28 @@ impl BtcProcessRunner {
             },
             accepted: true,
         };
-        umr_telemetry::prediction(
-            self.config.process_id,
-            snapshot.snapshot_id,
-            &market.market_id,
-            &selection.identity(),
-            result.request.observed_at,
-            &result.request.input_sha256,
-            score,
-            result.inference_seconds,
-            Some(serde_json::json!({"agent_evaluation":result,"uncalibrated":true})),
-        );
+        if fresh_result {
+            umr_telemetry::prediction(
+                self.config.process_id,
+                snapshot.snapshot_id,
+                &market.market_id,
+                &selection.identity(),
+                result.request.observed_at,
+                &result.request.input_sha256,
+                score,
+                result.inference_seconds,
+                Some(serde_json::json!({"agent_evaluation":result,"uncalibrated":true})),
+            );
+            umr_telemetry::member_event(self.config.process_id, &member.member_id, "inferences");
+        } else {
+            umr_telemetry::retained_agent_prediction(
+                self.config.process_id,
+                snapshot.snapshot_id,
+                &result,
+                score,
+            );
+        }
+        session.retain(result.clone());
         umr_telemetry::attribute_member(
             self.config.process_id,
             snapshot.snapshot_id,
@@ -1484,8 +1546,6 @@ impl BtcProcessRunner {
             )
             .await?;
         }
-        session.accept();
-        umr_telemetry::member_event(self.config.process_id, &member.member_id, "inferences");
         if decision.approved_intent.is_none() {
             return Ok(None);
         }
@@ -2286,6 +2346,20 @@ impl BtcProcessRunner {
         // Once this durable reservation succeeds, execution must proceed. A
         // crash after authorization cannot permit a different entry for the
         // same process and market on resume.
+        if member.strategy.agent_selection().is_some()
+            && Utc::now()
+                >= market.window_start
+                    + chrono::Duration::seconds(300 - member.strategy.min_seconds_before_close)
+        {
+            member.agent.lock().await.accept();
+            umr_telemetry::gauge(self.config.process_id, "agent_pending", 0.0);
+            umr_telemetry::event(
+                self.config.process_id,
+                "execution_opportunity",
+                "agent_deadline",
+            );
+            return Ok(());
+        }
         self.repository
             .authorize_pending_strategy_decision(
                 self.config.process_id,
@@ -2357,6 +2431,15 @@ impl BtcProcessRunner {
                 / 1_000.0,
         );
         self.store.persist_order_plan_report(&report).await?;
+        if member.strategy.agent_selection().is_some() && !report.fills.is_empty() {
+            member.agent.lock().await.accept();
+            umr_telemetry::gauge(self.config.process_id, "agent_pending", 0.0);
+            umr_telemetry::event(
+                self.config.process_id,
+                "execution_opportunity",
+                "agent_filled",
+            );
+        }
         for fill in &report.fills {
             if let (Some(price), Some(size), Some(fee)) =
                 (fill.price.to_f64(), fill.size.to_f64(), fill.fee.to_f64())

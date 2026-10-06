@@ -89,9 +89,9 @@ impl AgentSelection {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvaluationRequest {
-    pub version: &'static str,
+    pub version: String,
     pub request_id: Uuid,
     pub process_id: Uuid,
     pub run_id: Uuid,
@@ -142,7 +142,7 @@ impl Prediction {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderFailure {
     Authentication,
@@ -167,13 +167,14 @@ impl ProviderFailure {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvaluationResult {
     pub request: EvaluationRequest,
     pub completed_at: DateTime<Utc>,
     pub inference_seconds: f64,
     pub response_id: Option<String>,
     pub model: Option<String>,
+    #[serde(default)]
     pub usage: UsageReport,
     pub prediction: Result<Prediction, ProviderFailure>,
 }

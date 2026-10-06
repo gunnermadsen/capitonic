@@ -1,7 +1,7 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TokenUsage {
     pub input: u64,
     pub output: u64,
@@ -21,7 +21,7 @@ impl TokenUsage {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "status", content = "tokens", rename_all = "snake_case")]
 pub enum UsageReport {
     Reported(TokenUsage),

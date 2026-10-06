@@ -11,6 +11,8 @@ pub struct AgentSession {
     accepted: bool,
     pending: Option<JoinHandle<EvaluationResult>>,
     completed: Option<EvaluationResult>,
+    latest: Option<EvaluationResult>,
+    pub restored: bool,
     cancellation: CancellationToken,
     usage_process: Option<uuid::Uuid>,
     created_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -23,6 +25,7 @@ impl AgentSession {
             self.market = market.into();
             self.attempts = 0;
             self.accepted = false;
+            self.restored = false;
             self.cancellation = CancellationToken::new();
         }
     }
@@ -60,10 +63,27 @@ impl AgentSession {
         self.pending.take()?.await.ok()
     }
     pub fn accept(&mut self) {
-        if let Some(id) = self.usage_process {
-            super::super::telemetry::agent_usage_finish(id);
-        }
+        self.cancel();
         self.accepted = true;
+    }
+    pub fn finished(&self) -> bool {
+        self.accepted
+    }
+    pub fn pending(&self) -> bool {
+        self.pending.is_some()
+    }
+    pub fn latest(&self) -> Option<&EvaluationResult> {
+        self.latest.as_ref()
+    }
+    pub fn retain(&mut self, result: EvaluationResult) {
+        self.attempts = self.attempts.max(
+            profile()
+                .attempts_seconds
+                .iter()
+                .filter(|second| **second <= result.request.attempt as i64)
+                .count(),
+        );
+        self.latest = Some(result);
     }
     pub fn defer(&mut self, result: EvaluationResult) {
         self.completed = Some(result);
@@ -74,6 +94,7 @@ impl AgentSession {
         }
         self.cancellation.cancel();
         self.completed = None;
+        self.latest = None;
         if let Some(task) = self.pending.take() {
             task.abort();
         }
@@ -101,17 +122,14 @@ mod tests {
         assert!(session.due(45));
     }
 
-    #[tokio::test]
-    async fn deferred_result_is_bounded_and_cleared_on_rollover() {
-        use super::super::{AgentSelection, ProviderFailure, BRIDGE_VERSION, PROFILE_KEY};
+    fn forecast() -> EvaluationResult {
+        use super::super::{AgentSelection, Prediction, BRIDGE_VERSION, PROFILE_KEY};
         use chrono::Utc;
         use uuid::Uuid;
-        let mut session = AgentSession::default();
-        session.observe_market("a");
         let request_id = Uuid::new_v4();
-        let result = EvaluationResult {
+        EvaluationResult {
             request: EvaluationRequest {
-                version: BRIDGE_VERSION,
+                version: BRIDGE_VERSION.into(),
                 request_id,
                 process_id: Uuid::new_v4(),
                 run_id: Uuid::new_v4(),
@@ -134,8 +152,21 @@ mod tests {
             response_id: None,
             model: None,
             usage: super::super::UsageReport::Missing,
-            prediction: Err(ProviderFailure::Transport),
-        };
+            prediction: Ok(Prediction {
+                direction: crate::btc::types::BtcOutcome::Up,
+                probability_up: 0.6,
+                confidence: 0.4,
+                reason_codes: vec!["momentum".into()],
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn deferred_result_is_bounded_and_cleared_on_rollover() {
+        let mut session = AgentSession::default();
+        session.observe_market("a");
+        let result = forecast();
+        let request_id = result.request.request_id;
         session.defer(result.clone());
         assert!(!session.due(75));
         assert_eq!(session.poll().await.unwrap().request.request_id, request_id);
@@ -144,5 +175,71 @@ mod tests {
         session.observe_market("b");
         assert!(session.poll().await.is_none());
         assert!(session.due(45));
+    }
+
+    #[tokio::test]
+    async fn retained_forecast_survives_non_fills_and_refreshes_until_fill() {
+        let mut session = AgentSession::default();
+        session.observe_market("a");
+        let first = forecast();
+        session.retain(first.clone());
+        assert!(!session.due(74));
+        assert!(session.due(75));
+        assert!(!session.finished());
+        assert_eq!(
+            session.latest().unwrap().request.request_id,
+            first.request.request_id
+        );
+        let mut updated = forecast();
+        updated.request.attempt = 75;
+        updated.prediction.as_mut().unwrap().direction = crate::btc::types::BtcOutcome::Down;
+        updated.prediction.as_mut().unwrap().probability_up = 0.3;
+        session.retain(updated.clone());
+        assert!(!session.due(104));
+        assert!(session.due(105));
+        assert_eq!(
+            session
+                .latest()
+                .unwrap()
+                .prediction
+                .as_ref()
+                .unwrap()
+                .probability_up,
+            0.3
+        );
+        // A fill cancels even an in-flight refresh and discards its late answer.
+        session.pending = Some(tokio::spawn(async move {
+            std::future::pending::<()>().await;
+            updated
+        }));
+        assert!(!session.due(105));
+        session.accept();
+        assert!(session.finished());
+        assert!(session.latest().is_none());
+        assert!(session.poll().await.is_none());
+        assert!(!session.due(105));
+        session.observe_market("b");
+        assert!(!session.finished());
+        assert!(session.due(45));
+    }
+
+    #[test]
+    fn persisted_forecast_restores_remaining_schedule_without_token_replay() {
+        let original = forecast();
+        let mut wire = serde_json::to_value(&original).unwrap();
+        // Earlier deployed evidence predates token reporting.
+        wire.as_object_mut().unwrap().remove("usage");
+        let restored: EvaluationResult = serde_json::from_value(wire).unwrap();
+        let mut session = AgentSession::default();
+        session.observe_market("a");
+        session.retain(restored);
+        assert!(!session.due(60));
+        assert!(session.due(75));
+        assert!(!session.due(120));
+        assert!(session.usage_process.is_none());
+        assert_eq!(
+            session.latest().unwrap().request.request_id,
+            original.request.request_id
+        );
     }
 }
