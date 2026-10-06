@@ -87,13 +87,6 @@ if [[ "$mode" == --build || "$mode" == --next-version ]] && [[ -f infra/producti
   selected_rc="$(python3 -c 'import json,sys; print(json.load(open("infra/production/release.json"))["components"][sys.argv[1]]["rcVersion"])' "$component")"
   [[ "$selected_rc" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.(0|[1-9][0-9]*)$ ]] || exit 64
   base_version="${selected_rc#v}"; base_version="${base_version%%-*}"
-  # The bot package owns the enhancement base; production pins remain immutable inputs.
-  if [[ "$component" == polymarket-bot ]]; then
-    package_version="$(python3 -c 'import tomllib; print(tomllib.load(open("packages/polymarket-bot/Cargo.toml", "rb"))["package"]["version"])')"
-    if python3 -c 'import sys; sys.exit(0 if tuple(map(int,sys.argv[1].split("."))) > tuple(map(int,sys.argv[2].split("."))) else 1)' "$package_version" "$base_version"; then
-      base_version="$package_version"
-    fi
-  fi
   production_release="$(git show origin/production:infra/production/release.json)" || exit 67
   promoted_version="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["components"][sys.argv[1]]["finalVersion"])' "$component" <<< "$production_release")"
   promoted_source="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["components"][sys.argv[1]]["sourceRevision"])' "$component" <<< "$production_release")"

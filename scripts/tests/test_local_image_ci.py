@@ -51,7 +51,6 @@ class LocalImageCiTest(unittest.TestCase):
             target = self.repo / path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(path + "\n")
-        (self.repo / "packages/polymarket-bot/Cargo.toml").write_text('[package]\nversion = "0.1.0"\n')
         runner = self.bin / "nerdctl"
         runner.write_text('''#!/usr/bin/env python3
 import hashlib, json, os, pathlib, sys
@@ -238,12 +237,6 @@ state_file.write_text(json.dumps(state))
         self.assertEqual(corrected.returncode, 0, corrected.stderr)
         self.assertIn("image/polymarket-bot/v3.2.5-local.0", self.tags("polymarket-bot"))
         self.assertEqual(self.count.read_text(), "3")
-        (self.repo / "packages/polymarket-bot/Cargo.toml").write_text('[package]\nversion = "3.3.0"\n')
-        self.commit()
-        enhancement = self.run_ci("polymarket-bot")
-        self.assertEqual(enhancement.returncode, 0, enhancement.stderr)
-        self.assertIn("image/polymarket-bot/v3.3.0-local.0", self.tags("polymarket-bot"))
-        self.assertEqual(json.loads(release_path.read_text()), release)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 [package]
 name = "polymarket-bot"
-version = "3.3.0"
+version = "0.1.0"
 edition = "2021"
 description = "Polymarket negative-risk arbitrage scanner and execution service"
 license = "UNLICENSED"
