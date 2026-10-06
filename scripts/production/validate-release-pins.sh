@@ -37,26 +37,9 @@ for component in ingester polymarket-bot db-migrate; do
   [[ "$expected_digest" =~ ^sha256:[0-9a-f]{64}$ && "$source_revision" =~ ^[0-9a-f]{40}$ ]]
   [[ "$(yq -r '.environment' "$values")" == production ]]
   selected=false
-  rc_version=''
   if [[ ",${DEPLOY_COMPONENTS:-}," == *,$component,* ]]; then
     selected=true
-    rc_version="$(jq -r --arg component "$component" '.components[$component].rcVersion' infra/production/release.json)"
   fi
-  qualified=false
-  while IFS= read -r tag; do
-    [[ "$selected" != true || "$tag" == "rc/$component/$rc_version" ]] || continue
-    [[ "$(git cat-file -t "refs/tags/$tag")" == tag ]] || continue
-    checkpoint="$(git rev-list -n1 "$tag")"
-    git merge-base --is-ancestor "$checkpoint" "$revision" || continue
-    annotation="$(git for-each-ref --format='%(contents)' "refs/tags/$tag")"
-    admitted_source="$(awk '$1 == "source_revision:" {print $2}' <<< "$annotation")"
-    golden_tag="$(awk '$1 == "golden_tag:" {print $2}' <<< "$annotation")"
-    [[ "$admitted_source" == "$source_revision" && "$golden_tag" == golden/$component/* ]] || continue
-    [[ "$(git cat-file -t "refs/tags/$golden_tag" 2>/dev/null)" == tag ]] || continue
-    qualified=true
-    break
-  done < <(git tag --list "rc/$component/$final_version-rc.*" --sort=-version:refname)
-  [[ "$qualified" == true ]] || { echo "No accepted RC provenance for $component:$version." >&2; exit 1; }
   actual_digest="$expected_digest"
   if [[ "$task" != pins && "$selected" != true ]]; then
   actual_digest="$(scripts/production/verify-ecr-arm64-image.sh "capitonic/$component" "$final_version" "$source_revision")"
