@@ -1,4 +1,4 @@
-image: capitonic/polymarket-bot:v3.3.0-local.3
+image: capitonic/polymarket-bot:v3.3.0-local.4
 environment: development
 imagePullPolicy: Never
 imagePullSecrets: []
