@@ -1,5 +1,5 @@
 environment: production
-image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/ingester@sha256:fef65d3f9429e143f5ae7442d202807399444d0a76537ad079a1ad937549099c
+image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/ingester:v1.3.0
 imagePullPolicy: IfNotPresent
 imagePullSecrets:
   - name: ecr-registry

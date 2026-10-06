@@ -13,7 +13,7 @@ on:
 
 permissions:
   actions: read
-  contents: write
+  contents: read
   id-token: write
 
 concurrency:
@@ -28,12 +28,12 @@ env:
 jobs:
   detect:
     name: Detect production components
-    if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[production-pins]')
     runs-on: ubuntu-latest
     outputs:
       images: ${{ steps.components.outputs.images }}
       charts: ${{ steps.components.outputs.charts }}
       any: ${{ steps.components.outputs.any }}
+      baseline: ${{ steps.components.outputs.baseline }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -42,35 +42,46 @@ jobs:
         id: components
         env:
           GH_TOKEN: ${{ github.token }}
+          FULL_STACK: ${{ inputs.full_stack || false }}
         run: |
           set -euo pipefail
-          baseline=''
-          while read -r run_id revision; do
-            if gh api --method GET "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs" \
-              --jq '[.jobs[] | select(.name == "Promote, pin, deploy, and verify" and .conclusion == "success")] | length' | grep -qx 1; then
-              baseline="$revision"
-              break
-            fi
-          done < <(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/CD.yml/runs" \
-            -f branch=production -f status=success -f per_page=20 \
-            --jq '.workflow_runs[] | [.id,.head_sha] | join(" ")')
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            baseline=''
+            while read -r run_id revision; do
+              if gh api --method GET "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs" \
+                --jq '[.jobs[] | select(.name == "Promote, pin, deploy, and verify" and .conclusion == "success")] | length' | grep -qx 1; then
+                baseline="$revision"
+                break
+              fi
+            done < <(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/CD.yml/runs" \
+              -f branch=production -f status=success -f per_page=20 \
+              --jq '.workflow_runs[] | [.id,.head_sha] | join(" ")')
+          else
+            baseline="$(git rev-parse origin/production)"
+          fi
           [[ "$baseline" =~ ^[0-9a-f]{40}$ ]]
-          scripts/production/detect-components.sh "$baseline" "$GITHUB_SHA"
+          echo "baseline=$baseline" >> "$GITHUB_OUTPUT"
+          if [[ "$FULL_STACK" == true ]]; then
+            echo 'charts=ingester,polymarket-bot,db-migrate,grafana,prometheus,loki,alloy,cloudflared' >> "$GITHUB_OUTPUT"
+            echo 'images=' >> "$GITHUB_OUTPUT"
+            echo 'any=true' >> "$GITHUB_OUTPUT"
+          else
+            scripts/production/detect-components.sh "$baseline" "$GITHUB_SHA"
+          fi
 
   validate:
     name: Validate release scope
     needs: detect
-    if: >-
-      always() &&
-      (inputs.full_stack || github.event_name == 'workflow_dispatch' || needs.detect.result == 'success')
+    if: needs.detect.result == 'success'
     runs-on: ubuntu-latest
     outputs:
+      baseline: ${{ needs.detect.outputs.baseline }}
       deployment_scope: ${{ steps.scope.outputs.deployment_scope }}
       deploy_components: ${{ steps.scope.outputs.deploy_components }}
       promote_components: ${{ steps.scope.outputs.promote_components }}
     env:
       DEPLOYMENT_SCOPE: ${{ inputs.full_stack && 'full-stack' || 'selected' }}
-      DEPLOY_COMPONENTS: ${{ needs.detect.outputs.charts && format('{0},ingester,polymarket-bot', needs.detect.outputs.charts) || 'ingester,polymarket-bot' }}
+      DEPLOY_COMPONENTS: ${{ needs.detect.outputs.charts }}
       PROMOTE_COMPONENTS: ${{ needs.detect.outputs.images }}
     steps:
       - name: Validate release scope
@@ -78,7 +89,7 @@ jobs:
         run: |
           [[ "$DEPLOYMENT_SCOPE" == full-stack || "$DEPLOYMENT_SCOPE" == selected ]]
           if [[ "$DEPLOYMENT_SCOPE" == selected ]]; then
-            [[ "$DEPLOY_COMPONENTS" =~ ^[a-z0-9,-]+$ ]]
+            [[ "$DEPLOY_COMPONENTS" =~ ^[a-z0-9,-]*$ ]]
             [[ "$PROMOTE_COMPONENTS" =~ ^[a-z0-9,-]*$ ]]
           fi
           {
@@ -87,16 +98,88 @@ jobs:
             echo "promote_components=$PROMOTE_COMPONENTS"
           } >> "$GITHUB_OUTPUT"
 
+  pins:
+    name: Validate committed release pins
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      deployment_scope: ${{ needs.validate.outputs.deployment_scope }}
+      deploy_components: ${{ needs.validate.outputs.deploy_components }}
+      promote_components: ${{ needs.validate.outputs.promote_components }}
+    env:
+      DEPLOY_COMPONENTS: ${{ needs.validate.outputs.deploy_components }}
+      BASELINE_REVISION: ${{ needs.validate.outputs.baseline }}
+      PIN_REPORT: ${{ runner.temp }}/production-pin-diagnostics/report.md
+      PROMETHEUS_BASIC_AUTH_USER: diagnostic
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Install pinned yq
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.47.2/yq_linux_amd64 -o /tmp/yq
+          curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.47.2/checksums -o /tmp/yq-checksums
+          expected="$(awk '$1 == "yq_linux_amd64" {print $19}' /tmp/yq-checksums)"
+          [ -n "$expected" ]
+          echo "$expected  /tmp/yq" | sha256sum -c -
+          sudo install -m 0755 /tmp/yq /usr/local/bin/yq
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.18.6
+      - name: Verify pins and render selected charts
+        run: scripts/production/validate-release-pins.sh
+      - name: Preserve diagnostic output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-pin-diagnostics
+          path: ${{ env.PIN_REPORT }}
+          if-no-files-found: warn
+
+  diagnostics:
+    name: Log release diagnostics
+    needs: pins
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      deployment_scope: ${{ needs.pins.outputs.deployment_scope }}
+      deploy_components: ${{ needs.pins.outputs.deploy_components }}
+      promote_components: ${{ needs.pins.outputs.promote_components }}
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: production-pin-diagnostics
+          path: ${{ runner.temp }}/production-pin-diagnostics
+      - name: Log inspected pins and deployment boundary
+        env:
+          VALIDATION_RESULT: ${{ needs.pins.result }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/production-pin-diagnostics/report.md"
+          if [[ -f "$report" ]]; then
+            cat "$report"
+            cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "Pin validation result: $VALIDATION_RESULT; production deployment skipped." | tee -a "$GITHUB_STEP_SUMMARY"
+
   deploy:
     name: Promote, pin, deploy, and verify
-    needs: validate
-    if: always() && needs.validate.result == 'success'
+    needs: diagnostics
+    # Temporary diagnostic boundary: no entry point can enable production writes.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      DEPLOYMENT_SCOPE: ${{ needs.validate.outputs.deployment_scope }}
-      DEPLOY_COMPONENTS: ${{ needs.validate.outputs.deploy_components }}
-      PROMOTE_COMPONENTS: ${{ needs.validate.outputs.promote_components }}
+      DEPLOYMENT_SCOPE: ${{ needs.diagnostics.outputs.deployment_scope }}
+      DEPLOY_COMPONENTS: ${{ needs.diagnostics.outputs.deploy_components }}
+      PROMOTE_COMPONENTS: ${{ needs.diagnostics.outputs.promote_components }}
     steps:
       - uses: actions/checkout@v6
         with:

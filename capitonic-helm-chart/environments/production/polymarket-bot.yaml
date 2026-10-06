@@ -1,5 +1,5 @@
 environment: production
-image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/polymarket-bot@sha256:be1770fc449d04826beb7698cac7e45b13982c57d746a86c7b283cda8f49a3c6
+image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/polymarket-bot:v3.2.7
 imagePullPolicy: IfNotPresent
 imagePullSecrets:
   - name: ecr-registry
