@@ -10,6 +10,7 @@ pub struct AgentSession {
     attempts: usize,
     accepted: bool,
     pending: Option<JoinHandle<EvaluationResult>>,
+    completed: Option<EvaluationResult>,
     cancellation: CancellationToken,
 }
 impl AgentSession {
@@ -25,6 +26,7 @@ impl AgentSession {
     pub fn due(&self, seconds: i64) -> bool {
         !self.accepted
             && self.pending.is_none()
+            && self.completed.is_none()
             && profile()
                 .attempts_seconds
                 .get(self.attempts)
@@ -41,6 +43,9 @@ impl AgentSession {
         Ok(())
     }
     pub async fn poll(&mut self) -> Option<EvaluationResult> {
+        if self.completed.is_some() {
+            return self.completed.take();
+        }
         if !self.pending.as_ref().is_some_and(|task| task.is_finished()) {
             return None;
         }
@@ -49,8 +54,12 @@ impl AgentSession {
     pub fn accept(&mut self) {
         self.accepted = true;
     }
+    pub fn defer(&mut self, result: EvaluationResult) {
+        self.completed = Some(result);
+    }
     pub fn cancel(&mut self) {
         self.cancellation.cancel();
+        self.completed = None;
         if let Some(task) = self.pending.take() {
             task.abort();
         }
@@ -75,6 +84,50 @@ mod tests {
         session.accept();
         assert!(!session.due(75));
         session.observe_market("b");
+        assert!(session.due(45));
+    }
+
+    #[tokio::test]
+    async fn deferred_result_is_bounded_and_cleared_on_rollover() {
+        use super::super::{AgentSelection, ProviderFailure, BRIDGE_VERSION, PROFILE_KEY};
+        use chrono::Utc;
+        use uuid::Uuid;
+        let mut session = AgentSession::default();
+        session.observe_market("a");
+        let request_id = Uuid::new_v4();
+        let result = EvaluationResult {
+            request: EvaluationRequest {
+                version: BRIDGE_VERSION,
+                request_id,
+                process_id: Uuid::new_v4(),
+                run_id: Uuid::new_v4(),
+                config_hash: "a".repeat(64),
+                selection: AgentSelection {
+                    profile_key: PROFILE_KEY.into(),
+                    profile_sha256: super::super::hash(&profile()).unwrap(),
+                },
+                market_id: "a".into(),
+                window_start: Utc::now(),
+                snapshot_id: Uuid::new_v4(),
+                observed_at: Utc::now(),
+                deadline: Utc::now(),
+                attempt: 45,
+                input_sha256: "b".repeat(64),
+                context: serde_json::json!({}),
+            },
+            completed_at: Utc::now(),
+            inference_seconds: 1.0,
+            response_id: None,
+            model: None,
+            prediction: Err(ProviderFailure::Transport),
+        };
+        session.defer(result.clone());
+        assert!(!session.due(75));
+        assert_eq!(session.poll().await.unwrap().request.request_id, request_id);
+        assert!(session.poll().await.is_none());
+        session.defer(result);
+        session.observe_market("b");
+        assert!(session.poll().await.is_none());
         assert!(session.due(45));
     }
 }

@@ -1318,6 +1318,20 @@ impl BtcProcessRunner {
                         <= member.strategy.max_reference_age_ms
             })
             .cloned();
+        // Keep one completed forecast until fresh shared execution evidence arrives.
+        // The market deadline and rollover checks above still expire it automatically.
+        if result
+            .as_ref()
+            .is_some_and(|result| result.prediction.is_ok())
+            && (inputs.chainlink_current.is_none()
+                || inputs.chainlink_open.is_none()
+                || inputs.up_book.is_none()
+                || inputs.down_book.is_none()
+                || !readiness.ready)
+        {
+            session.defer(result.expect("completed forecast checked above"));
+            return Ok(None);
+        }
         let mut snapshot = build_snapshot(
             self.config.process_id,
             market,
