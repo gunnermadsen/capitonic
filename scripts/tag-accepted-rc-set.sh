@@ -13,7 +13,7 @@ if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
   exit 65
 fi
 
-for tool in jq git; do
+for tool in git; do
   command -v "$tool" >/dev/null 2>&1 || { echo "Missing $tool" >&2; exit 69; }
 done
 
@@ -33,8 +33,17 @@ if [[ "$current_branch" == integration-* \
 fi
 
 for component in "${components[@]}"; do
-  version="$(jq -er --arg component "$component" '.components[$component].rcVersion' infra/production/release.json)"
-  rc_tag="rc/$component/$version"
+  rc_tags=()
+  while IFS= read -r tag; do
+    [[ "$tag" =~ ^rc/$component/v[0-9]+\.[0-9]+\.[0-9]+-rc\.(0|[1-9][0-9]*)$ ]] || continue
+    [[ "$(git cat-file -t "refs/tags/$tag")" == tag ]] || continue
+    rc_tags+=("$tag")
+  done < <(git tag --points-at "$accepted" --list "rc/$component/v*-rc.*")
+  (( ${#rc_tags[@]} == 1 )) || {
+    echo "Expected one accepted RC tag for $component at $accepted." >&2
+    exit 67
+  }
+  rc_tag="${rc_tags[0]}"
   annotation="$(git cat-file -p "refs/tags/$rc_tag")"
   candidate_tag="$(awk '$1 == "candidate_tag:" { print $2 }' <<<"$annotation")"
   golden_tag="$(awk '$1 == "golden_tag:" { print $2 }' <<<"$annotation")"

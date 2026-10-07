@@ -9,7 +9,7 @@ This is the operator runbook for the bot and ingester image path in local k3s. E
 | Validate the candidate, pin the chart image and `appVersion`, and deploy the committed pin | `scripts/local-image-cd.sh` |
 | Record accepted checkpoint and first-use `golden/...` provenance | Operator or agent under `AGENTS.md` |
 | Validate one accepted RC and atomically push its Git refs with `development` | `scripts/local-image-ci.sh <component> --tag-rc` |
-| Validate and atomically push every RC selected by the production release manifest | `scripts/tag-accepted-rc-set.sh` |
+| Validate and atomically push the component RC tags on the accepted checkpoint | `scripts/tag-accepted-rc-set.sh` |
 
 ## Feature or defect branch: local candidate
 
@@ -20,6 +20,8 @@ scripts/local-image-ci.sh polymarket-bot --build
 # or, on an ingester branch:
 scripts/local-image-ci.sh ingester --build
 ```
+
+Local CI selects the highest SemVer base among annotated `ci/<component>/v*-test.*`, `rc/<component>/v*-rc.*`, and `image/<component>/v*-local.*` tags reachable from the current commit. It allocates the next `local.N` on that base. Fetch origin tags before selecting a version. The committed production chart pin on `origin/production` closes a deployed base for changed inputs; select a newer base with a component Git tag.
 
 Use the `Candidate image` and image ID reported by CI. Invoke CD separately to generate the Helm pin, review and commit its changes, then invoke deployment as another command:
 
@@ -46,17 +48,17 @@ scripts/local-image-cd.sh rc <component> <vMAJOR.MINOR.PATCH-local.N>
 scripts/local-image-cd.sh deploy <component>
 ```
 
-Record the predeployment rollback tuple and perform Development Checkpoint Verification from `AGENTS.md`. If accepted, fast-forward `development`, record its annotated checkpoint tag, and create a `golden/...` tag only when each image is first accepted. When `infra/production/release.json` selects more than one component, validate and publish the complete release set together:
+Record the predeployment rollback tuple and perform Development Checkpoint Verification from `AGENTS.md`. If accepted, fast-forward `development`, record its annotated checkpoint tag, and create a `golden/...` tag only when each image is first accepted. To validate and publish the complete three-component release set together:
 
 ```sh
 scripts/tag-accepted-rc-set.sh
 ```
 
-The command checks every accepted chart, running image ID, and provenance before publishing `development`, the aligned integration branch, checkpoint, candidate, image-hash, golden, and RC refs in one `git push --atomic` operation. This prevents CI from observing a partially tagged release manifest. Use `scripts/local-image-ci.sh <component> --tag-rc` only when the release manifest selects a single component. Never push those related refs separately. A golden image remains identified by its immutable image ID and embedded source revision; an RC alias does not change its bytes.
+The command checks every accepted chart, running image ID, and provenance before publishing `development`, the aligned integration branch, checkpoint, candidate, image-hash, golden, and RC refs in one `git push --atomic` operation. The command selects exactly one annotated RC tag per component on the accepted checkpoint. This prevents CI from observing a partially published set of release tags. Use `scripts/local-image-ci.sh <component> --tag-rc` when publishing a single component. Never push those related refs separately. A golden image remains identified by its immutable image ID and embedded source revision; an RC alias does not change its bytes.
 
 ## Separate production boundary
 
-GitHub Actions retains the local CI component boundaries: it runs the bot and ingester formatting, Clippy, unit/integration tests, the existing Docker-backed outage-recovery integration workflow, ingester documentation checks, and the db-migrate TypeScript build/tests. Every production image publication depends on all of those checks. It builds only components whose image inputs changed or whose accepted RC selection changed. Production images are built by GitHub CI from the accepted component source as `linux/arm64`, then published under immutable component-source-revision and SemVer RC tags from `infra/production/release.json`; no mutable `production` image tag is permitted. CI verifies the matching accepted `rc/<component>/<version>` Git provenance before publishing an absent ECR RC, and verifies an existing ECR RC's architecture and embedded revision without rebuilding or overwriting it. Local CI qualifies the local k3s image and publishes Git provenance only; it must not stage or push the production ECR image. An independently rebuilt CI image does not inherit local golden status merely because it has the same source.
+GitHub Actions retains the local CI component boundaries: it runs the bot and ingester formatting, Clippy, unit/integration tests, the existing Docker-backed outage-recovery integration workflow, ingester documentation checks, and the db-migrate TypeScript build/tests. Every production image publication depends on all of those checks. It builds only components whose image inputs changed or whose accepted RC selection changed. Production images are built by GitHub CI from the accepted component source as `linux/arm64`, then published under immutable component-source-revision and SemVer test or RC versions selected from component Git tags; no mutable `production` image tag is permitted. CI verifies the matching accepted `rc/<component>/<version>` Git provenance before publishing an absent ECR RC, and verifies an existing ECR RC's architecture and embedded revision without rebuilding or overwriting it. Local CI qualifies the local k3s image and publishes Git provenance only; it must not stage or push the production ECR image. An independently rebuilt CI image does not inherit local golden status merely because it has the same source.
 
 ### Production CD release contract
 
@@ -68,7 +70,7 @@ production deployment or a simulation of live checks.
 
 | Order | Workflow job | Behavior |
 | --- | --- | --- |
-| 1 | Detect production components | Establish the exact revision and baseline; select committed chart/value/configuration changes, preserving an empty no-op. Application source and `release.json` do not select components. |
+| 1 | Detect production components | Establish the exact revision and baseline; select committed chart/value/configuration changes, preserving an empty no-op. Application source changes alone do not select deployment components. |
 | 2 | Validate release scope | Validate the selected scope without implicitly adding components. |
 | 3 | Verify release authorization | In parallel with validation, admit only the first direct CD execution of a production push associated with a merged same-repository `development → production` PR. `gunnermadsen` must approve the final PR head before merging and must merge it. Direct pushes without this evidence fail closed. Manual runs, internal calls and reruns remain planning-only. |
 | 3 | Validate release pins / images / charts | Parallel matrix jobs reuse `validate-release-pins.sh`: committed version/secret declarations and RC/golden provenance; read-only ECR digest/ARM64/source verification; runner-local Helm lint/render. Each publishes a separate report. |
@@ -78,7 +80,7 @@ production deployment or a simulation of live checks.
 Production values already contain immutable final version tags, expected digests,
 source revisions, chart metadata, secret-version pins and credential revisions.
 CD validates these inputs; it never prepares new pins, publishes final image tags,
-writes `release.json`, commits metadata, or creates/pushes Git tags. Unselected
+writes a release manifest, commits metadata, or creates/pushes Git tags. Unselected
 component pins are preserved. Existing helpers and unrelated workflows keep their
 owners. Live selected execution still uses ECR credential refresh and existing
 Argo/Helm reconciliation; planning does not promise those commands are no-ops.
@@ -104,8 +106,7 @@ gh workflow run CD.yml --ref development
 
 The manual run compares that revision against `origin/production`, reports declared
 configuration/secret differences and renders selected charts without deploying.
-Cloudflared rendering uses a diagnostic tunnel-ID placeholder. `release.json`
-remains for other consumers; CD does not migrate local tooling or provisioning.
+Cloudflared rendering uses a diagnostic tunnel-ID placeholder. Component Git tags own image version allocation; committed Helm values own deployment selection. The obsolete image `release.json` has been removed.
 
 GitHub production branch protection requires PR review, dismisses stale approvals
 and applies to administrators. CD additionally verifies the named approver and
