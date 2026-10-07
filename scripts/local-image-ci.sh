@@ -49,21 +49,18 @@ case "$component" in
   polymarket-bot)
     dockerfile="packages/polymarket-bot/Dockerfile.production"
     revision_arg="POLYMARKET_GIT_REVISION"
-    base_version="3.2.4"
     checks_description="local formatting, Clippy, and component tests passed"
     image_inputs=(.dockerignore Cargo.toml Cargo.lock packages/polymarket-bot/Cargo.toml packages/market-data-ingester/Cargo.toml packages/polymarket-bot/build.rs common/proto packages/polymarket-bot/src packages/btc-directional-model/runtime-models packages/polymarket-bot/scripts/package_models.py "$dockerfile")
     ;;
   ingester)
     dockerfile="packages/market-data-ingester/Dockerfile.production"
     revision_arg="INGESTER_GIT_REVISION"
-    base_version="1.2.1"
     checks_description="local formatting, Clippy, component tests, and docs passed"
     image_inputs=(.dockerignore Cargo.toml Cargo.lock packages/polymarket-bot/Cargo.toml packages/market-data-ingester/Cargo.toml packages/market-data-ingester/build.rs common/proto packages/market-data-ingester/src "$dockerfile")
     ;;
   db-migrate)
     dockerfile="packages/db-migrate/Dockerfile.production"
     revision_arg="DB_MIGRATE_GIT_REVISION"
-    base_version="0.2.0"
     checks_description="local TypeScript build and component tests passed"
     image_inputs=(.dockerignore packages/db-migrate/package.json packages/db-migrate/package-lock.json packages/db-migrate/tsconfig.json packages/db-migrate/src "$dockerfile")
     ;;
@@ -83,17 +80,33 @@ image_inputs_sha256() {
   git ls-tree -r --full-tree "$1" -- "${image_inputs[@]}" | LC_ALL=C shasum -a 256 | awk '{print $1}'
 }
 
-if [[ "$mode" == --build || "$mode" == --next-version ]] && [[ -f infra/production/release.json ]]; then
-  selected_rc="$(python3 -c 'import json,sys; print(json.load(open("infra/production/release.json"))["components"][sys.argv[1]]["rcVersion"])' "$component")"
-  [[ "$selected_rc" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.(0|[1-9][0-9]*)$ ]] || exit 64
-  base_version="${selected_rc#v}"; base_version="${base_version%%-*}"
-  production_release="$(git show origin/production:infra/production/release.json)" || exit 67
-  promoted_version="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["components"][sys.argv[1]]["finalVersion"])' "$component" <<< "$production_release")"
-  promoted_source="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["components"][sys.argv[1]]["sourceRevision"])' "$component" <<< "$production_release")"
-  if python3 -c 'import sys; sys.exit(0 if tuple(map(int,sys.argv[1].split("."))) <= tuple(map(int,sys.argv[2].lstrip("v").split("."))) else 1)' "$base_version" "$promoted_version" &&
-     [[ "$(image_inputs_sha256 HEAD)" != "$(image_inputs_sha256 "$promoted_source")" ]]; then
-    echo "Production $promoted_version closes this version base; select a newer SemVer base in infra/production/release.json before building changed inputs." >&2
+if [[ "$mode" == --build || "$mode" == --next-version ]]; then
+  base_version="$(
+    while IFS= read -r tag; do
+      version="${tag##*/}"
+      [[ "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(test|rc|local)\.(0|[1-9][0-9]*)$ ]] || continue
+      [[ "$(git cat-file -t "refs/tags/$tag")" == tag ]] || continue
+      git merge-base --is-ancestor "refs/tags/$tag" HEAD || continue
+      version="${version#v}"
+      printf '%s\n' "${version%%-*}"
+    done < <(git tag --list "ci/$component/v*-test.*" "rc/$component/v*-rc.*" "image/$component/v*-local.*") |
+      python3 -c 'import sys; versions=[tuple(map(int,line.strip().split("."))) for line in sys.stdin]; print(".".join(map(str,max(versions))) if versions else "")'
+  )"
+  [[ -n "$base_version" ]] || {
+    echo "No annotated component version tag reachable from HEAD for $component." >&2
     exit 67
+  }
+  if git rev-parse --verify origin/production >/dev/null 2>&1; then
+    production_values="$(git show "origin/production:capitonic-helm-chart/environments/production/$component.yaml")" || exit 67
+    promoted_version="$(yq -r '.release.version' - <<< "$production_values")"
+    promoted_version="${promoted_version%-rc.*}"
+    promoted_source="$(yq -r '.release.sourceRevision' - <<< "$production_values")"
+    [[ "$promoted_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "$promoted_source" =~ ^[0-9a-f]{40}$ ]] || exit 67
+    if python3 -c 'import sys; sys.exit(0 if tuple(map(int,sys.argv[1].split("."))) <= tuple(map(int,sys.argv[2].lstrip("v").split("."))) else 1)' "$base_version" "$promoted_version" &&
+       [[ "$(image_inputs_sha256 HEAD)" != "$(image_inputs_sha256 "$promoted_source")" ]]; then
+      echo "Production $promoted_version closes this version base; select a newer SemVer base with a component Git tag before building changed inputs." >&2
+      exit 67
+    fi
   fi
 fi
 

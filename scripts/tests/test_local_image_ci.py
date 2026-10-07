@@ -117,6 +117,8 @@ state_file.write_text(json.dumps(state))
                         GIT_COMMITTER_EMAIL="ci-test@example.invalid")
         self.git("init", "-q", "-b", "defect/local-ci-test")
         self.commit()
+        for component, version in (("polymarket-bot", "3.2.4"), ("ingester", "1.2.1"), ("db-migrate", "0.2.0")):
+            self.git("tag", "-a", f"ci/{component}/v{version}-test.0", "-m", "fixture version")
 
     def git(self, *args):
         return subprocess.run(["git", *args], cwd=self.repo, env=self.env,
@@ -217,26 +219,68 @@ state_file.write_text(json.dumps(state))
         (self.repo / "packages/polymarket-bot/src/main.rs").write_text("new model inputs\n")
         self.commit()
         self.assertEqual(self.run_ci("polymarket-bot").returncode, 0)
-        release_path = self.repo / "infra/production/release.json"
-        release_path.parent.mkdir(parents=True)
-        release = {"components": {"polymarket-bot": {
-            "rcVersion": "v3.2.4-rc.1", "finalVersion": "v3.2.4",
-            "sourceRevision": promoted_source,
-        }}}
-        release_path.write_text(json.dumps(release))
+        production_values = self.repo / "capitonic-helm-chart/environments/production/polymarket-bot.yaml"
+        production_values.parent.mkdir(parents=True)
+        production_values.write_text(f"release:\n  version: v3.2.4-rc.1\n  sourceRevision: {promoted_source}\n")
         self.commit()
         self.git("update-ref", "refs/remotes/origin/production", "HEAD")
         blocked = self.run_ci("polymarket-bot")
         self.assertNotEqual(blocked.returncode, 0)
         self.assertIn("closes this version base", blocked.stderr)
         self.assertEqual(self.count.read_text(), "2")
-        release["components"]["polymarket-bot"]["rcVersion"] = "v3.2.5-rc.0"
-        release_path.write_text(json.dumps(release))
-        self.commit()
+        self.git("tag", "-a", "ci/polymarket-bot/v3.2.5-test.0", "-m", "next version")
         corrected = self.run_ci("polymarket-bot")
         self.assertEqual(corrected.returncode, 0, corrected.stderr)
         self.assertIn("image/polymarket-bot/v3.2.5-local.0", self.tags("polymarket-bot"))
         self.assertEqual(self.count.read_text(), "3")
+
+    def test_version_selection_ignores_unreachable_and_lightweight_tags(self):
+        self.git("tag", "ci/ingester/v99.0.0-test.0")
+        self.git("checkout", "-qb", "feature/unrelated")
+        (self.repo / "unrelated.txt").write_text("other branch")
+        self.commit()
+        self.git("tag", "-a", "ci/ingester/v98.0.0-test.0", "-m", "unrelated")
+        self.git("checkout", "defect/local-ci-test")
+        self.git("tag", "-a", "rc/ingester/v1.10.0-rc.0", "-m", "selected base")
+        self.git("tag", "-a", "ci/ingester/v1.9.0-test.0", "-m", "older base")
+        result = self.run_ci("ingester")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("image/ingester/v1.10.0-local.0", self.tags("ingester"))
+
+    def test_rc_set_publishes_checkpoint_tags_without_manifest(self):
+        shutil.copy2(SCRIPT.parent / "tag-accepted-rc-set.sh", self.repo / "scripts/tag-accepted-rc-set.sh")
+        (self.repo / "scripts/local-image-ci.sh").write_text("#!/bin/sh\nexit 0\n")
+        self.commit()
+        accepted = self.git("rev-parse", "HEAD")
+        self.git("branch", "development")
+        checkpoint = f"checkpoint/development/git-{accepted}"
+        self.git("tag", "-a", checkpoint, "-m", "fixture checkpoint")
+        for component in ("polymarket-bot", "ingester", "db-migrate"):
+            candidate = f"image/{component}/v1.0.0-local.0"
+            golden = f"golden/{component}/sha256-" + "1" * 64
+            image_hash = f"image/{component}/sha256-" + "1" * 64
+            for tag in (candidate, golden, image_hash):
+                self.git("tag", "-a", tag, "-m", "fixture image")
+            self.git("tag", "-a", f"rc/{component}/v1.0.0-rc.0", "-m",
+                     f"candidate_tag: {candidate}\ngolden_tag: {golden}\nimage_id: sha256:" + "1" * 64)
+        remote = self.root / "remote.git"
+        self.git("init", "--bare", str(remote))
+        self.git("remote", "add", "origin", str(remote))
+        result = subprocess.run(["bash", "scripts/tag-accepted-rc-set.sh"], cwd=self.repo,
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        refs = self.git("ls-remote", "origin")
+        for component in ("polymarket-bot", "ingester", "db-migrate"):
+            self.assertIn(f"refs/tags/rc/{component}/v1.0.0-rc.0", refs)
+        self.assertIn("refs/heads/development", refs)
+        self.assertFalse((self.repo / "infra/production/release.json").exists())
+
+    def test_missing_version_tag_does_not_build(self):
+        self.git("tag", "-d", "ci/ingester/v1.2.1-test.0")
+        result = self.run_ci("ingester")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("No annotated component version tag", result.stderr)
+        self.assertEqual(self.count.read_text(), "0")
 
 
 if __name__ == "__main__":
