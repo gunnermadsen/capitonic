@@ -422,10 +422,10 @@ jobs:
       needs.changes.outputs.any_image == 'true' &&
       needs.repository-layout.result == 'success' &&
       (needs.helm-lint.result == 'success' || needs.helm-lint.result == 'skipped') &&
-      (needs.rust-tests.result == 'success' || needs.rust-tests.result == 'skipped') &&
+      (needs.polymarket-bot-tests.result == 'success' || needs.polymarket-bot-tests.result == 'skipped') &&
       (needs.market-data-ingester-tests.result == 'success' || needs.market-data-ingester-tests.result == 'skipped') &&
       (needs.db-migrate-tests.result == 'success' || needs.db-migrate-tests.result == 'skipped')
-    needs: [changes, repository-layout, helm-lint, rust-tests, market-data-ingester-tests, db-migrate-tests]
+    needs: [changes, repository-layout, helm-lint, polymarket-bot-tests, market-data-ingester-tests, db-migrate-tests]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     strategy:
