@@ -7,10 +7,6 @@ on:
       - feature/**
       - defect/**
       - fix/**
-    tags:
-      - rc/polymarket-bot/v*-rc.*
-      - rc/ingester/v*-rc.*
-      - rc/db-migrate/v*-rc.*
 
 permissions:
   contents: read
@@ -442,7 +438,7 @@ jobs:
     name: Build and push ${{ matrix.name }} production image
     if: >-
       always() &&
-      (github.ref == 'refs/heads/development' || startsWith(github.ref, 'refs/tags/rc/')) &&
+      github.ref == 'refs/heads/development' &&
       needs.changes.outputs.any_image == 'true' &&
       needs.repository-layout.result == 'success' &&
       (needs.helm-lint.result == 'success' || needs.helm-lint.result == 'skipped') &&
