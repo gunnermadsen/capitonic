@@ -1401,14 +1401,17 @@ impl BtcProcessRunner {
                     .context("agent sources missing from frozen configuration")?
                     .clone(),
             )?;
-            let context = if selection.profile_key == agent::VOLATILITY_PROFILE_KEY {
+            let context = if matches!(
+                selection.profile_key.as_str(),
+                agent::VOLATILITY_PROFILE_KEY | agent::REASSESSMENT_PROFILE_KEY
+            ) {
                 agent::build_volatility_context(&observation.state, &snapshot, &sources)
             } else if selection.profile_key == agent::SETTLEMENT_PROFILE_KEY {
                 agent::build_settlement_context(&observation.state, &snapshot, &sources)
             } else {
                 agent::build_context(&observation.state, &snapshot, &sources)
             };
-            let request = agent::EvaluationRequest {
+            let mut request = agent::EvaluationRequest {
                 version: agent::BRIDGE_VERSION.into(),
                 request_id: Uuid::new_v4(),
                 process_id: self.config.process_id,
@@ -1425,6 +1428,10 @@ impl BtcProcessRunner {
                 input_sha256: agent::hash(&context)?,
                 context,
             };
+            if selection.profile_key == agent::REASSESSMENT_PROFILE_KEY {
+                agent::add_reassessment_context(&mut request, session.latest());
+                request.input_sha256 = agent::hash(&request.context)?;
+            }
             session.start(request)?;
             umr_telemetry::eligible_market(self.config.process_id, &market.market_id);
             umr_telemetry::event(self.config.process_id, "agent_requests", "started");
