@@ -1,6 +1,7 @@
 //! Asynchronous decision providers within UMR. Process runners alone own execution.
 pub mod auth;
 mod context;
+pub(super) mod diagnostics;
 mod provider;
 mod reassessment;
 mod session;
@@ -9,6 +10,7 @@ use anyhow::{ensure, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 pub use context::{build_context, build_settlement_context, build_volatility_context};
+pub use diagnostics::FailureDiagnostic;
 pub use provider::OpenAiProvider;
 pub use reassessment::add_reassessment_context;
 use serde::{Deserialize, Serialize};
@@ -219,6 +221,8 @@ impl ProviderFailure {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvaluationResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_diagnostic: Option<FailureDiagnostic>,
     pub request: EvaluationRequest,
     pub completed_at: DateTime<Utc>,
     pub inference_seconds: f64,

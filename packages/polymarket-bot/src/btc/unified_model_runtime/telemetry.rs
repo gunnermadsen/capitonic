@@ -334,6 +334,11 @@ pub fn register(
                     .or_default();
             }
             p.gauges.entry("agent_pending").or_default();
+            for reason in super::agent::diagnostics::FAILURE_REASONS {
+                p.counters
+                    .entry(("agent_response_failures", (*reason).into()))
+                    .or_default();
+            }
             p.gauges.entry("agent_decision_second").or_default();
         }
         for (metric, reasons) in [
@@ -1683,6 +1688,7 @@ mod router_tests {
         let id = Uuid::new_v4();
         let at = Utc::now();
         let result = EvaluationResult {
+            failure_diagnostic: None,
             request: EvaluationRequest {
                 version: super::super::agent::BRIDGE_VERSION.into(),
                 request_id: Uuid::new_v4(),

@@ -5862,7 +5862,8 @@
       "id": 98, "title": "Agent subscription requests", "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "x": 0, "y": 403, "w": 12, "h": 8 },
-      "targets": [{ "refId": "A", "expr": "sum by(process_id,reason)(increase(polymarket_umr_agent_requests_total{process_id=~\"$process\"}[$__rate_interval]))", "legendFormat": "{{process_id}} · {{reason}}", "range": true }],
+      "description": "Request outcomes and bounded failure causes. Failure breakdown counts each provider evaluation once; reasons are not separate order rejections. Correlate umr_agent_response_failed logs by request_id in the process diagnostics panel.",
+      "targets": [{ "refId": "A", "expr": "sum by(process_id,reason)(increase(polymarket_umr_agent_requests_total{process_id=~\"$process\"}[$__rate_interval]))", "legendFormat": "{{process_id}} · {{reason}}", "range": true }, { "refId": "B", "expr": "sum by(process_id,reason)(increase(polymarket_umr_agent_response_failures_total{process_id=~\"$process\"}[$__rate_interval]))", "legendFormat": "{{process_id}} · failure: {{reason}}", "range": true }],
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] }
     },
     {

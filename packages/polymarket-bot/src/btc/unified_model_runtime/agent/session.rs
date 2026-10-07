@@ -128,6 +128,7 @@ mod tests {
         use uuid::Uuid;
         let request_id = Uuid::new_v4();
         EvaluationResult {
+            failure_diagnostic: None,
             request: EvaluationRequest {
                 version: BRIDGE_VERSION.into(),
                 request_id,
@@ -159,6 +160,23 @@ mod tests {
                 reason_codes: vec!["momentum".into()],
             }),
         }
+    }
+
+    #[test]
+    fn saved_evaluations_without_diagnostics_remain_readable() {
+        let old = serde_json::to_value(forecast()).unwrap();
+        assert!(old.get("failure_diagnostic").is_none());
+        let restored: EvaluationResult = serde_json::from_value(old).unwrap();
+        assert!(restored.failure_diagnostic.is_none());
+        let mut failed = forecast();
+        failed.failure_diagnostic = Some(super::super::FailureDiagnostic {
+            stage: "validation".into(),
+            reason: "reason_codes".into(),
+            ..Default::default()
+        });
+        let restored: EvaluationResult =
+            serde_json::from_value(serde_json::to_value(failed).unwrap()).unwrap();
+        assert_eq!(restored.failure_diagnostic.unwrap().reason, "reason_codes");
     }
 
     #[tokio::test]

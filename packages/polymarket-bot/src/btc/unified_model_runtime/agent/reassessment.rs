@@ -112,6 +112,7 @@ mod tests {
             context,
         };
         let previous = EvaluationResult {
+            failure_diagnostic: None,
             request: request.clone(),
             completed_at: start + Duration::seconds(52),
             inference_seconds: 7.0,
