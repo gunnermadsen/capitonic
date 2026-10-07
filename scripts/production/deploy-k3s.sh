@@ -19,7 +19,8 @@ case "${DEPLOYMENT_SCOPE:-full-stack}" in
   full-stack) components=(polymarket-bot ingester db-migrate) ;;
   *) echo "Unsupported deployment scope: $DEPLOYMENT_SCOPE" >&2; exit 64 ;;
 esac
-scripts/production/install-yq.sh
+command -v yq >/dev/null || { echo "Provisioning prerequisite missing: yq v4.47.2." >&2; exit 69; }
+[[ "$(yq --version)" == *"version v4.47.2"* ]] || { echo "Provisioning prerequisite requires yq v4.47.2." >&2; exit 69; }
 
 for component in "${components[@]}"; do
   case "$component" in
@@ -28,8 +29,18 @@ for component in "${components[@]}"; do
     *) echo "Unsupported deployment component: $component" >&2; exit 64 ;;
   esac
   image="$(yq -r .image "capitonic-helm-chart/environments/production/$component.yaml")"
-  [[ "$image" =~ ^192200846560\.dkr\.ecr\.eu-west-1\.amazonaws\.com/capitonic/$component@sha256:[0-9a-f]{64}$ ]]
-  [[ "$image" != *sha256:0000000000000000000000000000000000000000000000000000000000000000 ]]
+  values="capitonic-helm-chart/environments/production/$component.yaml"
+  version="$(yq -r '.release.version' "$values")"
+  digest="$(yq -r '.release.digest' "$values")"
+  source_revision="$(yq -r '.release.sourceRevision' "$values")"
+  [[ "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?$ ]]
+  [[ "$image" == "192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/$component:$version" ]]
+  [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+  [[ "$digest" != sha256:0000000000000000000000000000000000000000000000000000000000000000 ]]
+  [[ "$source_revision" =~ ^[0-9a-f]{40}$ ]]
+  [[ "$(yq -r '.appVersion' "capitonic-helm-chart/charts/$component/Chart.yaml")" == "$version" ]]
+  [[ "$(yq -r .environment "$values")" == production ]]
+  # CD verifies the production-rendered version's immutable registry digest before invoking the host.
 done
 
 deploy_chart() {

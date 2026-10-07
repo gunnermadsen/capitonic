@@ -149,16 +149,20 @@ class ModelPackagingTest(unittest.TestCase):
         commit()
         self.assertEqual(packager.input_paths(self.root, "HEAD"), [packager.CATALOG])
 
-    def test_real_manifest_packages_only_production_pair(self):
+    def test_real_manifest_packages_production_pairs(self):
         expected = {
             "btc-5m-conservative-selective-paper-20260917",
             "btc-5m-conservative-selective-development-live-pilot-20260921-v1",
+            "btc-5m-conservative-selective-confidence-075-paper-20261001",
+            "btc-5m-conservative-selective-confidence-075-live-pilot-20261006",
         }
         packager.package(ROOT, self.output)
         self.assertEqual({p.name for p in self.output.iterdir() if p.is_dir()}, expected)
         definitions = [
             "btc-5m-conservative-selective-paper-20260917.json",
             "btc-5m-conservative-selective-live-pilot-20260921.json",
+            "btc-5m-conservative-selective-confidence-075-paper-20261001.json",
+            "btc-5m-conservative-selective-confidence-075-live-pilot-20261006.json",
         ]
         for name in definitions:
             definition = json.loads((ROOT / "infra/processes" / name).read_bytes())

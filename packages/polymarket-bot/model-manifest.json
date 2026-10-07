@@ -8,6 +8,14 @@
     {
       "model_key": "btc-5m-conservative-selective-development-live-pilot-20260921-v1",
       "artifact_sha256": "a26e1a7fbc014c362ec20251b6242c1953e8a59a0c34dfab2912a90c459405c7"
+    },
+    {
+      "model_key": "btc-5m-conservative-selective-confidence-075-paper-20261001",
+      "artifact_sha256": "d413b59cbbc6c613aad82b1ad39cb1cf24aae56d853811859cf30cd43cedbbf6"
+    },
+    {
+      "model_key": "btc-5m-conservative-selective-confidence-075-live-pilot-20261006",
+      "artifact_sha256": "d18f13dd58f3b32ace158f9bf46b05ae897aaf65776f8a7ee553bddf0131761e"
     }
   ]
 }

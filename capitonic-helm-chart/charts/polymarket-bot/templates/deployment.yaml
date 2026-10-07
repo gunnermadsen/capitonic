@@ -39,7 +39,7 @@ spec:
         runAsUser: 10002
       containers:
         - name: polymarket-bot
-          image: {{ .Values.image | quote }}
+          image: {{ include "polymarket-bot.image" . | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           ports:
             - {name: http, containerPort: 8097}

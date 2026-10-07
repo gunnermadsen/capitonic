@@ -13,7 +13,8 @@ on:
 
 permissions:
   actions: read
-  contents: write
+  contents: read
+  pull-requests: read
   id-token: write
 
 concurrency:
@@ -28,59 +29,226 @@ env:
 jobs:
   detect:
     name: Detect production components
-    if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[production-pins]')
     runs-on: ubuntu-latest
     outputs:
       images: ${{ steps.components.outputs.images }}
       charts: ${{ steps.components.outputs.charts }}
       any: ${{ steps.components.outputs.any }}
+      baseline: ${{ steps.components.outputs.baseline }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Compare with the last successful production deployment
+      - name: Select release components
         id: components
         env:
           GH_TOKEN: ${{ github.token }}
+          FULL_STACK: ${{ inputs.full_stack || false }}
         run: |
           set -euo pipefail
-          baseline=''
-          while read -r run_id revision; do
-            if gh api --method GET "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs" \
-              --jq '[.jobs[] | select(.name == "Promote, pin, deploy, and verify" and .conclusion == "success")] | length' | grep -qx 1; then
-              baseline="$revision"
-              break
-            fi
-          done < <(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/CD.yml/runs" \
-            -f branch=production -f status=success -f per_page=20 \
-            --jq '.workflow_runs[] | [.id,.head_sha] | join(" ")')
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            baseline=''
+            while read -r run_id revision; do
+              if gh api --method GET "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs" \
+                --jq '[.jobs[] | select(.name == "Promote, pin, deploy, and verify" and .conclusion == "success")] | length' | grep -qx 1; then
+                baseline="$revision"
+                break
+              fi
+            done < <(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/CD.yml/runs" \
+              -f branch=production -f status=success -f per_page=20 \
+              --jq '.workflow_runs[] | [.id,.head_sha] | join(" ")')
+          else
+            baseline="$(git rev-parse origin/production)"
+          fi
           [[ "$baseline" =~ ^[0-9a-f]{40}$ ]]
-          scripts/production/detect-components.sh "$baseline" "$GITHUB_SHA"
+          echo "baseline=$baseline" >> "$GITHUB_OUTPUT"
+          if [[ "$FULL_STACK" == true ]]; then
+            echo 'charts=ingester,polymarket-bot,db-migrate,grafana,prometheus,loki,alloy,cloudflared' >> "$GITHUB_OUTPUT"
+            echo 'images=' >> "$GITHUB_OUTPUT"
+            echo 'any=true' >> "$GITHUB_OUTPUT"
+          else
+            scripts/production/detect-components.sh "$baseline" "$GITHUB_SHA"
+          fi
 
-  deploy:
-    name: Promote, pin, deploy, and verify
+  validate:
+    name: Validate release scope
     needs: detect
-    if: >-
-      always() &&
-      (inputs.full_stack || github.event_name == 'workflow_dispatch' || needs.detect.result == 'success')
+    if: needs.detect.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    outputs:
+      baseline: ${{ needs.detect.outputs.baseline }}
+      deployment_scope: ${{ steps.scope.outputs.deployment_scope }}
+      deploy_components: ${{ steps.scope.outputs.deploy_components }}
+      promote_components: ${{ steps.scope.outputs.promote_components }}
     env:
       DEPLOYMENT_SCOPE: ${{ inputs.full_stack && 'full-stack' || 'selected' }}
-      DEPLOY_COMPONENTS: ${{ needs.detect.outputs.charts && format('{0},ingester,polymarket-bot', needs.detect.outputs.charts) || 'ingester,polymarket-bot' }}
+      DEPLOY_COMPONENTS: ${{ needs.detect.outputs.charts }}
       PROMOTE_COMPONENTS: ${{ needs.detect.outputs.images }}
+    steps:
+      - name: Validate release scope
+        id: scope
+        run: |
+          [[ "$DEPLOYMENT_SCOPE" == full-stack || "$DEPLOYMENT_SCOPE" == selected ]]
+          if [[ "$DEPLOYMENT_SCOPE" == selected ]]; then
+            [[ "$DEPLOY_COMPONENTS" =~ ^[a-z0-9,-]*$ ]]
+            [[ "$PROMOTE_COMPONENTS" =~ ^[a-z0-9,-]*$ ]]
+          fi
+          PROMOTE_COMPONENTS=''
+          IFS=, read -ra selected <<< "$DEPLOY_COMPONENTS"
+          for component in "${selected[@]}"; do
+            case "$component" in
+              polymarket-bot|ingester|db-migrate) PROMOTE_COMPONENTS+="${PROMOTE_COMPONENTS:+,}$component" ;;
+            esac
+          done
+          {
+            echo "deployment_scope=$DEPLOYMENT_SCOPE"
+            echo "deploy_components=$DEPLOY_COMPONENTS"
+            echo "promote_components=$PROMOTE_COMPONENTS"
+          } >> "$GITHUB_OUTPUT"
+
+  admission:
+    name: Verify release authorization
+    needs: validate
+    runs-on: ubuntu-latest
+    outputs:
+      live: ${{ steps.admission.outputs.live }}
+    steps:
+      - name: Admit approved merged release or planning only
+        id: admission
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_APPROVER: gunnermadsen
+        run: |
+          set -euo pipefail
+          echo 'live=false' >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_EVENT_NAME" != push || "$GITHUB_REF" != refs/heads/production || "$GITHUB_RUN_ATTEMPT" != 1 || "$GITHUB_WORKFLOW_REF" != "$GITHUB_REPOSITORY/.github/workflows/CD.yml@refs/heads/production" ]]; then
+            echo 'Planning only: manual calls, internal calls and reruns cannot authorize deployment.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/production" --jq .object.sha)" == "$GITHUB_SHA" ]]
+          prs="$(gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" | jq -s 'add')"
+          release="$(jq -ce --arg revision "$GITHUB_SHA" --arg approver "$RELEASE_APPROVER" --arg repository "$GITHUB_REPOSITORY" '
+            [.[] | select(.merged_at != null and .merge_commit_sha == $revision and
+              .base.ref == "production" and .head.ref == "development" and
+              .head.repo.full_name == $repository)] |
+            if length == 1 then .[0] else error("Require exactly one user-merged development release PR") end
+          ' <<< "$prs")"
+          number="$(jq -r .number <<< "$release")"
+          release="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number")"
+          jq -e --arg approver "$RELEASE_APPROVER" --arg revision "$GITHUB_SHA" '
+            .merged == true and .merged_by.login == $approver and .merge_commit_sha == $revision
+          ' <<< "$release" >/dev/null
+          # The maintainer's manual GitHub PR merge authorizes release; a separate self-review is not required.
+          echo 'live=true' >> "$GITHUB_OUTPUT"
+          echo "Authorized release PR #$number; exact merged revision $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"
+
+  checks:
+    name: Validate release ${{ matrix.task }}
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        task: [pins, images, charts]
+    env:
+      VALIDATION_TASK: ${{ matrix.task }}
+      DEPLOY_COMPONENTS: ${{ needs.validate.outputs.deploy_components }}
+      BASELINE_REVISION: ${{ needs.validate.outputs.baseline }}
+      PROMETHEUS_BASIC_AUTH_USER: diagnostic
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'push' && github.sha || 'production' }}
-      - name: Validate selected components
+      - uses: aws-actions/configure-aws-credentials@v6
+        if: matrix.task == 'images'
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Install pinned yq
         run: |
-          [[ "$DEPLOYMENT_SCOPE" == full-stack || "$DEPLOYMENT_SCOPE" == selected ]]
-          if [[ "$DEPLOYMENT_SCOPE" == selected ]]; then
-            [[ "$DEPLOY_COMPONENTS" =~ ^[a-z0-9,-]+$ ]]
-            [[ "$PROMOTE_COMPONENTS" =~ ^[a-z0-9,-]*$ ]]
-          fi
+          set -euo pipefail
+          curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.47.2/yq_linux_amd64 -o /tmp/yq
+          curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.47.2/checksums -o /tmp/yq-checksums
+          expected="$(awk '$1 == "yq_linux_amd64" {print $19}' /tmp/yq-checksums)"
+          [ -n "$expected" ]
+          echo "$expected  /tmp/yq" | sha256sum -c -
+          sudo install -m 0755 /tmp/yq /usr/local/bin/yq
+      - uses: azure/setup-helm@v4
+        if: matrix.task == 'charts'
+        with:
+          version: v3.18.6
+      - name: Validate committed ${{ matrix.task }}
+        env:
+          PIN_REPORT: ${{ runner.temp }}/production-pin-diagnostics/${{ matrix.task }}.md
+        run: scripts/production/validate-release-pins.sh
+      - name: Preserve diagnostic output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-pin-diagnostics-${{ matrix.task }}
+          path: ${{ runner.temp }}/production-pin-diagnostics/${{ matrix.task }}.md
+          if-no-files-found: warn
+
+  diagnostics:
+    name: Report deployment plan
+    needs: [validate, admission, checks]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: production-pin-diagnostics-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/production-pin-diagnostics
+      - name: Report inspected release and planned actions
+        env:
+          VALIDATION_RESULT: ${{ needs.checks.result }}
+          SCOPE_RESULT: ${{ needs.validate.result }}
+          ADMISSION_RESULT: ${{ needs.admission.result }}
+          LIVE_RELEASE: ${{ needs.admission.outputs.live }}
+          DEPLOY_COMPONENTS: ${{ needs.validate.outputs.deploy_components }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Inspected revision: $GITHUB_SHA"
+            echo "Selected components: ${DEPLOY_COMPONENTS:-none (no-op)}"
+            for report in "$RUNNER_TEMP"/production-pin-diagnostics/*.md; do
+              [[ ! -f "$report" ]] || cat "$report"
+            done
+            if [[ "$LIVE_RELEASE" == true && -n "$DEPLOY_COMPONENTS" && "$VALIDATION_RESULT" == success && "$SCOPE_RESULT" == success && "$ADMISSION_RESULT" == success ]]; then
+              echo 'Approved live release: promote approved RC manifests, verify final tags, then deploy and verify selected components.'
+            else
+              echo 'Planning only or empty/invalid release: production execution skipped.'
+            fi
+            echo 'Planned selected execution uses existing ECR pull-secret refresh, Argo reconciliation for application charts, or Helm for other selected charts. A selected migration Job may be recreated; pending migrations require their separate approval.'
+            echo 'Configuration and secret-version changes are the committed values compared with the reported baseline; no new pins are generated.'
+            echo 'Live readiness, secret availability, migration ledger, worker capacity and rollback remain UNVERIFIED by planning.'
+            echo "Validation=$VALIDATION_RESULT; scope=$SCOPE_RESULT; admission=$ADMISSION_RESULT."
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          [[ "$VALIDATION_RESULT" == success && "$SCOPE_RESULT" == success && "$ADMISSION_RESULT" == success ]]
+
+  deploy:
+    name: Promote, pin, deploy, and verify
+    needs: [validate, admission, checks, diagnostics]
+    if: >-
+      ${{ github.event_name == 'push' && github.ref == 'refs/heads/production' &&
+          github.run_attempt == 1 &&
+          github.workflow_ref == format('{0}/.github/workflows/CD.yml@refs/heads/production', github.repository) &&
+          needs.admission.outputs.live == 'true' &&
+          needs.validate.outputs.deploy_components != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DEPLOYMENT_SCOPE: selected
+      DEPLOY_COMPONENTS: ${{ needs.validate.outputs.deploy_components }}
+      PROMOTE_COMPONENTS: ${{ needs.validate.outputs.promote_components }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
@@ -94,7 +262,10 @@ jobs:
           [ -n "$expected" ]
           echo "$expected  /tmp/yq" | sha256sum -c -
           sudo install -m 0755 /tmp/yq /usr/local/bin/yq
-      - name: Resolve the single production node
+      - name: Promote approved RC images and verify final tags
+        if: env.PROMOTE_COMPONENTS != ''
+        run: scripts/production/promote-production-images.sh
+      - name: Locate production server
         id: host
         shell: bash
         run: |
@@ -104,116 +275,24 @@ jobs:
             --query 'Reservations[].Instances[].InstanceId' --output text)"
           [ "$(wc -w <<< "$instance_id")" -eq 1 ]
           echo "instance_id=$instance_id" >> "$GITHUB_OUTPUT"
-      - name: Select immutable runtime secret versions
+      - name: Deploy and verify production release
         env:
           INSTANCE_ID: ${{ steps.host.outputs.instance_id }}
-        run: |
-          set -euo pipefail
-          revision="$(git rev-parse HEAD)"
-          checkout_payload="$(base64 -w0 scripts/production/checkout-revision.sh)"
-          command="install -d -m 0700 /run/capitonic && printf '%s' '$checkout_payload' | base64 -d > /run/capitonic/checkout-revision.sh && chmod 0700 /run/capitonic/checkout-revision.sh && /run/capitonic/checkout-revision.sh $revision >/dev/null && rm -f /run/capitonic/checkout-revision.sh && cd /opt/polymarket-bot && python3 scripts/production/prepare-runtime-secrets.py"
-          result="$(mktemp)"
-          trap 'rm -f "$result"' EXIT
-          scripts/production/run-ssm-command.sh "$INSTANCE_ID" 180 'Select projected runtime secret versions' "$command" > "$result"
-          configuration="$(jq -er '.Output' "$result")"
-          for component in ingester polymarket-bot; do
-            CONFIGURATION="$(jq -c --arg component "$component" '.[$component]' <<< "$configuration")" \
-              yq -i '.externalSecrets = (strenv(CONFIGURATION) | from_json | .externalSecrets) | .credentialRevisions = (strenv(CONFIGURATION) | from_json | .credentialRevisions)' \
-              "capitonic-helm-chart/environments/production/$component.yaml"
-          done
-          CONFIGURATION="$(jq -c '.grafana' <<< "$configuration")" yq -i '.credentialRevisions = (strenv(CONFIGURATION) | from_json | .credentialRevisions)' capitonic-helm-chart/environments/production/grafana.yaml
-          if ! git diff --quiet -- capitonic-helm-chart/environments/production/grafana.yaml; then
-            echo "DEPLOY_COMPONENTS=$DEPLOY_COMPONENTS,grafana" >> "$GITHUB_ENV"
-          fi
-      - name: Promote accepted RC digests and write exact Helm pins
-        run: scripts/production/promote-production-images.sh
-      - name: Install Helm for chart provenance checks
-        uses: azure/setup-helm@v4
-        with:
-          version: v3.18.6
-      - name: Commit generated production pins
-        id: pins
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          if [[ "$DEPLOYMENT_SCOPE" == full-stack ]]; then
-            git add infra/production/release.json capitonic-helm-chart/environments/production capitonic-helm-chart/charts/*/Chart.yaml
-          else
-            IFS=, read -ra components <<< "$PROMOTE_COMPONENTS"
-            for component in "${components[@]}"; do
-              [[ -n "$component" ]] || continue
-              git add infra/production/release.json "capitonic-helm-chart/environments/production/$component.yaml" "capitonic-helm-chart/charts/$component/Chart.yaml"
-            done
-          fi
-          git add capitonic-helm-chart/environments/production/ingester.yaml capitonic-helm-chart/environments/production/polymarket-bot.yaml capitonic-helm-chart/environments/production/grafana.yaml
-          if git diff --cached --quiet; then
-            echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          else
-            chart_paths=()
-            while IFS= read -r path; do
-              [[ "$path" == capitonic-helm-chart/charts/*/Chart.yaml ]] && chart_paths+=("$path")
-            done < <(git diff --cached --name-only)
-            for path in "${chart_paths[@]}"; do
-              chart="${path%/Chart.yaml}"
-              component="${chart##*/}"
-              helm lint "$chart" -f "capitonic-helm-chart/environments/production/$component.yaml"
-              helm template "$component" "$chart" -f "capitonic-helm-chart/environments/production/$component.yaml" >/dev/null
-            done
-            git commit -m 'release: admit production images and secret versions [production-pins]'
-            refs=(HEAD:production)
-            for path in "${chart_paths[@]}"; do
-              previous_version="$(git show "HEAD^:$path" | yq -r .version -)"
-              component="${path%/Chart.yaml}"; component="${component##*/}"
-              version="$(yq -r .version "$path")"
-              [[ "$version" != "$previous_version" ]] || continue
-              tag="helm/$component/v$version"
-              git tag -a "$tag" HEAD -m "Chart: ${path%/Chart.yaml}; admit exact production image pin and appVersion; production Helm lint/render passed."
-              refs+=("refs/tags/$tag")
-            done
-            git push --atomic origin "${refs[@]}"
-            echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Deploy exact revision through SSM
-        env:
-          INSTANCE_ID: ${{ steps.host.outputs.instance_id }}
-          DEPLOY_REVISION: ${{ steps.pins.outputs.revision }}
+          DEPLOY_REVISION: ${{ github.sha }}
         run: |
           set -euo pipefail
           [[ "$DEPLOY_REVISION" =~ ^[0-9a-f]{40}$ ]]
           checkout_payload="$(base64 -w0 scripts/production/checkout-revision.sh)"
           command="install -d -m 0700 /run/capitonic && printf '%s' '$checkout_payload' | base64 -d > /run/capitonic/checkout-revision.sh && chmod 0700 /run/capitonic/checkout-revision.sh && /run/capitonic/checkout-revision.sh $DEPLOY_REVISION && rm -f /run/capitonic/checkout-revision.sh && cd /opt/polymarket-bot && DEPLOYMENT_SCOPE=$DEPLOYMENT_SCOPE DEPLOY_COMPONENTS=$DEPLOY_COMPONENTS scripts/production/deploy-k3s.sh"
           scripts/production/run-ssm-command.sh "$INSTANCE_ID" 3300 'Deploy and verify Capitonic production' "$command"
-      - name: Record observability provisioning provenance
+      - name: Record deployment evidence
+        if: always()
         env:
-          DEPLOY_REVISION: ${{ steps.pins.outputs.revision }}
+          DEPLOYMENT_RESULT: ${{ job.status }}
         run: |
-          set -euo pipefail
-          timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-          selected=()
-          if [[ "$DEPLOYMENT_SCOPE" == full-stack ]]; then
-            selected=(grafana prometheus loki alloy)
-          else
-            IFS=, read -ra requested <<< "$DEPLOY_COMPONENTS"
-            for component in "${requested[@]}"; do
-              case "$component" in grafana|prometheus|loki|alloy) selected+=("$component") ;; esac
-            done
-          fi
-          ((${#selected[@]})) || exit 0
-          paths=()
-          for component in "${selected[@]}"; do
-            paths+=("common/configs/$component" "capitonic-helm-chart/charts/$component" "capitonic-helm-chart/environments/production/$component.yaml")
-          done
-          config_hash="$(find "${paths[@]}" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
-          components="$(IFS=,; echo "${selected[*]}")"
-          path_list="$(IFS=';'; echo "${paths[*]}")"
-          tag="provisioned/observability/production/$timestamp"
-          git tag -a "$tag" "$DEPLOY_REVISION" -m "Target: production
-          Provisioned at: $timestamp
-          Originating ref: ${GITHUB_REF_NAME:-production}
-          Result: success
-          Configuration SHA-256: $config_hash
-          Components: $components
-          Paths: $path_list"
-          git push origin "refs/tags/$tag"
+          {
+            echo "Deployment result: $DEPLOYMENT_RESULT"
+            echo "Revision: $GITHUB_SHA"
+            echo "Components: $DEPLOY_COMPONENTS"
+            echo 'Workflow logs retain deployment and verification evidence; CD publishes no Git refs.'
+          } >> "$GITHUB_STEP_SUMMARY"

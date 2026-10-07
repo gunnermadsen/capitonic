@@ -5,10 +5,10 @@
   "components": {
     "polymarket-bot": {
       "repository": "capitonic/polymarket-bot",
-      "rcVersion": "v3.2.7-rc.1",
-      "sourceRevision": "f2b064d2f151d267c015bca03f6340df674ce153",
-      "finalVersion": "v3.2.7",
-      "digest": "sha256:be1770fc449d04826beb7698cac7e45b13982c57d746a86c7b283cda8f49a3c6"
+      "rcVersion": "v3.2.8-rc.0",
+      "finalVersion": "v3.2.8",
+      "sourceRevision": "f8074bd8b2172b91ce86f91868f5edec146302d9",
+      "digest": "sha256:50510bda47c03754c3bc22746ecf4925352045f2c65d432ff3ff261c156c0bf5"
     },
     "ingester": {
       "repository": "capitonic/ingester",

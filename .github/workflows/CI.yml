@@ -58,12 +58,39 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      - name: Fingerprint component inputs
+        id: fingerprints
+        shell: bash
+        run: |
+          set -euo pipefail
+          for component in polymarket-bot ingester db-migrate; do
+            fingerprint="$(python3 scripts/ci/component-fingerprint.py "$component")"
+            echo "${component//-/_}=$fingerprint" >> "$GITHUB_OUTPUT"
+          done
+      - name: Restore successful polymarket-bot fingerprint
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ runner.temp }}/ci-fingerprints/polymarket-bot
+          key: ci-published-v1-polymarket-bot-${{ steps.fingerprints.outputs.polymarket_bot }}
+      - name: Restore successful ingester fingerprint
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ runner.temp }}/ci-fingerprints/ingester
+          key: ci-published-v1-ingester-${{ steps.fingerprints.outputs.ingester }}
+      - name: Restore successful db-migrate fingerprint
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ runner.temp }}/ci-fingerprints/db-migrate
+          key: ci-published-v1-db-migrate-${{ steps.fingerprints.outputs.db_migrate }}
       - name: Detect affected images
         id: filter
         shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           CURRENT_SHA: ${{ github.sha }}
+          BOT_FINGERPRINT: ${{ steps.fingerprints.outputs.polymarket_bot }}
+          INGESTER_FINGERPRINT: ${{ steps.fingerprints.outputs.ingester }}
+          MIGRATE_FINGERPRINT: ${{ steps.fingerprints.outputs.db_migrate }}
         run: |
           set -euo pipefail
           if [ -z "$BASE_SHA" ] \
@@ -82,28 +109,21 @@ jobs:
               echo true
             fi
           }
-          polymarket_bot="$(changed Cargo.toml Cargo.lock packages/polymarket-bot common/proto)"
-          previous_models="$(python3 packages/polymarket-bot/scripts/package_models.py fingerprint "$BASE_SHA")"
-          current_models="$(python3 packages/polymarket-bot/scripts/package_models.py fingerprint "$CURRENT_SHA")"
-          if [[ "$previous_models" != "$current_models" ]]; then
-            polymarket_bot=true
-          fi
-          ingester="$(changed Cargo.toml Cargo.lock packages/market-data-ingester common/proto)"
-          db_migrate="$(changed packages/db-migrate)"
-          polymarket_bot_tests="$(changed .github/workflows/CI.yml Cargo.toml Cargo.lock packages/polymarket-bot packages/btc-directional-model/runtime-models common/proto)"
-          ingester_tests="$(changed .github/workflows/CI.yml Cargo.toml Cargo.lock packages/market-data-ingester common/proto)"
-          db_migrate_tests="$(changed packages/db-migrate)"
-          for component in polymarket-bot ingester db-migrate; do
-            previous="$(git show "$BASE_SHA:infra/production/release.json" | jq -c --arg component "$component" '.components[$component] | {rcVersion,sourceRevision}')"
-            current="$(jq -c --arg component "$component" '.components[$component] | {rcVersion,sourceRevision}' infra/production/release.json)"
-            if [[ "$previous" != "$current" ]]; then
-              case "$component" in
-                polymarket-bot) polymarket_bot=true; polymarket_bot_tests=true ;;
-                ingester) ingester=true; ingester_tests=true ;;
-                db-migrate) db_migrate=true; db_migrate_tests=true ;;
-              esac
+          pending() {
+            local component="$1" fingerprint="$2" receipt="$RUNNER_TEMP/ci-fingerprints/$1/published.json"
+            if [[ -f "$receipt" ]] && jq -e --arg component "$component" --arg fingerprint "$fingerprint" \
+              '.component == $component and .fingerprint == $fingerprint and (.digest | test("^sha256:[0-9a-f]{64}$"))' "$receipt" >/dev/null; then
+              echo false
+            else
+              echo true
             fi
-          done
+          }
+          polymarket_bot="$(pending polymarket-bot "$BOT_FINGERPRINT")"
+          ingester="$(pending ingester "$INGESTER_FINGERPRINT")"
+          db_migrate="$(pending db-migrate "$MIGRATE_FINGERPRINT")"
+          polymarket_bot_tests="$polymarket_bot"
+          ingester_tests="$ingester"
+          db_migrate_tests="$db_migrate"
           helm_inputs=(
             capitonic-helm-chart
             common/configs/alloy
@@ -129,26 +149,29 @@ jobs:
                 dockerfile=packages/polymarket-bot/Dockerfile.production
                 revision_arg=POLYMARKET_GIT_REVISION
                 cache_scope=polymarket-bot-production
+                fingerprint="$BOT_FINGERPRINT"
                 ;;
               ingester)
                 affected="$ingester"
                 dockerfile=packages/market-data-ingester/Dockerfile.production
                 revision_arg=INGESTER_GIT_REVISION
                 cache_scope=ingester-production
+                fingerprint="$INGESTER_FINGERPRINT"
                 ;;
               db-migrate)
                 affected="$db_migrate"
                 dockerfile=packages/db-migrate/Dockerfile.production
                 revision_arg=DB_MIGRATE_GIT_REVISION
                 cache_scope=db-migrate-production
+                fingerprint="$MIGRATE_FINGERPRINT"
                 ;;
             esac
             if [ "$affected" = true ]; then
               image_matrix="$(jq -cn --argjson matrix "$image_matrix" \
                 --arg component "$component" --arg dockerfile "$dockerfile" \
-                --arg revision_arg "$revision_arg" --arg cache_scope "$cache_scope" \
+                --arg revision_arg "$revision_arg" --arg cache_scope "$cache_scope" --arg fingerprint "$fingerprint" \
                 '$matrix + [{name:$component,dockerfile:$dockerfile,revision_arg:$revision_arg,
-                  repository:("capitonic/"+$component),cache_scope:$cache_scope}]')"
+                  repository:("capitonic/"+$component),cache_scope:$cache_scope,fingerprint:$fingerprint}]')"
             fi
           done
           {
@@ -421,26 +444,48 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
       - name: Log in to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
-      - name: Resolve accepted semver RC identity
+      - name: Resolve component image identity
         id: release
         shell: bash
         env:
           COMPONENT: ${{ matrix.name }}
           REPOSITORY: ${{ matrix.repository }}
+          FINGERPRINT: ${{ matrix.fingerprint }}
         run: |
           set -euo pipefail
-          rc_version="$(jq -er --arg component "$COMPONENT" '.components[$component].rcVersion' infra/production/release.json)"
-          source_revision="$(jq -er --arg component "$COMPONENT" '.components[$component].sourceRevision' infra/production/release.json)"
-          [[ "$rc_version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.(0|[1-9][0-9]*)$ ]]
-          [[ "$source_revision" =~ ^[0-9a-f]{40}$ ]]
-          git merge-base --is-ancestor "$source_revision" "$GITHUB_SHA"
-          rc_git_tag="rc/$COMPONENT/$rc_version"
-          [[ "$(git cat-file -t "refs/tags/$rc_git_tag")" == tag ]]
-          rc_checkpoint="$(git rev-list -n1 "$rc_git_tag")"
-          git merge-base --is-ancestor "$rc_checkpoint" "$GITHUB_SHA"
-          accepted_release="$(git show "$rc_checkpoint:infra/production/release.json" | jq -cer --arg component "$COMPONENT" '.components[$component] | {repository,rcVersion,sourceRevision}')"
-          current_release="$(jq -cer --arg component "$COMPONENT" '.components[$component] | {repository,rcVersion,sourceRevision}' infra/production/release.json)"
-          [[ "$accepted_release" == "$current_release" ]]
+          test_tags=''
+          while IFS= read -r tag; do
+            [[ "$(git cat-file -t "refs/tags/$tag")" == tag ]] || continue
+            candidate="$(git rev-list -n1 "$tag")"
+            git merge-base --is-ancestor "$candidate" "$GITHUB_SHA" || continue
+            [[ "$(python3 scripts/ci/component-fingerprint.py "$COMPONENT" "$candidate")" == "$FINGERPRINT" ]] || continue
+            test_tags="$tag"
+            break
+          done < <(git tag --list "ci/$COMPONENT/v*-test.*" --sort=-version:refname)
+          if [[ -n "$test_tags" ]]; then
+            [[ "$(wc -l <<< "$test_tags")" -eq 1 ]]
+            [[ "$(git cat-file -t "refs/tags/$test_tags")" == tag ]]
+            rc_version="${test_tags##*/}"
+            [[ "$rc_version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-test\.(0|[1-9][0-9]*)$ ]]
+            source_revision="$(git rev-list -n1 "$test_tags")"
+          else
+            source_revision=''
+            while IFS= read -r tag; do
+              [[ "$(git cat-file -t "refs/tags/$tag")" == tag ]] || continue
+              checkpoint="$(git rev-list -n1 "$tag")"
+              git merge-base --is-ancestor "$checkpoint" "$GITHUB_SHA" || continue
+              annotation="$(git for-each-ref --format='%(contents)' "refs/tags/$tag")"
+              candidate="$(awk '$1 == "source_revision:" {print $2}' <<< "$annotation")"
+              [[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || continue
+              git merge-base --is-ancestor "$candidate" "$checkpoint" || continue
+              [[ "$(python3 scripts/ci/component-fingerprint.py "$COMPONENT" "$candidate")" == "$FINGERPRINT" ]] || continue
+              source_revision="$candidate"
+              rc_version="${tag##*/}"
+              break
+            done < <(git tag --list "rc/$COMPONENT/v*-rc.*" --sort=-version:refname)
+            [[ -n "$source_revision" ]] || { echo "No admitted component tag matches these inputs." >&2; exit 1; }
+            [[ "$rc_version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.(0|[1-9][0-9]*)$ ]]
+          fi
           existing_digest="$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$REPOSITORY" \
             --image-ids imageTag="$rc_version" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
           {
@@ -448,7 +493,6 @@ jobs:
             echo "source_revision=$source_revision"
             echo "existing_rc=$([[ "$existing_digest" =~ ^sha256:[0-9a-f]{64}$ ]] && echo true || echo false)"
             echo "tags<<EOF"
-            echo "$ECR_REGISTRY/$REPOSITORY:$source_revision"
             if [[ ! "$existing_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "$ECR_REGISTRY/$REPOSITORY:$rc_version"
             fi
@@ -483,4 +527,17 @@ jobs:
           REPOSITORY: ${{ matrix.repository }}
           RC_VERSION: ${{ steps.release.outputs.rc_version }}
           SOURCE_REVISION: ${{ steps.release.outputs.source_revision }}
-        run: scripts/production/verify-ecr-arm64-image.sh "$REPOSITORY" "$RC_VERSION" "$SOURCE_REVISION" >/dev/null
+          FINGERPRINT: ${{ matrix.fingerprint }}
+        run: |
+          set -euo pipefail
+          digest="$(scripts/production/verify-ecr-arm64-image.sh "$REPOSITORY" "$RC_VERSION" "$SOURCE_REVISION")"
+          mkdir -p "$RUNNER_TEMP/ci-fingerprints/$COMPONENT"
+          jq -n --arg component "$COMPONENT" --arg fingerprint "$FINGERPRINT" \
+            --arg version "$RC_VERSION" --arg revision "$SOURCE_REVISION" --arg digest "$digest" \
+            '{component:$component,fingerprint:$fingerprint,version:$version,source_revision:$revision,digest:$digest}' \
+            > "$RUNNER_TEMP/ci-fingerprints/$COMPONENT/published.json"
+      - name: Record successfully published component fingerprint
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/ci-fingerprints/${{ matrix.name }}
+          key: ci-published-v1-${{ matrix.name }}-${{ matrix.fingerprint }}

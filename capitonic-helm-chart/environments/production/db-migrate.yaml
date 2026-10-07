@@ -1,5 +1,5 @@
 environment: production
-image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/db-migrate@sha256:a9973bdfa163538e7f16bafe87358f0f63d4ac18286debf9d30cf7d78f3fd8a0
+image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/db-migrate:v0.3.0
 imagePullPolicy: IfNotPresent
 imagePullSecrets:
   - name: ecr-registry

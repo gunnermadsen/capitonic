@@ -44,7 +44,7 @@ spec:
         fsGroup: {{ .Values.archiveStorage.runAsGroup }}
       containers:
         - name: ingester-worker
-          image: {{ .Values.image | quote }}
+          image: {{ include "ingester.image" . | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           ports:
             - {name: http, containerPort: 8099}
