@@ -123,14 +123,6 @@ deploy_selected_components() {
   if [[ ",$DEPLOY_COMPONENTS," == *,polymarket-bot,* || ",$DEPLOY_COMPONENTS," == *,ingester,* || ",$DEPLOY_COMPONENTS," == *,db-migrate,* ]]; then
     scripts/production/refresh-ecr-pull-secret.sh || return $?
   fi
-  if [[ "$has_applications" == true ]]; then
-    scripts/production/reconcile-application-charts.sh || return $?
-  fi
-  if [[ ",$DEPLOY_COMPONENTS," == *,polymarket-bot,* ]]; then
-    scripts/production/deploy-pilot-pair.sh || return $?
-    scripts/production/verify-production.sh || return $?
-  fi
-  ((${#selected[@]})) || return 0
   started="$(date -u +%s)"
   for component in ${selected[@]+"${selected[@]}"}; do
     [[ "$component" == db-migrate ]] && kubectl -n "$NAMESPACE" delete job db-migrate --ignore-not-found --wait=true
@@ -167,6 +159,17 @@ deploy_selected_components() {
     done
     echo "Selected rollout failed; rollback failed=$rollback_failed; preserve $snapshot." >&2
     return 71
+  fi
+  # Complete Helm-owned releases, including the migration Job, before application rollout.
+  if [[ "$has_applications" == true ]]; then
+    scripts/production/reconcile-application-charts.sh || return $?
+  fi
+  if [[ ",$DEPLOY_COMPONENTS," == *,polymarket-bot,* ]]; then
+    scripts/production/deploy-pilot-pair.sh || return $?
+  fi
+  # Full release verification requires completed deployments and reconciled pilot processes.
+  if [[ "$has_applications" == true ]]; then
+    scripts/production/verify-production.sh || return $?
   fi
   printf 'Selected releases verified at revision %s; snapshot %s.\n' "$deployment_revision" "$snapshot"
 }
