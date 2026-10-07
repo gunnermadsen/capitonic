@@ -254,8 +254,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/capitonic-helm-lint"
           printf '%s\n' "$HELM_CHART_SHA" > "$RUNNER_TEMP/capitonic-helm-lint/validated-sha256"
 
-  rust-tests:
-    name: Rust tests
+  polymarket-bot-tests:
+    name: Polymarket Bot Tests
     needs: [changes, repository-layout, helm-lint]
     if: >-
       always() && needs.repository-layout.result == 'success' &&
