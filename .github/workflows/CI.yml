@@ -93,6 +93,14 @@ jobs:
           MIGRATE_FINGERPRINT: ${{ steps.fingerprints.outputs.db_migrate }}
         run: |
           set -euo pipefail
+          rc_component=''
+          if [[ "$GITHUB_REF" == refs/tags/rc/* ]]; then
+            [[ "$GITHUB_REF_NAME" =~ ^rc/(polymarket-bot|ingester|db-migrate)/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.(0|[1-9][0-9]*)$ ]]
+            rc_component="${BASH_REMATCH[1]}"
+            [[ "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" == tag ]]
+            [[ "$(git rev-list -n1 "refs/tags/$GITHUB_REF_NAME")" == "$CURRENT_SHA" ]]
+            BASE_SHA="$(git rev-parse "$CURRENT_SHA^")"
+          fi
           if [ -z "$BASE_SHA" ] \
             || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
             if [ "$GITHUB_REF" = 'refs/heads/development' ]; then
@@ -121,6 +129,17 @@ jobs:
           polymarket_bot="$(pending polymarket-bot "$BOT_FINGERPRINT")"
           ingester="$(pending ingester "$INGESTER_FINGERPRINT")"
           db_migrate="$(pending db-migrate "$MIGRATE_FINGERPRINT")"
+          # An explicit RC publishes its selected component even after a cached publication.
+          if [[ -n "$rc_component" ]]; then
+            polymarket_bot=false
+            ingester=false
+            db_migrate=false
+            case "$rc_component" in
+              polymarket-bot) polymarket_bot=true ;;
+              ingester) ingester=true ;;
+              db-migrate) db_migrate=true ;;
+            esac
+          fi
           polymarket_bot_tests="$polymarket_bot"
           ingester_tests="$ingester"
           db_migrate_tests="$db_migrate"
@@ -135,6 +154,7 @@ jobs:
             scripts/helm/bake-assets.py
           )
           helm_lint="$(changed .github/workflows/CI.yml "${helm_inputs[@]}")"
+          [[ -z "$rc_component" ]] || helm_lint=true
           helm_chart_sha="$(git ls-files -z -- "${helm_inputs[@]}" \
             | sort -z \
             | xargs -0 sha256sum \
@@ -254,8 +274,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/capitonic-helm-lint"
           printf '%s\n' "$HELM_CHART_SHA" > "$RUNNER_TEMP/capitonic-helm-lint/validated-sha256"
 
-  rust-tests:
-    name: Rust tests
+  polymarket-bot-tests:
+    name: Polymarket Bot Tests
     needs: [changes, repository-layout, helm-lint]
     if: >-
       always() && needs.repository-layout.result == 'success' &&
@@ -422,10 +442,10 @@ jobs:
       needs.changes.outputs.any_image == 'true' &&
       needs.repository-layout.result == 'success' &&
       (needs.helm-lint.result == 'success' || needs.helm-lint.result == 'skipped') &&
-      (needs.rust-tests.result == 'success' || needs.rust-tests.result == 'skipped') &&
+      (needs.polymarket-bot-tests.result == 'success' || needs.polymarket-bot-tests.result == 'skipped') &&
       (needs.market-data-ingester-tests.result == 'success' || needs.market-data-ingester-tests.result == 'skipped') &&
       (needs.db-migrate-tests.result == 'success' || needs.db-migrate-tests.result == 'skipped')
-    needs: [changes, repository-layout, helm-lint, rust-tests, market-data-ingester-tests, db-migrate-tests]
+    needs: [changes, repository-layout, helm-lint, polymarket-bot-tests, market-data-ingester-tests, db-migrate-tests]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     strategy:
@@ -453,38 +473,83 @@ jobs:
           FINGERPRINT: ${{ matrix.fingerprint }}
         run: |
           set -euo pipefail
-          test_tags=''
-          while IFS= read -r tag; do
-            [[ "$(git cat-file -t "refs/tags/$tag")" == tag ]] || continue
-            candidate="$(git rev-list -n1 "$tag")"
-            git merge-base --is-ancestor "$candidate" "$GITHUB_SHA" || continue
-            [[ "$(python3 scripts/ci/component-fingerprint.py "$COMPONENT" "$candidate")" == "$FINGERPRINT" ]] || continue
-            test_tags="$tag"
-            break
-          done < <(git tag --list "ci/$COMPONENT/v*-test.*" --sort=-version:refname)
-          if [[ -n "$test_tags" ]]; then
-            [[ "$(wc -l <<< "$test_tags")" -eq 1 ]]
-            [[ "$(git cat-file -t "refs/tags/$test_tags")" == tag ]]
-            rc_version="${test_tags##*/}"
-            [[ "$rc_version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-test\.(0|[1-9][0-9]*)$ ]]
-            source_revision="$(git rev-list -n1 "$test_tags")"
+          if [[ "$GITHUB_REF" == refs/tags/rc/* ]]; then
+            rc_tag="$GITHUB_REF_NAME"
+            [[ "$rc_tag" =~ ^rc/(polymarket-bot|ingester|db-migrate)/(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.(0|[1-9][0-9]*))$ ]] || exit 1
+            [[ "${BASH_REMATCH[1]}" == "$COMPONENT" ]] || exit 1
+            rc_version="${rc_tag##*/}"
+            [[ "$(git cat-file -t "refs/tags/$rc_tag")" == tag ]] || exit 1
+            release_revision="$(git rev-list -n1 "refs/tags/$rc_tag")"
+            [[ "$release_revision" == "$GITHUB_SHA" ]] || exit 1
+            field() {
+              git for-each-ref --format='%(contents)' "refs/tags/$1" | awk -v key="$2:" '$1 == key {print $2}'
+            }
+            source_revision="$(field "$rc_tag" source_revision)"
+            image_id="$(field "$rc_tag" image_id)"
+            candidate_tag="$(field "$rc_tag" candidate_tag)"
+            golden_tag="$(field "$rc_tag" golden_tag)"
+            checkpoint_tag="$(field "$rc_tag" checkpoint_tag)"
+            [[ "$(field "$rc_tag" component)" == "$COMPONENT" && "$(field "$rc_tag" version)" == "$rc_version" ]] || exit 1
+            [[ "$(field "$rc_tag" image)" == "capitonic/$COMPONENT:$rc_version" ]] || exit 1
+            [[ "$source_revision" =~ ^[0-9a-f]{40}$ && "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || exit 1
+            [[ "$candidate_tag" =~ ^image/$COMPONENT/v[0-9]+\.[0-9]+\.[0-9]+-local\.[0-9]+$ ]] || exit 1
+            [[ "${candidate_tag##*/}" == "${rc_version%-rc.*}-local."* ]] || exit 1
+            [[ "$golden_tag" == "golden/$COMPONENT/sha256-${image_id#sha256:}" ]] || exit 1
+            [[ "$checkpoint_tag" =~ ^checkpoint/development/git-[0-9a-f]{40}$ ]] || exit 1
+            [[ "$(git cat-file -t "refs/tags/$checkpoint_tag")" == tag ]] || exit 1
+            checkpoint="$(git rev-list -n1 "refs/tags/$checkpoint_tag")"
+            [[ "$checkpoint_tag" == "checkpoint/development/git-$checkpoint" ]] || exit 1
+            git merge-base --is-ancestor "$checkpoint" "$release_revision" || exit 1
+            for provenance in "$candidate_tag" "image/$COMPONENT/sha256-${image_id#sha256:}" "$golden_tag"; do
+              [[ "$(git cat-file -t "refs/tags/$provenance")" == tag ]] || exit 1
+              [[ "$(git rev-list -n1 "refs/tags/$provenance")" == "$source_revision" ]] || exit 1
+              [[ "$(field "$provenance" image_id)" == "$image_id" ]] || exit 1
+            done
+            [[ "$(field "$candidate_tag" component)" == "$COMPONENT" ]] || exit 1
+            [[ "$(field "$candidate_tag" version)" == "${candidate_tag##*/}" ]] || exit 1
+            [[ "$(field "$candidate_tag" source_revision)" == "$source_revision" ]] || exit 1
+            git merge-base --is-ancestor "$source_revision" "$checkpoint" || exit 1
+            [[ "$(python3 scripts/ci/component-fingerprint.py "$COMPONENT" "$source_revision")" == "$FINGERPRINT" ]] || exit 1
+            pin() {
+              python3 -c 'import sys; print(next(line.split(":",1)[1].strip().strip(chr(34)).strip(chr(39)) for line in open(sys.argv[1]) if line.startswith(sys.argv[2]+":")))' "$1" "$2"
+            }
+            chart="capitonic-helm-chart/charts/$COMPONENT"
+            [[ "$(pin "$chart/values.yaml" image)" == "capitonic/$COMPONENT:$rc_version" ]] || exit 1
+            [[ "$(pin "$chart/Chart.yaml" appVersion)" == "$rc_version" ]] || exit 1
           else
-            source_revision=''
+            test_tags=''
             while IFS= read -r tag; do
               [[ "$(git cat-file -t "refs/tags/$tag")" == tag ]] || continue
-              checkpoint="$(git rev-list -n1 "$tag")"
-              git merge-base --is-ancestor "$checkpoint" "$GITHUB_SHA" || continue
-              annotation="$(git for-each-ref --format='%(contents)' "refs/tags/$tag")"
-              candidate="$(awk '$1 == "source_revision:" {print $2}' <<< "$annotation")"
-              [[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || continue
-              git merge-base --is-ancestor "$candidate" "$checkpoint" || continue
+              candidate="$(git rev-list -n1 "$tag")"
+              git merge-base --is-ancestor "$candidate" "$GITHUB_SHA" || continue
               [[ "$(python3 scripts/ci/component-fingerprint.py "$COMPONENT" "$candidate")" == "$FINGERPRINT" ]] || continue
-              source_revision="$candidate"
-              rc_version="${tag##*/}"
+              test_tags="$tag"
               break
-            done < <(git tag --list "rc/$COMPONENT/v*-rc.*" --sort=-version:refname)
-            [[ -n "$source_revision" ]] || { echo "No admitted component tag matches these inputs." >&2; exit 1; }
-            [[ "$rc_version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.(0|[1-9][0-9]*)$ ]]
+            done < <(git tag --list "ci/$COMPONENT/v*-test.*" --sort=-version:refname)
+            if [[ -n "$test_tags" ]]; then
+              [[ "$(wc -l <<< "$test_tags")" -eq 1 ]]
+              [[ "$(git cat-file -t "refs/tags/$test_tags")" == tag ]]
+              rc_version="${test_tags##*/}"
+              [[ "$rc_version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-test\.(0|[1-9][0-9]*)$ ]]
+              source_revision="$(git rev-list -n1 "$test_tags")"
+            else
+              source_revision=''
+              while IFS= read -r tag; do
+                [[ "$(git cat-file -t "refs/tags/$tag")" == tag ]] || continue
+                checkpoint="$(git rev-list -n1 "$tag")"
+                git merge-base --is-ancestor "$checkpoint" "$GITHUB_SHA" || continue
+                annotation="$(git for-each-ref --format='%(contents)' "refs/tags/$tag")"
+                candidate="$(awk '$1 == "source_revision:" {print $2}' <<< "$annotation")"
+                [[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || continue
+                git merge-base --is-ancestor "$candidate" "$checkpoint" || continue
+                [[ "$(python3 scripts/ci/component-fingerprint.py "$COMPONENT" "$candidate")" == "$FINGERPRINT" ]] || continue
+                source_revision="$candidate"
+                rc_version="${tag##*/}"
+                break
+              done < <(git tag --list "rc/$COMPONENT/v*-rc.*" --sort=-version:refname)
+              [[ -n "$source_revision" ]] || { echo "No admitted component tag matches these inputs." >&2; exit 1; }
+              [[ "$rc_version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.(0|[1-9][0-9]*)$ ]]
+            fi
           fi
           existing_digest="$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$REPOSITORY" \
             --image-ids imageTag="$rc_version" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
