@@ -1,4 +1,4 @@
-name: Reconcile Production Pilot Pair
+name: Verify Production Trading Processes
 
 on:
   workflow_call:
@@ -18,7 +18,7 @@ env:
 
 jobs:
   pilots:
-    name: Reconcile paper and live pilot processes
+    name: Verify production trading processes
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -40,10 +40,10 @@ jobs:
             --query 'Reservations[].Instances[].InstanceId' --output text)"
           [ "$(wc -w <<< "$instance_id")" -eq 1 ]
           printf 'revision=%s\ninstance_id=%s\n' "$revision" "$instance_id" >> "$GITHUB_OUTPUT"
-      - name: Reconcile and verify pilot pair
+      - name: Verify production trading processes
         env:
           INSTANCE_ID: ${{ steps.target.outputs.instance_id }}
           REVISION: ${{ steps.target.outputs.revision }}
         run: |
-          command="cd /opt/polymarket-bot && scripts/production/checkout-revision.sh $REVISION && scripts/production/deploy-pilot-pair.sh && scripts/production/verify-production.sh"
-          scripts/production/run-ssm-command.sh "$INSTANCE_ID" 1800 'Reconcile production pilot pair' "$command"
+          command="cd /opt/polymarket-bot && scripts/production/checkout-revision.sh $REVISION && scripts/production/verify-production.sh"
+          scripts/production/run-ssm-command.sh "$INSTANCE_ID" 1800 'Verify production trading processes' "$command"

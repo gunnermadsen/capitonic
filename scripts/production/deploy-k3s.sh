@@ -172,7 +172,6 @@ else
   deploy_chart polymarket-bot
 fi
 scripts/production/reconcile-production-profiles.sh
-scripts/production/deploy-pilot-pair.sh
 scripts/production/verify-production.sh
 
 printf 'Production k3s deployment complete at revision %s.\n' "$deployment_revision"
