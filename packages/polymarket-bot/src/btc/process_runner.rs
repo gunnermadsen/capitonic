@@ -1401,7 +1401,9 @@ impl BtcProcessRunner {
                     .context("agent sources missing from frozen configuration")?
                     .clone(),
             )?;
-            let context = if selection.profile_key == agent::SETTLEMENT_PROFILE_KEY {
+            let context = if selection.profile_key == agent::VOLATILITY_PROFILE_KEY {
+                agent::build_volatility_context(&observation.state, &snapshot, &sources)
+            } else if selection.profile_key == agent::SETTLEMENT_PROFILE_KEY {
                 agent::build_settlement_context(&observation.state, &snapshot, &sources)
             } else {
                 agent::build_context(&observation.state, &snapshot, &sources)

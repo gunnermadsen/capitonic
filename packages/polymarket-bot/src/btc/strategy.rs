@@ -2488,6 +2488,11 @@ mod tests {
         }))
         .unwrap()];
         let missing = agent::build_settlement_context(&state, &data, &sources);
+        let mut enriched = agent::build_volatility_context(&state, &data, &sources);
+        assert!(enriched["rtds_volatility"]["observation"].is_null());
+        enriched.as_object_mut().unwrap().remove("rtds_volatility");
+        enriched["version"] = serde_json::json!(agent::SETTLEMENT_CONTEXT_VERSION);
+        assert_eq!(enriched, missing);
         assert!(missing["twap_context"]["opening"].is_null());
         assert!(missing["twap_context"]["current"].is_null());
         assert_eq!(

@@ -7,7 +7,7 @@ mod usage;
 use anyhow::{ensure, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-pub use context::{build_context, build_settlement_context};
+pub use context::{build_context, build_settlement_context, build_volatility_context};
 pub use provider::OpenAiProvider;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,6 +24,8 @@ pub const PROCESS_SCHEMA_VERSION: &str = "btc_realtime_paper_process_v5";
 pub const PROFILE_KEY: &str = "btc-5m-openai-agent-v1";
 pub const SETTLEMENT_PROFILE_KEY: &str = "btc-5m-openai-agent-settlement-v1";
 pub const SETTLEMENT_CONTEXT_VERSION: &str = "capitonic-btc-agent-settlement-context-v1";
+pub const VOLATILITY_PROFILE_KEY: &str = "btc-5m-openai-agent-volatility-v1";
+pub const VOLATILITY_CONTEXT_VERSION: &str = "capitonic-btc-agent-volatility-context-v1";
 pub const SETTLEMENT_RULE: &str = "UP when the official Chainlink BTC/USD 60-second TWAP at window_end is greater than or equal to its value at window_start; otherwise DOWN. RTDS midpoint, Binance spot and Polygon oracle are supporting indicators, not settlement prices. Missing TWAP observations are unknown, not zero; do not substitute midpoint prices for them.";
 pub const REQUIRED_PRODUCTS: [&str; 5] = [
     "polymarket_btc_five_minute_market_contracts",
@@ -83,6 +85,11 @@ pub fn profile_for_key(key: &str) -> Result<AgentProfile> {
             selected.instructions.push(' ');
             selected.instructions.push_str(SETTLEMENT_RULE);
         }
+        VOLATILITY_PROFILE_KEY => {
+            selected = profile_for_key(SETTLEMENT_PROFILE_KEY)?;
+            selected.key = VOLATILITY_PROFILE_KEY;
+            selected.context_version = VOLATILITY_CONTEXT_VERSION;
+        }
         _ => anyhow::bail!("unsupported agent profile"),
     }
     Ok(selected)
@@ -97,7 +104,9 @@ impl AgentSelection {
         Ok(())
     }
     pub fn context_version(&self) -> &'static str {
-        if self.profile_key == SETTLEMENT_PROFILE_KEY {
+        if self.profile_key == VOLATILITY_PROFILE_KEY {
+            VOLATILITY_CONTEXT_VERSION
+        } else if self.profile_key == SETTLEMENT_PROFILE_KEY {
             SETTLEMENT_CONTEXT_VERSION
         } else {
             CONTEXT_VERSION
@@ -244,6 +253,24 @@ mod tests {
             format!("{} {}", original.instructions, SETTLEMENT_RULE)
         );
         assert_eq!(selection.context_version(), SETTLEMENT_CONTEXT_VERSION);
+        assert_eq!(
+            hash(&selected).unwrap(),
+            "be1c61203b42773ab443df3ca533e4de621f55bd75f6eceb2ceb319aa8c3ab0e"
+        );
+        let volatility = profile_for_key(VOLATILITY_PROFILE_KEY).unwrap();
+        let volatility_selection = AgentSelection {
+            profile_key: volatility.key.into(),
+            profile_sha256: hash(&volatility).unwrap(),
+        };
+        volatility_selection.validate().unwrap();
+        assert_eq!(
+            volatility_selection.context_version(),
+            VOLATILITY_CONTEXT_VERSION
+        );
+        let mut expected = serde_json::to_value(selected).unwrap();
+        expected["key"] = serde_json::json!(VOLATILITY_PROFILE_KEY);
+        expected["context_version"] = serde_json::json!(VOLATILITY_CONTEXT_VERSION);
+        assert_eq!(serde_json::to_value(volatility).unwrap(), expected);
     }
 
     #[test]
