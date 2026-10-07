@@ -98,14 +98,12 @@ deploy_selected_components() {
     (( ready >= desired + backfills )) || { echo 'Insufficient worker capacity for ingester rollout.' >&2; return 70; }
   fi
 
-  if [[ ",$DEPLOY_COMPONENTS," == *,grafana,* || ",$DEPLOY_COMPONENTS," == *,prometheus,* || ",$DEPLOY_COMPONENTS," == *,loki,* || ",$DEPLOY_COMPONENTS," == *,alloy,* ]]; then
-    local prometheus_user
-    prometheus_user="$(kubectl -n "$NAMESPACE" get secret prometheus-auth -o jsonpath='{.data.username}' | base64 -d)" || return 70
-    PROMETHEUS_BASIC_AUTH_USER="$prometheus_user" python3 scripts/helm/bake-assets.py || return 70
-    unset prometheus_user
-  else
-    python3 scripts/helm/bake-assets.py || return 70
-  fi
+  local prometheus_user
+  # Production asset preparation must use Kubernetes credentials, never local .env files.
+  prometheus_user="$(kubectl -n "$NAMESPACE" get secret prometheus-auth -o jsonpath='{.data.username}' | base64 -d)" || return 70
+  [[ -n "$prometheus_user" ]] || { echo 'Prometheus username is missing; no rollout started.' >&2; return 70; }
+  PROMETHEUS_BASIC_AUTH_USER="$prometheus_user" python3 scripts/helm/bake-assets.py || return 70
+  unset prometheus_user
   trap 'python3 scripts/helm/bake-assets.py --clean >/dev/null 2>&1 || true' EXIT
   # Validate every selected chart and tunnel input before the first cluster write.
   if [[ ",$DEPLOY_COMPONENTS," == *,cloudflared,* ]]; then
