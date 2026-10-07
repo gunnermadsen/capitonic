@@ -24,7 +24,8 @@ expected_bot="$(yq -r '.image | sub("-rc\\.[0-9]+$", "")' "$APP_DIRECTORY/capito
 expected_ingester="$(yq -r '.image | sub("-rc\\.[0-9]+$", "")' "$APP_DIRECTORY/capitonic-helm-chart/environments/production/ingester.yaml")"
 expected_migrate="$(yq -r '.image | sub("-rc\\.[0-9]+$", "")' "$APP_DIRECTORY/capitonic-helm-chart/environments/production/db-migrate.yaml")"
 for image in "$expected_bot" "$expected_ingester" "$expected_migrate"; do
-  [[ "$image" =~ ^192200846560\.dkr\.ecr\.eu-west-1\.amazonaws\.com/(polymarket-bot|ingester|db-migrate)(@sha256:[0-9a-f]{64}|:v[0-9]+\.[0-9]+\.[0-9]+)$ ]]
+  # Production ECR images MUST use the /capitonic/ repository namespace; unnamespaced images are forbidden.
+  [[ "$image" =~ ^192200846560\.dkr\.ecr\.eu-west-1\.amazonaws\.com/capitonic/(polymarket-bot|ingester|db-migrate)(@sha256:[0-9a-f]{64}|:v[0-9]+\.[0-9]+\.[0-9]+)$ ]]
   [[ "$image" != *sha256:0000000000000000000000000000000000000000000000000000000000000000 ]]
 done
 [[ "$(kubectl -n "$NAMESPACE" get deployment polymarket-bot -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$expected_bot" ]]

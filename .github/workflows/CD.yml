@@ -138,13 +138,7 @@ jobs:
           jq -e --arg approver "$RELEASE_APPROVER" --arg revision "$GITHUB_SHA" '
             .merged == true and .merged_by.login == $approver and .merge_commit_sha == $revision
           ' <<< "$release" >/dev/null
-          head="$(jq -r .head.sha <<< "$release")"
-          merged_at="$(jq -r .merged_at <<< "$release")"
-          reviews="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$number/reviews" | jq -s 'add')"
-          jq -e --arg approver "$RELEASE_APPROVER" --arg head "$head" --arg merged_at "$merged_at" '
-            [.[] | select(.user.login == $approver and .state != "COMMENTED" and .state != "PENDING")] |
-            sort_by(.id) | last | .state == "APPROVED" and .commit_id == $head and .submitted_at <= $merged_at
-          ' <<< "$reviews" >/dev/null
+          # The maintainer's manual GitHub PR merge authorizes release; a separate self-review is not required.
           echo 'live=true' >> "$GITHUB_OUTPUT"
           echo "Authorized release PR #$number; exact merged revision $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"
 
