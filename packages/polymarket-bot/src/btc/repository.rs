@@ -788,6 +788,32 @@ WITH order_identity AS MATERIALIZED (
       AS legacy_experiment_id
   FROM polymarket.orders o
   WHERE o.process_id = $1
+    -- Unfilled and unresolved orders must not consume the bounded settlement batch.
+    AND EXISTS (
+      SELECT 1 FROM polymarket.fills candidate_fill
+      WHERE candidate_fill.process_id = o.process_id
+        AND candidate_fill.order_id = o.order_id
+        AND candidate_fill.source = $2
+    )
+    AND EXISTS (
+      SELECT 1
+      FROM polymarket.btc_interval_markets candidate_market
+      JOIN polymarket.btc_official_resolution_watches candidate_watch
+        ON candidate_watch.market_id = candidate_market.market_id
+      WHERE candidate_market.market_id = o.market_id
+        AND candidate_market.official_resolution_received_at IS NOT NULL
+        AND candidate_market.official_resolution_source IS NOT NULL
+        AND (
+          (candidate_market.official_outcome = 'up'
+            AND candidate_market.official_winning_token_id = candidate_market.up_token_id)
+          OR
+          (candidate_market.official_outcome = 'down'
+            AND candidate_market.official_winning_token_id = candidate_market.down_token_id)
+        )
+        AND candidate_watch.status IN ('resolved', 'resolved_late')
+        AND candidate_watch.resolution_received_at = candidate_market.official_resolution_received_at
+        AND candidate_watch.resolution_source = candidate_market.official_resolution_source
+    )
     AND NOT EXISTS (
       SELECT 1
       FROM polymarket.account_trades account_exit
