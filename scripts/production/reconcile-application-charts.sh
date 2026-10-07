@@ -118,12 +118,7 @@ if [[ "$verified" == true && "$coordinate_grafana" == true ]]; then
  grafana_changed=true
  ARGO_CREDENTIAL_ROLLBACK_OWNER=true DEPLOYMENT_SCOPE=selected DEPLOY_COMPONENTS=grafana scripts/production/deploy-k3s.sh || verified=false
 fi
-if [[ "$verified" == true ]]; then
- if ! scripts/production/verify-production.sh; then
-   echo "Full verification failed; investigate attribution before rollback. Preserve $snapshot." >&2
-   exit 72
- fi
-fi
+# The deployment caller runs full release verification after Helm releases and pilot reconciliation.
 if [[ "$verified" == true ]]; then
  kubectl -n capitonic exec timescaledb-0 -c timescaledb -- psql -U postgres -d polymarket -Atc \
   "SELECT process_id FROM polymarket.trading_processes WHERE enabled AND status='running' AND heartbeat_at > now()-interval '90 seconds' ORDER BY process_id" > "$snapshot/enabled-after.txt"

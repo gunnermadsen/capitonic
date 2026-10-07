@@ -1,0 +1,15 @@
+{
+  "deployment_scope": "development_live_pilot",
+  "feature_schema_sha256": "5dceedc374621f50e844ddf43cea5f58068c4dc70c36169c037dbb2691c7f39a",
+  "feature_schema_version": "btc-5m-payoff-aware-conservative-price-v1",
+  "golden_vectors_file": "golden-vectors.json",
+  "golden_vectors_sha256": "b5bb96b5263bbc250102bcca6b143156acf30a5dc9e6857aabd6f065b84fc206",
+  "live_capital_allowed": true,
+  "model_file": "model.json",
+  "model_key": "btc-5m-conservative-selective-confidence-075-live-pilot-20261006",
+  "model_sha256": "d18f13dd58f3b32ace158f9bf46b05ae897aaf65776f8a7ee553bddf0131761e",
+  "production_qualified": false,
+  "schema_version": "capitonic-btc-directional-runtime-manifest-v1",
+  "source_freeze_manifest_sha256": "88744a1cc1fb0af824a902212906944ea7873433e672111d38a740afc3e01481",
+  "source_training_model_sha256": "88744a1cc1fb0af824a902212906944ea7873433e672111d38a740afc3e01481"
+}

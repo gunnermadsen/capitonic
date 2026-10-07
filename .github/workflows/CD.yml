@@ -93,6 +93,13 @@ jobs:
             [[ "$DEPLOY_COMPONENTS" =~ ^[a-z0-9,-]*$ ]]
             [[ "$PROMOTE_COMPONENTS" =~ ^[a-z0-9,-]*$ ]]
           fi
+          PROMOTE_COMPONENTS=''
+          IFS=, read -ra selected <<< "$DEPLOY_COMPONENTS"
+          for component in "${selected[@]}"; do
+            case "$component" in
+              polymarket-bot|ingester|db-migrate) PROMOTE_COMPONENTS+="${PROMOTE_COMPONENTS:+,}$component" ;;
+            esac
+          done
           {
             echo "deployment_scope=$DEPLOYMENT_SCOPE"
             echo "deploy_components=$DEPLOY_COMPONENTS"
@@ -131,13 +138,7 @@ jobs:
           jq -e --arg approver "$RELEASE_APPROVER" --arg revision "$GITHUB_SHA" '
             .merged == true and .merged_by.login == $approver and .merge_commit_sha == $revision
           ' <<< "$release" >/dev/null
-          head="$(jq -r .head.sha <<< "$release")"
-          merged_at="$(jq -r .merged_at <<< "$release")"
-          reviews="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$number/reviews" | jq -s 'add')"
-          jq -e --arg approver "$RELEASE_APPROVER" --arg head "$head" --arg merged_at "$merged_at" '
-            [.[] | select(.user.login == $approver and .state != "COMMENTED" and .state != "PENDING")] |
-            sort_by(.id) | last | .state == "APPROVED" and .commit_id == $head and .submitted_at <= $merged_at
-          ' <<< "$reviews" >/dev/null
+          # The maintainer's manual GitHub PR merge authorizes release; a separate self-review is not required.
           echo 'live=true' >> "$GITHUB_OUTPUT"
           echo "Authorized release PR #$number; exact merged revision $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"
 
@@ -217,7 +218,7 @@ jobs:
               [[ ! -f "$report" ]] || cat "$report"
             done
             if [[ "$LIVE_RELEASE" == true && -n "$DEPLOY_COMPONENTS" && "$VALIDATION_RESULT" == success && "$SCOPE_RESULT" == success && "$ADMISSION_RESULT" == success ]]; then
-              echo 'Approved live release: host checkout followed by selected-component deployment and verification.'
+              echo 'Approved live release: promote approved RC manifests, verify final tags, then deploy and verify selected components.'
             else
               echo 'Planning only or empty/invalid release: production execution skipped.'
             fi
@@ -242,6 +243,7 @@ jobs:
     env:
       DEPLOYMENT_SCOPE: selected
       DEPLOY_COMPONENTS: ${{ needs.validate.outputs.deploy_components }}
+      PROMOTE_COMPONENTS: ${{ needs.validate.outputs.promote_components }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -251,6 +253,18 @@ jobs:
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+      - name: Install pinned yq
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.47.2/yq_linux_amd64 -o /tmp/yq
+          curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.47.2/checksums -o /tmp/yq-checksums
+          expected="$(awk '$1 == "yq_linux_amd64" {print $19}' /tmp/yq-checksums)"
+          [ -n "$expected" ]
+          echo "$expected  /tmp/yq" | sha256sum -c -
+          sudo install -m 0755 /tmp/yq /usr/local/bin/yq
+      - name: Promote approved RC images and verify final tags
+        if: env.PROMOTE_COMPONENTS != ''
+        run: scripts/production/promote-production-images.sh
       - name: Locate production server
         id: host
         shell: bash

@@ -19,19 +19,19 @@ selected_release_ready() {
   local component="$1" expected_image
   case "$component" in
     polymarket-bot)
-      expected_image="$(yq -r .image capitonic-helm-chart/environments/production/polymarket-bot.yaml)"
+      expected_image="$(yq -r '.image | sub("-rc\\.[0-9]+$", "")' capitonic-helm-chart/environments/production/polymarket-bot.yaml)"
       kubectl -n "$NAMESPACE" rollout status deployment/polymarket-bot --timeout=5m &&
         [[ "$(kubectl -n "$NAMESPACE" get deployment polymarket-bot -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$expected_image" ]]
       ;;
     ingester)
-      expected_image="$(yq -r .image capitonic-helm-chart/environments/production/ingester.yaml)"
+      expected_image="$(yq -r '.image | sub("-rc\\.[0-9]+$", "")' capitonic-helm-chart/environments/production/ingester.yaml)"
       kubectl -n "$NAMESPACE" rollout status deployment/ingester-master --timeout=5m &&
         kubectl -n "$NAMESPACE" rollout status deployment/ingester-worker --timeout=5m &&
         [[ "$(kubectl -n "$NAMESPACE" get deployment ingester-master -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$expected_image" ]] &&
         [[ "$(kubectl -n "$NAMESPACE" get deployment ingester-worker -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$expected_image" ]]
       ;;
     db-migrate)
-      expected_image="$(yq -r .image capitonic-helm-chart/environments/production/db-migrate.yaml)"
+      expected_image="$(yq -r '.image | sub("-rc\\.[0-9]+$", "")' capitonic-helm-chart/environments/production/db-migrate.yaml)"
       kubectl -n "$NAMESPACE" wait --for=condition=complete job/db-migrate --timeout=5m &&
         [[ "$(kubectl -n "$NAMESPACE" get job db-migrate -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$expected_image" ]]
       ;;
@@ -98,14 +98,12 @@ deploy_selected_components() {
     (( ready >= desired + backfills )) || { echo 'Insufficient worker capacity for ingester rollout.' >&2; return 70; }
   fi
 
-  if [[ ",$DEPLOY_COMPONENTS," == *,grafana,* || ",$DEPLOY_COMPONENTS," == *,prometheus,* || ",$DEPLOY_COMPONENTS," == *,loki,* || ",$DEPLOY_COMPONENTS," == *,alloy,* ]]; then
-    local prometheus_user
-    prometheus_user="$(kubectl -n "$NAMESPACE" get secret prometheus-auth -o jsonpath='{.data.username}' | base64 -d)" || return 70
-    PROMETHEUS_BASIC_AUTH_USER="$prometheus_user" python3 scripts/helm/bake-assets.py || return 70
-    unset prometheus_user
-  else
-    python3 scripts/helm/bake-assets.py || return 70
-  fi
+  local prometheus_user
+  # Production asset preparation must use Kubernetes credentials, never local .env files.
+  prometheus_user="$(kubectl -n "$NAMESPACE" get secret prometheus-auth -o jsonpath='{.data.username}' | base64 -d)" || return 70
+  [[ -n "$prometheus_user" ]] || { echo 'Prometheus username is missing; no rollout started.' >&2; return 70; }
+  PROMETHEUS_BASIC_AUTH_USER="$prometheus_user" python3 scripts/helm/bake-assets.py || return 70
+  unset prometheus_user
   trap 'python3 scripts/helm/bake-assets.py --clean >/dev/null 2>&1 || true' EXIT
   # Validate every selected chart and tunnel input before the first cluster write.
   if [[ ",$DEPLOY_COMPONENTS," == *,cloudflared,* ]]; then
@@ -125,10 +123,6 @@ deploy_selected_components() {
   if [[ ",$DEPLOY_COMPONENTS," == *,polymarket-bot,* || ",$DEPLOY_COMPONENTS," == *,ingester,* || ",$DEPLOY_COMPONENTS," == *,db-migrate,* ]]; then
     scripts/production/refresh-ecr-pull-secret.sh || return $?
   fi
-  if [[ "$has_applications" == true ]]; then
-    scripts/production/reconcile-application-charts.sh || return $?
-  fi
-  ((${#selected[@]})) || return 0
   started="$(date -u +%s)"
   for component in ${selected[@]+"${selected[@]}"}; do
     [[ "$component" == db-migrate ]] && kubectl -n "$NAMESPACE" delete job db-migrate --ignore-not-found --wait=true
@@ -165,6 +159,17 @@ deploy_selected_components() {
     done
     echo "Selected rollout failed; rollback failed=$rollback_failed; preserve $snapshot." >&2
     return 71
+  fi
+  # Complete Helm-owned releases, including the migration Job, before application rollout.
+  if [[ "$has_applications" == true ]]; then
+    scripts/production/reconcile-application-charts.sh || return $?
+  fi
+  if [[ ",$DEPLOY_COMPONENTS," == *,polymarket-bot,* ]]; then
+    scripts/production/deploy-pilot-pair.sh || return $?
+  fi
+  # Full release verification requires completed deployments and reconciled pilot processes.
+  if [[ "$has_applications" == true ]]; then
+    scripts/production/verify-production.sh || return $?
   fi
   printf 'Selected releases verified at revision %s; snapshot %s.\n' "$deployment_revision" "$snapshot"
 }
