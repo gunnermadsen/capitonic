@@ -1,4 +1,4 @@
-name: Verify Production Trading Processes
+name: Production Validation
 
 on:
   workflow_call:
@@ -17,8 +17,8 @@ env:
   AWS_ROLE_ARN: arn:aws:iam::192200846560:role/capitonic-polymarket-bot-github-actions-prod
 
 jobs:
-  pilots:
-    name: Verify production trading processes
+  validation:
+    name: Validate production
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -40,10 +40,10 @@ jobs:
             --query 'Reservations[].Instances[].InstanceId' --output text)"
           [ "$(wc -w <<< "$instance_id")" -eq 1 ]
           printf 'revision=%s\ninstance_id=%s\n' "$revision" "$instance_id" >> "$GITHUB_OUTPUT"
-      - name: Verify production trading processes
+      - name: Validate production
         env:
           INSTANCE_ID: ${{ steps.target.outputs.instance_id }}
           REVISION: ${{ steps.target.outputs.revision }}
         run: |
           command="cd /opt/polymarket-bot && scripts/production/checkout-revision.sh $REVISION && scripts/production/verify-production.sh"
-          scripts/production/run-ssm-command.sh "$INSTANCE_ID" 1800 'Verify production trading processes' "$command"
+          scripts/production/run-ssm-command.sh "$INSTANCE_ID" 1800 'Validate production' "$command"

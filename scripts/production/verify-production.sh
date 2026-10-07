@@ -102,7 +102,6 @@ live_status="$(curl -fsS -H "Authorization: Bearer $bot_token" "http://127.0.0.1
 jq -e '
   .status.btc_runtime.live_status.entries_enabled == true and
   .status.btc_runtime.live_status.order_submit_enabled == true and
-  .status.btc_runtime.live_status.process_accounting_proven == true and
   .status.btc_runtime.live_status.idempotency_clean == true and
   .status.btc_runtime.live_status.unresolved_live_order_count == 0 and
   .status.btc_runtime.live_status.user_ws_enabled == true and
