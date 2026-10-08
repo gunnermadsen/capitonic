@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 pub use context::{build_context, build_settlement_context, build_volatility_context};
 pub use diagnostics::FailureDiagnostic;
 pub use provider::OpenAiProvider;
-pub use reassessment::add_reassessment_context;
+pub use reassessment::{add_entry_reassessment_context, add_reassessment_context};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 pub use session::AgentSession;
@@ -32,6 +32,10 @@ pub const VOLATILITY_PROFILE_KEY: &str = "btc-5m-openai-agent-volatility-v1";
 pub const VOLATILITY_CONTEXT_VERSION: &str = "capitonic-btc-agent-volatility-context-v1";
 pub const REASSESSMENT_PROFILE_KEY: &str = "btc-5m-openai-agent-reassessment-v1";
 pub const REASSESSMENT_CONTEXT_VERSION: &str = "capitonic-btc-agent-reassessment-context-v1";
+pub const ENTRY_REASSESSMENT_PROFILE_KEY: &str = "btc-5m-openai-agent-entry-reassessment-v1";
+pub const ENTRY_REASSESSMENT_CONTEXT_VERSION: &str =
+    "capitonic-btc-agent-entry-reassessment-context-v1";
+const ENTRY_REASSESSMENT_INSTRUCTION: &str = "When entry_reassessment.trigger is forecast_became_affordable, the earlier forecast could not enter at its observed price and its selected side has since become affordable. Reassess whether the changed reference, TWAP and Binance evidence supports a bargain or a deteriorating forecast. Reaffirm or revise the settlement direction using current evidence; a cheaper entry alone is not evidence for the earlier direction.";
 const REASSESSMENT_INSTRUCTION: &str = "When previous_prediction_comparison is available, reassess your earlier forecast using the changed evidence. Reaffirm or revise it; your previous prediction is context, not a commitment. Distinguish the likely settlement outcome from the attractiveness of the current entry price. Missing comparisons are unknown, not zero, and do not require abstention. With no previous prediction, forecast from the current observations as usual.";
 pub const SETTLEMENT_RULE: &str = "UP when the official Chainlink BTC/USD 60-second TWAP at window_end is greater than or equal to its value at window_start; otherwise DOWN. RTDS midpoint, Binance spot and Polygon oracle are supporting indicators, not settlement prices. Missing TWAP observations are unknown, not zero; do not substitute midpoint prices for them.";
 pub const REQUIRED_PRODUCTS: [&str; 5] = [
@@ -104,6 +108,15 @@ pub fn profile_for_key(key: &str) -> Result<AgentProfile> {
             selected.instructions.push(' ');
             selected.instructions.push_str(REASSESSMENT_INSTRUCTION);
         }
+        ENTRY_REASSESSMENT_PROFILE_KEY => {
+            selected = profile_for_key(REASSESSMENT_PROFILE_KEY)?;
+            selected.key = ENTRY_REASSESSMENT_PROFILE_KEY;
+            selected.context_version = ENTRY_REASSESSMENT_CONTEXT_VERSION;
+            selected.instructions.push(' ');
+            selected
+                .instructions
+                .push_str(ENTRY_REASSESSMENT_INSTRUCTION);
+        }
         _ => anyhow::bail!("unsupported agent profile"),
     }
     Ok(selected)
@@ -118,7 +131,9 @@ impl AgentSelection {
         Ok(())
     }
     pub fn context_version(&self) -> &'static str {
-        if self.profile_key == REASSESSMENT_PROFILE_KEY {
+        if self.profile_key == ENTRY_REASSESSMENT_PROFILE_KEY {
+            ENTRY_REASSESSMENT_CONTEXT_VERSION
+        } else if self.profile_key == REASSESSMENT_PROFILE_KEY {
             REASSESSMENT_CONTEXT_VERSION
         } else if self.profile_key == VOLATILITY_PROFILE_KEY {
             VOLATILITY_CONTEXT_VERSION
@@ -338,5 +353,32 @@ mod tests {
             previous.instructions, REASSESSMENT_INSTRUCTION
         ));
         assert_eq!(serde_json::to_value(selected).unwrap(), expected);
+    }
+    #[test]
+    fn entry_profile_is_opt_in_and_preserves_existing_forecast_contract() {
+        let old = profile_for_key(REASSESSMENT_PROFILE_KEY).unwrap();
+        assert_eq!(
+            hash(&old).unwrap(),
+            "e7b23b34460727ecf5693774e63f92fa0d04b2737c76b2e01a644c6b66eafa80"
+        );
+        let new = profile_for_key(ENTRY_REASSESSMENT_PROFILE_KEY).unwrap();
+        let selection = AgentSelection {
+            profile_key: new.key.into(),
+            profile_sha256: hash(&new).unwrap(),
+        };
+        selection.validate().unwrap();
+        assert_eq!(
+            selection.context_version(),
+            ENTRY_REASSESSMENT_CONTEXT_VERSION
+        );
+        let mut expected = serde_json::to_value(&old).unwrap();
+        expected["key"] = serde_json::json!(ENTRY_REASSESSMENT_PROFILE_KEY);
+        expected["context_version"] = serde_json::json!(ENTRY_REASSESSMENT_CONTEXT_VERSION);
+        expected["instructions"] = serde_json::json!(format!(
+            "{} {}",
+            old.instructions, ENTRY_REASSESSMENT_INSTRUCTION
+        ));
+        assert_eq!(serde_json::to_value(&new).unwrap(), expected);
+        eprintln!("entry profile sha256: {}", hash(&new).unwrap());
     }
 }
