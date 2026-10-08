@@ -1,4 +1,4 @@
-image: capitonic/polymarket-bot:v3.2.9-rc.0
+image: capitonic/polymarket-bot:v3.3.0-local.13
 environment: development
 imagePullPolicy: Never
 imagePullSecrets: []
@@ -16,3 +16,8 @@ resources:
 externalSecrets:
   enabled: false
 credentialRevisions: {}
+openaiAgent:
+  enabled: true
+  secretName: polymarket-openai-auth
+  storageSize: 64Mi
+  storageClass: local-path

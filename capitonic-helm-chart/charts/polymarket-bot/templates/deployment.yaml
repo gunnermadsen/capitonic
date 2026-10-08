@@ -37,6 +37,9 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 10002
+{{- if .Values.openaiAgent.enabled }}
+        fsGroup: 10002
+{{- end }}
       containers:
         - name: polymarket-bot
           image: {{ include "polymarket-bot.image" . | quote }}
@@ -44,6 +47,10 @@ spec:
           ports:
             - {name: http, containerPort: 8097}
           env:
+{{- if .Values.openaiAgent.enabled }}
+            - {name: POLYMARKET_OPENAI_CREDENTIAL_PATH, value: /var/lib/polymarket/openai/credentials.enc}
+            - {name: POLYMARKET_OPENAI_CREDENTIAL_KEY, valueFrom: {secretKeyRef: {name: {{ .Values.openaiAgent.secretName }}, key: POLYMARKET_OPENAI_CREDENTIAL_KEY}}}
+{{- end }}
             - {name: RUST_LOG, value: info}
             - {name: TOKIO_WORKER_THREADS, value: "2"}
             - {name: POSTGRES_HOST, value: pgbouncer}
@@ -85,3 +92,10 @@ spec:
 {{ toYaml .Values.resources | indent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
+{{- if .Values.openaiAgent.enabled }}
+          volumeMounts:
+            - {name: openai-credentials, mountPath: /var/lib/polymarket/openai}
+      volumes:
+        - name: openai-credentials
+          persistentVolumeClaim: {claimName: polymarket-openai-credentials}
+{{- end }}

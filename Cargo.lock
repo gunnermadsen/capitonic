@@ -3759,6 +3759,7 @@ dependencies = [
  "prost",
  "protoc-bin-vendored",
  "reqwest 0.12.28",
+ "ring",
  "rust_decimal",
  "rust_decimal_macros",
  "rustls",

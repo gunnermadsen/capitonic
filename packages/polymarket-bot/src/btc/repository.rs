@@ -2785,6 +2785,36 @@ impl BtcRepository {
             .context("failed to check existing BTC process entry")
     }
 
+    /// Restore the latest forecast from the process-owned decision ledger.
+    pub async fn load_agent_prediction(
+        &self,
+        process_id: Uuid,
+        run_id: Uuid,
+        config_hash: &str,
+        market_id: &str,
+        window_start: DateTime<Utc>,
+    ) -> Result<Option<super::unified_model_runtime::agent::EvaluationResult>> {
+        let value = sqlx::query_scalar::<_, serde_json::Value>("SELECT metadata->'agent_evaluation' FROM polymarket.btc_strategy_decisions WHERE process_id=$1 AND market_id=$2 AND strategy_version=$3 AND decision_at >= $4 AND decision_at < $4 + interval '120 seconds' AND run_id=$5 AND config_hash=$6 AND metadata #> '{agent_evaluation,prediction,Ok}' IS NOT NULL ORDER BY decision_at DESC LIMIT 1")
+            .bind(process_id).bind(market_id).bind(super::unified_model_runtime::agent::STRATEGY_VERSION)
+            .bind(window_start).bind(run_id).bind(config_hash)
+            .fetch_optional(&self.pool).await.context("failed to restore agent prediction ownership")?;
+        value
+            .map(serde_json::from_value)
+            .transpose()
+            .context("invalid persisted agent evaluation")
+    }
+
+    pub async fn process_has_entry_fill(
+        &self,
+        process_id: Uuid,
+        market_id: &str,
+        window_start: DateTime<Utc>,
+    ) -> Result<bool> {
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM polymarket.orders o JOIN polymarket.fills f ON f.process_id=o.process_id AND f.order_id=o.order_id WHERE o.process_id=$1 AND o.market_id=$2 AND o.created_at >= $3 AND o.created_at < $3 + interval '300 seconds' AND f.timestamp_utc >= $3 AND f.timestamp_utc < $3 + interval '300 seconds' AND o.raw_payload #>> '{request,metadata,execution_intent}'='entry' AND f.source IN ('paper','live') AND f.size > 0)")
+            .bind(process_id).bind(market_id).bind(window_start).fetch_one(&self.pool).await
+            .context("failed to check process entry fills")
+    }
+
     pub async fn load_resolved_loss_regime_candidates(
         &self,
         process_id: Uuid,
@@ -2986,9 +3016,19 @@ impl BtcRepository {
             process_id,
             decision.feature_snapshot_id,
         ) {
+            if let Some(evidence) = record
+                .admission
+                .as_ref()
+                .and_then(|value| value.get("agent_evaluation"))
+            {
+                metadata["agent_evaluation"] = evidence.clone();
+            }
             metadata["model_evaluation"] = serde_json::to_value(record)?;
         }
         if let Some(entry_admission_evidence) = entry_admission_evidence {
+            if let Some(evidence) = entry_admission_evidence.get("agent_evaluation") {
+                metadata["agent_evaluation"] = evidence.clone();
+            }
             metadata
                 .as_object_mut()
                 .context("serialized BTC decision metadata must be an object")?
@@ -3926,7 +3966,11 @@ fn decision_edge_projection(decision: &BtcDecision) -> Result<BtcDecisionEdgePro
                 || (*entry_policy == BtcDirectionalModelEntryPolicy::RequirePositiveDirectEdge
                     && net_edge_per_share <= Decimal::ZERO)
                 || (*entry_policy == BtcDirectionalModelEntryPolicy::ExecuteDirectionalPrediction
-                    && intent.strategy_version != BTC_DIRECTIONAL_MODEL_STRATEGY_VERSION)
+                    && !matches!(
+                        intent.strategy_version.as_str(),
+                        BTC_DIRECTIONAL_MODEL_STRATEGY_VERSION
+                            | super::unified_model_runtime::agent::STRATEGY_VERSION
+                    ))
                 || gross_edge_per_share - fee_per_share != net_edge_per_share
                 || intent.expected_net_edge_per_share != net_edge_per_share
                 || intent.expected_net_edge != net_edge_per_share * edge.size
@@ -4784,6 +4828,16 @@ mod tests {
             assert_eq!(projection.gross_edge_per_share, Some(dec!(-0.03)));
             assert_eq!(projection.fee_per_share, Some(dec!(0.002)));
             assert_eq!(projection.net_edge_per_share, Some(dec!(-0.032)));
+
+            let mut agent_decision = decision.clone();
+            agent_decision
+                .approved_intent
+                .as_mut()
+                .unwrap()
+                .strategy_version =
+                super::super::unified_model_runtime::agent::STRATEGY_VERSION.to_string();
+            let agent_projection = decision_edge_projection(&agent_decision).unwrap();
+            assert_eq!(agent_projection.net_edge_per_share, Some(dec!(-0.032)));
 
             let mut default_policy = decision.clone();
             let Some(BtcStrategyPrediction::DirectionalPrediction { entry_policy, .. }) =

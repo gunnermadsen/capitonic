@@ -5,6 +5,8 @@ pub(super) const BTC_PROCESS_SCHEMA_VERSION: &str = "btc_realtime_paper_process_
 pub(super) const SELECTABLE_BTC_PIPELINE_VERSION: &str = "btc_realtime_paper_pipeline_v12";
 pub(super) const SELECTABLE_BTC_PROCESS_SCHEMA_VERSION: &str = "btc_realtime_paper_process_v3";
 pub(super) const ROUTER_BTC_PIPELINE_VERSION: &str = "btc_realtime_paper_pipeline_v13";
+pub(super) const AGENT_PROCESS_SCHEMA_VERSION: &str = "btc_realtime_paper_process_v5";
+pub(super) const AGENT_BTC_PIPELINE_VERSION: &str = "btc_realtime_paper_pipeline_v14";
 pub(super) const LEGACY_BTC_PROCESS_SCHEMA_VERSION: &str = "btc_realtime_paper_process_v1";
 pub(super) const BTC_PROCESS_TYPE: &str = "btc_5m";
 pub(super) const BTC_PROCESS_SCOPE: &str = "realtime_paper";
@@ -225,6 +227,7 @@ pub(super) fn parse_btc_process_control(
         BTC_PROCESS_SCHEMA_VERSION
             | SELECTABLE_BTC_PROCESS_SCHEMA_VERSION
             | ROUTER_PROCESS_SCHEMA_VERSION
+            | AGENT_PROCESS_SCHEMA_VERSION
     ) {
         return Err(HttpError::bad_request(format!(
             "unsupported BTC process schema_version {schema_version}"
@@ -316,6 +319,11 @@ pub(super) fn resolve_legacy_btc_strategy(
         )
         .map_err(|error| HttpError::bad_request(format!("invalid strategy selection: {error}")))?;
         let (strategy_version, feature_schema_version) = match &selection {
+            BtcDecisionStrategyConfig::OpenaiAgent { .. } => {
+                return Err(HttpError::bad_request(
+                    "openai_agent requires process schema v5",
+                ))
+            }
             BtcDecisionStrategyConfig::BtcDirectionalModel {
                 model_key,
                 artifact_sha256,
@@ -375,7 +383,9 @@ pub(super) fn resolve_legacy_btc_strategy(
 pub(super) fn resolve_btc_members(
     control: &BtcRealtimePaperControlConfig,
 ) -> Result<Vec<(String, BtcStrategyConfig, polymarket_bot::models::OrderType)>, HttpError> {
-    if control.schema_version != ROUTER_PROCESS_SCHEMA_VERSION {
+    if control.schema_version != ROUTER_PROCESS_SCHEMA_VERSION
+        && control.schema_version != AGENT_PROCESS_SCHEMA_VERSION
+    {
         return Ok(vec![(
             "legacy_primary".into(),
             resolve_legacy_btc_strategy(control)?,
@@ -407,6 +417,17 @@ pub(super) fn resolve_btc_members(
             .ok_or_else(|| HttpError::bad_request("missing router selection"))?,
     )
     .map_err(|e| HttpError::bad_request(format!("invalid router: {e}")))?;
+    if router.models.iter().any(|m| {
+        matches!(
+            m.selection,
+            polymarket_bot::btc::unified_model_runtime::router::Selection::OpenaiAgent { .. }
+        )
+    }) && control.schema_version != AGENT_PROCESS_SCHEMA_VERSION
+    {
+        return Err(HttpError::bad_request(
+            "openai_agent requires process schema v5",
+        ));
+    }
     let mut value = serde_json::to_value(BtcStrategyConfig::default())
         .map_err(|e| HttpError::internal(e.to_string()))?;
     let object = value.as_object_mut().expect("strategy object");
@@ -442,7 +463,10 @@ pub(super) fn pin_router_config(config: &mut TradingProcessConfig) -> Result<(),
     let Some(control) = config.raw.get_mut("btc_realtime_paper") else {
         return Ok(());
     };
-    if control["schema_version"].as_str() != Some(ROUTER_PROCESS_SCHEMA_VERSION) {
+    if !matches!(
+        control["schema_version"].as_str(),
+        Some(ROUTER_PROCESS_SCHEMA_VERSION | AGENT_PROCESS_SCHEMA_VERSION)
+    ) {
         return Ok(());
     }
     let selected = control
@@ -464,7 +488,10 @@ pub(super) fn validate_directional_model_entry_policy(
     if entry_policy == BtcDirectionalModelEntryPolicy::ExecuteDirectionalPrediction
         && !matches!(
             strategy.decision_strategy.as_ref(),
-            Some(BtcDecisionStrategyConfig::BtcDirectionalModel { .. })
+            Some(
+                BtcDecisionStrategyConfig::BtcDirectionalModel { .. }
+                    | BtcDecisionStrategyConfig::OpenaiAgent { .. }
+            )
         )
     {
         return Err(HttpError::bad_request(
@@ -870,6 +897,7 @@ pub(super) fn prepare_btc_start_definition_for_execution(
         ROUTER_PROCESS_SCHEMA_VERSION => {
             (ROUTER_BTC_PIPELINE_VERSION, ROUTER_PROCESS_SCHEMA_VERSION)
         }
+        AGENT_PROCESS_SCHEMA_VERSION => (AGENT_BTC_PIPELINE_VERSION, AGENT_PROCESS_SCHEMA_VERSION),
         schema_version => {
             return Err(HttpError::internal(format!(
                 "resolved unsupported BTC process schema {schema_version}"
@@ -887,6 +915,11 @@ pub(super) fn prepare_btc_start_definition_for_execution(
             ))
         }
     };
+    if strategy.agent_selection().is_some() && execution_mode != BtcExecutionMode::Paper {
+        return Err(HttpError::bad_request(
+            "openai_agent supports paper execution only",
+        ));
+    }
     if execution_mode == BtcExecutionMode::Live {
         validate_btc_live_execution_freshness(&strategy)?;
     }
@@ -898,7 +931,10 @@ pub(super) fn prepare_btc_start_definition_for_execution(
         &uuid::Uuid::NAMESPACE_URL,
         format!("{run_namespace}/{run_key}").as_bytes(),
     );
-    let frozen_strategy = if process_schema_version == ROUTER_PROCESS_SCHEMA_VERSION {
+    let frozen_strategy = if matches!(
+        process_schema_version,
+        ROUTER_PROCESS_SCHEMA_VERSION | AGENT_PROCESS_SCHEMA_VERSION
+    ) {
         control.strategy.clone()
     } else {
         serde_json::to_value(&strategy).map_err(|error| HttpError::internal(error.to_string()))?
