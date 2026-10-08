@@ -1287,9 +1287,11 @@ impl BtcProcessRunner {
             {
                 session.retain(result);
             }
-            if member.strategy.agent_selection().is_some_and(|selection| {
-                selection.profile_key == agent::ENTRY_REASSESSMENT_PROFILE_KEY
-            }) {
+            if member
+                .strategy
+                .agent_selection()
+                .is_some_and(|selection| agent::uses_entry_reassessment(&selection.profile_key))
+            {
                 if let Some(request) = self
                     .repository
                     .load_agent_entry_request(
@@ -1298,6 +1300,12 @@ impl BtcProcessRunner {
                         &self.config.config_hash,
                         &market.market_id,
                         market.window_start,
+                        member
+                            .strategy
+                            .agent_selection()
+                            .unwrap()
+                            .profile_key
+                            .as_str(),
                     )
                     .await?
                 {
@@ -1309,6 +1317,21 @@ impl BtcProcessRunner {
                 }
             }
             session.restored = true;
+        }
+        if member
+            .strategy
+            .agent_selection()
+            .is_some_and(|selection| selection.profile_key == agent::CALIBRATION_PROFILE_KEY)
+            && session.calibration.is_none()
+        {
+            session.calibration = Some(
+                self.repository
+                    .load_agent_calibration(self.config.process_id, market.window_start)
+                    .await
+                    .unwrap_or_else(|_| agent::calibration::unavailable(market.window_start)),
+            );
+            // Read history only once, then use a fresh observation on the next callback.
+            return Ok(None);
         }
         if self
             .repository
@@ -1436,6 +1459,7 @@ impl BtcProcessRunner {
                 agent::VOLATILITY_PROFILE_KEY
                     | agent::REASSESSMENT_PROFILE_KEY
                     | agent::ENTRY_REASSESSMENT_PROFILE_KEY
+                    | agent::CALIBRATION_PROFILE_KEY
             ) {
                 agent::build_volatility_context(&observation.state, &snapshot, &sources)
             } else if selection.profile_key == agent::SETTLEMENT_PROFILE_KEY {
@@ -1464,7 +1488,7 @@ impl BtcProcessRunner {
                 agent::add_reassessment_context(&mut request, session.latest());
                 request.input_sha256 = agent::hash(&request.context)?;
             }
-            if selection.profile_key == agent::ENTRY_REASSESSMENT_PROFILE_KEY {
+            if agent::uses_entry_reassessment(&selection.profile_key) {
                 agent::add_entry_reassessment_context(
                     &mut request,
                     session.latest(),
@@ -1472,6 +1496,12 @@ impl BtcProcessRunner {
                     session.evaluation_slot(),
                     affordability_trigger,
                 );
+                if selection.profile_key == agent::CALIBRATION_PROFILE_KEY {
+                    request.context["version"] =
+                        serde_json::json!(agent::CALIBRATION_CONTEXT_VERSION);
+                    request.context["historical_calibration"] =
+                        session.calibration.clone().unwrap();
+                }
                 request.input_sha256 = agent::hash(&request.context)?;
                 // Record the slot before sending, so restart cannot replenish its budget.
                 let mut pending =

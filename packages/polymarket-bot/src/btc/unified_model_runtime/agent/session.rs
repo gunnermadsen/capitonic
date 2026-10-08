@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 #[derive(Default)]
 pub struct AgentSession {
     market: String,
+    pub calibration: Option<serde_json::Value>,
     attempts: usize,
     accepted: bool,
     entry_reassessment: Option<uuid::Uuid>,
@@ -53,7 +54,7 @@ impl AgentSession {
         down_ask: Option<rust_decimal::Decimal>,
         cap: rust_decimal::Decimal,
     ) -> bool {
-        if result.request.selection.profile_key != super::ENTRY_REASSESSMENT_PROFILE_KEY {
+        if !super::uses_entry_reassessment(&result.request.selection.profile_key) {
             return false;
         }
         let current =
@@ -86,7 +87,10 @@ impl AgentSession {
 
     /// Request ordinals include failed and interrupted calls in the existing ledger.
     pub fn restore_request(&mut self, request: &EvaluationRequest) {
-        if request.selection.profile_key == super::ENTRY_REASSESSMENT_PROFILE_KEY {
+        if request.selection.profile_key == super::CALIBRATION_PROFILE_KEY {
+            self.calibration = request.context.get("historical_calibration").cloned();
+        }
+        if super::uses_entry_reassessment(&request.selection.profile_key) {
             if let Some(slot) = request.context["evaluation_slot"].as_u64() {
                 self.attempts = self
                     .attempts
@@ -146,7 +150,7 @@ impl AgentSession {
             self.entry_reassessment = None;
             self.entry_reassessment_started = None;
         }
-        if result.request.selection.profile_key == super::ENTRY_REASSESSMENT_PROFILE_KEY {
+        if super::uses_entry_reassessment(&result.request.selection.profile_key) {
             if let Some(slot) = result.request.context["evaluation_slot"].as_u64() {
                 self.attempts = self
                     .attempts
@@ -161,6 +165,13 @@ impl AgentSession {
                     .count(),
             );
         }
+        if result.request.selection.profile_key == super::CALIBRATION_PROFILE_KEY {
+            self.calibration = result
+                .request
+                .context
+                .get("historical_calibration")
+                .cloned();
+        }
         self.latest = Some(result);
     }
     pub fn defer(&mut self, result: EvaluationResult) {
@@ -173,6 +184,7 @@ impl AgentSession {
         self.cancellation.cancel();
         self.completed = None;
         self.latest = None;
+        self.calibration = None;
         self.entry_reassessment = None;
         self.entry_reassessment_started = None;
         if let Some(task) = self.pending.take() {
@@ -471,5 +483,35 @@ mod tests {
         session.retain(revised.clone());
         assert!(!session.hold_entry(&revised, Some(dec!(0.59)), Some(dec!(0.45)), dec!(0.60)));
         assert!(!session.entry_reassessment_due(110));
+    }
+    #[test]
+    fn calibration_evidence_and_entry_budget_survive_restart_and_reset_on_rollover() {
+        use rust_decimal_macros::dec;
+        let mut result = entry_forecast("0.70", 2);
+        let profile = super::super::profile_for_key(super::super::CALIBRATION_PROFILE_KEY).unwrap();
+        result.request.selection.profile_key = profile.key.into();
+        result.request.selection.profile_sha256 = super::super::hash(&profile).unwrap();
+        let evidence = super::super::calibration::unavailable(result.request.window_start);
+        result.request.context["historical_calibration"] = evidence.clone();
+        result.request.input_sha256 = super::super::hash(&result.request.context).unwrap();
+        let wire = serde_json::to_vec(&result.request).unwrap();
+        let restored: EvaluationRequest = serde_json::from_slice(&wire).unwrap();
+        let mut session = AgentSession::default();
+        session.observe_market("a");
+        session.restore_request(&restored);
+        assert_eq!(session.calibration, Some(evidence.clone()));
+        assert_eq!(session.evaluation_slot(), 3);
+        session.retain(result.clone());
+        assert!(session.hold_entry(&result, Some(dec!(0.55)), None, dec!(0.60)));
+        assert!(session.entry_reassessment_due(100));
+        assert!(!session.entry_reassessment_due(120));
+        assert_eq!(
+            super::super::hash(&restored.context).unwrap(),
+            restored.input_sha256
+        );
+        session.observe_market("b");
+        assert!(session.calibration.is_none());
+        assert_eq!(session.evaluation_slot(), 1);
+        assert!(session.due(45));
     }
 }

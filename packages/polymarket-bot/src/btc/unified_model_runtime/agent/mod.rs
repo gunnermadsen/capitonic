@@ -1,5 +1,6 @@
 //! Asynchronous decision providers within UMR. Process runners alone own execution.
 pub mod auth;
+pub(crate) mod calibration;
 mod context;
 pub(super) mod diagnostics;
 mod provider;
@@ -35,6 +36,17 @@ pub const REASSESSMENT_CONTEXT_VERSION: &str = "capitonic-btc-agent-reassessment
 pub const ENTRY_REASSESSMENT_PROFILE_KEY: &str = "btc-5m-openai-agent-entry-reassessment-v1";
 pub const ENTRY_REASSESSMENT_CONTEXT_VERSION: &str =
     "capitonic-btc-agent-entry-reassessment-context-v1";
+pub const CALIBRATION_PROFILE_KEY: &str = "btc-5m-openai-agent-calibration-v1";
+pub const CALIBRATION_CONTEXT_VERSION: &str = "capitonic-btc-agent-calibration-context-v1";
+const CALIBRATION_INSTRUCTION: &str = "Use historical_calibration as historical reliability evidence when estimating probability_up. Its bands describe selected-side probabilities, not probability_up; respect direction when interpreting them. Source profiles are separate cohorts, not measured performance of this profile. Initial and latest reassessment populations can overlap markets and are not independent. Filled versus unfilled describes historical selection, not a known property of the current forecast. Small samples, wide intervals, unavailable outcomes and truncated coverage imply uncertainty; do not mechanically substitute a historical win rate, invent certainty, or abstain solely because history is unavailable. Forecast from the current causal observations with the existing settlement rule.";
+
+pub fn uses_entry_reassessment(key: &str) -> bool {
+    matches!(
+        key,
+        ENTRY_REASSESSMENT_PROFILE_KEY | CALIBRATION_PROFILE_KEY
+    )
+}
+
 const ENTRY_REASSESSMENT_INSTRUCTION: &str = "When entry_reassessment.trigger is forecast_became_affordable, the earlier forecast could not enter at its observed price and its selected side has since become affordable. Reassess whether the changed reference, TWAP and Binance evidence supports a bargain or a deteriorating forecast. Reaffirm or revise the settlement direction using current evidence; a cheaper entry alone is not evidence for the earlier direction.";
 const REASSESSMENT_INSTRUCTION: &str = "When previous_prediction_comparison is available, reassess your earlier forecast using the changed evidence. Reaffirm or revise it; your previous prediction is context, not a commitment. Distinguish the likely settlement outcome from the attractiveness of the current entry price. Missing comparisons are unknown, not zero, and do not require abstention. With no previous prediction, forecast from the current observations as usual.";
 pub const SETTLEMENT_RULE: &str = "UP when the official Chainlink BTC/USD 60-second TWAP at window_end is greater than or equal to its value at window_start; otherwise DOWN. RTDS midpoint, Binance spot and Polygon oracle are supporting indicators, not settlement prices. Missing TWAP observations are unknown, not zero; do not substitute midpoint prices for them.";
@@ -117,6 +129,13 @@ pub fn profile_for_key(key: &str) -> Result<AgentProfile> {
                 .instructions
                 .push_str(ENTRY_REASSESSMENT_INSTRUCTION);
         }
+        CALIBRATION_PROFILE_KEY => {
+            selected = profile_for_key(ENTRY_REASSESSMENT_PROFILE_KEY)?;
+            selected.key = CALIBRATION_PROFILE_KEY;
+            selected.context_version = CALIBRATION_CONTEXT_VERSION;
+            selected.instructions.push(' ');
+            selected.instructions.push_str(CALIBRATION_INSTRUCTION);
+        }
         _ => anyhow::bail!("unsupported agent profile"),
     }
     Ok(selected)
@@ -131,7 +150,9 @@ impl AgentSelection {
         Ok(())
     }
     pub fn context_version(&self) -> &'static str {
-        if self.profile_key == ENTRY_REASSESSMENT_PROFILE_KEY {
+        if self.profile_key == CALIBRATION_PROFILE_KEY {
+            CALIBRATION_CONTEXT_VERSION
+        } else if self.profile_key == ENTRY_REASSESSMENT_PROFILE_KEY {
             ENTRY_REASSESSMENT_CONTEXT_VERSION
         } else if self.profile_key == REASSESSMENT_PROFILE_KEY {
             REASSESSMENT_CONTEXT_VERSION
@@ -380,5 +401,26 @@ mod tests {
         ));
         assert_eq!(serde_json::to_value(&new).unwrap(), expected);
         eprintln!("entry profile sha256: {}", hash(&new).unwrap());
+    }
+    #[test]
+    fn calibration_extends_frozen_entry_profile_without_changing_execution_contract() {
+        let old = profile_for_key(ENTRY_REASSESSMENT_PROFILE_KEY).unwrap();
+        assert_eq!(
+            hash(&old).unwrap(),
+            "acedf40a871c3308098785e1af739aadc4996b589eb38886e8d7591ec254daeb"
+        );
+        let new = profile_for_key(CALIBRATION_PROFILE_KEY).unwrap();
+        assert!(new.instructions.starts_with(&old.instructions));
+        assert_eq!(new.model, old.model);
+        assert_eq!(new.attempts_seconds, old.attempts_seconds);
+        assert_eq!(new.timeout_seconds, old.timeout_seconds);
+        assert_eq!(new.decision_ceiling_seconds, old.decision_ceiling_seconds);
+        AgentSelection {
+            profile_key: new.key.into(),
+            profile_sha256: hash(&new).unwrap(),
+        }
+        .validate()
+        .unwrap();
+        assert!(uses_entry_reassessment(new.key));
     }
 }
