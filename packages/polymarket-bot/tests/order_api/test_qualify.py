@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from qualify import Qualification, REUSABLE_PROCESS_IDS, ROOT
+from qualify import Qualification, REUSABLE_PROCESS_IDS, ROOT, ledger_amount
 
 
 class ExecutionBoundaryTest(unittest.TestCase):
@@ -100,6 +100,15 @@ class ProcessReuseTest(unittest.TestCase):
 
 
 class SettlementEvidenceTest(unittest.TestCase):
+    def test_fractional_price_improvement_uses_existing_ledger_scale(self):
+        from decimal import Decimal
+        debit = Decimal('0.12') * Decimal('5.4166666667') + Decimal('0.0400400000')
+        self.assertEqual(ledger_amount(debit), Decimal('0.6900400000'))
+        self.assertEqual(ledger_amount(-debit), Decimal('-0.6900400000'))
+        self.assertEqual(ledger_amount(Decimal('5.4166666667') - debit), Decimal('4.7266266667'))
+        self.assertEqual(ledger_amount(Decimal('-0.00000000005')), Decimal('-0.0000000001'))
+        self.assertNotEqual(ledger_amount(debit + Decimal('0.0000000001')), Decimal('0.6900400000'))
+
     def test_official_winner_and_loser_credits_are_verified_without_mutation(self):
         for winner, payout, pnl in [('up', '5', '2.99'), ('down', '0', '-2.01'), ('up', '6', '3.99')]:
             with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'POLYMARKET_HTTP_ADMIN_TOKEN': 'unused'}):
@@ -124,6 +133,18 @@ class SettlementEvidenceTest(unittest.TestCase):
 
 
 class ContinuedQualificationTest(unittest.TestCase):
+    def test_daily_loss_limit_stops_collection_without_another_submission(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'POLYMARKET_HTTP_ADMIN_TOKEN': 'unused'}):
+            driver = Qualification(directory, mode='paper')
+            driver.state.update(processes={'paper': {'process_id': 'paper'}}, paper_dry_run={'prepared': True})
+            rejection = {'status': 'rejected', 'policy_results': [{'reason': 'daily_loss_limit'}]}
+            with patch.object(driver, 'candidate', return_value={'version': 1, 'candidate': {}}), patch.object(driver, 'request', return_value=(200, rejection)) as api:
+                with self.assertRaisesRegex(RuntimeError, 'daily loss limit'):
+                    driver.paper(1)
+                self.assertEqual(api.call_count, 1)
+                self.assertEqual(api.call_args.args[1], '/orders/paper/preview')
+                self.assertNotIn('pending_execute', driver.state)
+
     def test_advance_requires_verified_unchanged_settlement_and_same_process(self):
         for invalid in ('missing', 'changed_economics', 'changed_config', 'stopped', None):
             with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'POLYMARKET_HTTP_ADMIN_TOKEN': 'unused'}):

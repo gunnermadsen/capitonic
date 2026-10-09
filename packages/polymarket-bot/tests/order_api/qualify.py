@@ -6,7 +6,7 @@ No test implementation, feature flag, or persistence path is installed in the ra
 import argparse
 import copy
 from datetime import datetime, timezone, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import hashlib
 import json
 import os
@@ -25,6 +25,11 @@ REUSABLE_PROCESS_IDS = {
     'paper': 'b4171f11-9fde-45e0-ad8c-37f6954769ec',
     'live': 'bd63f9ce-e58b-4395-aee2-aab3ce197621',
 }
+
+
+def ledger_amount(value):
+    """Existing settlement NUMERIC(30,10), including PostgreSQL tie rounding."""
+    return value.quantize(Decimal('0.0000000001'), rounding=ROUND_HALF_UP)
 
 
 class Qualification:
@@ -277,6 +282,9 @@ class Qualification:
                 for outcome, probability in [('up','0.95'),('down','0.05')]:
                     candidate['candidate'].update(outcome=outcome,synthetic_prediction={'probability_up':probability})
                     code, preview = self.request('POST',f'/orders/{pid}/preview',candidate)
+                    if code == 200 and any(p.get('reason') == 'daily_loss_limit'
+                                           for p in preview.get('policy_results', [])):
+                        raise RuntimeError('Retained paper process daily loss limit reached; qualification stopped')
                     if code != 200 or preview.get('status') != 'evaluated': continue
                     attempts += 1
                     if attempts > 3:
@@ -352,9 +360,9 @@ class Qualification:
             expected_payout = quantity if order['token_id'] == official['winner'] else Decimal(0)
             self.check('settlement quantity matches fills', quantity > 0 and Decimal(str(settlement['filled_size'])) == quantity)
             self.check('settlement debit matches notional and fees',
-                       Decimal(str(settlement['entry_notional'])) + Decimal(str(settlement['entry_fees'])) == debit)
+                       Decimal(str(settlement['entry_notional'])) + Decimal(str(settlement['entry_fees'])) == ledger_amount(debit))
             self.check('settlement payout matches official winner', Decimal(str(settlement['payout'])) == expected_payout)
-            self.check('settlement net pnl matches credit minus debit', Decimal(str(settlement['net_pnl'])) == expected_payout - debit)
+            self.check('settlement net pnl matches credit minus debit', Decimal(str(settlement['net_pnl'])) == ledger_amount(expected_payout - debit))
             self.check('one canonical credited settlement', len([x for x in snapshot['settlements']
                        if x['order_id'] == order_id and x['credit_status'] == 'credited']) == 1)
             self.state['verified_settlement'] = settlement
