@@ -5,7 +5,9 @@ use super::{
     lifecycle::{self, Resolution},
     oms::{candidate_identity, Accounting, Candidate, Oms, Ownership},
 };
-use crate::btc::execution_freshness::{OrderOutcome, OrderStage};
+use crate::btc::execution_freshness::{
+    LatencyOutcome, OrderLatencyStage, OrderOutcome, OrderStage,
+};
 use crate::{
     btc::{
         admission::LossRegimeConfidenceFloorState, BookRegistry, BtcRepository, PaperVenue,
@@ -221,7 +223,21 @@ impl ExecutionService {
         let origin = candidate.origin();
         self.freshness
             .order_event(origin, OrderStage::Candidate, OrderOutcome::Accepted);
-        let result = self.execute_inner(candidate).await;
+        let result = self
+            .freshness
+            .time_order_outcome(
+                origin,
+                OrderLatencyStage::Execution,
+                self.execute_inner(candidate),
+                |receipt| {
+                    if receipt.order.state == crate::models::OrderState::Rejected {
+                        LatencyOutcome::Rejected
+                    } else {
+                        LatencyOutcome::Completed
+                    }
+                },
+            )
+            .await;
         if let Err(error) = &result {
             self.freshness.order_event(
                 origin,
@@ -248,8 +264,12 @@ impl ExecutionService {
             .clone()
             .unwrap_or_else(|| format!("paper:{}", self.oms.owner.process_id));
         let lease = self
-            .store
-            .execution_lease(&account.to_ascii_lowercase())
+            .freshness
+            .time_order(
+                candidate.origin(),
+                OrderLatencyStage::ReservationWait,
+                self.store.execution_lease(&account.to_ascii_lowercase()),
+            )
             .await?;
         if let Some(existing) = self
             .store
@@ -327,32 +347,41 @@ impl ExecutionService {
                 .await?,
             "opportunity_has_execution_or_unresolved_order"
         );
-        let accounting = accounting(
-            &self.oms,
-            &self.store,
-            &self.repository,
-            live.as_deref(),
-            None,
-        )
-        .await?;
-        self.freshness.attempt();
-        let intent = {
-            let books = self.books.read().await;
-            let now = Utc::now();
-            self.oms.admit(
-                &candidate,
-                [
-                    books
-                        .checkpoint(&candidate.snapshot.up_book.token_id)
-                        .as_ref(),
-                    books
-                        .checkpoint(&candidate.snapshot.down_book.token_id)
-                        .as_ref(),
-                ],
-                &accounting,
-                now,
+        let accounting = self
+            .freshness
+            .time_order(
+                candidate.origin(),
+                OrderLatencyStage::Accounting,
+                accounting(
+                    &self.oms,
+                    &self.store,
+                    &self.repository,
+                    live.as_deref(),
+                    None,
+                ),
             )
-        };
+            .await?;
+        self.freshness.attempt();
+        let intent = self
+            .freshness
+            .time_order(candidate.origin(), OrderLatencyStage::Admission, async {
+                let books = self.books.read().await;
+                let now = Utc::now();
+                self.oms.admit(
+                    &candidate,
+                    [
+                        books
+                            .checkpoint(&candidate.snapshot.up_book.token_id)
+                            .as_ref(),
+                        books
+                            .checkpoint(&candidate.snapshot.down_book.token_id)
+                            .as_ref(),
+                    ],
+                    &accounting,
+                    now,
+                )
+            })
+            .await;
         let intent = match intent {
             Ok(intent) => intent,
             Err(error) => {
@@ -360,7 +389,13 @@ impl ExecutionService {
                     if let Some(rejection) = error.downcast_ref::<super::AdmissionRejection>() {
                         if !rejection.evidence_unavailable() {
                             let order = self.rejected_api_order(&candidate, rejection)?;
-                            self.store.insert_order(&order).await?;
+                            self.freshness
+                                .time_order(
+                                    candidate.origin(),
+                                    OrderLatencyStage::Persistence,
+                                    self.store.insert_order(&order),
+                                )
+                                .await?;
                             self.freshness.order_event(
                                 candidate.origin(),
                                 OrderStage::Admission,
@@ -393,31 +428,62 @@ impl ExecutionService {
             OrderStage::Submission,
             OrderOutcome::Accepted,
         );
-        let order = match &self.adapter {
-            Adapter::Paper(venue) => {
-                venue
-                    .execute_durable(intent.request, accounting.available, Box::new(lease), guard)
-                    .await?
-            }
-            Adapter::Live(venue) => {
-                let result = venue
-                    .submit_order_with_pre_post_guard(intent.request.clone(), Some(guard))
-                    .await;
-                // A returned pre-POST rejection may not yet have a row. Preserve its idempotency.
-                if let Ok(order) = &result {
-                    if self
-                        .store
-                        .find_order_by_client_order_id(order.request.client_order_id)
-                        .await?
-                        .is_none()
-                    {
-                        self.store.insert_order(order).await?;
+        let origin = intent.origin;
+        let order = self
+            .freshness
+            .time_order_outcome(
+                origin,
+                OrderLatencyStage::Adapter,
+                async {
+                    Ok(match &self.adapter {
+                        Adapter::Paper(venue) => {
+                            venue
+                                .execute_durable(
+                                    intent.request,
+                                    accounting.available,
+                                    Box::new(lease),
+                                    guard,
+                                )
+                                .await?
+                        }
+                        Adapter::Live(venue) => {
+                            let result = venue
+                                .submit_order_with_pre_post_guard(
+                                    intent.request.clone(),
+                                    Some(guard),
+                                )
+                                .await;
+                            // A returned pre-POST rejection may not yet have a row. Preserve its idempotency.
+                            if let Ok(order) = &result {
+                                if self
+                                    .store
+                                    .find_order_by_client_order_id(order.request.client_order_id)
+                                    .await?
+                                    .is_none()
+                                {
+                                    self.freshness
+                                        .time_order(
+                                            origin,
+                                            OrderLatencyStage::Persistence,
+                                            self.store.insert_order(order),
+                                        )
+                                        .await?;
+                                }
+                            }
+                            lease.release().await?;
+                            result?
+                        }
+                    })
+                },
+                |order| {
+                    if order.state == crate::models::OrderState::Rejected {
+                        LatencyOutcome::Rejected
+                    } else {
+                        LatencyOutcome::Completed
                     }
-                }
-                lease.release().await?;
-                result?
-            }
-        };
+                },
+            )
+            .await?;
         self.recover(order, false).await
     }
     async fn recover(&self, mut order: OrderRecord, replayed: bool) -> Result<ExecutionReceipt> {
@@ -428,7 +494,14 @@ impl ExecutionService {
             Adapter::Paper(_) => true,
             Adapter::Live(venue) => {
                 venue.request_post_order_reconciliation();
-                let report = venue.reconcile().await?;
+                let report = self
+                    .freshness
+                    .time_order(
+                        order_origin(&order),
+                        OrderLatencyStage::Reconciliation,
+                        venue.reconcile(),
+                    )
+                    .await?;
                 if let Some(durable) = self
                     .store
                     .find_order_by_client_order_id(order.request.client_order_id)
@@ -450,10 +523,11 @@ impl ExecutionService {
         replayed: bool,
         reconciled: bool,
     ) -> Result<ExecutionReceipt> {
+        self.freshness.time_order(order_origin(&order), OrderLatencyStage::Observation, async {
         let fills = self.store.execution_fills(&order).await?;
         let resolution = lifecycle::resolution(&order, &fills, reconciled)?;
         if resolution != Resolution::Pending {
-            self.store
+            self.freshness.time_order(order_origin(&order), OrderLatencyStage::Persistence, self.store
                 .confirm_execution_resolution(
                     &order,
                     match resolution {
@@ -461,8 +535,7 @@ impl ExecutionService {
                         Resolution::DefinitiveNonexecution => "definitive_nonexecution",
                         Resolution::Pending => unreachable!(),
                     },
-                )
-                .await?;
+                )).await?;
         }
         let origin = if order
             .request
@@ -490,6 +563,8 @@ impl ExecutionService {
             resolution,
             replayed,
         })
+
+        }).await
     }
 }
 
@@ -510,6 +585,7 @@ impl LivePrePostGuard for SubmissionGuard {
         &self,
         request: &OrderRequest,
     ) -> Result<Option<LiveExecutionGateReason>> {
+        self.freshness.time_order_outcome(self.candidate.origin(), OrderLatencyStage::FinalValidation, async {
         let process = self
             .store
             .get_trading_process(self.oms.owner.process_id)
@@ -546,14 +622,13 @@ impl LivePrePostGuard for SubmissionGuard {
                 return Ok(Some(LiveExecutionGateReason::ReferenceFreshness));
             }
         }
-        let accounting = accounting(
+        let accounting = self.freshness.time_order(self.candidate.origin(), OrderLatencyStage::Accounting, accounting(
             &self.oms,
             &self.store,
             &self.repository,
             self.live.as_deref(),
             Some(request.client_order_id),
-        )
-        .await?;
+        )).await?;
         let fee = crate::fees::sealed_dynamic_fee_rate(&request.metadata)
             .context("missing sealed fee")?;
         let exposure = crate::btc::ProposedEntryExposure::for_buy_cash_budget(
@@ -604,6 +679,20 @@ impl LivePrePostGuard for SubmissionGuard {
                 Ok(Some(LiveExecutionGateReason::OrderbookReadiness))
             }
         }
+
+        }, |reason| if reason.is_some() { LatencyOutcome::Rejected } else { LatencyOutcome::Completed }).await
+    }
+    fn observe_persistence(&self, elapsed: Duration, success: bool) {
+        self.freshness.order_duration(
+            self.candidate.origin(),
+            OrderLatencyStage::Persistence,
+            if success {
+                LatencyOutcome::Completed
+            } else {
+                LatencyOutcome::Error
+            },
+            elapsed,
+        );
     }
     fn observe_post_attempt(&self, request: &OrderRequest) {
         let evidence = *self.final_book.lock().unwrap_or_else(|e| e.into_inner());
@@ -617,6 +706,16 @@ impl LivePrePostGuard for SubmissionGuard {
         latency: Duration,
         outcome: &'static str,
     ) {
+        self.freshness.order_duration(
+            self.candidate.origin(),
+            OrderLatencyStage::Transport,
+            match outcome {
+                "accepted" | "acknowledged" => LatencyOutcome::Completed,
+                "venue_rejected" => LatencyOutcome::Rejected,
+                _ => LatencyOutcome::Error,
+            },
+            latency,
+        );
         tracing::info!(event="order_submission_result",process_id=%self.oms.owner.process_id,client_order_id=%request.client_order_id,origin=self.candidate.origin().as_str(),execution_mode="live",elapsed_ms=latency.as_millis(),outcome,"Live order POST result");
     }
 }
@@ -785,4 +884,18 @@ async fn accounting(
         high_water: state,
         loss_regime,
     })
+}
+
+fn order_origin(order: &OrderRecord) -> super::oms::Origin {
+    if order
+        .request
+        .metadata
+        .pointer("/polymarket_execution/origin")
+        .and_then(|v| v.as_str())
+        == Some("api")
+    {
+        super::oms::Origin::Api
+    } else {
+        super::oms::Origin::Umr
+    }
 }

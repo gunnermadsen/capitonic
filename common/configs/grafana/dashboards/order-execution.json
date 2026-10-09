@@ -237,6 +237,93 @@
         "defaults": {},
         "overrides": []
       }
+    },
+    {
+      "id": 20,
+      "title": "Shared execution latency p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Bucket estimate, shown only with at least 20 observations in the selected rate window; this threshold is not a confidence guarantee. Nested stages are not additive. Paper arrival delay and live transport are domain-specific.",
+      "gridPos": {
+        "x": 0,
+        "y": 52,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le,stage,outcome,execution_mode,origin) (rate(polymarket_order_stage_duration_seconds_bucket{process_id=\"$process_id\",execution_mode=~\"$execution_mode\",origin=~\"$origin\"}[$__rate_interval]))) and on(stage,outcome,execution_mode,origin) (sum by (stage,outcome,execution_mode,origin) (increase(polymarket_order_stage_duration_seconds_count{process_id=\"$process_id\",execution_mode=~\"$execution_mode\",origin=~\"$origin\"}[$__rate_interval])) >= 20)",
+          "legendFormat": "{{execution_mode}} / {{origin}} / {{stage}} / {{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 21,
+      "title": "Shared execution latency mean",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Completed means the timed operation returned normally, not that an order filled. Rejected/error/cancelled samples remain separate.",
+      "gridPos": {
+        "x": 0,
+        "y": 60,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (stage,outcome,execution_mode,origin) (rate(polymarket_order_stage_duration_seconds_sum{process_id=\"$process_id\",execution_mode=~\"$execution_mode\",origin=~\"$origin\"}[$__rate_interval])) / sum by (stage,outcome,execution_mode,origin) (rate(polymarket_order_stage_duration_seconds_count{process_id=\"$process_id\",execution_mode=~\"$execution_mode\",origin=~\"$origin\"}[$__rate_interval]))",
+          "legendFormat": "{{execution_mode}} / {{origin}} / {{stage}} / {{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 22,
+      "title": "Largest observed execution stage duration",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Maximum since the process metrics owner was created; resets on restart, not a rolling-window maximum.",
+      "gridPos": {
+        "x": 0,
+        "y": 68,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (stage,outcome,execution_mode,origin) (polymarket_order_stage_duration_max_seconds{process_id=\"$process_id\",execution_mode=~\"$execution_mode\",origin=~\"$origin\"})",
+          "legendFormat": "{{execution_mode}} / {{origin}} / {{stage}} / {{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
     }
   ],
   "links": [

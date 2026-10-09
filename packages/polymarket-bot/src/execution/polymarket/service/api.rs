@@ -38,71 +38,109 @@ impl ExecutionService {
         request: &EvaluationRequest,
         market: &BtcIntervalMarket,
     ) -> Result<Candidate> {
-        ensure!(
-            request.candidate.market_id == market.market_id,
-            "market evidence unavailable"
-        );
-        let p = &self.oms.definition.execution.policies;
-        // Execution reads the same canonical gRPC-fed registry as admission and arrival.
-        // Copy both sides under one read lock before choosing the causal reference cutoff.
-        // Historical database checkpoints are not a runtime orderbook dependency.
-        let (up_book, down_book, at) = {
-            let books = self.books.read().await;
-            observe_books(&books, market)
-        };
-        let mut inputs = self
-            .repository
-            .load_point_in_time_inputs(
-                market,
-                at,
-                chrono::Duration::milliseconds(p.evidence.max_chainlink_open_delay_ms),
-                chrono::Duration::milliseconds(p.evidence.max_reference_age_ms),
-                chrono::Duration::milliseconds(p.evidence.max_book_age_ms),
-                None,
+        self.freshness
+            .time_order(
+                super::super::oms::Origin::Api,
+                OrderLatencyStage::Evidence,
+                async {
+                    ensure!(
+                        request.candidate.market_id == market.market_id,
+                        "market evidence unavailable"
+                    );
+                    let p = &self.oms.definition.execution.policies;
+                    // Execution reads the same canonical gRPC-fed registry as admission and arrival.
+                    // Copy both sides under one read lock before choosing the causal reference cutoff.
+                    // Historical database checkpoints are not a runtime orderbook dependency.
+                    let (up_book, down_book, at) = {
+                        let books = self.books.read().await;
+                        observe_books(&books, market)
+                    };
+                    let mut inputs = self
+                        .repository
+                        .load_point_in_time_inputs(
+                            market,
+                            at,
+                            chrono::Duration::milliseconds(p.evidence.max_chainlink_open_delay_ms),
+                            chrono::Duration::milliseconds(p.evidence.max_reference_age_ms),
+                            chrono::Duration::milliseconds(p.evidence.max_book_age_ms),
+                            None,
+                        )
+                        .await?;
+                    inputs.up_book = up_book;
+                    inputs.down_book = down_book;
+                    let snapshot = crate::btc::process_runner::build_snapshot(
+                        self.oms.owner.process_id,
+                        market,
+                        at,
+                        &inputs,
+                        p.sizing.default_share,
+                        "synthetic_market_evidence_v1",
+                        at,
+                        None,
+                    );
+                    let (outcome, probability) = match request.candidate.outcome {
+                        Outcome::Up => (
+                            BtcOutcome::Up,
+                            request.candidate.synthetic_prediction.probability_up,
+                        ),
+                        Outcome::Down => (
+                            BtcOutcome::Down,
+                            Decimal::ONE - request.candidate.synthetic_prediction.probability_up,
+                        ),
+                    };
+                    let mut candidate = Candidate::synthetic(
+                        id,
+                        request.candidate.member_id.clone(),
+                        snapshot,
+                        outcome,
+                        probability,
+                    )?;
+                    candidate.api_request_hash = Some(
+                        request
+                            .identity()
+                            .map_err(|_| anyhow::anyhow!("invalid request identity"))?,
+                    );
+                    Ok(candidate)
+                },
             )
-            .await?;
-        inputs.up_book = up_book;
-        inputs.down_book = down_book;
-        let snapshot = crate::btc::process_runner::build_snapshot(
-            self.oms.owner.process_id,
-            market,
-            at,
-            &inputs,
-            p.sizing.default_share,
-            "synthetic_market_evidence_v1",
-            at,
-            None,
-        );
-        let (outcome, probability) = match request.candidate.outcome {
-            Outcome::Up => (
-                BtcOutcome::Up,
-                request.candidate.synthetic_prediction.probability_up,
-            ),
-            Outcome::Down => (
-                BtcOutcome::Down,
-                Decimal::ONE - request.candidate.synthetic_prediction.probability_up,
-            ),
-        };
-        let mut candidate = Candidate::synthetic(
-            id,
-            request.candidate.member_id.clone(),
-            snapshot,
-            outcome,
-            probability,
-        )?;
-        candidate.api_request_hash = Some(
-            request
-                .identity()
-                .map_err(|_| anyhow::anyhow!("invalid request identity"))?,
-        );
-        Ok(candidate)
+            .await
     }
     pub async fn preview_api(&self, candidate: &Candidate, prepare: bool) -> Result<Receipt> {
+        self.freshness
+            .time_order_outcome(
+                candidate.origin(),
+                if prepare {
+                    OrderLatencyStage::Preparation
+                } else {
+                    OrderLatencyStage::Preview
+                },
+                self.preview_api_inner(candidate, prepare),
+                |receipt| {
+                    if receipt.status == "rejected" {
+                        LatencyOutcome::Rejected
+                    } else {
+                        LatencyOutcome::Completed
+                    }
+                },
+            )
+            .await
+    }
+    async fn preview_api_inner(&self, candidate: &Candidate, prepare: bool) -> Result<Receipt> {
         let live: Option<&dyn ExecutionVenue> = match &self.adapter {
             Adapter::Live(v) => Some(v.as_ref()),
             Adapter::Paper(_) => None,
         };
-        let accounting = accounting(&self.oms, &self.store, &self.repository, live, None).await?;
+        let accounting = self
+            .freshness
+            .time_order(
+                candidate.origin(),
+                OrderLatencyStage::Accounting,
+                accounting(&self.oms, &self.store, &self.repository, live, None),
+            )
+            .await?;
+        let admission_timer = self
+            .freshness
+            .order_timer(candidate.origin(), OrderLatencyStage::Admission);
         let (intent, policy_results) = {
             let books = self.books.read().await;
             self.oms.admit_report(
@@ -119,6 +157,11 @@ impl ExecutionService {
                 Utc::now(),
             )
         };
+        admission_timer.finish(if intent.is_ok() {
+            LatencyOutcome::Completed
+        } else {
+            LatencyOutcome::Rejected
+        });
         let mut receipt = Receipt {
             version: 1,
             process_id: self.oms.owner.process_id,

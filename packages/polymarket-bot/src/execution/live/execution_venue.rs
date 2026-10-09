@@ -470,7 +470,9 @@ impl ExecutionVenue for LiveVenue {
             }
         };
         let stage_started = std::time::Instant::now();
-        let (pending_order, newly_created) = match store.create_pending_order(&request).await {
+        let pending_result = store.create_pending_order(&request).await;
+        pre_post_guard.observe_persistence(stage_started.elapsed(), pending_result.is_ok());
+        let (pending_order, newly_created) = match pending_result {
             Ok(result) => {
                 order_path.stage(
                     "pending_persistence",

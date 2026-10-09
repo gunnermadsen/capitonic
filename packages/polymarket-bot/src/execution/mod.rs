@@ -111,6 +111,9 @@ pub trait LivePrePostGuard: live_pre_post_guard_sealed::Sealed + Send + Sync {
     /// Telemetry only; this never changes durable trading authorization.
     fn observe_post_attempt(&self, _request: &OrderRequest) {}
 
+    /// Optional telemetry for the existing durable pending-order claim; never gates execution.
+    fn observe_persistence(&self, _elapsed: std::time::Duration, _success: bool) {}
+
     fn observe_post_result(
         &self,
         _request: &OrderRequest,

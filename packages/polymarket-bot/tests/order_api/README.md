@@ -28,3 +28,7 @@ Offline driver boundary tests:
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s packages/polymarket-bot/tests/order_api -p 'test_*.py'
 ```
+
+Latency evidence: run `qualify.py latency --evidence-dir /tmp/order-api-run` after preparation/execution and **before stopping** the dedicated processes. It scrapes the existing bot Prometheus endpoint, retains only their series in `latency.prom`, and writes `latency.json` with stage counts/means/maxima, estimated percentiles, current book-age gauges, configured paper arrival delay and external HTTP timings. Capture again after a further bounded run if needed; each report represents the cumulative lifetime of these dedicated metrics owners, not an incremental delta. A changed pod identity/restart count/image invalidates cumulative qualification and is rejected. Do not combine restarted-owner samples.
+
+Request timing uses a monotonic clock around HTTP request/response transfer, including HTTP errors and transport exceptions; it excludes driver preflight, SQL audit and evidence serialization. Replayed execute requests are reported separately. Older evidence without durations remains untimed. p50 requires 2 observations, p95 20, p99 100; these minimum counts do not certify statistical confidence. Sparse or histogram-overflow percentiles remain null. Server histogram percentiles are interpolated estimates; nested stages are not additive. A single fill provides diagnostic timings, not tail-latency qualification. Never increase order budgets or bypass unresolved-order recovery to obtain more samples.

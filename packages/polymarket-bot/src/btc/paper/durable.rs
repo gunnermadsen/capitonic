@@ -1,5 +1,7 @@
 //! The new OMS uses the same arrival simulator without a second in-memory economic ledger.
 use super::*;
+use crate::btc::execution_freshness::{LatencyOutcome, OrderLatencyStage};
+use crate::execution::polymarket::oms::Origin;
 use crate::store::PaperCommit;
 
 impl PaperVenue {
@@ -31,7 +33,24 @@ impl PaperVenue {
         guard: Arc<dyn crate::execution::LivePrePostGuard>,
     ) -> Result<OrderRecord> {
         let submitted_at = Utc::now();
+        let origin = if request
+            .metadata
+            .pointer("/polymarket_execution/origin")
+            .and_then(|v| v.as_str())
+            == Some("api")
+        {
+            Origin::Api
+        } else {
+            Origin::Umr
+        };
+        let timer = self
+            .freshness_metrics
+            .as_ref()
+            .map(|m| m.order_timer(origin, OrderLatencyStage::PaperArrival));
         tokio::time::sleep(self.config.arrival_latency).await;
+        if let Some(timer) = timer {
+            timer.finish(LatencyOutcome::Completed);
+        }
         let arrival_at = Utc::now();
         let order_id = format!("paper-{}", request.client_order_id);
         let execution = match guard.validate_pre_post(&request).await? {
@@ -64,7 +83,19 @@ impl PaperVenue {
         };
         crate::execution::polymarket::lifecycle::validate_fills(&order, &execution.fills)?;
         // No memory debit precedes this commit. A lost response is resolved from the same ledger.
-        lease.commit(&order, &execution.fills).await?;
+        let timer = self
+            .freshness_metrics
+            .as_ref()
+            .map(|m| m.order_timer(origin, OrderLatencyStage::Persistence));
+        let result = lease.commit(&order, &execution.fills).await;
+        if let Some(timer) = timer {
+            timer.finish(if result.is_ok() {
+                LatencyOutcome::Completed
+            } else {
+                LatencyOutcome::Error
+            });
+        }
+        result?;
         Ok(order)
     }
 }
@@ -171,13 +202,15 @@ mod tests {
             size: dec!(5),
             metadata: serde_json::json!({"dynamic_fee_rate":"0.25"}),
         };
-        (venue, request)
+        let metrics = ExecutionFreshnessMetrics::new(request.process_id.unwrap(), "paper", 2000);
+        (venue.with_order_metrics(metrics), request)
     }
     #[tokio::test]
     async fn failed_persistence_does_not_apply_a_paper_balance_or_fill() {
         let (venue, request) = fixture();
         let committed = Arc::new(Mutex::new(None));
         let calls = Arc::new(AtomicUsize::new(0));
+        let process_label = format!("process_id=\"{}\"", request.process_id.unwrap());
         let result = venue
             .execute_durable(
                 request,
@@ -191,6 +224,16 @@ mod tests {
             )
             .await;
         assert!(result.is_err());
+        let text = crate::btc::execution_freshness::prometheus_metrics(&serde_json::json!({}));
+        // Actual durable execution, including failed commit, must expose timings.
+        assert!(text.lines().any(|l| l
+            .starts_with("polymarket_order_stage_duration_seconds_count")
+            && l.contains(&process_label)
+            && l.contains("stage=\"persistence\",outcome=\"error\"")));
+        assert!(text.lines().any(|l| l
+            .starts_with("polymarket_order_stage_duration_seconds_count")
+            && l.contains(&process_label)
+            && l.contains("stage=\"paper_arrival\",outcome=\"completed\"")));
         assert!(committed.lock().await.is_none());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(venue.status().await.entry_debits_usd, Decimal::ZERO);

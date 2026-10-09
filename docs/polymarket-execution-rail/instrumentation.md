@@ -48,3 +48,31 @@ The new alerts retain process/mode labels, and execution errors retain origin. R
 `tests/order_observability.rb` validates committed query expressions using an existing Prometheus `promtool` through stdin. Eight fixtures cover healthy-peer masking, stale recovery, inactivity, error origin separation and dashboard PromQL syntax. They pass on the local existing Prometheus binary. JSON/YAML syntax, unique alert IDs, nested Loki extraction and existing provisioning ownership are checked. This executes no provisioning operation.
 
 A read-only comparison of current local provisioned dashboards found live health and UMR content matching this branch apart from the new navigation links. Current PnL provisioning has independent differences; they are not overwritten or reconciled here. Actual dashboard rendering, datasource execution and alert delivery for this candidate await an authorized deployment.
+
+## Shared latency measurements
+
+`polymarket_order_stage_duration_seconds{process_id,execution_mode,origin,stage,outcome}` is a histogram in seconds for both paper and live. `polymarket_order_stage_duration_max_seconds` records the largest observation since that process metrics owner was created. Labels are bounded except the existing canonical process identity; request/order identifiers are never metric labels. Recording uses monotonic `Instant` and preallocated atomic bins, with no database writes, network export, logging, allocation or scrape-lock acquisition on the observation path. Scrapes are approximate during concurrent updates. No measurement changes trading authority.
+
+Outcomes describe the timed operation: `completed` means it returned normally, **not** that an order filled; `rejected` means a policy/gate/venue refusal; `error` means failure; `cancelled` means the future/timer was dropped before completion. Existing lifecycle counters and durable records remain the authority for fills, nonexecution and ambiguity.
+
+| Stage | Boundary |
+| --- | --- |
+| evidence | API candidate construction, including canonical book capture, existing reference/history/fee reads and snapshot construction. UMR feature/inference timings retain their existing owner. |
+| preview / preparation | Shared preview or dry-run service evaluation; includes accounting/admission and, for live preparation, signing diagnostics. Excludes earlier candidate construction and HTTP dispatch. |
+| execution | Execution service entry through returned receipt/error; includes reservation, adapter and recovery/observation. Excludes earlier candidate construction and controller-only historical replay shortcuts. |
+| reservation_wait | Existing connection/semaphore acquisition, transaction creation and account advisory-lock acquisition. Does not measure lock hold time. |
+| accounting | Each existing accounting evaluation, including preview and final validation; multiple samples per request are expected. |
+| admission | Initial OMS evaluation including book-lock acquisition and snapshot copies; applies to execute and preview/dry run. |
+| final_validation | Shared adjacent paper-arrival/live-pre-POST guard, including renewed authority, accounting and book admission. |
+| adapter | Adapter execution through return, including paper arrival delay/commit or live preparation/POST/persistence. |
+| paper_arrival | Actual awaited simulation delay, including scheduler delay. Configured delay stays in TPC; this stage is absent for live. |
+| persistence | Explicit rail order/rejection/resolution writes, atomic paper order/fill commit, and existing live pending-order claim. Multiple samples per request; not an exhaustive timer of all writes inside live reconciliation. Existing live instrumentation retains additional transport/persistence detail. |
+| transport | Existing live POST-result callback duration; absent for paper. |
+| reconciliation | Live receipt recovery's awaited reconciliation; background process recovery retains its existing metrics. |
+| observation | Fill retrieval, lifecycle resolution and resolution persistence for returned/recovered receipts. |
+
+Stages are nested and **must not be summed** into a total. `execution` includes `adapter`; `adapter` includes `paper_arrival` and final validation; final validation includes accounting. HTTP duration is captured independently by the external qualification driver, including response body transfer but excluding the driver's audit/preflight/report writes. Paper configured delay, observed delay, and overall execution must be reported separately. Shared stages must be compared under equivalent policies and outcomes; paper cannot establish live transport latency.
+
+The existing Order Execution dashboard adds shared mean, p95 and owner-lifetime maximum panels. The p95 query requires at least 20 observations in its rate window. That threshold only suppresses sparse output; it is not a statistical confidence guarantee. Dashboard changes are source-validated, not automatically provisioned by a bot deployment. No speculative latency alert threshold is added before establishing a baseline.
+
+Before qualification, measure both modes' instrumentation correctness, then actual paper API execution with real data. Record sample counts, outcome, book age, intentional delay, query/lock-stage costs and timing distributions. Report sparse or blocked results as such. Performance acceptance and a comparable legacy baseline remain unproven until runtime measurements exist; the prior in-memory OMS benchmark is not an end-to-end budget.

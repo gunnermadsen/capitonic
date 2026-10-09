@@ -10,6 +10,7 @@ from decimal import Decimal
 import hashlib
 import json
 import os
+from latency import report as latency_report
 from pathlib import Path
 import subprocess
 import time
@@ -56,17 +57,26 @@ class Qualification:
             headers['Authorization'] = 'Bearer ' + self.token
         data = None if body is None else json.dumps(body).encode()
         req = urllib.request.Request(self.base + path, data=data, headers=headers, method=method)
+        started = time.perf_counter_ns()
         try:
             with urllib.request.urlopen(req, timeout=45) as r:
                 code, raw = r.status, r.read().decode()
         except urllib.error.HTTPError as e:
             code, raw = e.code, e.read().decode()
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            self.state['requests'].append({'at': datetime.now(timezone.utc).isoformat(),
+                'method': method, 'path': path, 'request': body, 'code': None,
+                'duration_seconds': (time.perf_counter_ns() - started) / 1e9,
+                'response': {'error_type': type(error).__name__}})
+            self.save()
+            raise
+        elapsed = (time.perf_counter_ns() - started) / 1e9
         try:
             result = json.loads(raw)
         except ValueError:
             result = {'text': raw}
         self.state['requests'].append({'at': datetime.now(timezone.utc).isoformat(),
-            'method': method, 'path': path, 'request': body, 'code': code, 'response': result})
+            'method': method, 'path': path, 'request': body, 'code': code, 'response': result, 'duration_seconds': elapsed})
         self.save()
         return code, result
 
@@ -285,6 +295,27 @@ class Qualification:
             time.sleep(5)
         self.check('paper fill observed within bounded run',False)
 
+    def latency(self):
+        # Capture while process metrics owners still exist; stopping removes their series.
+        code, response = self.request('GET', '/prometheus/metrics')
+        if code != 200 or 'text' not in response:
+            raise RuntimeError('Prometheus exposition unavailable')
+        text = response['text']
+        current = json.loads(subprocess.check_output(['kubectl', '--context', 'rancher-desktop', '-n', 'capitonic',
+            'get', 'pods', '-l', 'app.kubernetes.io/name=polymarket-bot', '-o', 'json']))
+        def identities(pods):
+            return sorted((p['metadata']['uid'], c['name'], c.get('restartCount', 0), c.get('imageID'))
+                          for p in pods['items'] for c in p.get('status', {}).get('containerStatuses', []))
+        if not identities(current) or identities(current) != identities(self.state['image']):
+            raise RuntimeError('Runtime changed during qualification; cumulative latency samples are not comparable')
+        ids = {p['process_id'] for p in self.state['processes'].values()}
+        selected = '\n'.join(line for line in text.splitlines()
+            if any('process_id="' + pid + '"' in line for pid in ids)) + '\n'
+        (self.directory / 'latency.prom').write_text(selected)
+        result = latency_report(self.state, selected)
+        (self.directory / 'latency.json').write_text(json.dumps(result, indent=2) + '\n')
+        print(json.dumps(result, indent=2))
+
     def stop(self):
         for mode, p in self.state['processes'].items():
             code, current = self.request('GET','/admin/trading-processes/'+p['process_id'])
@@ -320,11 +351,11 @@ class Qualification:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action',choices=['prepare','start','evaluate','prepare-orders','paper','stop','audit'])
+    parser.add_argument('action',choices=['prepare','start','evaluate','prepare-orders','paper','latency','stop','audit'])
     parser.add_argument('--evidence-dir',required=True)
     parser.add_argument('--order-type',choices=['fak','fok'],default='fak')
     parser.add_argument('--timeout',type=int,default=360)
     args = parser.parse_args()
     q = Qualification(args.evidence_dir, args.order_type)
     {'prepare':q.prepare,'start':q.start,'evaluate':q.evaluate,'prepare-orders':lambda:q.poll_preparation(args.timeout),
-     'paper':lambda:q.paper(args.timeout),'stop':q.stop,'audit':q.audit}[args.action]()
+     'paper':lambda:q.paper(args.timeout),'latency':q.latency,'stop':q.stop,'audit':q.audit}[args.action]()
