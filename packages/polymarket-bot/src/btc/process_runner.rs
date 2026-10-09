@@ -1321,12 +1321,21 @@ impl BtcProcessRunner {
         if member
             .strategy
             .agent_selection()
-            .is_some_and(|selection| selection.profile_key == agent::CALIBRATION_PROFILE_KEY)
+            .is_some_and(|selection| agent::uses_calibration(&selection.profile_key))
             && session.calibration.is_none()
         {
             session.calibration = Some(
                 self.repository
-                    .load_agent_calibration(self.config.process_id, market.window_start)
+                    .load_agent_calibration(
+                        self.config.process_id,
+                        market.window_start,
+                        member
+                            .strategy
+                            .agent_selection()
+                            .unwrap()
+                            .profile_key
+                            .as_str(),
+                    )
                     .await
                     .unwrap_or_else(|_| agent::calibration::unavailable(market.window_start)),
             );
@@ -1460,6 +1469,7 @@ impl BtcProcessRunner {
                     | agent::REASSESSMENT_PROFILE_KEY
                     | agent::ENTRY_REASSESSMENT_PROFILE_KEY
                     | agent::CALIBRATION_PROFILE_KEY
+                    | agent::MARKET_CONTEXT_PROFILE_KEY
             ) {
                 agent::build_volatility_context(&observation.state, &snapshot, &sources)
             } else if selection.profile_key == agent::SETTLEMENT_PROFILE_KEY {
@@ -1496,11 +1506,18 @@ impl BtcProcessRunner {
                     session.evaluation_slot(),
                     affordability_trigger,
                 );
-                if selection.profile_key == agent::CALIBRATION_PROFILE_KEY {
-                    request.context["version"] =
-                        serde_json::json!(agent::CALIBRATION_CONTEXT_VERSION);
+                if agent::uses_calibration(&selection.profile_key) {
+                    request.context["version"] = serde_json::json!(selection.context_version());
                     request.context["historical_calibration"] =
                         session.calibration.clone().unwrap();
+                }
+                if selection.profile_key == agent::MARKET_CONTEXT_PROFILE_KEY {
+                    agent::add_market_context(
+                        &mut request,
+                        &observation.state,
+                        &sources,
+                        session.latest(),
+                    );
                 }
                 request.input_sha256 = agent::hash(&request.context)?;
                 // Record the slot before sending, so restart cannot replenish its budget.

@@ -3,6 +3,7 @@ pub mod auth;
 pub(crate) mod calibration;
 mod context;
 pub(super) mod diagnostics;
+mod market_context;
 mod provider;
 mod reassessment;
 mod session;
@@ -12,6 +13,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 pub use context::{build_context, build_settlement_context, build_volatility_context};
 pub use diagnostics::FailureDiagnostic;
+pub use market_context::add_market_context;
 pub use provider::OpenAiProvider;
 pub use reassessment::{add_entry_reassessment_context, add_reassessment_context};
 use serde::{Deserialize, Serialize};
@@ -38,12 +40,20 @@ pub const ENTRY_REASSESSMENT_CONTEXT_VERSION: &str =
     "capitonic-btc-agent-entry-reassessment-context-v1";
 pub const CALIBRATION_PROFILE_KEY: &str = "btc-5m-openai-agent-calibration-v1";
 pub const CALIBRATION_CONTEXT_VERSION: &str = "capitonic-btc-agent-calibration-context-v1";
+pub const MARKET_CONTEXT_PROFILE_KEY: &str = "btc-5m-openai-agent-market-context-v1";
+pub const MARKET_CONTEXT_VERSION: &str = "capitonic-btc-agent-market-context-v1";
+const MARKET_CONTEXT_INSTRUCTION: &str = "Use market_horizons to compare the 15-second, 5-minute and 15-minute RTDS midpoint paths: returns, sample volatility, path efficiency and reversals. Respect each window's source end, sampling interval and availability; closed-minute summaries lag the current observation. Use settlement_uncertainty to relate the observed official TWAP distance to remaining time, the supporting RTDS variability scale and changes in the reference/TWAP gap. The square-root-time scale assumes stationary independent returns, ignores drift and TWAP averaging, and is not a calibrated settlement distribution or probability. A zero or unavailable scale gives no certainty. Reference/TWAP gap changes can reflect different observation timestamps; they do not guarantee convergence. Missing optional summaries are unknown and do not alone require abstention. Preserve the exact settlement rule and distinguish directional evidence from entry price.";
+
+pub fn uses_calibration(key: &str) -> bool {
+    matches!(key, CALIBRATION_PROFILE_KEY | MARKET_CONTEXT_PROFILE_KEY)
+}
+
 const CALIBRATION_INSTRUCTION: &str = "Use historical_calibration as historical reliability evidence when estimating probability_up. Its bands describe selected-side probabilities, not probability_up; respect direction when interpreting them. Source profiles are separate cohorts, not measured performance of this profile. Initial and latest reassessment populations can overlap markets and are not independent. Filled versus unfilled describes historical selection, not a known property of the current forecast. Small samples, wide intervals, unavailable outcomes and truncated coverage imply uncertainty; do not mechanically substitute a historical win rate, invent certainty, or abstain solely because history is unavailable. Forecast from the current causal observations with the existing settlement rule.";
 
 pub fn uses_entry_reassessment(key: &str) -> bool {
     matches!(
         key,
-        ENTRY_REASSESSMENT_PROFILE_KEY | CALIBRATION_PROFILE_KEY
+        ENTRY_REASSESSMENT_PROFILE_KEY | CALIBRATION_PROFILE_KEY | MARKET_CONTEXT_PROFILE_KEY
     )
 }
 
@@ -136,6 +146,13 @@ pub fn profile_for_key(key: &str) -> Result<AgentProfile> {
             selected.instructions.push(' ');
             selected.instructions.push_str(CALIBRATION_INSTRUCTION);
         }
+        MARKET_CONTEXT_PROFILE_KEY => {
+            selected = profile_for_key(CALIBRATION_PROFILE_KEY)?;
+            selected.key = MARKET_CONTEXT_PROFILE_KEY;
+            selected.context_version = MARKET_CONTEXT_VERSION;
+            selected.instructions.push(' ');
+            selected.instructions.push_str(MARKET_CONTEXT_INSTRUCTION);
+        }
         _ => anyhow::bail!("unsupported agent profile"),
     }
     Ok(selected)
@@ -150,7 +167,9 @@ impl AgentSelection {
         Ok(())
     }
     pub fn context_version(&self) -> &'static str {
-        if self.profile_key == CALIBRATION_PROFILE_KEY {
+        if self.profile_key == MARKET_CONTEXT_PROFILE_KEY {
+            MARKET_CONTEXT_VERSION
+        } else if self.profile_key == CALIBRATION_PROFILE_KEY {
             CALIBRATION_CONTEXT_VERSION
         } else if self.profile_key == ENTRY_REASSESSMENT_PROFILE_KEY {
             ENTRY_REASSESSMENT_CONTEXT_VERSION
@@ -422,5 +441,26 @@ mod tests {
         .validate()
         .unwrap();
         assert!(uses_entry_reassessment(new.key));
+    }
+    #[test]
+    fn market_context_profile_preserves_calibration_identity_and_execution_contract() {
+        let old = profile_for_key(CALIBRATION_PROFILE_KEY).unwrap();
+        assert_eq!(
+            hash(&old).unwrap(),
+            "ec0c11d5493ce6a4fd3eca18f7081fc068cdbf9336512e293a89cc47088b67eb"
+        );
+        let new = profile_for_key(MARKET_CONTEXT_PROFILE_KEY).unwrap();
+        assert!(new.instructions.starts_with(&old.instructions));
+        assert_eq!(new.model, old.model);
+        assert_eq!(new.attempts_seconds, old.attempts_seconds);
+        assert_eq!(new.timeout_seconds, old.timeout_seconds);
+        assert_eq!(new.decision_ceiling_seconds, old.decision_ceiling_seconds);
+        assert!(uses_calibration(new.key) && uses_entry_reassessment(new.key));
+        let selection = AgentSelection {
+            profile_key: new.key.into(),
+            profile_sha256: hash(&new).unwrap(),
+        };
+        selection.validate().unwrap();
+        assert_eq!(selection.context_version(), MARKET_CONTEXT_VERSION);
     }
 }

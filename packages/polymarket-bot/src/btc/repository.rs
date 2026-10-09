@@ -2852,13 +2852,17 @@ impl BtcRepository {
         &self,
         process_id: Uuid,
         cutoff: DateTime<Utc>,
+        profile_key: &str,
     ) -> Result<serde_json::Value> {
         use super::unified_model_runtime::agent::{self, calibration};
-        let keys = [
+        let mut keys = vec![
             agent::REASSESSMENT_PROFILE_KEY,
             agent::ENTRY_REASSESSMENT_PROFILE_KEY,
             agent::CALIBRATION_PROFILE_KEY,
         ];
+        if profile_key == agent::MARKET_CONTEXT_PROFILE_KEY {
+            keys.push(agent::MARKET_CONTEXT_PROFILE_KEY);
+        }
         let hashes = keys
             .iter()
             .map(|key| agent::hash(&agent::profile_for_key(key)?))
@@ -2875,7 +2879,7 @@ impl BtcRepository {
             let rows = sqlx::query_scalar::<_, serde_json::Value>(calibration::HISTORY_SQL)
                 .bind(process_id)
                 .bind(cutoff)
-                .bind(keys.to_vec())
+                .bind(keys)
                 .bind(hashes)
                 .fetch_all(&mut *tx)
                 .await?;

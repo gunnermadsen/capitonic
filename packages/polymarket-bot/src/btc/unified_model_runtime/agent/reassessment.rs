@@ -83,7 +83,7 @@ fn comparison(current: &EvaluationRequest, previous: &EvaluationResult) -> Optio
     }))
 }
 
-fn positive(context: &Value, path: &str) -> Option<Decimal> {
+pub(super) fn positive(context: &Value, path: &str) -> Option<Decimal> {
     let value: Decimal = serde_json::from_value(context.pointer(path)?.clone()).ok()?;
     (value > Decimal::ZERO).then_some(value)
 }
