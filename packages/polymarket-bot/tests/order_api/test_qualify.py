@@ -51,6 +51,18 @@ class LatencyEvidenceTest(unittest.TestCase):
             self.assertEqual(driver.state['requests'][-1]['duration_seconds'], .3)
             self.assertIsNone(driver.state['requests'][-1]['code'])
 
+    def test_snapshot_prunes_history_at_owned_process_creation(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'POLYMARKET_HTTP_ADMIN_TOKEN': 'unused'}):
+            driver = Qualification(directory)
+            pid = '00000000-0000-0000-0000-000000000001'
+            driver.state['processes']['paper'] = {'process_id': pid, 'created_at': '2026-10-09T15:39:00Z'}
+            with patch.object(driver, 'sql', return_value={}) as sql:
+                driver.snapshot(pid)
+            query = sql.call_args.args[0]
+            self.assertEqual(query.count("timestamp_utc >= '2026-10-09T15:38:59+00:00'::timestamptz"), 2)
+            self.assertIn("decision_at >= '2026-10-09T15:38:59+00:00'::timestamptz", query)
+            self.assertIn("process_id='" + pid + "'", query)
+
     def test_sparse_samples_do_not_invent_tail_percentiles_and_replays_are_separate(self):
         from latency import report, bucket_quantile
         labels = 'process_id="p",execution_mode="paper",origin="api",stage="execution",outcome="completed"'

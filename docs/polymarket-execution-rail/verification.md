@@ -149,3 +149,44 @@ Dormant `BtcRepository::insert_orderbook_checkpoint` and `insert_orderbook_check
 The unchanged local CI script completed on repaired source `2f4805b5c23b0d99a04e885e778568bd8d36b332`: formatting and Clippy passed; **561 Rust tests passed, 0 failed, 5 ignored**; **17 existing Python tests passed**. The two external-driver safety tests passed separately, including under Python optimization. Read-only SQL confirmed zero debit for the empty process and exact old/new debit agreement for an existing populated paper process.
 
 Built candidate: `capitonic/polymarket-bot:v3.4.0-local.4`, image ID `sha256:2722557e7cf1be789d87ebb3f3a787429d3dc0013bc81054c6901b0ad964ea43`. Local annotated image/version provenance points to the repaired source. This candidate was **not deployed or pushed**. Helm files/versions, CI/CD workflows/scripts, image build/deploy code, ingesters and database schema remain unchanged. Positive API preparation and paper execution must be repeated after separately authorized deployment; they are not claimed by this build.
+
+## Shared latency qualification — 2026-10-09
+
+Implemented shared monotonic timing under the existing execution metrics owner, with `process_id`, `execution_mode`, `origin`, bounded stage and operation-outcome labels. The timers preserve execution results and classify rejection/error/cancellation separately. Recording uses preallocated atomic histograms without checkpoint persistence, network export or logging. Existing live pending-claim and POST callbacks expose their respective timing; paper reports actual arrival wait and atomic persistence separately. See the instrumentation contract for nesting and coverage limits.
+
+Validation and deployment:
+
+- Unchanged local CI passed formatting, Clippy, **563 Rust tests** (0 failed, 5 existing ignored) and **17 Python tooling tests**. Two new Rust tests cover histogram boundaries/sums/maxima, label isolation, both modes, result preservation, rejection/error and cancelled futures. Existing durable paper fault tests also exercise failed-commit timing. All five durable paper tests passed separately.
+- External driver safety/duration/report tests: **5 passed**, including timeout/HTTP error timing, sparse percentile suppression, replay separation and creation-bounded audit queries. Four preceded the image build; the fifth validates the subsequent external-driver-only audit fix. The four initial tests also passed under optimized Python; the final five were rerun under both modes.
+- **11** existing-owner Prometheus/dashboard query fixtures passed. Three latency panels were added to the maintained Order Execution dashboard source. They were not provisioned: bot CD does not deploy Grafana, and unrelated provisioned dashboard differences were not overwritten.
+- Local CI selected **v3.4.0-local.5**, source `b4e196733cfc5da28672fc4f3d7e9ad3a6c11ae6`, image ID `sha256:faeb8e44fad9622e2ac5c14b94f5086d4727028c65ea300acc12903280f44ddd`.
+- The unchanged local CD script generated image/appVersion pins, committed as `4c5df6b3`. Per the user's explicit instruction, no chart version was manually changed; it remains **0.4.15**. No template, CI/CD, build/deploy script, ingester or schema change was made.
+- Local CD deployed Helm revision **49**, passed exact-image, bot process recovery, unchanged migration/enabled-process set, worker/profile and feed advancement checks. Capacity was 14 ready workers, 9 desired realtime profiles, 0 active backfill allocations. Rollback remains the recorded v3.4.0-local.3 image `sha256:247c4641a5391635191f8cff897124654873848dcc729b565e0cbed9f563a53b` at Helm revision 48. Its CD snapshot is `/var/folders/6w/fnv3n0_569q0458hy9dvzyyh0000gn/T/local-image-cd.jnup7f`.
+- Final bot check: exact selected image, ready, **0 restarts**, no ERROR-level entries in the bounded final five-minute/1,200-line log window. No production mutation, remote push or funded order was performed.
+
+Actual qualification used the same external driver and real local ingester data:
+
+- Paper process: `0a4b7c63-f76e-44e4-95c5-09fcfba6101f`.
+- Live preparation process: `88122111-db4b-455b-a588-f4f4b7c48be1`.
+- Matching new-contract policies, API trigger, fixed five-share FAK setup. No policy was loosened.
+- Initial read-only driver audit timed out at five seconds while considering historical Timescale chunks. The driver now prunes fills and decisions at its owned process's creation time (minus one second), preserving its complete valid economic scope. The application query and five-second timeout are unchanged. Startup then passed using the same created process identities.
+- **57 real API/storage assertions passed**. Both processes were stopped after two bounded preparation attempts. Final audits confirmed zero orders/fills/settlements/strategy decisions and preservation of all nine pre-existing enabled process configurations/running states. There were **zero execution requests**.
+- Preparation initially rejected outside the configured entry window. Within the window, repeated `future_input_timestamp` rejections prevented successful paper preview and complete live preparation. Existing readiness evidence for market `5432581` showed source `15:42:06.060Z`, receipt `15:42:06.001459Z`, check `15:42:06.009991944Z`: the source was approximately 50 ms ahead of the check. The OMS's strict future-source validation rejects such evidence. The readiness response otherwise reported healthy; resolving this semantic difference is not achieved by weakening a gate during qualification.
+- Live had one successful preview, followed by a rejected preparation; its existing reconciliation also reported three mismatches and zero unresolved orders. No funded test or accounting repair was attempted.
+
+Measured paper values from 14 observations per stage (seconds converted to milliseconds below):
+
+| Stage / outcome | Samples | Mean ms | Observed maximum ms |
+| --- | ---: | ---: | ---: |
+| Evidence / completed | 14 | 4.362 | 14.763 |
+| Accounting / completed | 14 | 304.851 | 403.822 |
+| Admission / rejected | 14 | 0.027 | 0.042 |
+| Preview / rejected | 14 | 304.898 | 403.892 |
+
+Preview includes accounting and admission, but excludes prior evidence construction; these nested stages must not be added together. Accounting consumes almost all measured preview time. Its timer encloses the existing collection of accounting reads; these results do **not** identify an individual SQL query as the cause. Live accounting averaged 706.771 ms across 19 samples (maximum 1,171.895 ms); different account checks prevent interpreting that as a paper/live execution parity result. The server's paper histograms were independently verified in stored Prometheus samples using `last_over_time` after process shutdown.
+
+All paper p95/p99 fields are **null** because counts are below the report's minimum thresholds. There is no executed-order, reservation-wait, paper-arrival, persistence or final-validation runtime latency result. Configured simulation delay is reported separately in external evidence, but was never exercised. No legacy-vs-new end-to-end latency comparison or optimization claim is made.
+
+Raw local evidence is retained in `/tmp/order-latency-fak/` (`run.json`, `latency.json`, `latency.prom`), with local CI/CD logs and the scoped Prometheus response under `/tmp/order-latency-*`. Only this concise result is committed. Test-driver/documentation follow-ups do not change image inputs or require another image allocation.
+
+Acceptance: shared instrumentation, automated checks, local build/deployment and blocked-preparation measurement are verified. Positive preview/dry-run, paper FAK/FOK execution/persistence and executed-order latency qualification remain **blocked**, so development order qualification is **not complete**. No gate, clock tolerance, accounting query, reservation behavior or live reconciliation rule was changed to obtain a passing test.

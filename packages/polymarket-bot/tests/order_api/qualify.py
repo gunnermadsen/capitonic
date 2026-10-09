@@ -5,7 +5,7 @@ No test implementation, feature flag, or persistence path is installed in the ra
 """
 import argparse
 import copy
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 import hashlib
 import json
@@ -94,15 +94,19 @@ class Qualification:
 
     def snapshot(self, pid):
         pid = str(uuid.UUID(pid))
+        owned = next(p for p in self.state['processes'].values() if p['process_id'] == pid)
+        # This newly created process cannot own earlier fills/decisions. Prune historical
+        # Timescale chunks without changing the audited economic scope or timeout.
+        since = (datetime.fromisoformat(owned['created_at'].replace('Z', '+00:00')) - timedelta(seconds=1)).isoformat()
         return self.sql(f"""SELECT json_build_object(
           'orders',(SELECT coalesce(json_agg(x ORDER BY x.order_id),'[]') FROM
             (SELECT order_id,client_order_id,state,raw_payload FROM polymarket.orders WHERE process_id='{pid}' ORDER BY order_id LIMIT 30) x),
           'fills',(SELECT coalesce(json_agg(x ORDER BY x.fill_id),'[]') FROM
-            (SELECT fill_id,order_id,price::text,size::text,fee::text,source,raw_payload FROM polymarket.fills WHERE process_id='{pid}' ORDER BY fill_id LIMIT 30) x),
+            (SELECT fill_id,order_id,price::text,size::text,fee::text,source,raw_payload FROM polymarket.fills WHERE timestamp_utc >= '{since}'::timestamptz AND process_id='{pid}' ORDER BY fill_id LIMIT 30) x),
           'settlements',(SELECT coalesce(json_agg(x ORDER BY x.order_id),'[]') FROM
             (SELECT order_id,payout::text,net_pnl::text,credit_status FROM polymarket.btc_paper_settlement_ledger WHERE process_id='{pid}' ORDER BY order_id LIMIT 30) x),
-          'decisions',(SELECT count(*) FROM polymarket.btc_strategy_decisions WHERE process_id='{pid}'),
-          'fill_debit',coalesce((SELECT sum(price*size+fee) FROM polymarket.fills WHERE process_id='{pid}'),0)::text,
+          'decisions',(SELECT count(*) FROM polymarket.btc_strategy_decisions WHERE decision_at >= '{since}'::timestamptz AND process_id='{pid}'),
+          'fill_debit',coalesce((SELECT sum(price*size+fee) FROM polymarket.fills WHERE timestamp_utc >= '{since}'::timestamptz AND process_id='{pid}'),0)::text,
           'settlement_credit',(SELECT coalesce(sum(payout),0)::text FROM polymarket.btc_paper_settlement_ledger WHERE process_id='{pid}' AND credit_status='credited'))""")
 
     def prepare(self):
