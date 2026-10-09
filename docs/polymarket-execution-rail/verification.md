@@ -99,4 +99,18 @@ Focused evidence before full CI:
 
 Qualification limits: these tests do not execute the new controller against a real PostgreSQL database, place a paper or funded live order through a running candidate, or prove restart recovery end to end. The new dashboard/alert sources are not deployed. Those runtime checks remain the dedicated development qualification boundary. No database-backed or funded parity claim is made by a successful image build.
 
-Full local CI and candidate provenance are recorded after the build below.
+The unchanged `scripts/local-image-ci.sh polymarket-bot 3.4.0-local.2` completed successfully on 2026-10-08:
+
+- Full Rust component suite: **545 passed, 0 failed, 5 ignored**. The unchanged manual/SSD-dependent exclusions remain; no new ignored correctness test was added.
+- Python tooling suite: **17 passed** (8 local-CI tests, 9 model-packaging tests).
+- Formatting and Clippy (`--all-targets`, warnings denied): passed.
+- Separate committed observability regression: **8 query fixtures passed**, using `ruby packages/polymarket-bot/tests/order_observability.rb kubectl --context rancher-desktop -n capitonic exec -i prometheus-0 -- promtool`. Input was provided through stdin; no live configuration changed.
+- Candidate image: `capitonic/polymarket-bot:v3.4.0-local.2`.
+- Image ID: `sha256:65b3df405de1d509e1cc5059836d4c385d2f0ca9586ff4b73413b2a60e2cfef2`.
+- Image source: `5f6b9b13ffe800d79b11525078d9dfe69ff8cd8d`.
+- Image input hash: `e2cd7d258d20d18e5e8e5fc044abb967419253c2d5885f5c5c59fc97977d2710`.
+- Local annotated provenance: `image/polymarket-bot/v3.4.0-local.2` and `image/polymarket-bot/sha256-65b3df405de1d509e1cc5059836d4c385d2f0ca9586ff4b73413b2a60e2cfef2`.
+- Origin tag, refreshed production-pin and ECR tag reads found no conflicting v3.4.0 allocation. Production remained pinned to bot v3.2.9-rc.0; no production action was performed.
+- Scope verification found no edits to `.github`, `scripts`, `common/scripts`, `capitonic-helm-chart`, `packages/market-data-ingester`, or root Cargo manifests/lockfile. No chart version changed. New observability source uses the existing provisioning owners.
+
+This result record is a documentation-only follow-up to the image source. No deployment, process activation, database mutation, observability provisioning, integration merge, registry publication or remote push occurred. Source/fixture acceptance does not replace the runtime qualification limits above.
