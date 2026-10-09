@@ -1,8 +1,8 @@
-# Configuration foundation verification
+# Execution rail verification
 
 ## Acceptance scope
 
-This implementation covers frozen-plan phases 1–2 only: standards, mappings, baseline regression and additive TPC admission/compiler. It does not claim a working OMS, new order HTTP routes, paper/live execution parity, funded qualification or deployment. Compiled definitions remain inactive and cannot reach the legacy runner. No database was mutated for verification; API admission is tested through the application validator with a lazy, unconnected Store. Actual database round-trip execution and controller E2E belong to subsequent qualification.
+The v3.4.0-local.0 foundation covered frozen-plan phases 1–2 only: standards, mappings, baseline regression and additive TPC admission/compiler. It does not claim a working OMS, new order HTTP routes, paper/live execution parity, funded qualification or deployment. Compiled definitions remain inactive and cannot reach the legacy runner. No database was mutated for verification; API admission is tested through the application validator with a lazy, unconnected Store. Actual database round-trip execution and controller E2E belong to subsequent qualification.
 
 ## Regression baseline
 
@@ -55,3 +55,18 @@ The unchanged `scripts/local-image-ci.sh polymarket-bot 3.4.0-local.0` completed
 - Scope check: no modifications under `.github`, `scripts`, `common`, `capitonic-helm-chart`, `packages/market-data-ingester`, or root Cargo manifests/lockfile.
 
 This result record is a documentation-only follow-up to the image source; it does not change image inputs or mint another image. The worktree is retained for subsequent rail work. No order-execution qualification, production mutation, deployment, branch integration or remote push is claimed.
+
+## Execution core acceptance evidence
+
+The v3.4.0-local.1 scope implements the shared OMS, application entry, domain adapters and durable lifecycle library. It preserves the foundation's inactive process-routing boundary. The user explicitly authorized narrow extensions in existing gate, paper and Store owners; no legacy runtime is routed through the new service.
+
+- New OMS/lifecycle tests: 15 passed. Coverage includes shared paper/live admission, quantity-dependent pricing, limit-specific participation, funds/exposure/position/daily-loss checks, stale/future/identity evidence, automatic next-action recovery, configuration identity, duplicate/conflicting/reordered fill evidence, nonfinal acknowledgements, explicit rejection, partial FAK cancellation, cash-budget price improvement and fee reservation parity with durable exposure replay.
+- New durable paper tests: 5 passed. They call the actual arrival simulator and inject a precommit failure, lost commit response and transient arrival rejection; they verify durable-capital authority and cash-budget versus unchanged legacy share sizing.
+- Manual warmed admission timing: median 250.166µs, p95 270.541µs across 100 local debug calls. The check excludes database/transport IO and model loading; it is not an end-to-end latency claim. It is intentionally ignored in ordinary CI.
+- Existing live fixtures retained: ambiguous POST is not retried; uncertain ownership remains unresolved; REST recovers missed and cancelled-FAK fills; price-improved BUY accounting uses authorized cash; sealed dynamic fees are reused. Existing paper settlement/restart and legacy HTTP regression tests remain in full local CI.
+
+The narrow shared extensions expose existing validation helpers, factor fill insertion into a caller-owned transaction, and factor paper settlement processing with an optional legacy memory-credit owner. No second order/fill/settlement ledger, database schema, ingester, agent/model execution system or release pathway is added.
+
+Database caveat: fault injection verifies the paper commit boundary and lifecycle logic, not a running PostgreSQL transaction. The new SQL and complete service recovery wiring have not been exercised against a database here. Real database concurrency, API E2E and funded execution remain development qualification requirements. No live trade or database mutation was performed during this work.
+
+Full local CI and image provenance are recorded below after the candidate build.

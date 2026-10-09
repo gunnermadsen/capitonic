@@ -1,6 +1,6 @@
 # Execution instrumentation contract
 
-Specification only in this foundation; no metrics, dashboards, alerts, Alloy or Helm assets are changed or provisioned.
+The execution core reuses `ExecutionFreshnessMetrics` with the existing process_id/execution_mode labels and structured logs. No dashboard, alert, Alloy or Helm asset is changed or provisioned. Expanded shared Prometheus origin labels and consumer provisioning remain the instrumentation work package.
 
 ## Existing owners to extend
 
@@ -27,3 +27,9 @@ API orders participate in balances, reservations, fees, exposure and realized ac
 ## Acceptance
 
 Exercise successful, rejected, partial-fill, unresolved and recovered operations and trace each end to end. Validate metric labels against dashboard PromQL and actual Loki extraction. Alerts are scoped so another healthy process cannot mask failure; telemetry outages cannot change durable trading authority. Provision all changes through existing sources and deployment provenance. Remove duplicates only after consumers migrate. No high-frequency work is introduced into websocket intake.
+
+## Execution core event boundaries
+
+The core emits `order_intent_admitted`, `order_pre_submit_rejected`, `order_submission_attempt`, `order_submission_result`, `order_execution_observed` and `order_recovery_deferred`. Order events carry process ownership and bounded mode/origin fields where a candidate exists; correlation IDs and hashes remain log fields. Reconciliation operates on orders from potentially different origins, so its process-level retry event does not invent an origin.
+
+Live freshness is observed through the existing adjacent pre-POST hooks. Paper freshness uses the arrival simulator's actual checkpoint. API candidates do not register a fake UMR model, inference, or prediction-quality event. Existing settlement telemetry remains owned by the shared settlement lifecycle. Dashboard/API-versus-strategy interpretation still requires the planned instrumentation integration before process cutover.

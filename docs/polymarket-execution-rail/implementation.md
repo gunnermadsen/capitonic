@@ -1,6 +1,6 @@
 # Implementation acceptance and rollout
 
-Frozen scope: additive order contract and Polymarket execution standard, no broader TPC reorganization. Existing rail and its dry-run endpoint remain untouched until controlled retirement. No ingester changes, new tables/ledger, model/agent trading subsystem, CI/CD/workflow/build-script changes or automatic process conversion. No Helm changes during this implementation; later deployment requires separate scope and repository versioning policy.
+Frozen scope: additive order contract and Polymarket execution standard, no broader TPC reorganization. Existing rail behavior and its dry-run endpoint remain unchanged until controlled retirement. The approved shared-helper extensions preserve legacy callers and behavior. No ingester changes, new tables/ledger, model/agent trading subsystem, CI/CD/workflow/build-script changes or automatic process conversion. No Helm changes during this implementation; later deployment requires separate scope and repository versioning policy.
 
 ## Work grouping
 
@@ -57,4 +57,4 @@ No enabled/resumable process or unresolved order may require the old path. Prese
 
 ## Version and integration boundaries
 
-Feature starts from integration-2026-10-08 at ca910a01daf6b43de6d6a53daa610b1a1d7babb3, on feature/polymarket-execution-rail. Requested local image candidate is v3.4.0-local.0, not a promotion or deployment. Existing 3.3.x model/agent work continues independently. Integrate selected older-version changes only through authorized merges, keeping both contract suites and production image/secret provenance. Rail/OMS contracts start at 1.0.0; selector major 1 resolves a compatible internal implementation. No separate selectable OMS version. Future refactors must preserve ownership and acceptance boundaries.
+Feature starts from integration-2026-10-08 at ca910a01daf6b43de6d6a53daa610b1a1d7babb3, on feature/polymarket-execution-rail. The foundation candidate was v3.4.0-local.0; the execution core candidate is v3.4.0-local.1. Neither is a promotion or deployment. Existing 3.3.x model/agent work continues independently. Integrate selected older-version changes only through authorized merges, keeping both contract suites and production image/secret provenance. Rail/OMS contracts start at 1.0.0; selector major 1 resolves a compatible internal implementation. No separate selectable OMS version. Future refactors must preserve ownership and acceptance boundaries.

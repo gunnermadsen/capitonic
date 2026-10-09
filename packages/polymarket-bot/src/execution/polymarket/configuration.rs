@@ -31,6 +31,15 @@ pub enum ExecutionMode {
     Live,
 }
 
+impl ExecutionMode {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Paper => "paper",
+            Self::Live => "live",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionTrigger {
@@ -82,6 +91,17 @@ pub struct CompiledDefinition {
     pub execution: ExecutionSettings,
     pub control: ProcessControl,
     pub config_sha256: String,
+}
+
+impl CompiledDefinition {
+    pub(crate) fn verify_identity(&self) -> Result<()> {
+        let canonical = serde_json::json!({"rail_contract_version":super::RAIL_CONTRACT_VERSION,"oms_contract_version":super::OMS_CONTRACT_VERSION,"execution":self.execution,"control":self.control});
+        ensure!(
+            self.config_sha256 == format!("{:x}", Sha256::digest(serde_json::to_vec(&canonical)?)),
+            "compiled execution identity mismatch"
+        );
+        Ok(())
+    }
 }
 
 /// Any marker selects strict new-contract validation, never a fallback to legacy.

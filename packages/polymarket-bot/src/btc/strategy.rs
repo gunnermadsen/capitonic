@@ -1853,7 +1853,7 @@ fn validate_btc_directional_model_execution_lineage(
     Ok(())
 }
 
-fn validate_book(
+pub(crate) fn validate_book(
     config: &BtcStrategyConfig,
     snapshot: &BtcFeatureSnapshot,
     book: &BtcOutcomeBookFeatures,
@@ -1898,7 +1898,7 @@ fn validate_book(
     Ok(())
 }
 
-fn validate_fee(
+pub(crate) fn validate_fee(
     config: &BtcStrategyConfig,
     snapshot: &BtcFeatureSnapshot,
 ) -> Result<(), BtcRejectReason> {
@@ -1922,7 +1922,7 @@ fn validate_fee(
     Ok(())
 }
 
-fn quote_outcome_edge(
+pub(crate) fn quote_outcome_edge(
     config: &BtcStrategyConfig,
     book: &BtcOutcomeBookFeatures,
     conservative_probability: Decimal,
@@ -2116,7 +2116,7 @@ fn rejected_with_prediction(
     decision
 }
 
-fn edge_passes(config: &BtcStrategyConfig, edge: &OutcomeEdge) -> bool {
+pub(crate) fn edge_passes(config: &BtcStrategyConfig, edge: &OutcomeEdge) -> bool {
     edge.net_edge >= config.min_net_edge_usd
         && edge.net_edge_per_share >= config.min_net_edge_per_share
 }

@@ -1,3 +1,4 @@
+mod durable;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -670,6 +671,11 @@ impl PaperVenue {
                 }
             }),
         );
+        let cash_budget = request
+            .metadata
+            .pointer("/polymarket_execution/quantity_semantics")
+            .and_then(|v| v.as_str())
+            == Some("buy_cash_budget");
         if depth.executable_size >= request.size
             && request.size > max_participating_size
             && request.order_type == OrderType::Fok
@@ -690,14 +696,22 @@ impl PaperVenue {
         } else {
             request.size
         };
-        let mut remaining = executable_target;
+        let mut remaining = if cash_budget {
+            request.size * request.price
+        } else {
+            executable_target
+        };
         let mut walked = Vec::new();
         for level in &checkpoint.asks {
             if level.price > request.price || level.size <= Decimal::ZERO {
                 continue;
             }
             let executable_size = level.size * visible_depth_haircut;
-            let fill_size = remaining.min(executable_size);
+            let fill_size = if cash_budget {
+                (remaining / level.price).min(executable_size)
+            } else {
+                remaining.min(executable_size)
+            };
             if fill_size <= Decimal::ZERO {
                 continue;
             }
@@ -705,10 +719,17 @@ impl PaperVenue {
                 price: level.price,
                 size: fill_size,
             });
-            remaining -= fill_size;
+            remaining -= if cash_budget {
+                fill_size * level.price
+            } else {
+                fill_size
+            };
             if remaining <= Decimal::ZERO {
                 break;
             }
+        }
+        if cash_budget && remaining <= Decimal::new(1, 6) {
+            remaining = Decimal::ZERO;
         }
         if remaining > Decimal::ZERO && request.order_type == OrderType::Fok {
             return paper_reject_with_details(
@@ -786,7 +807,11 @@ impl PaperVenue {
         }
         let average_price = filled_notional / filled_size;
         PaperExecution {
-            state: if filled_size == request.size {
+            state: if if cash_budget {
+                remaining == Decimal::ZERO
+            } else {
+                filled_size == request.size
+            } {
                 OrderState::Filled
             } else {
                 OrderState::Cancelled

@@ -1,6 +1,6 @@
 # Polymarket execution rail standard
 
-Status: configuration foundation; execution is not registered. Application candidate: **v3.4.0-local.0**. Rail contract **1.0.0**, OMS contract **1.0.0**, selector `{ "name": "polymarket", "version": 1 }`. Constants live in `packages/polymarket-bot/src/execution/polymarket/mod.rs`. These contract versions do not claim a completed OMS implementation. Application image versions use existing image provenance, not the unrelated Cargo package version.
+Status: callable shared execution core; HTTP and process routing are not registered. Application candidate: **v3.4.0-local.1**. Rail contract **1.0.0**, OMS contract **1.0.0**, selector `{ "name": "polymarket", "version": 1 }`. Constants live in `packages/polymarket-bot/src/execution/polymarket/mod.rs`. Execution qualification is recorded separately from contract versioning. Application image versions use existing image provenance, not the unrelated Cargo package version.
 
 This is the authoritative specification for the additive Polymarket order standard. Existing model and agent trading, execution, ingester contracts, database schemas, release workflows and legacy dry-run behavior remain unchanged. New inactive definitions can be admitted through the existing process API; starting or resuming them returns `polymarket_execution_not_implemented` before a legacy runner can be constructed. No account access or order submission occurs during configuration compilation. The API trigger is a durable declaration for future controller operation, not an implemented runner or authorization bypass.
 
@@ -24,7 +24,7 @@ This is the authoritative specification for the additive Polymarket order standa
 3. The OMS resolves quantity before execution VWAP, fees, edge, risk and capital checks. Any material change requires re-evaluation. Historical `qualified_trade_size` is provenance, not sizing authority.
 4. Execution intent seals the approved request, policy decisions, evidence timestamps, configuration identity, ownership and idempotency identity. Reuse existing `models::OrderRequest`, `OrderType`, `OrderState` and repository representations; do not create a replacement persisted order.
 5. Submission acknowledgement is not a fill. Adapter observations feed one reducer. Duplicate/out-of-order evidence cannot duplicate economic effects. HTTP and websocket evidence must converge.
-6. FOK requires the full authorized execution semantics; FAK permits partial fills and cancellation of the remainder. Share bounds constrain requested quantity, not a minimum FAK fill. Price improvement, cash-budget versus share quantity, venue rounding and maximum fill authorization must be explicitly resolved before execution qualification, never inferred from this configuration foundation.
+6. FOK requires the full authorized execution semantics; FAK permits partial fills and cancellation of the remainder. Share bounds constrain requested quantity, not a minimum FAK fill. New BUY intents explicitly use the existing live cash-budget semantics, including price-improved fill quantities and a conservative fee reservation; see the execution core contract. Legacy paper semantics remain unchanged.
 7. Unknown submission outcomes are reconciled before retry. Definitive rejection and zero-fill completion are distinct from ambiguity. An opportunity must not remain incorrectly sealed after a definitive nonexecution.
 8. Transient evidence/infrastructure failures affect only the unsafe action and recover automatically. No manual re-enable ritual, durable kill switch, or cross-process disablement is added.
 9. Same inputs and configuration produce the same applicable shared-stage decisions. Different market observations need not produce identical fills. Paper fill optimism is measured, not hidden.
@@ -36,6 +36,7 @@ Paper/live differ in credentials/signing; exchange transport versus simulated ma
 
 ## Standard references
 
+- [Execution core and recovery](execution-core.md)
 - [Configuration and parameter ownership](configuration.md)
 - [Generic order API](api.md)
 - [Instrumentation and dashboard contract](instrumentation.md)
