@@ -258,3 +258,34 @@ had no ERROR entries. Grafana was not provisioned or modified. Evidence is retai
 at `/tmp/order-accounting-ci.log` and `/tmp/order-accounting-cd.log`. The prior comparison
 is `/tmp/order-latency-fak/latency.json`; raw SQL exploration remains under
 `/tmp/rail-hot-path-analysis/`. Only this concise verification result is committed.
+
+## Reusable process pair and inactive lifecycle transitions
+
+Local bot `v3.4.0-local.7`, source `cf0134f8872daedef450715fafc20690421ca72f`,
+image `sha256:1f2b4d63292cee273463860b0c4439426779eca3d4ad9ed95e6310fc5405bee6`,
+was deployed through the unchanged local CI/CD scripts. CI passed 564 Rust tests
+(five explicitly ignored) and 17 Python tooling tests. All ten external driver/SQL
+regression tests passed, including repeated reuse of the same process identities.
+
+The existing lifecycle API now permits inactive created, stopped, failed, completed,
+and expired definitions to move to stopped or completed; these states are also
+eligible for the existing start preflight. Active-runtime shutdown, run identity,
+accounting and execution safety checks remain in their existing paths. Stale runtime
+callbacks cannot rewrite inactive operator decisions. API checks verified stopped →
+completed, completed → stopped → completed, and repeat completion without an update.
+
+The four duplicate qualification processes were completed through the API:
+`88122111-db4b-455b-a588-f4f4b7c48be1`, `0a4b7c63-f76e-44e4-95c5-09fcfba6101f`,
+`99a8c962-33d1-43be-8dee-78b600145bd8`, and `fff03502-3e34-416e-a8fc-7765b837e05e`.
+The driver retains only paper `b4171f11-9fde-45e0-ad8c-37f6954769ec` and live
+`bd63f9ce-e58b-4395-aee2-aab3ce197621`; both remain stopped. Future runs reuse their
+configuration and economic history with fresh run identities, never new processes.
+
+All 68 process records remain present. All unrelated definitions and enabled states
+were preserved; the nine enabled processes recovered after deployment. The selected
+image is ready with zero restarts, bounded logs contain no ERROR/panic entries, and
+CD verified unchanged migration state, advancing feeds and capacity of 14 ready
+workers for nine desired realtime profiles with no active backfill shards. No orders
+were requested during this lifecycle verification. Evidence: `/tmp/rail-lifecycle-ci.log`,
+`/tmp/rail-lifecycle-cd.log`, and `/tmp/rail-test-process-completion.json`. The CD rollback
+snapshot is `/var/folders/6w/fnv3n0_569q0458hy9dvzyyh0000gn/T/local-image-cd.FpoZ9v`.
