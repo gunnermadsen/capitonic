@@ -460,7 +460,7 @@ At 20:33 UTC, after the 19:31 trade aged out of the existing one-hour activity
 window, a bounded recheck automatically returned zero mismatches and proven
 accounting. A further preflight with the existing submission flags temporarily
 disabled passed every preflight condition (`ready=true`); the original flags were
-restored while the process remained stopped and capped at one share. Orders/fills
+restored while the process remained stopped with its sizing target set to one. Orders/fills
 were unchanged throughout. This proves non-submitting credential/reconciliation
 preflight, not one-share order admission or signing.
 
@@ -478,3 +478,138 @@ paper process, and 5.891 → 5.607 ms for live account/reservation reads. Same-s
 results matched, but live reservations were empty; nonempty/overflow parity and
 network/pool savings are not proven. No query optimization was applied. Report:
 `/tmp/rail-query-qualification-report.md`.
+
+
+### Paper qualification outcome and remaining blockers
+
+The first local.9 cohort ended at 20:46:44 UTC without meeting full paper
+qualification. Only the retained process was used; no replacement process, reset
+capital, relaxed policy or ingester change was introduced. Both retained processes
+were stopped at that boundary. Its API inventory audit preserved all nine unrelated
+enabled processes and their configurations. The paper process was subsequently
+restarted to recover the late resolution described below and collect a separate
+metrics cohort; live remained stopped.
+
+One additional pre-deployment FAK order on local.8 filled and settled with payout
+zero (`paper-e723094d-dd67-4288-aa33-0685ea8f0f90`). It is excluded from local.9
+latency statistics. Under one uninterrupted local.9 paper metrics owner:
+
+| Order | Result |
+| --- | --- |
+| `paper-b14bab96-4949-489f-824d-7a05126d5fb5` | Five shares at 0.34, fee 0.07854; official settlement credited payout zero. |
+| `paper-3639b1e0-0da0-4091-bbbb-2cf4557a1e78` | Five shares at 0.24, fee 0.06384; official settlement credited payout zero. |
+| `paper-ab040587-5543-416a-9921-0cfe7b0d0583` | Price improvement filled 5.4166666667 shares at 0.12, fee 0.04004; market 5442351 lacked an official winner at the bounded deadline, then recovered and credited payout zero after the late official resolution. |
+| `paper-c801efb5-577f-40df-befd-a445416b6d6f` | Arrival-time `orderbook_marketability` rejection; no fill or debit. |
+
+Preview, non-submitting paper dry run, execute and retrieval passed. Canonical
+order/fill ownership, no synthetic UMR strategy decisions, actual notional-plus-fee
+debits, three same-key successful replays without duplicate effects, and the real
+arrival-time rejection were verified. Existing deterministic CI cases passed for
+FAK partial fill, FOK atomic failure, failed persistence, duplicate evidence,
+settlement idempotency and recovery. Earlier actual FOK evidence remains recorded
+above; it is not relabelled as a local.9 funded or paper FOK execution.
+
+The fractional fill follows the existing `buy_cash_budget` contract: a requested
+share target times limit price seals a cash amount, and improved prices can produce
+more shares. Therefore a one-share TPC sizing target is **not** an exact one-share
+fill ceiling. No funded order was attempted under that ambiguous quantity bound.
+The external settlement checker now rounds its recomputed amounts to the existing
+Postgres `NUMERIC(30,10)` ledger scale instead of comparing extra multiplication
+digits to rounded storage. A focused regression covers the observed fractional
+fill, winning and losing economics, tie rounding, and a one-unit discrepancy.
+All 15 external tests passed including the three read-only SQL cases and the
+collection driver stopping without submission when the existing daily loss policy
+rejects preparation. The external
+driver alone was resumed with that checker; the process, pod and metrics owner
+were not restarted. No application arithmetic or storage contract changed.
+
+| Shared Prometheus stage | Samples | Mean ms | Maximum ms |
+| --- | ---: | ---: | ---: |
+| Execution, completed / actual filled receipts | 3 | 264.623 | 268.038 |
+| Execution, rejected | 1 | 258.756 | 258.756 |
+| Final validation, completed | 3 | 37.735 | 41.598 |
+| Reservation wait, including rejected attempt | 4 | 0.480 | 0.547 |
+| Persistence observations, including rejected attempt | 8 | 2.976 | 5.583 |
+| Paper arrival delay, including rejected attempt | 4 | 151.369 | 151.824 |
+| Accounting across preview/preparation/execution | 62 | 42.128 | 106.131 |
+
+Stages overlap and must not be added. Configured paper delay is 150 ms. **Execution
+p95 is unavailable: three successful observations do not meet the 20-sample floor.**
+The separate accounting histogram has 62 samples and an approximate p95 of 85 ms;
+it is not execution p95. Histogram interpolation is coarse; exact maxima above
+come from the shared owner-lifetime maximum gauge. Rejections, preparation, HTTP
+retrieval polling and historical replay were not counted as successful executions.
+
+At the first cohort deadline, official resolution was missing for market 5442351
+(closed 20:35 UTC). The resolution profile had a healthy owner and fresh heartbeat, but
+its latest source fact remained 20:32 UTC; bounded worker logs showed websocket
+resets around 20:30:49 and 20:37:05 UTC. Bot logs showed no settlement write failure.
+A direct public CLOB market read returned 403, so venue delay versus ingestion loss
+is not proven. The existing process-scoped Grafana settlement-incomplete/stale
+alerts fired; freshness and shared order recovery remained healthy. No resolution
+was invented or ingester code/state changed to finish the test. This input blocker
+was not attributed to the new preflight image, so the image was not rolled back.
+
+Official resolution arrived at 20:46:48.806495 UTC, four seconds after the first
+cohort stopped. Restarting the same retained paper process recovered the existing
+order and credited its zero payout once at 20:49:43.084716 UTC. Fill ownership,
+ledger-scale debit/PnL and one canonical settlement passed again. Subsequent orders
+use a separate metrics cohort; the earlier three latency samples are not combined
+with the restarted owner. The longer settlement observation budget changes only
+the external driver, not any rail policy or resolution semantics.
+
+The restarted metrics owner completed two more FAK fills, each with successful
+same-key replay and exactly one official zero-payout settlement:
+
+| Order | Fill and credited result |
+| --- | --- |
+| `paper-92569ec1-d077-4a2c-b2dc-dfeb3f16b3ce` | Five shares at 0.14, fee 0.04214; credited at 20:57:02 UTC. |
+| `paper-a87c6895-b6ff-4f72-8e99-cdefa628a298` | Five shares at 0.41, fee 0.084665; credited at 21:03:44 UTC. |
+
+One additional attempt (`paper-3b84bbf7-0ae7-49a4-b6eb-6ca9e461492f`)
+was definitively rejected for `orderbook_readiness`, with no fill/debit. The
+successful retry used a new identity only after definitive nonexecution.
+
+| Restarted-owner stage | Samples | Mean ms | Maximum ms |
+| --- | ---: | ---: | ---: |
+| Execution, completed / actual filled receipts | 2 | 301.551 | 322.442 |
+| Execution, rejected | 1 | 402.929 | 402.929 |
+| Final validation, completed | 2 | 43.931 | 45.133 |
+| Reservation wait, including rejected attempt | 3 | 0.616 | 1.024 |
+| Persistence observations, including rejected attempt | 6 | 3.334 | 7.318 |
+| Paper arrival delay, including rejected attempt | 3 | 152.485 | 155.490 |
+
+Prometheus stored both cohorts' counts, sums and maxima. Neither cohort meets the
+20-success execution p95 floor; cumulative scrapes across the restart are not
+combined. The second owner's accounting p95 estimate is 90.893 ms across 71
+observations, not order execution p95.
+
+At 21:05:31 UTC the next preview rejected `daily_loss_limit`; the external driver
+stopped without another execute. The retained process now has nine lifetime fills
+and nine credited settlements, all payout zero, with total actual debit
+11.289560000004 and calculated remaining paper collateral 988.710439999996
+from seed 1000.
+Realized ledger PnL is -11.28956. The unchanged 10 USD daily limit checks already
+realized PnL before admission; it is not a hard worst-case loss cap, so the last
+eligible order crossed that threshold. No capital reset or limit increase was used
+to obtain more samples. Both retained processes finished stopped/disabled; the
+nine unrelated enabled processes and their configurations were preserved. Live
+still has zero orders/fills, and its lower/default/upper sizing values remain one.
+
+Positive payout and its reuse without duplicate credit remain **unproven on the
+retained process**, and enough successful samples for execution p95 were not
+collected. The active qualification blocker is now the existing daily loss policy;
+all tested paper orders have official credited settlements. The new-contract live credential/reconciliation preflight passed, but
+one-share admission/signing and funded FAK/FOK execution, fills and redemption
+remain **unqualified**. The live sizing policy is one; current market metadata is
+five and the shared OMS enforces that minimum. All live order/fill snapshots stayed
+empty. Paper/live shared policies remain equal except for this explicitly requested
+sizing difference and paper simulation settings; this is not an equal-size live
+execution comparison.
+
+Evidence: `/tmp/rail-paper-qualified-sample/`, `/tmp/rail-paper-owner-latency/`,
+`/tmp/rail-paper-collect.log`, `/tmp/rail-paper-settlement-diagnostic/`,
+`/tmp/rail-paper-recovered-sample/`, `/tmp/rail-paper-continue.log`,
+`/tmp/rail-observability-qualification/paper-recovered-prometheus.json`. The current image remains local.9;
+subsequent dashboard, documentation and external-test changes do not alter bot
+image inputs. No Git refs were pushed.
