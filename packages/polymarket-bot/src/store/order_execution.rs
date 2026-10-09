@@ -120,7 +120,9 @@ impl Store {
             .map(|v| Decimal::from_str_exact(&v))
             .transpose()?
             .unwrap_or(configured_seed);
-        let debit: Decimal = sqlx::query_scalar("SELECT COALESCE(SUM(price*size+fee),0)::numeric FROM polymarket.fills WHERE process_id=$1 AND source='paper'")
+        // Keep a scalar outer row: the deployed Timescale aggregate plan can return no
+        // rows for a process without fills, even when COALESCE wraps SUM inside it.
+        let debit: Decimal = sqlx::query_scalar("SELECT COALESCE((SELECT SUM(price*size+fee) FROM polymarket.fills WHERE process_id=$1 AND source='paper'),0)::numeric")
             .bind(process_id).fetch_one(&self.pool).await?;
         let credit: Decimal = sqlx::query_scalar("SELECT COALESCE(SUM(payout),0)::numeric FROM polymarket.btc_paper_settlement_ledger WHERE process_id=$1 AND execution_mode='paper' AND credit_status='credited'")
             .bind(process_id).fetch_one(&self.pool).await?;

@@ -114,3 +114,34 @@ The unchanged `scripts/local-image-ci.sh polymarket-bot 3.4.0-local.2` completed
 - Scope verification found no edits to `.github`, `scripts`, `common/scripts`, `capitonic-helm-chart`, `packages/market-data-ingester`, or root Cargo manifests/lockfile. No chart version changed. New observability source uses the existing provisioning owners.
 
 This result record is a documentation-only follow-up to the image source. No deployment, process activation, database mutation, observability provisioning, integration merge, registry publication or remote push occurred. Source/fixture acceptance does not replace the runtime qualification limits above.
+
+## Development API qualification — 2026-10-09
+
+Tested the deployed combined source `43f896c7dd6f5300b501e66cfbc081c2ec93ebe4`, image `v3.4.0-local.3`, using the real local ingress, process manager and database. The external driver lives in `packages/polymarket-bot/tests/order_api/`; no test mode, substitute venue, ledger, schema or configuration contract was added to runtime machinery.
+
+- Dedicated paper process: `fff03502-3e34-416e-a8fc-7765b837e05e`.
+- Dedicated live preparation process: `99a8c962-33d1-43be-8dee-78b600145bd8`.
+- Both use `btc_realtime_paper_process_v6`, `runtime.trigger=api`, fixed five-share sizing, FAK, and matching shared `order_policies` from the maintained examples. Run identifiers are unique. Live execution was never requested.
+- 57 assertions passed over actual API/storage checks: definition admission, duplicate/unknown/mixed/unsupported policy rejection, invalid-update immutability, start-preview/start, inactive-process rejection, preview/dry-run/detail authentication, forbidden overrides, malformed requests, unavailable members/markets, unknown order lookup, and unchanged economic records.
+- Both processes were stopped through the existing API after the blocker was identified. Existing nine enabled processes retained their configurations and running state. Both test processes have zero orders, fills, settlements and strategy decisions. The test driver made zero execution requests.
+
+Acceptance status: configuration/isolation passed; non-executing negative HTTP cases passed; successful preview and signing preparation blocked; paper execution, real FAK/FOK fills, foreign existing-order retrieval, replay and fill/accounting agreement remain **unverified**. No positive economic outcome is inferred from the negative tests. No new image is authorized for deployment by this test request.
+
+### Defects established by real-service testing
+
+1. API candidate construction called `load_point_in_time_inputs` with a CLOB epoch, invoking the obsolete `polymarket.orderbook_checkpoints` reader. Both modes returned 503. Local database logs proved `relation "polymarket.orderbook_checkpoints" does not exist`. The fix snapshots both books from the existing canonical gRPC-fed `BookRegistry` under one read lock and uses the repository's supported `None` book-epoch path for unchanged reference/history/fee reads. No missing table is recreated, no new feed is introduced, and shared OMS/arrival checks remain authoritative. A regression checks book identity, epoch, timestamps, depth, missing and quarantined evidence.
+2. The new paper-capital query's `COALESCE(SUM(...),0)` returned **zero rows** for the empty test process under the deployed Timescale partial/final hash-aggregate plan. This would make `fetch_one` fail after the book dependency was repaired. A scalar outer `COALESCE((SELECT SUM(...)),0)` returned one numeric zero on the same read-only query. Only the new rail's paper-capital reader and external audit query were adjusted; errors still propagate and populated-account semantics remain unchanged.
+
+### Persistence boundary sweep
+
+Read-only catalog inspection and source call tracing found no absent write target in the new rail or the canonical persistence methods it calls. The runtime role has SELECT/INSERT/UPDATE permissions on the checked targets:
+
+| Responsibility | Existing targets / ownership |
+| --- | --- |
+| Order identity, status, reservations and resolution | `polymarket.orders`; reservations are existing order states plus transaction-scoped advisory locks, not a new table |
+| Atomic paper fill commit and live fill deduplication | `polymarket.fills`, `polymarket.fill_identities`; `ExecutionLease::commit_paper` uses the existing order SQL and `Store::insert_fill_in_transaction` |
+| Settlement recognition and recovery | `polymarket.btc_paper_settlement_ledger`, `polymarket.btc_official_resolution_watches`, `polymarket.btc_interval_markets`, `polymarket.btc_market_labels` |
+| Live venue and account reconciliation | `polymarket.live_venue_events`, `polymarket.live_reconciliation_runs`, `polymarket.account_trades`, `polymarket.account_position_snapshots`, `polymarket.account_reconciliation_runs`, `polymarket.risk_events` |
+| Process lifecycle and immutable run evidence | `polymarket.trading_processes`, `polymarket.trading_process_events`; run manifests are existing events |
+
+Dormant `BtcRepository::insert_orderbook_checkpoint` and `insert_orderbook_checkpoint_pair` still reference the retired checkpoint table, but have no runtime call sites in bot source and are not rail write paths. They were not removed or changed. This catalog sweep proves target existence/privileges, not successful fill/settlement transactions; those still require the blocked execution qualification.

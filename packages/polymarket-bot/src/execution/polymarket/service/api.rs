@@ -1,11 +1,26 @@
 //! Synthetic candidates use real canonical market evidence and the shared OMS.
 use super::*;
 use crate::{
-    btc::types::{BtcIntervalMarket, BtcOutcome},
+    btc::types::{BtcIntervalMarket, BtcOutcome, OrderbookCheckpoint},
     execution::orders::{EvaluationRequest, Outcome, Receipt},
 };
 use serde_json::json;
 use uuid::Uuid;
+
+fn observe_books(
+    books: &BookRegistry,
+    market: &BtcIntervalMarket,
+) -> (
+    Option<OrderbookCheckpoint>,
+    Option<OrderbookCheckpoint>,
+    chrono::DateTime<Utc>,
+) {
+    (
+        books.checkpoint(&market.up_token_id),
+        books.checkpoint(&market.down_token_id),
+        Utc::now(),
+    )
+}
 
 impl ExecutionService {
     pub fn accepts_api_member(&self, member: &str) -> bool {
@@ -28,9 +43,14 @@ impl ExecutionService {
             "market evidence unavailable"
         );
         let p = &self.oms.definition.execution.policies;
-        let at = Utc::now();
-        let epoch = self.books.read().await.connection_id();
-        let inputs = self
+        // Execution reads the same canonical gRPC-fed registry as admission and arrival.
+        // Copy both sides under one read lock before choosing the causal reference cutoff.
+        // Historical database checkpoints are not a runtime orderbook dependency.
+        let (up_book, down_book, at) = {
+            let books = self.books.read().await;
+            observe_books(&books, market)
+        };
+        let mut inputs = self
             .repository
             .load_point_in_time_inputs(
                 market,
@@ -38,9 +58,11 @@ impl ExecutionService {
                 chrono::Duration::milliseconds(p.evidence.max_chainlink_open_delay_ms),
                 chrono::Duration::milliseconds(p.evidence.max_reference_age_ms),
                 chrono::Duration::milliseconds(p.evidence.max_book_age_ms),
-                Some(epoch),
+                None,
             )
             .await?;
+        inputs.up_book = up_book;
+        inputs.down_book = down_book;
         let snapshot = crate::btc::process_runner::build_snapshot(
             self.oms.owner.process_id,
             market,
@@ -220,6 +242,77 @@ fn redacted_preparation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn api_book_observation_preserves_canonical_lineage_and_missing_evidence() {
+        use crate::btc::types::FeedIntegrityStatus;
+        use rust_decimal_macros::dec;
+        let at = Utc::now() - chrono::Duration::milliseconds(100);
+        let market = BtcIntervalMarket {
+            event_id: "event".into(),
+            event_slug: "event".into(),
+            series_slug: "series".into(),
+            market_id: "market".into(),
+            condition_id: "condition".into(),
+            window_start: at - chrono::Duration::seconds(60),
+            window_end: at + chrono::Duration::seconds(240),
+            up_token_id: "up".into(),
+            down_token_id: "down".into(),
+            tick_size: dec!(0.01),
+            minimum_order_size: Some(dec!(1)),
+            resolution_source: "chainlink".into(),
+            active: true,
+            closed: false,
+            accepting_orders: true,
+            fees_enabled: true,
+            fee_schedule: json!({}),
+            raw_payload: json!({}),
+        };
+        let epoch = Uuid::new_v4();
+        let mut books = BookRegistry::new(epoch);
+        books.register_market(&market);
+        let (up, down, _) = observe_books(&books, &market);
+        assert!(up.is_none() && down.is_none());
+        for (token, outcome) in [("up", BtcOutcome::Up), ("down", BtcOutcome::Down)] {
+            books
+                .apply_canonical_snapshot(
+                    epoch,
+                    &market,
+                    token,
+                    outcome,
+                    at,
+                    at,
+                    7,
+                    None,
+                    vec![(dec!(0.39), dec!(100))],
+                    vec![(dec!(0.40), dec!(100))],
+                )
+                .unwrap();
+        }
+        let (up, down, cutoff) = observe_books(&books, &market);
+        for book in [up.unwrap(), down.unwrap()] {
+            assert_eq!(book.market_id, market.market_id);
+            assert_eq!(book.connection_id, epoch);
+            assert_eq!(book.source_timestamp, at);
+            assert_eq!(book.received_at, at);
+            assert!(book.observed_at <= cutoff);
+            assert_eq!(book.ingest_sequence, 7);
+            assert_eq!(book.best_ask, Some(dec!(0.40)));
+            assert_eq!(book.asks[0].size, dec!(100));
+            assert_eq!(book.integrity_status, FeedIntegrityStatus::Ok);
+        }
+        // Never turn quarantined evidence into a healthy snapshot at the API boundary.
+        books.quarantine(FeedIntegrityStatus::PreSnapshot);
+        let (up, down, _) = observe_books(&books, &market);
+        assert_eq!(
+            up.unwrap().integrity_status,
+            FeedIntegrityStatus::PreSnapshot
+        );
+        assert_eq!(
+            down.unwrap().integrity_status,
+            FeedIntegrityStatus::PreSnapshot
+        );
+    }
 
     #[tokio::test]
     async fn rejected_api_attempt_is_non_executable_and_retains_durable_identity() {
