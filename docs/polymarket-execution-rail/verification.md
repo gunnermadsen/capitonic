@@ -69,4 +69,17 @@ The narrow shared extensions expose existing validation helpers, factor fill ins
 
 Database caveat: fault injection verifies the paper commit boundary and lifecycle logic, not a running PostgreSQL transaction. The new SQL and complete service recovery wiring have not been exercised against a database here. Real database concurrency, API E2E and funded execution remain development qualification requirements. No live trade or database mutation was performed during this work.
 
-Full local CI and image provenance are recorded below after the candidate build.
+The unchanged `scripts/local-image-ci.sh polymarket-bot 3.4.0-local.1` completed successfully on 2026-10-08:
+
+- Python tooling tests: 17 passed (8 local-CI tests and 9 model-packaging tests).
+- Rust formatting and Clippy (`--all-targets`, warnings denied): passed.
+- Full component tests: 536 passed, 0 failed, 5 ignored. The additional ignored test is the explicit OMS timing check, run separately above. Existing model/agent/paper/live and legacy HTTP regressions passed.
+- Candidate image: `capitonic/polymarket-bot:v3.4.0-local.1`.
+- Image ID: `sha256:ce10da77359ca08b8991dd18448f827ecb57c3a1f970cde6b273841251ecf7f0`.
+- Image source: `0eca147734ab33fef10469b7201e01a1bfb08622`.
+- Image input hash: `d9f11491a813ae06b7a608110b654130fdb3551c07102059a8aee1211cd59a9f`.
+- Local annotated provenance: `image/polymarket-bot/v3.4.0-local.1` and `image/polymarket-bot/sha256-ce10da77359ca08b8991dd18448f827ecb57c3a1f970cde6b273841251ecf7f0`.
+- Version preflight checked origin tags, refreshed the production reference (bot v3.2.9-rc.0) and read ECR final tags; no conflicting v3.4.0 allocation existed.
+- Scope check: no changes to charts/Helm versions, CI/CD, GitHub workflows, build/deploy tooling, ingesters, model/agent runtimes, database schema or root Cargo manifests/lockfile. Existing application routing remains inactive for the new definition.
+
+This verification record is a documentation-only follow-up to the image source. No deployment, process activation, database mutation, branch integration, registry publication or remote push occurred. Database-backed and funded qualification remain unverified as described above.
