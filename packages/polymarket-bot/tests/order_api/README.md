@@ -1,9 +1,18 @@
 # Order API qualification
 
-`qualify.py` is an opt-in external HTTP driver for the deployed application. It installs no code, switches, mocks or alternate contracts in the rail. It creates isolated process definitions through the existing API, uses the versioned configuration examples, and audits existing tables through read-only PostgreSQL sessions. Its only order submission path checks both the owned paper process ID and its current configured mode. Live mode supports preview and signing preparation only.
+`qualify.py` is an opt-in external HTTP driver for the deployed application. It installs no code, switches, mocks or alternate contracts in the rail. It reuses the fixed local paper/live process pair through the existing API, preserves their new-contract policies, and audits existing tables through read-only PostgreSQL sessions. Its only order submission path checks both the owned paper process ID and its current configured mode. Live mode supports preview and signing preparation only.
 
 Prerequisites: local Rancher Desktop `capitonic`, the qualified bot image, healthy required ingester evidence, and the existing bot admin token inherited from the main worktree environment. Never put that token in arguments or evidence. The driver always targets `http://localhost/api/bot`; SQL always uses `kubectl --context rancher-desktop`, `default_transaction_read_only=on`, and a five-second statement timeout. No production target is supported.
 
+Reuse these process identities for every qualification:
+
+- Paper: `b4171f11-9fde-45e0-ad8c-37f6954769ec`.
+- Live: `bd63f9ce-e58b-4395-aee2-aab3ce197621`.
+
+`prepare` requires both processes to be stopped, reads their current definitions,
+and patches only the requested order type and fresh immutable run/preregistration
+identity. It never creates a process or resets capital/history. Missing or mismatched
+processes stop qualification. FAK/FOK runs use this same pair sequentially.
 Use a fresh external evidence directory for each qualification. Requests, receipts, definitions, image identity and assertions are retained in `run.json`. Never commit raw evidence. Invoke one action at a time and inspect failures before continuing:
 
 ```sh
@@ -15,7 +24,7 @@ python3 packages/polymarket-bot/tests/order_api/qualify.py stop --evidence-dir /
 python3 packages/polymarket-bot/tests/order_api/qualify.py audit --evidence-dir /tmp/order-api-run
 ```
 
-Repeat in another evidence directory with `--order-type fok` to qualify that policy. `start` is only for finishing setup when creation succeeded but startup did not begin; an explicit restart requires a fresh immutable run key through the normal process API. Do not rerun `prepare` over existing evidence.
+Repeat in another evidence directory with `--order-type fok` to qualify that policy. `start` is only for finishing setup when configuration succeeded but startup did not begin; an explicit restart requires a fresh immutable run key through the normal process API. Do not rerun `prepare` over existing evidence.
 
 Missing/stale evidence must not be worked around by loosening policies. Repeated unavailability stops preparation for diagnosis. Paper execution permits at most three attempts and one filled order per run. The request identity is saved before submission; after any uncertain response, recover that exact request/order before initiating another execution. The driver does not automatically retry ambiguous submissions. Never delete evidence or use a fresh directory to bypass uncertainty.
 

@@ -20,6 +20,11 @@ import urllib.request
 import uuid
 
 ROOT = Path(__file__).resolve().parents[4]
+# Local qualification owns exactly this pair across runs; never create replacements.
+REUSABLE_PROCESS_IDS = {
+    'paper': 'b4171f11-9fde-45e0-ad8c-37f6954769ec',
+    'live': 'bd63f9ce-e58b-4395-aee2-aab3ce197621',
+}
 
 
 class Qualification:
@@ -95,19 +100,50 @@ class Qualification:
     def snapshot(self, pid):
         pid = str(uuid.UUID(pid))
         owned = next(p for p in self.state['processes'].values() if p['process_id'] == pid)
-        # This newly created process cannot own earlier fills/decisions. Prune historical
+        # Process ownership starts at creation, including all previous test runs. Prune historical
         # Timescale chunks without changing the audited economic scope or timeout.
         since = (datetime.fromisoformat(owned['created_at'].replace('Z', '+00:00')) - timedelta(seconds=1)).isoformat()
         return self.sql(f"""SELECT json_build_object(
           'orders',(SELECT coalesce(json_agg(x ORDER BY x.order_id),'[]') FROM
-            (SELECT order_id,client_order_id,state,raw_payload FROM polymarket.orders WHERE process_id='{pid}' ORDER BY order_id LIMIT 30) x),
+            (SELECT order_id,client_order_id,state,raw_payload FROM polymarket.orders WHERE process_id='{pid}' ORDER BY created_at DESC, order_id DESC LIMIT 30) x),
           'fills',(SELECT coalesce(json_agg(x ORDER BY x.fill_id),'[]') FROM
-            (SELECT fill_id,order_id,price::text,size::text,fee::text,source,raw_payload FROM polymarket.fills WHERE timestamp_utc >= '{since}'::timestamptz AND process_id='{pid}' ORDER BY fill_id LIMIT 30) x),
+            (SELECT fill_id,order_id,price::text,size::text,fee::text,source,raw_payload FROM polymarket.fills WHERE timestamp_utc >= '{since}'::timestamptz AND process_id='{pid}' ORDER BY timestamp_utc DESC, fill_id DESC LIMIT 30) x),
           'settlements',(SELECT coalesce(json_agg(x ORDER BY x.order_id),'[]') FROM
-            (SELECT order_id,payout::text,net_pnl::text,credit_status FROM polymarket.btc_paper_settlement_ledger WHERE process_id='{pid}' ORDER BY order_id LIMIT 30) x),
+            (SELECT order_id,payout::text,net_pnl::text,credit_status FROM polymarket.btc_paper_settlement_ledger WHERE process_id='{pid}' ORDER BY created_at DESC, order_id DESC LIMIT 30) x),
           'decisions',(SELECT count(*) FROM polymarket.btc_strategy_decisions WHERE decision_at >= '{since}'::timestamptz AND process_id='{pid}'),
           'fill_debit',coalesce((SELECT sum(price*size+fee) FROM polymarket.fills WHERE timestamp_utc >= '{since}'::timestamptz AND process_id='{pid}'),0)::text,
           'settlement_credit',(SELECT coalesce(sum(payout),0)::text FROM polymarket.btc_paper_settlement_ledger WHERE process_id='{pid}' AND credit_status='credited'))""")
+
+    def reuse_processes(self):
+        existing = {}
+        # Check both identities before updating either definition. Missing/active
+        # processes are an operator issue, never permission to create another pair.
+        for mode, pid in REUSABLE_PROCESS_IDS.items():
+            code, response = self.request('GET', '/admin/trading-processes/' + pid)
+            if code != 200:
+                raise RuntimeError('Reusable ' + mode + ' process is unavailable; no replacement created')
+            process = response['process']
+            execution = process['config']['execution']
+            control = process['config']['raw']['btc_realtime_paper']
+            if (process['process_id'] != pid or process['enabled'] or process['status'] != 'stopped'
+                    or execution['mode'] != mode or execution.get('rail') != {'name': 'polymarket', 'version': 1}
+                    or control.get('runtime', {}).get('trigger') != 'api'):
+                raise RuntimeError('Reusable ' + mode + ' process must be stopped with its expected API contract')
+            existing[mode] = process
+        for mode, process in existing.items():
+            config = copy.deepcopy(process['config'])
+            for policy in config['execution']['order_policies']:
+                if policy['name'] == 'order_execution_policy':
+                    policy['params']['member_order_types']['conservative'] = self.state['order_type']
+            control = config['raw']['btc_realtime_paper']
+            run_key = 'order-api-' + mode + '-' + self.state['run']
+            control['next_experiment_key'] = run_key
+            control['preregistration_sha256'] = hashlib.sha256(run_key.encode()).hexdigest()
+            code, response = self.request('PATCH', '/admin/trading-processes/' + process['process_id'], {'config': config})
+            self.check(mode + ' reused new-contract definition', code == 200, response if code != 200 else None)
+            self.check(mode + ' stable process identity', response['process']['process_id'] == process['process_id'])
+            self.state['processes'][mode] = response['process']
+            self.save()
 
     def prepare(self):
         if self.state['processes']:
@@ -117,22 +153,7 @@ class Qualification:
         self.state['baseline'] = baseline
         self.state['image'] = json.loads(subprocess.check_output(['kubectl', '--context', 'rancher-desktop',
             '-n', 'capitonic', 'get', 'pods', '-l', 'app.kubernetes.io/name=polymarket-bot', '-o', 'json']))
-        for mode in ('paper', 'live'):
-            config = json.loads((ROOT / f'docs/polymarket-execution-rail/examples/{mode}.json').read_text())
-            for policy in config['execution']['order_policies']:
-                if policy['name'] == 'order_execution_policy':
-                    policy['params']['member_order_types']['conservative'] = self.state['order_type']
-            control = config['raw']['btc_realtime_paper']
-            key = 'order-api-' + mode + '-' + self.state['run']
-            control['next_experiment_key'] = key
-            control['preregistration_sha256'] = hashlib.sha256(key.encode()).hexdigest()
-            body = {'name': 'Order API qualification ' + mode, 'process_type': 'btc_5m',
-                    'process_scope': 'realtime_paper', 'enabled': False, 'status': 'created',
-                    'config': config, 'metadata': {'qualification_run': self.state['run']}}
-            code, response = self.request('PUT', '/admin/trading-processes/by-key/' + key, body)
-            self.check(mode + ' new-contract definition', code == 200, response if code != 200 else None)
-            self.state['processes'][mode] = response['process']
-            self.save()
+        self.reuse_processes()
         p, l = [self.state['processes'][m]['config']['execution']['order_policies'] for m in ('paper','live')]
         self.check('matching shared policy definitions', [x for x in p if x['name'] != 'paper_execution_policy'] == l)
         paper = self.state['processes']['paper']
@@ -276,7 +297,7 @@ class Qualification:
                     code, _ = self.request('GET',f"/orders/{self.state['processes']['live']['process_id']}/order/"+urllib.parse.quote(receipt['order_id'],safe=''))
                     self.check('foreign order ownership',code == 404)
                     if not fills:
-                        self.check('unfilled execution consumes no paper capital',Decimal(snapshot['fill_debit']) == 0)
+                        self.check('unfilled execution consumes no paper capital',Decimal(snapshot['fill_debit']) == Decimal(self.state['paper_before']['fill_debit']))
                         self.check('unfilled attempt is definitively rejected',receipt['status'] == 'rejected')
                         self.state.pop('executed')
                         self.state.pop('pending_execute')
@@ -286,7 +307,7 @@ class Qualification:
                     request = order['raw_payload']['request']
                     self.check('paper fills and order retain canonical ownership',request['process_id'] == pid and all(x['source'] == 'paper' and x['raw_payload']['process_id'] == pid for x in fills))
                     debit = sum(Decimal(x['price'])*Decimal(x['size'])+Decimal(x['fee']) for x in fills)
-                    self.check('paper debit equals notional plus actual fees',Decimal(snapshot['fill_debit']) == debit)
+                    self.check('paper debit equals notional plus actual fees',Decimal(snapshot['fill_debit']) - Decimal(self.state['paper_before']['fill_debit']) == debit)
                     seed = next(x['params']['starting_collateral_usd'] for x in self.state['processes']['paper']['config']['execution']['order_policies'] if x['name']=='paper_execution_policy')
                     self.state['paper_available_collateral'] = str(Decimal(seed)-Decimal(snapshot['fill_debit'])+Decimal(snapshot['settlement_credit']))
                     self.check('paper authorized budget respected',sum(Decimal(x['price'])*Decimal(x['size']) for x in fills) <= Decimal(request['price'])*Decimal(request['size'])+Decimal('0.000001'))

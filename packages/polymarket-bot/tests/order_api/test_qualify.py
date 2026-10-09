@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from qualify import Qualification
+from qualify import Qualification, REUSABLE_PROCESS_IDS, ROOT
 
 
 class ExecutionBoundaryTest(unittest.TestCase):
@@ -34,6 +34,56 @@ class ExecutionBoundaryTest(unittest.TestCase):
                 self.driver.request('POST', '/orders/paper-process/execute', {})
             self.assertEqual(transport.call_count, 1)
             self.assertEqual(transport.call_args.args[0].get_method(), 'GET')
+
+
+class ProcessReuseTest(unittest.TestCase):
+    def processes(self):
+        return {pid: {'process_id': pid, 'enabled': False, 'status': 'stopped',
+                      'config': json.loads((ROOT / f'docs/polymarket-execution-rail/examples/{mode}.json').read_text())}
+                for mode, pid in REUSABLE_PROCESS_IDS.items()}
+
+    def test_repeated_runs_patch_same_pair_without_creating_processes(self):
+        processes = self.processes()
+        run_keys = []
+        for order_type in ('fak', 'fok'):
+            with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'POLYMARKET_HTTP_ADMIN_TOKEN': 'unused'}):
+                driver = Qualification(directory, order_type)
+                calls = []
+                def request(method, path, body=None):
+                    calls.append((method, path))
+                    pid = path.rsplit('/', 1)[1]
+                    self.assertIn(pid, processes)
+                    self.assertIn(method, ('GET', 'PATCH'))
+                    if method == 'PATCH':
+                        processes[pid]['config'] = body['config']
+                    return 200, {'process': processes[pid]}
+                with patch.object(driver, 'request', side_effect=request):
+                    driver.reuse_processes()
+                self.assertEqual([m for m, _ in calls], ['GET', 'GET', 'PATCH', 'PATCH'])
+                self.assertEqual({m: p['process_id'] for m, p in driver.state['processes'].items()}, REUSABLE_PROCESS_IDS)
+                config = driver.state['processes']['paper']['config']
+                run_keys.append(config['raw']['btc_realtime_paper']['next_experiment_key'])
+                policy = next(p for p in config['execution']['order_policies'] if p['name'] == 'order_execution_policy')
+                self.assertEqual(policy['params']['member_order_types']['conservative'], order_type)
+        self.assertNotEqual(*run_keys)
+
+    def test_missing_or_active_pair_never_falls_back_to_creation(self):
+        for unavailable in ('missing', 'active', 'wrong_mode'):
+            with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'POLYMARKET_HTTP_ADMIN_TOKEN': 'unused'}):
+                driver = Qualification(directory)
+                processes = self.processes()
+                live = processes[REUSABLE_PROCESS_IDS['live']]
+                if unavailable == 'active': live['enabled'] = True
+                if unavailable == 'wrong_mode': live['config']['execution']['mode'] = 'paper'
+                def request(method, path):
+                    pid = path.rsplit('/', 1)[1]
+                    if unavailable == 'missing' and pid == live['process_id']:
+                        return 404, {}
+                    return 200, {'process': processes[pid]}
+                with patch.object(driver, 'request', side_effect=request) as api:
+                    with self.assertRaises(RuntimeError):driver.reuse_processes()
+                self.assertTrue(all(c.args[0] == 'GET' for c in api.call_args_list))
+                self.assertFalse(driver.state['processes'])
 
 
 class LatencyEvidenceTest(unittest.TestCase):

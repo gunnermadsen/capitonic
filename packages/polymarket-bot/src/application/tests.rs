@@ -81,6 +81,46 @@ mod lifecycle_tests {
         assert!(validate_btc_process_terminal_request("completed", " ").is_err());
     }
 
+    #[test]
+    fn inactive_operator_transitions_preserve_idempotency_and_stale_run_isolation() {
+        for current in ["created", "stopped", "failed", "completed", "expired"] {
+            let mut process = eligible_btc_process();
+            process.status = current.into();
+            validate_btc_start_eligibility(&process).unwrap();
+            for target in ["stopped", "completed"] {
+                assert_eq!(
+                    should_transition_inactive_btc_process(&process, None, false, target).unwrap(),
+                    current != target
+                );
+                assert!(!should_transition_inactive_btc_process(
+                    &process,
+                    Some(uuid::Uuid::new_v4()),
+                    false,
+                    target
+                )
+                .unwrap());
+                assert!(
+                    !should_transition_inactive_btc_process(&process, None, true, target).unwrap()
+                );
+            }
+            assert!(
+                should_transition_inactive_btc_process(&process, None, false, "running").is_err()
+            );
+            process.enabled = true;
+            assert!(
+                should_transition_inactive_btc_process(&process, None, false, "completed").is_err()
+            );
+        }
+        for current in ["starting", "running", "stopping"] {
+            let mut process = eligible_btc_process();
+            process.status = current.into();
+            assert!(
+                should_transition_inactive_btc_process(&process, None, false, "completed").is_err()
+            );
+            assert!(validate_btc_start_eligibility(&process).is_err());
+        }
+    }
+
     fn eligible_btc_process() -> TradingProcess {
         let now = Utc::now();
         TradingProcess {

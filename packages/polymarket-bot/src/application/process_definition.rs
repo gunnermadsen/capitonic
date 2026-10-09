@@ -107,6 +107,34 @@ pub(super) async fn mark_btc_process_terminal(
     Ok(())
 }
 
+/// An operator may move an inactive definition between terminal states without
+/// manufacturing another run. Late runtime callbacks must not rewrite it.
+pub(super) fn should_transition_inactive_btc_process(
+    process: &TradingProcess,
+    expected_run_id: Option<uuid::Uuid>,
+    runtime_failed: bool,
+    target: &str,
+) -> Result<bool, HttpError> {
+    if process.enabled || matches!(process.status.as_str(), "starting" | "running" | "stopping") {
+        return Err(HttpError::conflict(
+            "BTC process claims to be active but this service owns no runtime handle",
+        ));
+    }
+    if expected_run_id.is_some() || runtime_failed || process.status == target {
+        return Ok(false);
+    }
+    if !matches!(
+        process.status.as_str(),
+        "created" | "stopped" | "failed" | "completed" | "expired"
+    ) || !matches!(target, "stopped" | "completed")
+    {
+        return Err(HttpError::bad_request(
+            "unsupported inactive BTC lifecycle transition",
+        ));
+    }
+    Ok(true)
+}
+
 pub(super) fn validate_btc_process_terminal_request(status: &str, reason: &str) -> Result<()> {
     if !matches!(status, "stopped" | "failed" | "completed") || reason.trim().is_empty() {
         bail!("invalid BTC process terminal status or reason");
@@ -671,7 +699,7 @@ pub(super) fn validate_btc_start_eligibility(process: &TradingProcess) -> Result
     }
     if !matches!(
         process.status.as_str(),
-        "created" | "stopped" | "failed" | "completed"
+        "created" | "stopped" | "failed" | "completed" | "expired"
     ) {
         return Err(HttpError::bad_request(format!(
             "BTC trading process cannot start from status {}",

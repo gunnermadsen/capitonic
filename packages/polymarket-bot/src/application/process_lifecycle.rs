@@ -1304,17 +1304,36 @@ impl BtcProcessManager {
             .get(&process_id)
             .map(|active| (active.run_id, active.run_key.clone()));
         let Some((active_run_id, active_run_key)) = active_identity else {
-            if process.enabled
-                || matches!(process.status.as_str(), "starting" | "running" | "stopping")
-            {
-                return Err(HttpError::conflict(
-                    "BTC process claims to be active but this service owns no runtime handle",
-                ));
-            }
-            if successful_terminal_status == "completed" && process.status != "completed" {
-                return Err(HttpError::conflict(
-                    "only an active or already completed BTC process can be completed",
-                ));
+            if should_transition_inactive_btc_process(
+                &process,
+                expected_run_id,
+                runtime_failed,
+                successful_terminal_status,
+            )? {
+                let updated = self
+                    .store
+                    .update_trading_process_status(
+                        process_id,
+                        successful_terminal_status,
+                        false,
+                        None,
+                    )
+                    .await
+                    .map_err(|error| HttpError::internal(error.to_string()))?
+                    .ok_or_else(|| HttpError::not_found("trading process not found"))?;
+                self.record_event(
+                    process_id,
+                    "info",
+                    if successful_terminal_status == "completed" {
+                        "btc_runtime_completed"
+                    } else {
+                        "btc_runtime_stopped"
+                    },
+                    reason,
+                    serde_json::json!({"previous_status": process.status, "runtime_active": false}),
+                )
+                .await;
+                return Ok(updated);
             }
             return Ok(process);
         };
