@@ -190,3 +190,71 @@ All paper p95/p99 fields are **null** because counts are below the report's mini
 Raw local evidence is retained in `/tmp/order-latency-fak/` (`run.json`, `latency.json`, `latency.prom`), with local CI/CD logs and the scoped Prometheus response under `/tmp/order-latency-*`. Only this concise result is committed. Test-driver/documentation follow-ups do not change image inputs or require another image allocation.
 
 Acceptance: shared instrumentation, automated checks, local build/deployment and blocked-preparation measurement are verified. Positive preview/dry-run, paper FAK/FOK execution/persistence and executed-order latency qualification remain **blocked**, so development order qualification is **not complete**. No gate, clock tolerance, accounting query, reservation behavior or live reconciliation rule was changed to obtain a passing test.
+
+## Accounting query optimization qualification — 2026-10-09
+
+Applied three result-equivalent query optimizations on the existing repository paths:
+explicit process filtering in the shared daily high-water-mark fill scan; unresolved
+order filtering before account JSON extraction; and one process-owned fill-order set
+for open-market evaluation. The latter two are new execution repository queries; the
+shared high-water query remains one implementation for all callers and both modes.
+No mode-only filter, process-creation cutoff, new cache, checkpoint, table, schema,
+accounting rule, gate, or reconciliation change was introduced. Rail/OMS contracts
+remain 1.0.0. Historical paper/live fills, ambiguity and conflicting credits remain visible.
+
+Source `b2de90de38861b0045cfe18da8e497c2ef51b568` passed the unchanged local CI:
+formatting, Clippy, **563 Rust tests** (0 failed, 5 existing ignored), and **17 Python
+tooling tests**. **8 external qualification tests passed**, including three new opt-in,
+read-only PostgreSQL tests executing the actual SQL against inline fixtures. They cover
+both fill modes, causal cutoffs, empty processes, canonical/duplicate/conflicting
+credits, process ownership, stopped account sleeves and cancelled/expired reservations.
+
+Local CI built **v3.4.0-local.6**, image
+`sha256:62dfbcd78560caa29609726f674c68530afa96c2a0c63020835f89762918ac55`.
+Local CD generated and committed the image/appVersion pin (`ac71ad2f`) and deployed
+Helm revision **50**. Chart version remains **0.4.15** under the user's explicit
+instruction; no manual chart edits, templates, CI/CD/build/deploy tooling, ingesters,
+production changes or remote pushes occurred. CD verified exact image identity,
+process recovery, unchanged enabled-process/migration sets, worker/profile capacity
+and advancing feeds. Capacity remained 14 ready workers, 9 desired realtime profiles,
+0 active backfill allocations. Rollback is revision 49, v3.4.0-local.5,
+`sha256:faeb8e44fad9622e2ac5c14b94f5086d4727028c65ea300acc12903280f44ddd`;
+the CD rollback snapshot is `/var/folders/6w/fnv3n0_569q0458hy9dvzyyh0000gn/T/local-image-cd.ZP0ieD`.
+
+Dedicated API qualification used paper process `b4171f11-9fde-45e0-ad8c-37f6954769ec`
+and non-submitting live process `bd63f9ce-e58b-4395-aee2-aab3ce197621`. Their execution
+configurations exactly match the prior latency run. Shared policies match between
+paper/live, with only the established paper simulation policy differing. Fourteen
+previews per mode used real local ingester evidence and the normal API/OMS path.
+The existing shared metrics measured:
+
+| Accounting stage | Prior samples | New samples | Prior mean ms | New mean ms | Mean reduction | Prior maximum ms | New maximum ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Paper | 14 | 14 | 304.851 | 47.353 | 84.47% | 403.822 | 81.984 |
+| Live | 19 | 14 | 706.771 | 371.732 | 47.40% | 1171.895 | 642.104 |
+
+The first sample batch included one successful paper preview and two successful live
+previews. Paper rejected-preview mean was 44.730 ms versus 304.898 ms previously;
+evidence mean was 4.458 ms versus 4.362 ms. Accounting contains multiple SQL reads;
+live also includes venue balance access. These are separate local runs with identical
+policies, not a controlled load benchmark or a guarantee of tail latency. Fourteen
+samples do not support p95/p99 reporting, and nested stages must not be added together.
+
+**59 API/storage assertions passed**, including no economic writes from preview,
+configuration/authentication/ownership checks and preservation of all nine prior enabled
+processes. Bounded subsequent preparation reached the next valid entry window but
+stopped on repeated `future_input_timestamp`, the existing readiness/OMS issue.
+The dedicated live process also reported one existing reconciliation mismatch and
+zero unresolved orders. No policy, clock tolerance or gate was weakened. Neither mode
+completed dry-run preparation; there were **zero execution requests, orders, fills,
+settlements or strategy decisions** for these test processes. Both were stopped and
+audited. Therefore paper fill/persistence and complete executed-order latency remain
+unqualified; the measured accounting reduction does not claim their completion.
+
+Local Prometheus reported no active alerts; the bounded post-deployment bot log check
+had no ERROR entries. Grafana was not provisioned or modified. Evidence is retained at
+`/tmp/order-accounting-qualified-fak/` (`preview-latency.json`, `preview-latency.prom`,
+`latency-difference.json`, final `latency.json`, and `run.json`), with local CI/CD logs
+at `/tmp/order-accounting-ci.log` and `/tmp/order-accounting-cd.log`. The prior comparison
+is `/tmp/order-latency-fak/latency.json`; raw SQL exploration remains under
+`/tmp/rail-hot-path-analysis/`. Only this concise verification result is committed.
