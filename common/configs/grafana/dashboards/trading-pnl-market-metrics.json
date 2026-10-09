@@ -3018,7 +3018,7 @@
               "viz": false
             },
             "insertNulls": false,
-            "lineInterpolation": "smooth",
+            "lineInterpolation": "stepAfter",
             "lineWidth": 2,
             "pointSize": 5,
             "scaleDistribution": {
@@ -3061,7 +3061,7 @@
               "options": {
                 "mode": "exclude",
                 "names": [
-                  "BTC 5m conservative selective confidence 0.80 paper [eb73d85f]"
+                  "BTC 5m OpenAI agent paper [057d0d78]"
                 ],
                 "prefix": "All except:",
                 "readOnly": true
@@ -4197,6 +4197,6 @@
   "timezone": "browser",
   "title": "Trading, PNL & Market Metrics",
   "uid": "polymarket-bot",
-  "version": 69,
+  "version": 70,
   "weekStart": ""
 }
