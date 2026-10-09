@@ -37,7 +37,7 @@ Paths below are relative to `config.raw.btc_realtime_paper`, except `execution.*
 | strategy.decision_strategy.models[].entry_order_type / fok | order_execution_policy.member_order_types | Exact member_id map; only fok/fak. No duplicate value inside router members. |
 | execution.max_open_positions / null | exposure_policy | Null or existing 1..6 configuration range. Existing execution/accounting semantics preserved. |
 | execution.max_open_notional_usd / null | exposure_policy | Null or existing (0,30] USD configuration range. |
-| execution.max_daily_loss_usd / null | loss_limit_policy | Null or existing (0,10] USD configuration range. Paper/live application will be unified with accounting evidence. |
+| execution.max_daily_loss_usd / null | loss_limit_policy | Null or any positive representable Decimal, with no hardcoded maximum. Shared paper/live OMS enforces the configured UTC daily realized-loss threshold. Legacy flat configuration has the same accepted range. |
 | entry_admission.daily_realized_pnl_high_water_mark / absent | loss_limit_policy.daily_realized_pnl_high_water_mark | Reuse existing schema, activation_realized_pnl_usd and max_drawdown_from_high_water_mark_usd. Preserve UTC-period/evidence semantics; validate against paper starting collateral only for paper. |
 | entry_admission.loss_regime_confidence_floor / absent | loss_regime_policy | Reuse schema_version, activation_consecutive_candidate_losses (1..100), min_conservative_probability ([0,1]), release_consecutive_candidate_wins (1..100). Candidate regime, not a newly invented executed-loss counter. |
 | paper.arrival_latency_ms / 150 | paper_execution_policy | Existing 1..60000ms supported range. |

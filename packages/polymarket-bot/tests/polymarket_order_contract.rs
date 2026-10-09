@@ -391,3 +391,35 @@ fn warmed_configuration_compilation_stays_within_admission_budget() {
     assert!(elapsed[50] < std::time::Duration::from_millis(25));
     assert!(elapsed[95] < std::time::Duration::from_millis(100));
 }
+
+#[test]
+fn daily_loss_policy_accepts_positive_decimals_without_a_ceiling_in_both_modes() {
+    for mode in ["paper", "live"] {
+        for limit in [
+            json!(null),
+            json!("0.0000000000000000000000000001"),
+            json!("25"),
+            json!("1000000"),
+            json!("79228162514264337593543950335"),
+        ] {
+            let mut v = fixture(mode);
+            policy(&mut v, "loss_limit_policy")["max_daily_loss_usd"] = limit;
+            compile(&config(v)).unwrap();
+        }
+        let mut omitted = fixture(mode);
+        policy(&mut omitted, "loss_limit_policy")
+            .as_object_mut()
+            .unwrap()
+            .remove("max_daily_loss_usd");
+        compile(&config(omitted)).unwrap();
+        for limit in ["0", "-1"] {
+            let mut v = fixture(mode);
+            policy(&mut v, "loss_limit_policy")["max_daily_loss_usd"] = json!(limit);
+            invalid(v, "max_daily_loss_usd must be greater than zero");
+        }
+        let mut overflow = fixture(mode);
+        policy(&mut overflow, "loss_limit_policy")["max_daily_loss_usd"] =
+            json!("79228162514264337593543950336");
+        assert!(compile(&config(overflow)).is_err());
+    }
+}

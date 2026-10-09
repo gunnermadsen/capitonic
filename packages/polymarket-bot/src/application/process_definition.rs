@@ -783,13 +783,20 @@ pub(super) fn validate_optional_execution_controls(
             execution.max_open_notional_usd,
             dec!(30),
         ),
-        ("max_daily_loss_usd", execution.max_daily_loss_usd, dec!(10)),
     ] {
         if value.is_some_and(|value| value <= Decimal::ZERO || value > maximum) {
             return Err(HttpError::bad_request(format!(
                 "BTC execution.{name} must be greater than zero and at most {maximum}"
             )));
         }
+    }
+    if execution
+        .max_daily_loss_usd
+        .is_some_and(|value| value <= Decimal::ZERO)
+    {
+        return Err(HttpError::bad_request(
+            "BTC execution.max_daily_loss_usd must be greater than zero",
+        ));
     }
     if execution
         .max_open_positions

@@ -277,15 +277,18 @@ impl OrderPolicies {
                 .is_none_or(|v| (1..=6).contains(&v)),
             "max_open_positions must be 1..=6"
         );
-        for (value, maximum) in [
-            (self.exposure.max_open_notional_usd, Decimal::from(30)),
-            (self.loss_limit.max_daily_loss_usd, Decimal::from(10)),
-        ] {
-            ensure!(
-                value.is_none_or(|v| v > Decimal::ZERO && v <= maximum),
-                "exposure/loss value exceeds existing configuration bounds"
-            );
-        }
+        ensure!(
+            self.exposure
+                .max_open_notional_usd
+                .is_none_or(|v| v > Decimal::ZERO && v <= Decimal::from(30)),
+            "exposure value exceeds existing configuration bounds"
+        );
+        ensure!(
+            self.loss_limit
+                .max_daily_loss_usd
+                .is_none_or(|v| v > Decimal::ZERO),
+            "max_daily_loss_usd must be greater than zero"
+        );
         if let Some(p) = &self.loss_regime {
             p.validate()?;
         }

@@ -136,6 +136,45 @@ mod lifecycle_tests {
         assert!(resolve_btc_status_target("arbitrary").is_err());
     }
 
+    #[test]
+    fn legacy_daily_loss_has_no_ceiling_in_either_mode() {
+        for mode in ["paper", "live"] {
+            let mut process = eligible_btc_process();
+            let execution = process.config.execution.as_mut().unwrap();
+            execution.mode = Some(mode.into());
+            execution.live_capital = mode == "live";
+            execution.account_ref = (mode == "live").then(|| "polymarket-primary".into());
+            for limit in [
+                None,
+                Some(dec!(0.01)),
+                Some(dec!(25)),
+                Some(dec!(1000000)),
+                Some(Decimal::MAX),
+            ] {
+                process
+                    .config
+                    .execution
+                    .as_mut()
+                    .unwrap()
+                    .max_daily_loss_usd = limit;
+                validate_btc_process_capability(&process).unwrap();
+            }
+            for limit in [Decimal::ZERO, dec!(-1)] {
+                process
+                    .config
+                    .execution
+                    .as_mut()
+                    .unwrap()
+                    .max_daily_loss_usd = Some(limit);
+                assert!(validate_btc_process_capability(&process).is_err());
+            }
+        }
+        assert!(serde_json::from_value::<ProcessExecutionConfig>(
+            serde_json::json!({"max_daily_loss_usd":"79228162514264337593543950336"})
+        )
+        .is_err());
+    }
+
     fn eligible_btc_process() -> TradingProcess {
         let now = Utc::now();
         TradingProcess {

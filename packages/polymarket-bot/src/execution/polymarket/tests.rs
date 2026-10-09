@@ -554,3 +554,39 @@ fn shared_order_metrics_keep_process_mode_origin_and_recovery_independent() {
     )));
     assert!(!output.contains("order_id="));
 }
+
+#[test]
+fn configured_daily_loss_threshold_is_enforced_identically_in_both_modes() {
+    for mode in ["paper", "live"] {
+        let (mut oms, candidate, books, mut account) = fixture(mode);
+        for limit in [dec!(25), dec!(1000000), Decimal::MAX] {
+            oms.definition
+                .execution
+                .policies
+                .loss_limit
+                .max_daily_loss_usd = Some(limit);
+            account.daily_pnl = dec!(-10);
+            assert!(admit(&oms, &candidate, &books, &account).is_ok());
+            account.daily_pnl = -limit;
+            assert!(admit(&oms, &candidate, &books, &account)
+                .unwrap_err()
+                .to_string()
+                .contains("daily_loss_limit"));
+        }
+        oms.definition
+            .execution
+            .policies
+            .loss_limit
+            .max_daily_loss_usd = Some(dec!(25));
+        account.daily_pnl = dec!(-24.99);
+        assert!(admit(&oms, &candidate, &books, &account).is_ok());
+        account.daily_pnl = dec!(-25.01);
+        assert!(admit(&oms, &candidate, &books, &account).is_err());
+        oms.definition
+            .execution
+            .policies
+            .loss_limit
+            .max_daily_loss_usd = None;
+        assert!(admit(&oms, &candidate, &books, &account).is_ok());
+    }
+}
