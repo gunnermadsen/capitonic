@@ -7,8 +7,11 @@ use tokio_util::sync::CancellationToken;
 #[derive(Default)]
 pub struct AgentSession {
     market: String,
+    pub calibration: Option<serde_json::Value>,
     attempts: usize,
     accepted: bool,
+    entry_reassessment: Option<uuid::Uuid>,
+    entry_reassessment_started: Option<uuid::Uuid>,
     pending: Option<JoinHandle<EvaluationResult>>,
     completed: Option<EvaluationResult>,
     latest: Option<EvaluationResult>,
@@ -39,6 +42,69 @@ impl AgentSession {
                 .is_some_and(|at| seconds >= *at)
             && seconds < profile().decision_ceiling_seconds
     }
+    pub fn evaluation_slot(&self) -> usize {
+        self.attempts + 1
+    }
+
+    /// Latch only the affected forecast; a bounce above the cap cannot release it.
+    pub fn hold_entry(
+        &mut self,
+        result: &EvaluationResult,
+        up_ask: Option<rust_decimal::Decimal>,
+        down_ask: Option<rust_decimal::Decimal>,
+        cap: rust_decimal::Decimal,
+    ) -> bool {
+        if !super::uses_entry_reassessment(&result.request.selection.profile_key) {
+            return false;
+        }
+        let current =
+            result
+                .prediction
+                .as_ref()
+                .ok()
+                .and_then(|prediction| match prediction.direction {
+                    crate::btc::types::BtcOutcome::Up => up_ask,
+                    crate::btc::types::BtcOutcome::Down => down_ask,
+                });
+        if super::reassessment::selected_ask(result).is_some_and(|price| price > cap)
+            && current.is_some_and(|price| price > rust_decimal::Decimal::ZERO && price <= cap)
+        {
+            self.entry_reassessment = Some(result.request.request_id);
+        }
+        self.entry_reassessment == Some(result.request.request_id)
+    }
+
+    pub fn entry_reassessment_due(&self, seconds: i64) -> bool {
+        self.entry_reassessment.is_some()
+            && self.entry_reassessment_started != self.entry_reassessment
+            && !self.accepted
+            && self.pending.is_none()
+            && self.completed.is_none()
+            && self.attempts < profile().attempts_seconds.len()
+            && seconds >= profile().attempts_seconds[0]
+            && seconds < profile().decision_ceiling_seconds
+    }
+
+    /// Request ordinals include failed and interrupted calls in the existing ledger.
+    pub fn restore_request(&mut self, request: &EvaluationRequest) {
+        if super::uses_calibration(&request.selection.profile_key) {
+            self.calibration = request.context.get("historical_calibration").cloned();
+        }
+        if super::uses_entry_reassessment(&request.selection.profile_key) {
+            if let Some(slot) = request.context["evaluation_slot"].as_u64() {
+                self.attempts = self
+                    .attempts
+                    .max(slot.min(profile().attempts_seconds.len() as u64) as usize);
+            }
+            if request.context["entry_reassessment"]["trigger"] == "forecast_became_affordable" {
+                self.entry_reassessment_started = request.context["entry_reassessment"]
+                    ["previous_request_id"]
+                    .as_str()
+                    .and_then(|id| id.parse().ok());
+            }
+        }
+    }
+
     pub fn start(&mut self, request: EvaluationRequest) -> Result<()> {
         let provider = OpenAiProvider::new()?;
         super::super::telemetry::agent_usage_start(
@@ -51,6 +117,7 @@ impl AgentSession {
             provider.evaluate(request, cancellation).await
         }));
         self.attempts += 1;
+        self.entry_reassessment_started = self.entry_reassessment;
         Ok(())
     }
     pub async fn poll(&mut self) -> Option<EvaluationResult> {
@@ -76,13 +143,35 @@ impl AgentSession {
         self.latest.as_ref()
     }
     pub fn retain(&mut self, result: EvaluationResult) {
-        self.attempts = self.attempts.max(
-            profile()
-                .attempts_seconds
-                .iter()
-                .filter(|second| **second <= result.request.attempt as i64)
-                .count(),
-        );
+        if self
+            .entry_reassessment
+            .is_some_and(|id| id != result.request.request_id)
+        {
+            self.entry_reassessment = None;
+            self.entry_reassessment_started = None;
+        }
+        if super::uses_entry_reassessment(&result.request.selection.profile_key) {
+            if let Some(slot) = result.request.context["evaluation_slot"].as_u64() {
+                self.attempts = self
+                    .attempts
+                    .max(slot.min(profile().attempts_seconds.len() as u64) as usize);
+            }
+        } else {
+            self.attempts = self.attempts.max(
+                profile()
+                    .attempts_seconds
+                    .iter()
+                    .filter(|second| **second <= result.request.attempt as i64)
+                    .count(),
+            );
+        }
+        if super::uses_calibration(&result.request.selection.profile_key) {
+            self.calibration = result
+                .request
+                .context
+                .get("historical_calibration")
+                .cloned();
+        }
         self.latest = Some(result);
     }
     pub fn defer(&mut self, result: EvaluationResult) {
@@ -95,6 +184,9 @@ impl AgentSession {
         self.cancellation.cancel();
         self.completed = None;
         self.latest = None;
+        self.calibration = None;
+        self.entry_reassessment = None;
+        self.entry_reassessment_started = None;
         if let Some(task) = self.pending.take() {
             task.abort();
         }
@@ -259,5 +351,172 @@ mod tests {
             session.latest().unwrap().request.request_id,
             original.request.request_id
         );
+    }
+    fn entry_forecast(price: &str, slot: usize) -> EvaluationResult {
+        let mut result = forecast();
+        let selected =
+            super::super::profile_for_key(super::super::ENTRY_REASSESSMENT_PROFILE_KEY).unwrap();
+        result.request.selection.profile_key = selected.key.into();
+        result.request.selection.profile_sha256 = super::super::hash(&selected).unwrap();
+        result.request.context = serde_json::json!({"evaluation_slot":slot,
+            "execution_snapshot":{"up_book":{"executable_ask_vwap":price},
+                                  "down_book":{"executable_ask_vwap":"0.40"}}});
+        result.request.input_sha256 = super::super::hash(&result.request.context).unwrap();
+        result
+    }
+
+    #[test]
+    fn affordability_holds_only_the_affected_side_and_profile() {
+        use rust_decimal_macros::dec;
+        let mut session = AgentSession::default();
+        session.observe_market("a");
+        let above = entry_forecast("0.70", 1);
+        session.retain(above.clone());
+        assert!(!session.hold_entry(&above, Some(dec!(0.61)), Some(dec!(0.30)), dec!(0.60)));
+        assert!(!session.hold_entry(&above, None, Some(dec!(0.30)), dec!(0.60)));
+        assert!(session.hold_entry(&above, Some(dec!(0.60)), Some(dec!(0.30)), dec!(0.60)));
+        assert!(session.entry_reassessment_due(60));
+        // A price bounce cannot release the invalidated forecast.
+        assert!(session.hold_entry(&above, Some(dec!(0.65)), None, dec!(0.60)));
+        let mut independent = AgentSession::default();
+        independent.observe_market("a");
+        independent.retain(above.clone());
+        assert!(!independent.entry_reassessment_due(60));
+        let mut down = entry_forecast("0.70", 1);
+        down.prediction.as_mut().unwrap().direction = crate::btc::types::BtcOutcome::Down;
+        down.prediction.as_mut().unwrap().probability_up = 0.3;
+        independent.retain(down.clone());
+        assert!(!independent.hold_entry(&down, Some(dec!(0.55)), Some(dec!(0.35)), dec!(0.60)));
+        down.request.context["execution_snapshot"]["down_book"]["executable_ask_vwap"] =
+            serde_json::json!("0.80");
+        assert!(independent.hold_entry(&down, None, Some(dec!(0.59)), dec!(0.60)));
+        let affordable = entry_forecast("0.60", 1);
+        session.retain(affordable.clone());
+        assert!(!session.hold_entry(&affordable, Some(dec!(0.55)), None, dec!(0.60)));
+        let legacy = forecast();
+        assert!(!session.hold_entry(&legacy, Some(dec!(0.55)), None, dec!(0.60)));
+    }
+
+    #[tokio::test]
+    async fn one_refresh_uses_next_slot_and_failure_does_not_release_old_forecast() {
+        use rust_decimal_macros::dec;
+        let mut session = AgentSession::default();
+        session.observe_market("a");
+        let old = entry_forecast("0.70", 1);
+        session.retain(old.clone());
+        assert!(session.hold_entry(&old, Some(dec!(0.59)), None, dec!(0.60)));
+        assert!(session.entry_reassessment_due(60));
+        let mut refreshed = entry_forecast("0.59", 2);
+        refreshed.request.attempt = 60;
+        super::super::add_entry_reassessment_context(
+            &mut refreshed.request,
+            Some(&old),
+            dec!(0.60),
+            2,
+            true,
+        );
+        // Model the pending provider without network access.
+        session.attempts += 1;
+        session.entry_reassessment_started = session.entry_reassessment;
+        session.pending = Some(tokio::spawn(std::future::pending()));
+        assert!(!session.entry_reassessment_due(60));
+        assert!(!session.due(75));
+        session.pending.take().unwrap().abort();
+        // A failed result consumes its slot but is not retained as a valid forecast.
+        assert!(session.hold_entry(&old, Some(dec!(0.58)), None, dec!(0.60)));
+        assert!(!session.entry_reassessment_due(70));
+        assert!(!session.due(104));
+        assert!(session.due(105));
+        // A valid refreshed prediction clears the affected hold and resumes retries.
+        session.retain(refreshed.clone());
+        assert!(!session.hold_entry(&refreshed, Some(dec!(0.58)), None, dec!(0.60)));
+        refreshed.request.context["evaluation_slot"] = serde_json::json!(3);
+        session.retain(refreshed.clone());
+        assert!(!session.due(119));
+        assert!(!session.entry_reassessment_due(119));
+        session.accept();
+        assert!(!session.due(119));
+        session.observe_market("b");
+        assert!(session.due(45));
+        assert!(!session.entry_reassessment_due(45));
+    }
+
+    #[test]
+    fn restart_restores_interrupted_refresh_budget_without_releasing_forecast() {
+        use rust_decimal_macros::dec;
+        let old = entry_forecast("0.70", 1);
+        let mut request = entry_forecast("0.59", 2).request;
+        request.attempt = 60;
+        super::super::add_entry_reassessment_context(&mut request, Some(&old), dec!(0.60), 2, true);
+        let mut restarted = AgentSession::default();
+        restarted.observe_market("a");
+        restarted.retain(old.clone());
+        restarted.restore_request(&request);
+        assert!(restarted.hold_entry(&old, Some(dec!(0.58)), None, dec!(0.60)));
+        assert!(!restarted.entry_reassessment_due(60));
+        assert!(!restarted.due(75));
+        assert!(restarted.due(105));
+        request.context["evaluation_slot"] = serde_json::json!(3);
+        restarted.restore_request(&request);
+        assert!(!restarted.due(119));
+        assert!(!restarted.entry_reassessment_due(119));
+        assert!(!restarted.entry_reassessment_due(120));
+        restarted.observe_market("b");
+        assert!(restarted.due(45));
+    }
+
+    #[test]
+    fn a_pending_scheduled_result_must_review_the_affordable_evidence() {
+        use rust_decimal_macros::dec;
+        let mut session = AgentSession::default();
+        session.observe_market("a");
+        let old = entry_forecast("0.70", 1);
+        session.retain(old.clone());
+        assert!(session.hold_entry(&old, Some(dec!(0.59)), None, dec!(0.60)));
+        let still_expensive = entry_forecast("0.65", 2);
+        session.retain(still_expensive.clone());
+        assert!(session.hold_entry(&still_expensive, Some(dec!(0.59)), None, dec!(0.60)));
+        assert!(session.entry_reassessment_due(90));
+        let mut revised = entry_forecast("0.70", 3);
+        revised.prediction.as_mut().unwrap().direction = crate::btc::types::BtcOutcome::Down;
+        revised.prediction.as_mut().unwrap().probability_up = 0.3;
+        session.retain(revised.clone());
+        assert!(!session.hold_entry(&revised, Some(dec!(0.59)), Some(dec!(0.45)), dec!(0.60)));
+        assert!(!session.entry_reassessment_due(110));
+    }
+    #[test]
+    fn calibration_evidence_and_entry_budget_survive_restart_and_reset_on_rollover() {
+        for profile_key in [
+            super::super::CALIBRATION_PROFILE_KEY,
+            super::super::MARKET_CONTEXT_PROFILE_KEY,
+        ] {
+            use rust_decimal_macros::dec;
+            let mut result = entry_forecast("0.70", 2);
+            let profile = super::super::profile_for_key(profile_key).unwrap();
+            result.request.selection.profile_key = profile.key.into();
+            result.request.selection.profile_sha256 = super::super::hash(&profile).unwrap();
+            let evidence = super::super::calibration::unavailable(result.request.window_start);
+            result.request.context["historical_calibration"] = evidence.clone();
+            result.request.input_sha256 = super::super::hash(&result.request.context).unwrap();
+            let wire = serde_json::to_vec(&result.request).unwrap();
+            let restored: EvaluationRequest = serde_json::from_slice(&wire).unwrap();
+            let mut session = AgentSession::default();
+            session.observe_market("a");
+            session.restore_request(&restored);
+            assert_eq!(session.calibration, Some(evidence.clone()));
+            assert_eq!(session.evaluation_slot(), 3);
+            session.retain(result.clone());
+            assert!(session.hold_entry(&result, Some(dec!(0.55)), None, dec!(0.60)));
+            assert!(session.entry_reassessment_due(100));
+            assert!(!session.entry_reassessment_due(120));
+            assert_eq!(
+                super::super::hash(&restored.context).unwrap(),
+                restored.input_sha256
+            );
+            session.observe_market("b");
+            assert!(session.calibration.is_none());
+            assert_eq!(session.evaluation_slot(), 1);
+            assert!(session.due(45));
+        }
     }
 }

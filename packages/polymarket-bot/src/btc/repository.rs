@@ -2808,6 +2808,93 @@ impl BtcRepository {
             .context("invalid persisted agent evaluation")
     }
 
+    /// Restore the request budget, including interrupted affordability reassessments.
+    pub async fn load_agent_entry_request(
+        &self,
+        process_id: Uuid,
+        run_id: Uuid,
+        config_hash: &str,
+        market_id: &str,
+        window_start: DateTime<Utc>,
+        profile_key: &str,
+    ) -> Result<Option<super::unified_model_runtime::agent::EvaluationRequest>> {
+        let value = sqlx::query_scalar::<_, serde_json::Value>(
+            r#"
+            SELECT request FROM (
+                SELECT COALESCE(metadata #> '{entry_admission,agent_request}',
+                                metadata #> '{agent_evaluation,request}') AS request,
+                       decision_at
+                FROM polymarket.btc_strategy_decisions
+                WHERE process_id=$1 AND run_id=$2 AND config_hash=$3 AND market_id=$4
+                  AND decision_at >= $5 AND decision_at < $5 + interval '120 seconds'
+                  AND strategy_version=$6
+            ) requests
+            WHERE request #>> '{selection,profile_key}'=$7
+              AND request #>> '{context,evaluation_slot}' IN ('1','2','3')
+            ORDER BY (request #>> '{context,evaluation_slot}')::integer DESC, decision_at DESC
+            LIMIT 1
+        "#,
+        )
+        .bind(process_id)
+        .bind(run_id)
+        .bind(config_hash)
+        .bind(market_id)
+        .bind(window_start)
+        .bind(super::unified_model_runtime::agent::STRATEGY_VERSION)
+        .bind(profile_key)
+        .fetch_optional(&self.pool)
+        .await
+        .context("failed to restore agent entry request")?;
+        value
+            .map(serde_json::from_value)
+            .transpose()
+            .context("invalid persisted agent entry request")
+    }
+
+    /// Optional process-owned evidence; database time and returned history are bounded.
+    pub async fn load_agent_calibration(
+        &self,
+        process_id: Uuid,
+        cutoff: DateTime<Utc>,
+        profile_key: &str,
+    ) -> Result<serde_json::Value> {
+        use super::unified_model_runtime::agent::{self, calibration};
+        let mut keys = vec![
+            agent::REASSESSMENT_PROFILE_KEY,
+            agent::ENTRY_REASSESSMENT_PROFILE_KEY,
+            agent::CALIBRATION_PROFILE_KEY,
+        ];
+        if profile_key == agent::MARKET_CONTEXT_PROFILE_KEY {
+            keys.push(agent::MARKET_CONTEXT_PROFILE_KEY);
+        }
+        let hashes = keys
+            .iter()
+            .map(|key| agent::hash(&agent::profile_for_key(key)?))
+            .collect::<Result<Vec<_>>>()?;
+        // A transaction-local timeout also cancels work at the database, not just at the caller.
+        let operation = async {
+            let mut tx = self.pool.begin().await?;
+            sqlx::query("SET TRANSACTION READ ONLY")
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("SET LOCAL statement_timeout = '2000ms'")
+                .execute(&mut *tx)
+                .await?;
+            let rows = sqlx::query_scalar::<_, serde_json::Value>(calibration::HISTORY_SQL)
+                .bind(process_id)
+                .bind(cutoff)
+                .bind(keys)
+                .bind(hashes)
+                .fetch_all(&mut *tx)
+                .await?;
+            tx.commit().await?;
+            Ok::<_, anyhow::Error>(calibration::summarize(cutoff, rows))
+        };
+        tokio::time::timeout(std::time::Duration::from_millis(2250), operation)
+            .await
+            .context("agent calibration history timeout")?
+    }
+
     pub async fn process_has_entry_fill(
         &self,
         process_id: Uuid,

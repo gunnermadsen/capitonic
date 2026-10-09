@@ -14,6 +14,35 @@ pub fn add_reassessment_context(
         .unwrap_or(Value::Null);
 }
 
+/// Extend the existing comparison without adding a feed or changing price semantics.
+pub fn add_entry_reassessment_context(
+    request: &mut EvaluationRequest,
+    previous: Option<&EvaluationResult>,
+    max_entry_price: Decimal,
+    evaluation_slot: usize,
+    affordability_trigger: bool,
+) {
+    add_reassessment_context(request, previous);
+    request.context["version"] = json!(super::ENTRY_REASSESSMENT_CONTEXT_VERSION);
+    request.context["evaluation_slot"] = json!(evaluation_slot);
+    request.context["entry_reassessment"] = json!({
+        "trigger": if affordability_trigger { "forecast_became_affordable" } else { "scheduled_evaluation" },
+        "max_entry_price": max_entry_price,
+        "previous_request_id": previous.map(|result| result.request.request_id),
+        "meaning": "The cap is an execution limit, not a settlement probability. Price changes and reference/TWAP changes are in previous_prediction_comparison; current Binance candles contain trade-flow evidence."
+    });
+}
+
+pub(super) fn selected_ask(result: &EvaluationResult) -> Option<Decimal> {
+    let prediction = result.prediction.as_ref().ok()?;
+    prediction.validate().ok()?;
+    let path = match prediction.direction {
+        BtcOutcome::Up => "/execution_snapshot/up_book/executable_ask_vwap",
+        BtcOutcome::Down => "/execution_snapshot/down_book/executable_ask_vwap",
+    };
+    positive(&result.request.context, path)
+}
+
 fn comparison(current: &EvaluationRequest, previous: &EvaluationResult) -> Option<Value> {
     let prior = &previous.request;
     if prior.process_id != current.process_id
@@ -54,7 +83,7 @@ fn comparison(current: &EvaluationRequest, previous: &EvaluationResult) -> Optio
     }))
 }
 
-fn positive(context: &Value, path: &str) -> Option<Decimal> {
+pub(super) fn positive(context: &Value, path: &str) -> Option<Decimal> {
     let value: Decimal = serde_json::from_value(context.pointer(path)?.clone()).ok()?;
     (value > Decimal::ZERO).then_some(value)
 }
@@ -208,5 +237,40 @@ mod tests {
         assert!(c["twap_distance_from_open_bps"]["change"].is_null());
         assert!(c["previous_side_executable_price"]["change"].is_null());
         assert_eq!(c["rtds_reference_change_bps"], json!(Decimal::from(200)));
+    }
+    #[test]
+    fn affordability_context_reuses_causal_comparison_and_records_cap_and_slot() {
+        use rust_decimal_macros::dec;
+        let (mut current, mut previous) = fixture();
+        previous.request.context["execution_snapshot"]["up_book"]["executable_ask_vwap"] =
+            json!("0.70");
+        previous.request.input_sha256 = hash(&previous.request.context).unwrap();
+        let candles = current.context["binance_closed_one_second_candles"].clone();
+        add_entry_reassessment_context(&mut current, Some(&previous), dec!(0.60), 2, true);
+        assert_eq!(
+            current.context["entry_reassessment"]["trigger"],
+            "forecast_became_affordable"
+        );
+        assert_eq!(
+            current.context["entry_reassessment"]["max_entry_price"],
+            json!(dec!(0.60))
+        );
+        assert_eq!(current.context["evaluation_slot"], 2);
+        assert_eq!(
+            current.context["previous_prediction_comparison"]["previous_side_executable_price"]
+                ["change"],
+            json!(dec!(-0.1))
+        );
+        assert_eq!(
+            current.context["binance_closed_one_second_candles"],
+            candles
+        );
+        assert_eq!(
+            current.context["version"],
+            ENTRY_REASSESSMENT_CONTEXT_VERSION
+        );
+        previous.request.process_id = Uuid::new_v4();
+        add_entry_reassessment_context(&mut current, Some(&previous), dec!(0.60), 2, true);
+        assert!(current.context["previous_prediction_comparison"].is_null());
     }
 }

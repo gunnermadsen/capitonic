@@ -1287,7 +1287,60 @@ impl BtcProcessRunner {
             {
                 session.retain(result);
             }
+            if member
+                .strategy
+                .agent_selection()
+                .is_some_and(|selection| agent::uses_entry_reassessment(&selection.profile_key))
+            {
+                if let Some(request) = self
+                    .repository
+                    .load_agent_entry_request(
+                        self.config.process_id,
+                        self.config.run_id,
+                        &self.config.config_hash,
+                        &market.market_id,
+                        market.window_start,
+                        member
+                            .strategy
+                            .agent_selection()
+                            .unwrap()
+                            .profile_key
+                            .as_str(),
+                    )
+                    .await?
+                {
+                    anyhow::ensure!(
+                        request.input_sha256 == agent::hash(&request.context)?,
+                        "persisted agent entry request hash mismatch"
+                    );
+                    session.restore_request(&request);
+                }
+            }
             session.restored = true;
+        }
+        if member
+            .strategy
+            .agent_selection()
+            .is_some_and(|selection| agent::uses_calibration(&selection.profile_key))
+            && session.calibration.is_none()
+        {
+            session.calibration = Some(
+                self.repository
+                    .load_agent_calibration(
+                        self.config.process_id,
+                        market.window_start,
+                        member
+                            .strategy
+                            .agent_selection()
+                            .unwrap()
+                            .profile_key
+                            .as_str(),
+                    )
+                    .await
+                    .unwrap_or_else(|_| agent::calibration::unavailable(market.window_start)),
+            );
+            // Read history only once, then use a fresh observation on the next callback.
+            return Ok(None);
         }
         if self
             .repository
@@ -1386,7 +1439,16 @@ impl BtcProcessRunner {
             .strategy
             .agent_selection()
             .context("missing agent selection")?;
-        if result.is_none() && session.due(elapsed) {
+        if let Some(previous) = session.latest().cloned() {
+            session.hold_entry(
+                &previous,
+                snapshot.up_book.executable_ask_vwap,
+                snapshot.down_book.executable_ask_vwap,
+                member.strategy.max_entry_price,
+            );
+        }
+        let affordability_trigger = session.entry_reassessment_due(elapsed);
+        if result.is_none() && (session.due(elapsed) || affordability_trigger) {
             if inputs.chainlink_open.is_none()
                 || inputs.chainlink_current.is_none()
                 || inputs.up_book.is_none()
@@ -1403,7 +1465,11 @@ impl BtcProcessRunner {
             )?;
             let context = if matches!(
                 selection.profile_key.as_str(),
-                agent::VOLATILITY_PROFILE_KEY | agent::REASSESSMENT_PROFILE_KEY
+                agent::VOLATILITY_PROFILE_KEY
+                    | agent::REASSESSMENT_PROFILE_KEY
+                    | agent::ENTRY_REASSESSMENT_PROFILE_KEY
+                    | agent::CALIBRATION_PROFILE_KEY
+                    | agent::MARKET_CONTEXT_PROFILE_KEY
             ) {
                 agent::build_volatility_context(&observation.state, &snapshot, &sources)
             } else if selection.profile_key == agent::SETTLEMENT_PROFILE_KEY {
@@ -1431,6 +1497,52 @@ impl BtcProcessRunner {
             if selection.profile_key == agent::REASSESSMENT_PROFILE_KEY {
                 agent::add_reassessment_context(&mut request, session.latest());
                 request.input_sha256 = agent::hash(&request.context)?;
+            }
+            if agent::uses_entry_reassessment(&selection.profile_key) {
+                agent::add_entry_reassessment_context(
+                    &mut request,
+                    session.latest(),
+                    member.strategy.max_entry_price,
+                    session.evaluation_slot(),
+                    affordability_trigger,
+                );
+                if agent::uses_calibration(&selection.profile_key) {
+                    request.context["version"] = serde_json::json!(selection.context_version());
+                    request.context["historical_calibration"] =
+                        session.calibration.clone().unwrap();
+                }
+                if selection.profile_key == agent::MARKET_CONTEXT_PROFILE_KEY {
+                    agent::add_market_context(
+                        &mut request,
+                        &observation.state,
+                        &sources,
+                        session.latest(),
+                    );
+                }
+                request.input_sha256 = agent::hash(&request.context)?;
+                // Record the slot before sending, so restart cannot replenish its budget.
+                let mut pending =
+                    super::strategy::unavailable_agent_prediction(&member.strategy, &snapshot);
+                pending.decision_id = Uuid::new_v5(&request.request_id, b"agent_entry_request");
+                let feature_hash = sha256_json(&snapshot)?;
+                self.repository
+                    .insert_feature_snapshot(
+                        &snapshot,
+                        None,
+                        &feature_hash,
+                        "ready",
+                        &serde_json::json!({"router_member_id":member.member_id}),
+                    )
+                    .await?;
+                self.insert_process_strategy_decision(
+                    &member.strategy.strategy_version,
+                    &market.market_id,
+                    &pending,
+                    Some(&serde_json::json!({"agent_request":request})),
+                    None,
+                    "rejected",
+                )
+                .await?;
             }
             session.start(request)?;
             umr_telemetry::eligible_market(self.config.process_id, &market.market_id);
@@ -1537,23 +1649,39 @@ impl BtcProcessRunner {
             &member.member_id,
             "evaluated",
         );
-        let mut decision = super::strategy::evaluate_agent_prediction(
-            &member.strategy,
-            &snapshot,
-            prediction.probability_up,
-            self.config.directional_model_entry_policy,
-        )?;
+        let entry_held = session.hold_entry(
+            &result,
+            snapshot.up_book.executable_ask_vwap,
+            snapshot.down_book.executable_ask_vwap,
+            member.strategy.max_entry_price,
+        );
+        let mut decision = if entry_held {
+            super::strategy::unavailable_agent_prediction(&member.strategy, &snapshot)
+        } else {
+            super::strategy::evaluate_agent_prediction(
+                &member.strategy,
+                &snapshot,
+                prediction.probability_up,
+                self.config.directional_model_entry_policy,
+            )?
+        };
         enforce_runtime_readiness(&mut decision, &observation.readiness, &member.strategy);
         let feature_hash = sha256_json(&snapshot)?;
         self.repository.insert_feature_snapshot(&snapshot, decision.fair_value.as_ref(), &feature_hash, if readiness.ready { "ready" } else { "not_ready" },
             &serde_json::json!({"router_member_id":member.member_id,"runtime_readiness":observation.readiness,"agent_request_snapshot_id":result.request.snapshot_id})).await?;
         // Approved decisions are persisted by the existing execution seam with their order plan.
         if decision.approved_intent.is_none() {
+            let entry_hold_evidence = entry_held.then(|| {
+                serde_json::json!({
+                    "agent_evaluation":result,
+                    "agent_entry_reassessment":"forecast_became_affordable"
+                })
+            });
             self.insert_process_strategy_decision(
                 &member.strategy.strategy_version,
                 &market.market_id,
                 &decision,
-                None,
+                entry_hold_evidence.as_ref(),
                 None,
                 "rejected",
             )

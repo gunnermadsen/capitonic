@@ -2334,6 +2334,43 @@ mod tests {
         let mut expected_intent = decision.approved_intent.clone().unwrap();
         expected_intent.feature_schema_version = agent::SETTLEMENT_CONTEXT_VERSION.into();
         assert_eq!(settlement_decision.approved_intent, Some(expected_intent));
+        for profile_key in [
+            agent::ENTRY_REASSESSMENT_PROFILE_KEY,
+            agent::CALIBRATION_PROFILE_KEY,
+            agent::MARKET_CONTEXT_PROFILE_KEY,
+        ] {
+            let profile = agent::profile_for_key(profile_key).unwrap();
+            let mut entry_config = config.clone();
+            entry_config.feature_schema_version = profile.context_version.into();
+            entry_config.decision_strategy = Some(BtcDecisionStrategyConfig::OpenaiAgent {
+                profile_key: profile_key.into(),
+                profile_sha256: agent::hash(&agent::profile_for_key(profile_key).unwrap()).unwrap(),
+            });
+            let mut entry_data = data.clone();
+            entry_data.feature_schema_version = profile.context_version.into();
+            let entry_decision = evaluate_agent_prediction(
+                &entry_config,
+                &entry_data,
+                0.6,
+                BtcDirectionalModelEntryPolicy::ExecuteDirectionalPrediction,
+            )
+            .unwrap();
+            let mut expected_entry = decision.approved_intent.clone().unwrap();
+            expected_entry.feature_schema_version = profile.context_version.into();
+            assert_eq!(entry_decision.approved_intent, Some(expected_entry));
+            entry_data.chainlink_age_ms = Some(entry_config.max_reference_age_ms + 1);
+            assert_eq!(
+                evaluate_agent_prediction(
+                    &entry_config,
+                    &entry_data,
+                    0.6,
+                    BtcDirectionalModelEntryPolicy::ExecuteDirectionalPrediction
+                )
+                .unwrap()
+                .reject_reason,
+                Some(BtcRejectReason::StaleChainlinkFeed)
+            );
+        }
         let intent = decision.approved_intent.as_ref().unwrap();
         let request = OrderRequest {
             client_order_id: Uuid::new_v4(),
