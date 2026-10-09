@@ -523,6 +523,30 @@ impl ControlApi for FakeControlApi {
         })
     }
 
+    async fn update_trading_process_status(
+        &self,
+        process_id: Uuid,
+        request: http::UpdateTradingProcessStatusRequest,
+    ) -> Result<http::TradingProcessResponse, HttpError> {
+        let status = match request.status {
+            http::TradingProcessStatusTarget::Starting => "running",
+            http::TradingProcessStatusTarget::Stopping => "stopped",
+            target => target.as_str(),
+        };
+        Ok(http::TradingProcessResponse {
+            process: test_process(
+                process_id,
+                "btc-paper-canary".into(),
+                "btc_5m".into(),
+                "realtime_paper".into(),
+                Some("btc-paper-canary".into()),
+                status,
+                status == "running",
+                TradingProcessConfig::default(),
+            ),
+        })
+    }
+
     async fn get_trading_process_status(
         &self,
         process_id: Uuid,
@@ -1597,4 +1621,73 @@ async fn generic_order_routes_preserve_application_error_and_ownership_semantics
         .0,
         StatusCode::OK
     );
+}
+
+#[tokio::test]
+async fn process_status_patch_is_authenticated_typed_and_process_scoped() {
+    let app = http::router(Arc::new(FakeControlApi), "secret");
+    let process_id = Uuid::new_v4();
+    for (token, body, expected) in [
+        (None, r#"{"status":"completed"}"#, StatusCode::UNAUTHORIZED),
+        (
+            Some("Bearer wrong"),
+            r#"{"status":"completed"}"#,
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            Some("Bearer secret"),
+            r#"{"status":"unknown"}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            Some("Bearer secret"),
+            r#"{"status":"stopped","enabled":true}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+    ] {
+        let mut request = Request::builder()
+            .method("PATCH")
+            .uri(format!("/admin/trading-processes/{process_id}/status"))
+            .header("content-type", "application/json");
+        if let Some(token) = token {
+            request = request.header(AUTHORIZATION, token);
+        }
+        let response = app
+            .clone()
+            .oneshot(request.body(Body::from(body)).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+    for (target, actual) in [
+        ("created", "created"),
+        ("starting", "running"),
+        ("running", "running"),
+        ("stopping", "stopped"),
+        ("stopped", "stopped"),
+        ("failed", "failed"),
+        ("completed", "completed"),
+        ("expired", "expired"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/admin/trading-processes/{process_id}/status"))
+                    .header(AUTHORIZATION, "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::json!({"status":target}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["process"]["process_id"], process_id.to_string());
+        assert_eq!(body["process"]["status"], actual);
+        assert_eq!(body["process"]["enabled"], actual == "running");
+    }
 }

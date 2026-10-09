@@ -74,7 +74,7 @@ mod lifecycle_tests {
 
     #[test]
     fn btc_process_terminal_validation_accepts_all_supported_terminal_states() {
-        for status in ["stopped", "failed", "completed"] {
+        for status in ["created", "stopped", "failed", "completed", "expired"] {
             validate_btc_process_terminal_request(status, "api_transition").unwrap();
         }
         assert!(validate_btc_process_terminal_request("running", "api_transition").is_err());
@@ -83,42 +83,57 @@ mod lifecycle_tests {
 
     #[test]
     fn inactive_operator_transitions_preserve_idempotency_and_stale_run_isolation() {
-        for current in ["created", "stopped", "failed", "completed", "expired"] {
+        for current in [
+            "created",
+            "starting",
+            "running",
+            "stopping",
+            "stopped",
+            "failed",
+            "completed",
+            "expired",
+        ] {
             let mut process = eligible_btc_process();
             process.status = current.into();
-            validate_btc_start_eligibility(&process).unwrap();
-            for target in ["stopped", "completed"] {
-                assert_eq!(
-                    should_transition_inactive_btc_process(&process, None, false, target).unwrap(),
-                    current != target
-                );
-                assert!(!should_transition_inactive_btc_process(
-                    &process,
-                    Some(uuid::Uuid::new_v4()),
-                    false,
-                    target
-                )
-                .unwrap());
+            for enabled in [false, true] {
+                process.enabled = enabled;
+                for target in ["created", "stopped", "failed", "completed", "expired"] {
+                    assert_eq!(
+                        should_transition_inactive_btc_process(&process, None, false, target)
+                            .unwrap(),
+                        current != target || enabled
+                    );
+                    assert!(!should_transition_inactive_btc_process(
+                        &process,
+                        Some(uuid::Uuid::new_v4()),
+                        false,
+                        target
+                    )
+                    .unwrap());
+                    assert!(
+                        !should_transition_inactive_btc_process(&process, None, true, target)
+                            .unwrap()
+                    );
+                }
                 assert!(
-                    !should_transition_inactive_btc_process(&process, None, true, target).unwrap()
+                    should_transition_inactive_btc_process(&process, None, false, "running")
+                        .is_err()
                 );
             }
-            assert!(
-                should_transition_inactive_btc_process(&process, None, false, "running").is_err()
-            );
-            process.enabled = true;
-            assert!(
-                should_transition_inactive_btc_process(&process, None, false, "completed").is_err()
-            );
         }
-        for current in ["starting", "running", "stopping"] {
-            let mut process = eligible_btc_process();
-            process.status = current.into();
-            assert!(
-                should_transition_inactive_btc_process(&process, None, false, "completed").is_err()
-            );
-            assert!(validate_btc_start_eligibility(&process).is_err());
+        for (requested, actual) in [
+            ("starting", "running"),
+            ("running", "running"),
+            ("stopping", "stopped"),
+            ("stopped", "stopped"),
+            ("created", "created"),
+            ("completed", "completed"),
+            ("failed", "failed"),
+            ("expired", "expired"),
+        ] {
+            assert_eq!(resolve_btc_status_target(requested).unwrap(), actual);
         }
+        assert!(resolve_btc_status_target("arbitrary").is_err());
     }
 
     fn eligible_btc_process() -> TradingProcess {

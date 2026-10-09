@@ -190,6 +190,16 @@ pub trait ControlApi: Send + Sync + 'static {
         ))
     }
 
+    async fn update_trading_process_status(
+        &self,
+        _process_id: Uuid,
+        _request: UpdateTradingProcessStatusRequest,
+    ) -> Result<TradingProcessResponse, HttpError> {
+        Err(HttpError::not_implemented(
+            "trading process status transitions are not wired",
+        ))
+    }
+
     async fn update_trading_process(
         &self,
         _process_id: Uuid,
@@ -259,7 +269,7 @@ pub fn router(control: SharedControlApi, admin_bearer_token: impl Into<String>) 
         )
         .route(
             "/trading-processes/:process_id/status",
-            get(get_trading_process_status),
+            get(get_trading_process_status).patch(update_trading_process_status),
         )
         .route(
             "/trading-processes/:process_id/start-preview",
@@ -497,6 +507,18 @@ async fn get_trading_process_status(
         .map(Json)
 }
 
+async fn update_trading_process_status(
+    State(state): State<HttpState>,
+    Path(process_id): Path<Uuid>,
+    Json(request): Json<UpdateTradingProcessStatusRequest>,
+) -> Result<Json<TradingProcessResponse>, HttpError> {
+    state
+        .control
+        .update_trading_process_status(process_id, request)
+        .await
+        .map(Json)
+}
+
 async fn preview_trading_process_start(
     State(state): State<HttpState>,
     Path(process_id): Path<Uuid>,
@@ -678,6 +700,40 @@ pub struct TradingProcessesResponse {
 pub struct TradingProcessStatusResponse {
     pub process_id: Uuid,
     pub status: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TradingProcessStatusTarget {
+    Created,
+    Starting,
+    Running,
+    Stopping,
+    Stopped,
+    Failed,
+    Completed,
+    Expired,
+}
+
+impl TradingProcessStatusTarget {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Starting => "starting",
+            Self::Running => "running",
+            Self::Stopping => "stopping",
+            Self::Stopped => "stopped",
+            Self::Failed => "failed",
+            Self::Completed => "completed",
+            Self::Expired => "expired",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateTradingProcessStatusRequest {
+    pub status: TradingProcessStatusTarget,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

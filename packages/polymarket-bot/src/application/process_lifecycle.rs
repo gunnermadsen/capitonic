@@ -652,26 +652,93 @@ impl BtcProcessManager {
         &self,
         process_id: uuid::Uuid,
     ) -> Result<TradingProcess, HttpError> {
-        if self.shutting_down.load(Ordering::Acquire) {
-            return Err(HttpError::conflict(
-                "BTC runtime cannot start while the service is shutting down",
-            ));
-        }
+        self.transition_process(process_id, "running", "api_start")
+            .await
+    }
+
+    pub(super) async fn transition_process(
+        &self,
+        process_id: uuid::Uuid,
+        target: &str,
+        reason: &str,
+    ) -> Result<TradingProcess, HttpError> {
+        let target = resolve_btc_status_target(target)?.to_string();
         let transition_guard = self.transition.clone().lock_owned().await;
-        if self.shutting_down.load(Ordering::Acquire) {
-            return Err(HttpError::conflict(
-                "BTC runtime cannot start while the service is shutting down",
-            ));
-        }
         let manager = self.clone();
+        let reason = reason.to_string();
+        // Finish admitted transitions even if the HTTP client disconnects.
         tokio::spawn(async move {
             let _transition_guard = transition_guard;
-            manager.start_process_locked(process_id).await
+            manager
+                .transition_process_locked(process_id, &target, &reason)
+                .await
         })
         .await
         .map_err(|error| {
-            HttpError::internal(format!("BTC start transition task failed: {error}"))
+            HttpError::internal(format!("BTC status transition task failed: {error}"))
         })?
+    }
+
+    async fn transition_process_locked(
+        &self,
+        process_id: uuid::Uuid,
+        target: &str,
+        reason: &str,
+    ) -> Result<TradingProcess, HttpError> {
+        if target != "running" {
+            return self
+                .stop_process_locked(process_id, None, reason, false, target)
+                .await;
+        }
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(HttpError::conflict(
+                "BTC runtime cannot start while the service is shutting down",
+            ));
+        }
+        let pending = { self.terminal_pending.lock().await.get(&process_id).cloned() };
+        if let Some(pending) = pending {
+            self.finalize_pending_locked(pending).await?;
+        }
+        let process = self
+            .store
+            .get_trading_process(process_id)
+            .await
+            .map_err(|error| HttpError::internal(error.to_string()))?
+            .ok_or_else(|| HttpError::not_found("trading process not found"))?;
+        if !Self::is_managed_process(&process) {
+            return Err(HttpError::bad_request(
+                "process is not a managed BTC realtime execution process",
+            ));
+        }
+        let active = self.active_playbooks.lock().await.contains_key(&process_id);
+        if active {
+            if process.enabled && process.status == "running" {
+                return Ok(process);
+            }
+        } else if process.enabled
+            && matches!(process.status.as_str(), "starting" | "running" | "stopping")
+        {
+            // Reattach durable intent instead of manufacturing another run after restart.
+            let resumed = self.resume_durable_process_locked(process_id).await?;
+            if resumed.status == "running" {
+                return Ok(resumed);
+            }
+        } else {
+            if process.enabled
+                || matches!(process.status.as_str(), "starting" | "running" | "stopping")
+            {
+                self.store
+                    .update_trading_process_status(process_id, "stopped", false, None)
+                    .await
+                    .map_err(|error| HttpError::internal(error.to_string()))?;
+            }
+            return self.start_process_locked(process_id).await;
+        }
+        self.store
+            .update_trading_process_status(process_id, "running", true, None)
+            .await
+            .map_err(|error| HttpError::internal(error.to_string()))?
+            .ok_or_else(|| HttpError::not_found("trading process not found"))
     }
 
     pub(super) async fn resume_durable_processes(&self) -> Result<Vec<TradingProcess>, HttpError> {
@@ -1238,8 +1305,7 @@ impl BtcProcessManager {
         process_id: uuid::Uuid,
         reason: &str,
     ) -> Result<TradingProcess, HttpError> {
-        self.stop_process_for_generation(process_id, None, reason, false, "stopped")
-            .await
+        self.transition_process(process_id, "stopped", reason).await
     }
 
     pub(super) async fn complete_process(
@@ -1247,7 +1313,7 @@ impl BtcProcessManager {
         process_id: uuid::Uuid,
         reason: &str,
     ) -> Result<TradingProcess, HttpError> {
-        self.stop_process_for_generation(process_id, None, reason, false, "completed")
+        self.transition_process(process_id, "completed", reason)
             .await
     }
 
@@ -1292,7 +1358,7 @@ impl BtcProcessManager {
         runtime_failed: bool,
         successful_terminal_status: &str,
     ) -> Result<TradingProcess, HttpError> {
-        let process = self
+        let mut process = self
             .store
             .get_trading_process(process_id)
             .await
@@ -1309,7 +1375,10 @@ impl BtcProcessManager {
             if expected_run_id.is_some_and(|expected| expected != pending.run_id) {
                 return Ok(process);
             }
-            return self.finalize_pending_locked(pending).await;
+            process = self.finalize_pending_locked(pending).await?;
+            if expected_run_id.is_some() || runtime_failed {
+                return Ok(process);
+            }
         }
         let active_identity = self
             .active_playbooks
@@ -1330,7 +1399,7 @@ impl BtcProcessManager {
                         process_id,
                         successful_terminal_status,
                         false,
-                        None,
+                        (successful_terminal_status == "failed").then_some(reason),
                     )
                     .await
                     .map_err(|error| HttpError::internal(error.to_string()))?
@@ -1338,13 +1407,13 @@ impl BtcProcessManager {
                 self.record_event(
                     process_id,
                     "info",
-                    if successful_terminal_status == "completed" {
-                        "btc_runtime_completed"
-                    } else {
-                        "btc_runtime_stopped"
+                    match successful_terminal_status {
+                        "completed" => "btc_runtime_completed",
+                        "stopped" => "btc_runtime_stopped",
+                        _ => "btc_runtime_status_changed",
                     },
                     reason,
-                    serde_json::json!({"previous_status": process.status, "runtime_active": false}),
+                    serde_json::json!({"previous_status": process.status, "status": successful_terminal_status, "runtime_active": false}),
                 )
                 .await;
                 return Ok(updated);
@@ -1499,7 +1568,8 @@ impl BtcProcessManager {
         let (level, event_type) = match pending.terminal_status.as_str() {
             "stopped" => ("info", "btc_runtime_stopped"),
             "completed" => ("info", "btc_runtime_completed"),
-            _ => ("error", "btc_runtime_stop_failed"),
+            "failed" => ("error", "btc_runtime_stop_failed"),
+            _ => ("info", "btc_runtime_status_changed"),
         };
         self.record_event(
             pending.process_id,

@@ -536,6 +536,20 @@ impl ControlApi for RuntimeControl {
         manager.preview_start(process_id).await
     }
 
+    async fn update_trading_process_status(
+        &self,
+        process_id: uuid::Uuid,
+        request: control_http::UpdateTradingProcessStatusRequest,
+    ) -> Result<TradingProcessResponse, HttpError> {
+        let manager = self.btc_manager.as_ref().ok_or_else(|| {
+            HttpError::bad_request("BTC realtime capability is disabled for this deployment")
+        })?;
+        let process = manager
+            .transition_process(process_id, request.status.as_str(), "api_status_patch")
+            .await?;
+        Ok(TradingProcessResponse { process })
+    }
+
     async fn update_trading_process(
         &self,
         process_id: uuid::Uuid,

@@ -66,12 +66,14 @@ pub(super) async fn mark_btc_process_terminal(
             last_error = CASE WHEN $2 = 'failed' THEN $3 ELSE last_error END,
             updated_at = now()
         WHERE process_id = $1
-          AND status IN ('starting','running','stopping')
+          AND (status IN ('starting','running','stopping')
+               OR ($4 AND status IN ('created','stopped','failed','completed','expired')))
         "#,
     )
     .bind(process_id)
     .bind(status)
     .bind(reason)
+    .bind(allow_inactive_process)
     .execute(&mut *tx)
     .await
     .context("failed to mark BTC process terminal")?;
@@ -89,12 +91,6 @@ pub(super) async fn mark_btc_process_terminal(
         .context("failed to inspect existing BTC process terminal state")?;
         match existing_status {
             Some(existing_status) if existing_status == status => {}
-            Some(existing_status)
-                if allow_inactive_process
-                    && matches!(
-                        existing_status.as_str(),
-                        "created" | "stopped" | "failed" | "completed" | "expired"
-                    ) => {}
             Some(existing_status) => {
                 bail!("cannot overwrite BTC process terminal state {existing_status} with {status}")
             }
@@ -115,28 +111,35 @@ pub(super) fn should_transition_inactive_btc_process(
     runtime_failed: bool,
     target: &str,
 ) -> Result<bool, HttpError> {
-    if process.enabled || matches!(process.status.as_str(), "starting" | "running" | "stopping") {
-        return Err(HttpError::conflict(
-            "BTC process claims to be active but this service owns no runtime handle",
-        ));
-    }
-    if expected_run_id.is_some() || runtime_failed || process.status == target {
+    if expected_run_id.is_some() || runtime_failed {
         return Ok(false);
     }
     if !matches!(
-        process.status.as_str(),
+        target,
         "created" | "stopped" | "failed" | "completed" | "expired"
-    ) || !matches!(target, "stopped" | "completed")
-    {
+    ) {
         return Err(HttpError::bad_request(
             "unsupported inactive BTC lifecycle transition",
         ));
     }
-    Ok(true)
+    Ok(process.status != target || process.enabled)
+}
+
+pub(super) fn resolve_btc_status_target(status: &str) -> Result<&str, HttpError> {
+    match status {
+        "starting" | "running" => Ok("running"),
+        "stopping" | "stopped" => Ok("stopped"),
+        "created" | "failed" | "completed" | "expired" => Ok(status),
+        _ => Err(HttpError::bad_request("unsupported trading process status")),
+    }
 }
 
 pub(super) fn validate_btc_process_terminal_request(status: &str, reason: &str) -> Result<()> {
-    if !matches!(status, "stopped" | "failed" | "completed") || reason.trim().is_empty() {
+    if !matches!(
+        status,
+        "created" | "stopped" | "failed" | "completed" | "expired"
+    ) || reason.trim().is_empty()
+    {
         bail!("invalid BTC process terminal status or reason");
     }
     Ok(())

@@ -66,3 +66,22 @@ A terminal API policy rejection with observable price evidence is stored as a re
 Replay checks the original process and canonical request hash before loading current configuration or requiring an active runtime. It can return the original order after a process stops or its TPC changes, without resubmission. Decimal-equivalent probabilities share an identity; changed payload or owner conflicts. Read-only lookup returns canonical fills, persisted lifecycle resolution, settlement/accounting evidence and applicable paper arrival evidence. Acknowledged/unknown states are not represented as filled.
 
 Automated evidence covers authenticated HTTP dispatch, forbidden overrides, status/error mapping, ownership-safe lookup, canonical replay identity across configuration changes, configuration-to-runtime policy preservation, policy reports, preparation redaction and non-executable rejection records. These tests do not claim a database-backed HTTP execution or funded trade. Those remain development qualification, and this candidate is not activated or deployed by its local CI build.
+
+## Process lifecycle control
+
+Authenticated `PATCH /admin/trading-processes/{process_id}/status` accepts only
+`{"status":"created|starting|running|stopping|stopped|failed|completed|expired"}`
+(with one actual status value). It returns the existing process response envelope.
+Unknown fields/statuses are rejected. Existing GET status and POST start/stop/complete
+remain compatible and share the lifecycle manager's serialized transitions.
+
+Starting/running requests use existing startup or durable restart recovery and
+resolve to running on success. Repeated running requests reuse the owned runtime.
+Stopping resolves to stopped. Inactive targets quiesce any owned runtime before
+persisting the requested state; shutdown failure resolves to failed. Previous
+status alone does not prohibit an operator transition. Identity, immutable run
+ownership, startup checks and generation-scoped callback protections remain active.
+A pending terminal write must finish before a subsequent requested transition;
+failed persistence returns an error, never a successful but unwritten status.
+Repeated requests for an already consistent inactive state preserve timestamps.
+
