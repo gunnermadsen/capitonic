@@ -174,6 +174,21 @@ mod lifecycle_tests {
             process.config = serde_json::from_str(fixture).unwrap();
             pin_router_config(&mut process.config).unwrap();
             manager.validate_definition_for_storage(&process).unwrap();
+            let execution = manager.inactive_execution(&process).unwrap();
+            let definition =
+                polymarket_bot::execution::polymarket::configuration::compile(&process.config)
+                    .unwrap();
+            assert_eq!(execution.mode, definition.execution.mode.as_str());
+            assert_eq!(execution.account_ref, definition.execution.account_ref);
+            assert_eq!(
+                execution.max_open_notional_usd,
+                definition.execution.policies.exposure.max_open_notional_usd
+            );
+            assert_eq!(
+                execution.execute_signals,
+                definition.execution.execute_signals
+            );
+            assert_eq!(execution.live_capital, definition.execution.live_capital);
             let before = serde_json::to_value(&process).unwrap();
             assert!(manager.validate_start_definition(&process).is_err());
             process.enabled = true;
@@ -192,6 +207,7 @@ mod lifecycle_tests {
                 .unwrap()
                 .clear();
             assert!(manager.validate_definition_for_storage(&process).is_err());
+            assert!(manager.inactive_execution(&process).is_err());
         }
     }
 

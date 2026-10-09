@@ -281,6 +281,21 @@ impl BtcProcessManager {
         )
     }
 
+    pub(super) fn inactive_execution(
+        &self,
+        process: &TradingProcess,
+    ) -> Result<EffectiveProcessExecutionConfig, HttpError> {
+        if polymarket_bot::execution::polymarket::configuration::is_selected(&process.config) {
+            validate_btc_process_capability(process)?;
+            let definition =
+                polymarket_bot::execution::polymarket::configuration::compile(&process.config)
+                    .map_err(|error| HttpError::bad_request(format!("{error:#}")))?;
+            return Ok(super::order_execution::effective(&definition));
+        }
+        self.validate_inactive_definition(process)?;
+        Ok(process.effective_execution())
+    }
+
     pub(super) async fn live_preflight(
         &self,
         process_id: uuid::Uuid,
@@ -297,8 +312,7 @@ impl BtcProcessManager {
                 "credential preflight requires an inactive trading process",
             ));
         }
-        self.validate_inactive_definition(&process)?;
-        let execution = process.effective_execution();
+        let execution = self.inactive_execution(&process)?;
         if execution.mode != "live" {
             return Err(HttpError::bad_request(
                 "process-scoped live preflight requires execution.mode=live",

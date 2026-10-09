@@ -363,6 +363,27 @@ class Qualification:
             return
         self.check('official settlement credited within bounded run', False)
 
+    def next_order(self):
+        """Archive a verified settled order without restarting its metrics owner."""
+        settlement = self.state.get('verified_settlement')
+        if not settlement or settlement.get('credit_status') != 'credited':
+            raise RuntimeError('Verify settlement before advancing to another paper order')
+        pid = self.state['processes']['paper']['process_id']
+        snapshot = self.snapshot(pid)
+        self.check('settled economics remain unchanged before next order',
+                   snapshot == self.state['settlement_snapshot'])
+        code, current = self.request('GET', '/admin/trading-processes/' + pid)
+        expected = self.state['processes']['paper']['config']
+        self.check('same paper configuration and active metrics owner', code == 200
+                   and current['process']['enabled'] and current['process']['status'] == 'running'
+                   and current['process']['config'] == expected)
+        keys = ('executed', 'pending_execute', 'paper_after', 'verified_settlement', 'settlement_snapshot')
+        self.state.setdefault('completed_orders', []).append({key: self.state[key] for key in keys})
+        for key in keys:
+            del self.state[key]
+        self.state['paper_before'] = snapshot
+        self.save()
+
     def latency(self):
         # Capture while process metrics owners still exist; stopping removes their series.
         code, response = self.request('GET', '/prometheus/metrics')
@@ -419,7 +440,7 @@ class Qualification:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action',choices=['prepare','start','evaluate','prepare-orders','paper','settlement','latency','stop','audit'])
+    parser.add_argument('action',choices=['prepare','start','evaluate','prepare-orders','paper','settlement','next-order','latency','stop','audit'])
     parser.add_argument('--evidence-dir',required=True)
     parser.add_argument('--mode',choices=['both','paper'],default='both')
     parser.add_argument('--order-type',choices=['fak','fok'],default='fak')
@@ -427,4 +448,4 @@ if __name__ == '__main__':
     args = parser.parse_args()
     q = Qualification(args.evidence_dir, args.order_type, args.mode)
     {'prepare':q.prepare,'start':q.start,'evaluate':q.evaluate,'prepare-orders':lambda:q.poll_preparation(args.timeout),
-     'paper':lambda:q.paper(args.timeout),'settlement':lambda:q.settlement(args.timeout),'latency':q.latency,'stop':q.stop,'audit':q.audit}[args.action]()
+     'paper':lambda:q.paper(args.timeout),'settlement':lambda:q.settlement(args.timeout),'next-order':q.next_order,'latency':q.latency,'stop':q.stop,'audit':q.audit}[args.action]()

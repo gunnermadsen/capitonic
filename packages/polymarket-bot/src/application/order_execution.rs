@@ -94,7 +94,7 @@ pub(super) fn prepare(
         config_hash: definition.config_sha256,
     })
 }
-fn effective(definition: &CompiledDefinition) -> EffectiveProcessExecutionConfig {
+pub(super) fn effective(definition: &CompiledDefinition) -> EffectiveProcessExecutionConfig {
     let e = &definition.execution;
     let p = &e.policies;
     EffectiveProcessExecutionConfig {

@@ -35,6 +35,14 @@ Missing/stale evidence must not be worked around by loosening policies. Repeated
 
 Stop the dedicated processes after a blocked run. Following a fill, retain maintenance until official settlement evidence is captured with `qualify.py settlement --evidence-dir <directory> --timeout 720`. This checks the official winning token, fill quantity, fees, payout, net PnL and one canonical credited settlement. A restarted run of the same process may recover the original order; never assign it a new owner or reset capital. Do not stop or change unrelated processes.
 
+For multiple market windows under one metrics owner, call `next-order` only after
+`settlement` passes. It verifies unchanged settled economics and the same active
+configuration, archives the prior request and receipt in `completed_orders`, and
+advances the economic baseline. It does not restart the process, reset capital,
+alter policies or discard request identities. Then call `paper` and `settlement`
+again with a bounded timeout. Stop on an unresolved request or exhausted process
+loss budget; never loosen policies to manufacture a latency sample count.
+
 The driver covers actual HTTP and database boundaries; it does not replace deterministic Rust contract/fault tests. Successful preparation, paper fill, partial-fill scenarios and funded execution are distinct outcomes. A blocked preparation is not a paper execution pass. Runtime qualification evidence is recorded in `docs/polymarket-execution-rail/verification.md`; a passing driver test alone does not establish a fill or settlement.
 
 Offline driver boundary tests:

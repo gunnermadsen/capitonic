@@ -123,6 +123,30 @@ class SettlementEvidenceTest(unittest.TestCase):
                     self.assertTrue(sql.call_args.args[0].startswith('SELECT '))
 
 
+class ContinuedQualificationTest(unittest.TestCase):
+    def test_advance_requires_verified_unchanged_settlement_and_same_process(self):
+        for invalid in ('missing', 'changed_economics', 'changed_config', 'stopped', None):
+            with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'POLYMARKET_HTTP_ADMIN_TOKEN': 'unused'}):
+                driver = Qualification(directory, mode='paper')
+                driver.state.update(processes={'paper': {'process_id': 'paper', 'config': {'policy': 1}}},
+                    executed={'order_id': 'one'}, pending_execute={'idempotency_key': 'key'}, paper_after={},
+                    verified_settlement={'credit_status': 'credited'}, settlement_snapshot={'credit': 5})
+                if invalid == 'missing': driver.state.pop('verified_settlement')
+                snapshot = {'credit': 6 if invalid == 'changed_economics' else 5}
+                current = {'process': {'enabled': invalid != 'stopped', 'status': 'running',
+                    'config': {'policy': 2 if invalid == 'changed_config' else 1}}}
+                with patch.object(driver, 'snapshot', return_value=snapshot), patch.object(driver, 'request', return_value=(200, current)) as api:
+                    if invalid:
+                        with self.assertRaises((RuntimeError, AssertionError)): driver.next_order()
+                        self.assertEqual(driver.state['pending_execute']['idempotency_key'], 'key')
+                    else:
+                        driver.next_order()
+                        self.assertEqual(driver.state['completed_orders'][0]['pending_execute']['idempotency_key'], 'key')
+                        self.assertEqual(driver.state['paper_before'], snapshot)
+                        self.assertNotIn('pending_execute', driver.state)
+                        api.assert_called_once_with('GET', '/admin/trading-processes/paper')
+
+
 class LatencyEvidenceTest(unittest.TestCase):
     def test_request_duration_includes_http_error_and_transport_failure(self):
         import urllib.error
