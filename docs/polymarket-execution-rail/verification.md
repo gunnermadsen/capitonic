@@ -394,3 +394,87 @@ query regressed from 31.077 to 47.320 ms in fresh-session total time and was rej
 Historical Timescale planning remains significant; no history/source/ownership checks
 were weakened. Full report: `/tmp/rail-query-followup-report.md`; plans and result
 comparisons: `/tmp/rail-query-followup/`. No proposed query optimization was applied.
+
+
+## Inactive live preflight and retained-process qualification (2026-10-09)
+
+Candidate `v3.4.0-local.9` uses source
+`ff681d2731f3282871d3fe4934392d75cfda36f4` and image
+`sha256:764a8998371f1936dac844c7e720b261d6a1680acfdaa9d92544b3171aa91b85`.
+The unchanged local CI/CD scripts built and deployed it at Helm bot revision 53.
+CI passed 565 Rust tests (five ignored) and 17 tooling tests; all 13 external
+qualification tests passed, including the three opt-in read-only SQL cases.
+The bot chart version remains 0.4.15; only script-generated image/appVersion pins
+changed. No pipeline, image-build/deploy script, ingester or database schema changed.
+
+The inactive `/admin/trading-processes/{process_id}/live-preflight` route previously
+returned 501 for the new TPC because it called the intentionally legacy-only
+validator. It now compiles selected rail definitions and reuses the same execution
+settings projection as startup. Legacy validation is unchanged. Regression
+assertions cover compiled mode, account, exposure and authorization fields and
+invalid-policy rejection. The external qualification driver also supports advancing
+a verified settled paper order without replacing its process or metrics owner;
+it refuses an unsettled order, changed economics, changed configuration or a
+stopped process while preserving the pending request identity.
+
+The deployment preserved the nine pre-existing enabled processes and migration
+state. Capacity remained 14 ready workers, nine desired profiles and zero active
+backfill shards. Rollback evidence is in
+`/var/folders/6w/fnv3n0_569q0458hy9dvzyyh0000gn/T/local-image-cd.eDyY2Y`;
+CI/CD logs are `/tmp/rail-live-preflight-ci.log` and
+`/tmp/rail-live-preflight-cd.log`.
+
+The user's approved Grafana commit `fd32e5d3121306341de9dbbec347bfa9d42393ab`
+was merged as `fbe39cecdbd1814a009405ed569c30061c0deaf9`. Its complete PnL
+content matches the prior deployed dashboard and remains unchanged apart from the
+rail navigation link. The combined Grafana chart was rendered, diffed, linted and
+provisioned at revision 47 with existing runtime values and image. Changes were
+limited to the Order Execution dashboard, three navigation links, and shared
+execution recovery/error alerts. Provenance:
+`provisioned/observability/20261009T202316Z`.
+The dashboard GET and bounded economics SELECT through the Grafana Postgres
+datasource passed; Prometheus scraped process/mode/origin latency; the exact Loki
+queries returned nested paper/API stage and recovery events. Both new alerts
+loaded and evaluated without error. Eleven committed observability query fixtures
+passed. Evidence: `/tmp/rail-observability-qualification/`.
+
+The retained live process `bd63f9ce-e58b-4395-aee2-aab3ce197621` remains stopped.
+Its sizing policy now has lower/default/upper shares all equal to one. Current
+market metadata reports minimum size five; the shared OMS checks target quantity
+against that venue minimum and must not silently raise or clip it. The repaired
+non-submitting preflight returned HTTP 200 and verified credentials, account
+identity, readable collateral and zero open venue orders. It did **not** establish
+live readiness: one unmatched wallet trade made accounting unproven, zero owned
+orders were unresolved, and the inactive venue reported `global_enable_required`.
+That initial gate has an existing configured-startup restoration path; it is not
+evidence of a persistent manual re-enable requirement. The preflight
+also reports that its trading-disabled configuration prerequisite is not satisfied
+by the retained execution flags; the process itself stayed inactive.
+
+The historical mismatch was an unlinked five-share wallet BUY at 15:53:07 UTC
+(transaction `0xd2c73c64ae45c68da0708c7c4327e3286a35066f5f5da95eee861fcd3932297c`).
+The refreshed 20:18 UTC reconciliation found a different unlinked five-share BUY
+at 19:31:43 UTC (transaction
+`0xdfc1b0330983461d94613959f2f3780fd9b203c3c253bf9016cbf7b5e23bb28b`).
+At 20:33 UTC, after the 19:31 trade aged out of the existing one-hour activity
+window, a bounded recheck automatically returned zero mismatches and proven
+accounting. A further preflight with the existing submission flags temporarily
+disabled passed every preflight condition (`ready=true`); the original flags were
+restored while the process remained stopped and capped at one share. Orders/fills
+were unchanged throughout. This proves non-submitting credential/reconciliation
+preflight, not one-share order admission or signing.
+
+These are account activity records, not retained-process fills. Account matching
+requires canonical order ownership; matching a paper fill by token is insufficient.
+The configured production SSH hostname failed DNS resolution, so a possible
+production origin remains unverified. No trade was reassigned, no accounting gate
+was bypassed, and no funded order was submitted. Live FAK/FOK signing/submission,
+fill and redemption qualification remain incomplete. Evidence:
+`/tmp/rail-live-one-share/` and `/tmp/rail-qualification-continued/`.
+
+The separate read-only query analysis found warm server planning/execution medians
+of 13.515 → 11.611 ms for retained paper capital, 14.974 → 14.120 ms for a historical
+paper process, and 5.891 → 5.607 ms for live account/reservation reads. Same-snapshot
+results matched, but live reservations were empty; nonempty/overflow parity and
+network/pool savings are not proven. No query optimization was applied. Report:
+`/tmp/rail-query-qualification-report.md`.

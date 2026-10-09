@@ -1,6 +1,6 @@
 # Execution instrumentation contract
 
-The execution core extends the existing `ExecutionFreshnessMetrics` owner and structured JSON logs. The v3.4.0-local.2 source includes the Order Execution dashboard and scoped rules in the existing execution-freshness provisioning file. They have not been provisioned to a running environment. No Alloy, deployment tooling, Helm files or chart versions change.
+The execution core extends the existing `ExecutionFreshnessMetrics` owner and structured JSON logs. The Order Execution dashboard and scoped rules in the existing execution-freshness provisioning file were provisioned to local development on 2026-10-09 (Grafana Helm revision 47; provenance `provisioned/observability/20261009T202316Z`). The authorized PnL dashboard commit `fd32e5d3` was merged first; its content is preserved apart from the rail navigation link. No Alloy, deployment tooling or chart version changes were needed. Production provisioning remains unverified.
 
 ## Existing owners to extend
 
@@ -47,7 +47,7 @@ The new alerts retain process/mode labels, and execution errors retain origin. R
 
 `tests/order_observability.rb` validates committed query expressions using an existing Prometheus `promtool` through stdin. Eight fixtures cover healthy-peer masking, stale recovery, inactivity, error origin separation and dashboard PromQL syntax. They pass on the local existing Prometheus binary. JSON/YAML syntax, unique alert IDs, nested Loki extraction and existing provisioning ownership are checked. This executes no provisioning operation.
 
-A read-only comparison of current local provisioned dashboards found live health and UMR content matching this branch apart from the new navigation links. Current PnL provisioning has independent differences; they are not overwritten or reconciled here. Actual dashboard rendering, datasource execution and alert delivery for this candidate await an authorized deployment.
+Before provisioning, live health and UMR matched this branch apart from the new navigation links; PnL had independent changes. The user authorized merging `fd32e5d3`, which preserved that deployed PnL content, before provisioning the combined Grafana release. The local dashboard, datasource queries, log extraction and alert evaluation are now verified. External notification delivery and browser visual rendering were not tested.
 
 ## Shared latency measurements
 
@@ -73,6 +73,6 @@ Outcomes describe the timed operation: `completed` means it returned normally, *
 
 Stages are nested and **must not be summed** into a total. `execution` includes `adapter`; `adapter` includes `paper_arrival` and final validation; final validation includes accounting. HTTP duration is captured independently by the external qualification driver, including response body transfer but excluding the driver's audit/preflight/report writes. Paper configured delay, observed delay, and overall execution must be reported separately. Shared stages must be compared under equivalent policies and outcomes; paper cannot establish live transport latency.
 
-The existing Order Execution dashboard adds shared mean, p95 and owner-lifetime maximum panels. The p95 query requires at least 20 observations in its rate window. That threshold only suppresses sparse output; it is not a statistical confidence guarantee. Dashboard changes are source-validated, not automatically provisioned by a bot deployment. No speculative latency alert threshold is added before establishing a baseline.
+The existing Order Execution dashboard adds shared mean, p95 and owner-lifetime maximum panels. The p95 query requires at least 20 observations in its rate window. That threshold only suppresses sparse output; it is not a statistical confidence guarantee. Dashboard provisioning is separate from bot deployment. The local dashboard GET, actual Postgres economics query, Prometheus scrape, nested Loki fields and rail alert evaluation passed after the explicit Grafana deployment. No speculative latency alert threshold is added before establishing a baseline.
 
 Before qualification, measure both modes' instrumentation correctness, then actual paper API execution with real data. Record sample counts, outcome, book age, intentional delay, query/lock-stage costs and timing distributions. Report sparse or blocked results as such. Performance acceptance and a comparable legacy baseline remain unproven until runtime measurements exist; the prior in-memory OMS benchmark is not an end-to-end budget.
