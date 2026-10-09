@@ -12,6 +12,29 @@
         "iconColor": "rgba(0, 211, 255, 1)",
         "name": "Annotations & Alerts",
         "type": "dashboard"
+      },
+      {
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "postgres"
+        },
+        "enable": true,
+        "filter": {
+          "exclude": false,
+          "ids": [
+            38
+          ]
+        },
+        "hide": true,
+        "iconColor": "rgba(255, 183, 77, 0.85)",
+        "name": "Daily PnL — UTC midnight",
+        "target": {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH bounds AS (\n  SELECT $__timeFrom()::timestamptz AS from_ts,$__timeTo()::timestamptz AS to_ts\n)\nSELECT day AS time,'New UTC day: '||to_char(day AT TIME ZONE 'UTC','MM-DD') AS text,\n       'daily-pnl-boundary' AS tags\nFROM bounds CROSS JOIN LATERAL generate_series(\n  date_trunc('day',from_ts AT TIME ZONE 'UTC') AT TIME ZONE 'UTC',\n  to_ts,interval '24 hours'\n) AS days(day)\nWHERE day>=from_ts AND day<=to_ts\nORDER BY day;",
+          "refId": "Anno"
+        }
       }
     ]
   },
@@ -2981,12 +3004,13 @@
             "axisBorderShow": false,
             "axisCenteredZero": false,
             "axisColorMode": "text",
+            "axisGridShow": true,
             "axisLabel": "Daily Net PnL (USD)",
             "axisPlacement": "left",
             "barAlignment": 0,
             "barWidthFactor": 0.6,
             "drawStyle": "line",
-            "fillOpacity": 10,
+            "fillOpacity": 0,
             "gradientMode": "none",
             "hideFrom": {
               "legend": false,
@@ -2994,7 +3018,7 @@
               "viz": false
             },
             "insertNulls": false,
-            "lineInterpolation": "stepAfter",
+            "lineInterpolation": "smooth",
             "lineWidth": 2,
             "pointSize": 5,
             "scaleDistribution": {
@@ -3029,7 +3053,32 @@
           },
           "unit": "currencyUSD"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "__systemRef": "hideSeriesFrom",
+            "matcher": {
+              "id": "byNames",
+              "options": {
+                "mode": "exclude",
+                "names": [
+                  "BTC 5m conservative selective confidence 0.80 paper [eb73d85f]"
+                ],
+                "prefix": "All except:",
+                "readOnly": true
+              }
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "legend": false,
+                  "tooltip": true,
+                  "viz": true
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 10,
@@ -4148,6 +4197,6 @@
   "timezone": "browser",
   "title": "Trading, PNL & Market Metrics",
   "uid": "polymarket-bot",
-  "version": 66,
+  "version": 69,
   "weekStart": ""
 }
