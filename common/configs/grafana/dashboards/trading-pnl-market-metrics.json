@@ -1889,7 +1889,7 @@
       },
       "gridPos": {
         "h": 10,
-        "w": 18,
+        "w": 7,
         "x": 6,
         "y": 1
       },
@@ -1933,6 +1933,145 @@
       "timeFrom": "5m",
       "title": "BTC 5-Minute Realtime Market",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "postgres"
+      },
+      "description": "Lifetime net realized PnL for every BTC five-minute realtime-paper process, independent of the dashboard process-scope filter. Recognized manual live exits use actual net proceeds; other filled entries use official settlement economics. Paper realized PnL uses credited settlement-ledger amounts; paper and live settlements use official resolution timestamps. Recognized manual live exits retain actual net proceeds.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": true,
+            "axisColorMode": "text",
+            "axisLabel": "Net PnL (USD)",
+            "axisPlacement": "bottom",
+            "fillOpacity": 100,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 11,
+        "x": 13,
+        "y": 1
+      },
+      "id": 20,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.9,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "orientation": "horizontal",
+        "showValue": "always",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "pluginVersion": "12.4.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH eligible_processes AS MATERIALIZED (\n  SELECT p.process_id,p.name,p.created_at FROM polymarket.trading_processes p\n  WHERE p.process_type='btc_5m' AND p.process_scope='realtime_paper' AND p.status<>'completed'\n), selected_process AS NOT MATERIALIZED (SELECT * FROM eligible_processes),\nfilled_orders AS MATERIALIZED (\n  SELECT o.process_id,o.order_id,o.market_id,o.token_id,SUM(f.size)::numeric AS filled_size,\n         SUM(f.price*f.size)::numeric AS entry_cost,SUM(f.fee)::numeric AS entry_fees,MAX(f.timestamp_utc) AS filled_at,\n         BOOL_AND(f.source='live') AS is_live\n  FROM selected_process p JOIN polymarket.orders o USING(process_id)\n  JOIN polymarket.fills f ON f.order_id=o.order_id AND f.process_id=o.process_id AND f.source IN ('paper','live')\n  WHERE o.side='buy'\n  GROUP BY o.process_id,o.order_id,o.market_id,o.token_id\n), recognized_exits AS MATERIALIZED (\n  SELECT e.process_id,e.order_id,x.timestamp_utc AS realized_at,x.price AS exit_price,x.size AS exit_size,\n         (x.raw_payload#>>'{reconciliation,net_proceeds}')::numeric AS net_proceeds\n  FROM filled_orders e JOIN polymarket.account_trades x ON x.linked_order_id=e.order_id AND x.token_id=e.token_id\n  WHERE e.is_live AND x.side='sell' AND x.applied_exit_size=x.size AND x.applied_exit_size=e.filled_size\n    AND x.raw_payload#>>'{reconciliation,kind}'='manual_live_full_exit'\n    AND x.raw_payload#>>'{reconciliation,process_id}'=e.process_id::text\n    AND x.raw_payload#>>'{reconciliation,order_id}'=e.order_id\n    AND x.raw_payload#>>'{reconciliation,net_proceeds}'~'^[0-9]+([.][0-9]+)?$'\n), realized AS MATERIALIZED (\n  SELECT l.process_id,l.order_id,\n         l.official_resolution_received_at AS realized_at,\n         l.net_pnl\n  FROM polymarket.btc_paper_settlement_ledger l JOIN eligible_processes p USING(process_id)\n  WHERE ((l.execution_mode='paper' AND l.credit_status='credited' AND l.credited_at IS NOT NULL)\n      OR (l.execution_mode='live' AND l.official_resolution_received_at IS NOT NULL))\n    AND NOT EXISTS (SELECT 1 FROM recognized_exits x WHERE x.process_id=l.process_id AND x.order_id=l.order_id)\n  UNION ALL\n  SELECT e.process_id,e.order_id,x.realized_at,(x.net_proceeds-e.entry_cost-e.entry_fees)::numeric AS net_pnl\n  FROM filled_orders e JOIN recognized_exits x USING(process_id,order_id)\n\n), realized_by_process AS (\n  SELECT process_id,SUM(net_pnl)::numeric AS net_pnl FROM realized GROUP BY process_id\n)\nSELECT p.name AS \"Process\",\n       COALESCE(r.net_pnl,0::numeric)::double precision AS \"Lifetime Net Realized PnL\"\nFROM eligible_processes p LEFT JOIN realized_by_process r USING(process_id)\nORDER BY COALESCE(r.net_pnl,0::numeric) DESC,p.created_at DESC,p.process_id;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Lifetime Net Realized PnL by Trading Process",
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "Process",
+                "Lifetime Net Realized PnL"
+              ]
+            }
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "includeByName": {},
+            "indexByName": {
+              "Lifetime Net Realized PnL": 1,
+              "Process": 0
+            },
+            "renameByName": {}
+          }
+        }
+      ],
+      "type": "barchart"
     },
     {
       "datasource": {
@@ -2333,7 +2472,7 @@
         "type": "grafana-postgresql-datasource",
         "uid": "postgres"
       },
-      "description": "Lifetime net realized PnL for every BTC five-minute realtime-paper process, independent of the dashboard process-scope filter. Recognized manual live exits use actual net proceeds; other filled entries use official settlement economics. Paper realized PnL uses credited settlement-ledger amounts; paper and live settlements use official resolution timestamps. Recognized manual live exits retain actual net proceeds.",
+      "description": "Daily net realized PnL grouped by UTC realization day. Recognized manual live exits use their exit day and actual net proceeds; other filled entries use the official settlement day and economics. Paper realized PnL uses credited settlement-ledger amounts; paper and live settlements use official resolution timestamps. Recognized manual live exits retain actual net proceeds.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -2344,7 +2483,7 @@
             "axisCenteredZero": true,
             "axisColorMode": "text",
             "axisLabel": "Net PnL (USD)",
-            "axisPlacement": "bottom",
+            "axisPlacement": "left",
             "fillOpacity": 100,
             "gradientMode": "none",
             "hideFrom": {
@@ -2381,11 +2520,11 @@
       },
       "gridPos": {
         "h": 10,
-        "w": 11,
-        "x": 13,
+        "w": 18,
+        "x": 6,
         "y": 11
       },
-      "id": 20,
+      "id": 24,
       "options": {
         "barRadius": 0,
         "barWidth": 0.9,
@@ -2397,8 +2536,8 @@
           "placement": "bottom",
           "showLegend": false
         },
-        "orientation": "horizontal",
-        "showValue": "always",
+        "orientation": "vertical",
+        "showValue": "auto",
         "stacking": "none",
         "tooltip": {
           "hideZeros": false,
@@ -2418,7 +2557,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH eligible_processes AS MATERIALIZED (\n  SELECT p.process_id,p.name,p.created_at FROM polymarket.trading_processes p\n  WHERE p.process_type='btc_5m' AND p.process_scope='realtime_paper' AND p.status<>'completed'\n), selected_process AS NOT MATERIALIZED (SELECT * FROM eligible_processes),\nfilled_orders AS MATERIALIZED (\n  SELECT o.process_id,o.order_id,o.market_id,o.token_id,SUM(f.size)::numeric AS filled_size,\n         SUM(f.price*f.size)::numeric AS entry_cost,SUM(f.fee)::numeric AS entry_fees,MAX(f.timestamp_utc) AS filled_at,\n         BOOL_AND(f.source='live') AS is_live\n  FROM selected_process p JOIN polymarket.orders o USING(process_id)\n  JOIN polymarket.fills f ON f.order_id=o.order_id AND f.process_id=o.process_id AND f.source IN ('paper','live')\n  WHERE o.side='buy'\n  GROUP BY o.process_id,o.order_id,o.market_id,o.token_id\n), recognized_exits AS MATERIALIZED (\n  SELECT e.process_id,e.order_id,x.timestamp_utc AS realized_at,x.price AS exit_price,x.size AS exit_size,\n         (x.raw_payload#>>'{reconciliation,net_proceeds}')::numeric AS net_proceeds\n  FROM filled_orders e JOIN polymarket.account_trades x ON x.linked_order_id=e.order_id AND x.token_id=e.token_id\n  WHERE e.is_live AND x.side='sell' AND x.applied_exit_size=x.size AND x.applied_exit_size=e.filled_size\n    AND x.raw_payload#>>'{reconciliation,kind}'='manual_live_full_exit'\n    AND x.raw_payload#>>'{reconciliation,process_id}'=e.process_id::text\n    AND x.raw_payload#>>'{reconciliation,order_id}'=e.order_id\n    AND x.raw_payload#>>'{reconciliation,net_proceeds}'~'^[0-9]+([.][0-9]+)?$'\n), realized AS MATERIALIZED (\n  SELECT l.process_id,l.order_id,\n         l.official_resolution_received_at AS realized_at,\n         l.net_pnl\n  FROM polymarket.btc_paper_settlement_ledger l JOIN eligible_processes p USING(process_id)\n  WHERE ((l.execution_mode='paper' AND l.credit_status='credited' AND l.credited_at IS NOT NULL)\n      OR (l.execution_mode='live' AND l.official_resolution_received_at IS NOT NULL))\n    AND NOT EXISTS (SELECT 1 FROM recognized_exits x WHERE x.process_id=l.process_id AND x.order_id=l.order_id)\n  UNION ALL\n  SELECT e.process_id,e.order_id,x.realized_at,(x.net_proceeds-e.entry_cost-e.entry_fees)::numeric AS net_pnl\n  FROM filled_orders e JOIN recognized_exits x USING(process_id,order_id)\n\n), realized_by_process AS (\n  SELECT process_id,SUM(net_pnl)::numeric AS net_pnl FROM realized GROUP BY process_id\n)\nSELECT p.name AS \"Process\",\n       COALESCE(r.net_pnl,0::numeric)::double precision AS \"Lifetime Net Realized PnL\"\nFROM eligible_processes p LEFT JOIN realized_by_process r USING(process_id)\nORDER BY COALESCE(r.net_pnl,0::numeric) DESC,p.created_at DESC,p.process_id;",
+          "rawSql": "WITH bounds AS MATERIALIZED (\n  SELECT $__timeFrom()::timestamptz AS from_ts,$__timeTo()::timestamptz AS to_ts\n), selected_process AS NOT MATERIALIZED (\n  SELECT p.process_id,p.name,p.created_at FROM polymarket.trading_processes p\n  WHERE (${pnl_scope:sqlstring}='All processes' OR p.process_id=(${process_id:sqlstring})::uuid)\n    AND p.process_type='btc_5m' AND p.process_scope='realtime_paper' AND p.status<>'completed'\n), filled_orders AS MATERIALIZED (\n  SELECT o.process_id,o.order_id,o.market_id,o.token_id,SUM(f.size)::numeric AS filled_size,\n         SUM(f.price*f.size)::numeric AS entry_cost,SUM(f.fee)::numeric AS entry_fees,MAX(f.timestamp_utc) AS filled_at,\n         BOOL_AND(f.source='live') AS is_live\n  FROM selected_process p JOIN polymarket.orders o USING(process_id)\n  JOIN polymarket.fills f ON f.order_id=o.order_id AND f.process_id=o.process_id AND f.source IN ('paper','live')\n  WHERE o.side='buy'\n  GROUP BY o.process_id,o.order_id,o.market_id,o.token_id\n), recognized_exits AS MATERIALIZED (\n  SELECT e.process_id,e.order_id,x.timestamp_utc AS realized_at,x.price AS exit_price,x.size AS exit_size,\n         (x.raw_payload#>>'{reconciliation,net_proceeds}')::numeric AS net_proceeds\n  FROM filled_orders e JOIN polymarket.account_trades x ON x.linked_order_id=e.order_id AND x.token_id=e.token_id\n  WHERE e.is_live AND x.side='sell' AND x.applied_exit_size=x.size AND x.applied_exit_size=e.filled_size\n    AND x.raw_payload#>>'{reconciliation,kind}'='manual_live_full_exit'\n    AND x.raw_payload#>>'{reconciliation,process_id}'=e.process_id::text\n    AND x.raw_payload#>>'{reconciliation,order_id}'=e.order_id\n    AND x.raw_payload#>>'{reconciliation,net_proceeds}'~'^[0-9]+([.][0-9]+)?$'\n), realized AS MATERIALIZED (\n  SELECT l.process_id,l.order_id,\n         l.official_resolution_received_at AS realized_at,\n         l.net_pnl\n  FROM polymarket.btc_paper_settlement_ledger l JOIN selected_process p USING(process_id)\n  WHERE ((l.execution_mode='paper' AND l.credit_status='credited' AND l.credited_at IS NOT NULL)\n      OR (l.execution_mode='live' AND l.official_resolution_received_at IS NOT NULL))\n    AND NOT EXISTS (SELECT 1 FROM recognized_exits x WHERE x.process_id=l.process_id AND x.order_id=l.order_id)\n  UNION ALL\n  SELECT e.process_id,e.order_id,x.realized_at,(x.net_proceeds-e.entry_cost-e.entry_fees)::numeric AS net_pnl\n  FROM filled_orders e JOIN recognized_exits x USING(process_id,order_id)\n\n)\n, ranged AS (SELECT r.* FROM realized r CROSS JOIN bounds b WHERE r.realized_at BETWEEN b.from_ts AND b.to_ts)\n, realized_by_day AS (\n  SELECT date_trunc('day',realized_at AT TIME ZONE 'UTC') AS utc_day,SUM(net_pnl)::numeric AS net_pnl FROM ranged GROUP BY 1\n)\nSELECT to_char(utc_day,'YYYY-MM-DD') AS \"Day\",net_pnl::double precision AS \"Daily Net Realized PnL\"\nFROM realized_by_day ORDER BY utc_day;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -2439,32 +2578,8 @@
           }
         }
       ],
-      "title": "Lifetime Net Realized PnL by Trading Process",
-      "transformations": [
-        {
-          "id": "filterFieldsByName",
-          "options": {
-            "include": {
-              "names": [
-                "Process",
-                "Lifetime Net Realized PnL"
-              ]
-            }
-          }
-        },
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {},
-            "includeByName": {},
-            "indexByName": {
-              "Lifetime Net Realized PnL": 1,
-              "Process": 0
-            },
-            "renameByName": {}
-          }
-        }
-      ],
+      "timeFrom": "30d",
+      "title": "Daily Net Realized PnL",
       "type": "barchart"
     },
     {
@@ -2856,31 +2971,45 @@
         "type": "grafana-postgresql-datasource",
         "uid": "postgres"
       },
-      "description": "Daily net realized PnL grouped by UTC realization day. Recognized manual live exits use their exit day and actual net proceeds; other filled entries use the official settlement day and economics. Paper realized PnL uses credited settlement-ledger amounts; paper and live settlements use official resolution timestamps. Recognized manual live exits retain actual net proceeds.",
+      "description": "Net realized PnL accumulated independently within each UTC day, starting at zero with disconnected daily segments. Follows the dashboard time range, PnL scope, and Trading process filters. All processes shows their combined daily PnL. Includes activity before the visible start within that UTC day. Uses the same credited paper settlement, live settlement, and recognized manual live exit accounting as the other PnL panels. Midnight realizations appear 1 ms after the zero baseline. Quiet days remain flat at zero.",
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "fixedColor": "green",
+            "mode": "fixed"
           },
           "custom": {
             "axisBorderShow": false,
-            "axisCenteredZero": true,
+            "axisCenteredZero": false,
             "axisColorMode": "text",
-            "axisLabel": "Net PnL (USD)",
+            "axisLabel": "Daily Net PnL (USD)",
             "axisPlacement": "left",
-            "fillOpacity": 100,
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
             "gradientMode": "none",
             "hideFrom": {
               "legend": false,
               "tooltip": false,
               "viz": false
             },
-            "lineWidth": 1,
+            "insertNulls": false,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 5,
             "scaleDistribution": {
               "type": "linear"
             },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
             "thresholdsStyle": {
-              "mode": "off"
+              "mode": "line"
             }
           },
           "decimals": 2,
@@ -2889,11 +3018,11 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
+                "color": "transparent",
                 "value": 0
               },
               {
-                "color": "green",
+                "color": "gray",
                 "value": 0
               }
             ]
@@ -2908,28 +3037,19 @@
         "x": 6,
         "y": 21
       },
-      "id": 24,
+      "id": 38,
       "options": {
-        "barRadius": 0,
-        "barWidth": 0.9,
-        "fullHighlight": false,
-        "groupWidth": 0.7,
         "legend": {
           "calcs": [],
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": false
         },
-        "orientation": "vertical",
-        "showValue": "auto",
-        "stacking": "none",
         "tooltip": {
           "hideZeros": false,
           "mode": "single",
           "sort": "none"
-        },
-        "xTickLabelRotation": 0,
-        "xTickLabelSpacing": 0
+        }
       },
       "pluginVersion": "12.4.2",
       "targets": [
@@ -2939,9 +3059,9 @@
             "uid": "postgres"
           },
           "editorMode": "code",
-          "format": "table",
+          "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH bounds AS MATERIALIZED (\n  SELECT $__timeFrom()::timestamptz AS from_ts,$__timeTo()::timestamptz AS to_ts\n), selected_process AS NOT MATERIALIZED (\n  SELECT p.process_id,p.name,p.created_at FROM polymarket.trading_processes p\n  WHERE (${pnl_scope:sqlstring}='All processes' OR p.process_id=(${process_id:sqlstring})::uuid)\n    AND p.process_type='btc_5m' AND p.process_scope='realtime_paper' AND p.status<>'completed'\n), filled_orders AS MATERIALIZED (\n  SELECT o.process_id,o.order_id,o.market_id,o.token_id,SUM(f.size)::numeric AS filled_size,\n         SUM(f.price*f.size)::numeric AS entry_cost,SUM(f.fee)::numeric AS entry_fees,MAX(f.timestamp_utc) AS filled_at,\n         BOOL_AND(f.source='live') AS is_live\n  FROM selected_process p JOIN polymarket.orders o USING(process_id)\n  JOIN polymarket.fills f ON f.order_id=o.order_id AND f.process_id=o.process_id AND f.source IN ('paper','live')\n  WHERE o.side='buy'\n  GROUP BY o.process_id,o.order_id,o.market_id,o.token_id\n), recognized_exits AS MATERIALIZED (\n  SELECT e.process_id,e.order_id,x.timestamp_utc AS realized_at,x.price AS exit_price,x.size AS exit_size,\n         (x.raw_payload#>>'{reconciliation,net_proceeds}')::numeric AS net_proceeds\n  FROM filled_orders e JOIN polymarket.account_trades x ON x.linked_order_id=e.order_id AND x.token_id=e.token_id\n  WHERE e.is_live AND x.side='sell' AND x.applied_exit_size=x.size AND x.applied_exit_size=e.filled_size\n    AND x.raw_payload#>>'{reconciliation,kind}'='manual_live_full_exit'\n    AND x.raw_payload#>>'{reconciliation,process_id}'=e.process_id::text\n    AND x.raw_payload#>>'{reconciliation,order_id}'=e.order_id\n    AND x.raw_payload#>>'{reconciliation,net_proceeds}'~'^[0-9]+([.][0-9]+)?$'\n), realized AS MATERIALIZED (\n  SELECT l.process_id,l.order_id,\n         l.official_resolution_received_at AS realized_at,\n         l.net_pnl\n  FROM polymarket.btc_paper_settlement_ledger l JOIN selected_process p USING(process_id)\n  WHERE ((l.execution_mode='paper' AND l.credit_status='credited' AND l.credited_at IS NOT NULL)\n      OR (l.execution_mode='live' AND l.official_resolution_received_at IS NOT NULL))\n    AND NOT EXISTS (SELECT 1 FROM recognized_exits x WHERE x.process_id=l.process_id AND x.order_id=l.order_id)\n  UNION ALL\n  SELECT e.process_id,e.order_id,x.realized_at,(x.net_proceeds-e.entry_cost-e.entry_fees)::numeric AS net_pnl\n  FROM filled_orders e JOIN recognized_exits x USING(process_id,order_id)\n\n)\n, ranged AS (SELECT r.* FROM realized r CROSS JOIN bounds b WHERE r.realized_at BETWEEN b.from_ts AND b.to_ts)\n, realized_by_day AS (\n  SELECT date_trunc('day',realized_at AT TIME ZONE 'UTC') AS utc_day,SUM(net_pnl)::numeric AS net_pnl FROM ranged GROUP BY 1\n)\nSELECT to_char(utc_day,'YYYY-MM-DD') AS \"Day\",net_pnl::double precision AS \"Daily Net Realized PnL\"\nFROM realized_by_day ORDER BY utc_day;",
+          "rawSql": "WITH bounds AS MATERIALIZED (\n  SELECT $__timeFrom()::timestamptz AS from_ts,$__timeTo()::timestamptz AS to_ts,\n         date_trunc('day',$__timeFrom()::timestamptz AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS first_day\n), selected_process AS MATERIALIZED (\n  SELECT p.process_id,p.created_at FROM polymarket.trading_processes p\n  WHERE (${pnl_scope:sqlstring}='All processes' OR p.process_id=(${process_id:sqlstring})::uuid)\n    AND p.process_type='btc_5m' AND p.process_scope='realtime_paper' AND p.status<>'completed'\n), recognized_exits AS MATERIALIZED (\n  SELECT p.process_id,x.linked_order_id AS order_id,x.timestamp_utc AS realized_at,\n         (x.raw_payload#>>'{reconciliation,net_proceeds}')::numeric-f.entry_cost-f.entry_fees AS net_pnl\n  FROM polymarket.account_trades x\n  JOIN selected_process p ON x.raw_payload#>>'{reconciliation,process_id}'=p.process_id::text\n  JOIN polymarket.orders o ON o.order_id=x.linked_order_id AND o.process_id=p.process_id\n    AND o.token_id=x.token_id AND o.side='buy'\n  CROSS JOIN LATERAL (\n    SELECT SUM(f.size)::numeric AS filled_size,SUM(f.price*f.size)::numeric AS entry_cost,\n           SUM(f.fee)::numeric AS entry_fees,BOOL_AND(f.source='live') AS is_live\n    FROM polymarket.fills f\n    WHERE f.order_id=o.order_id AND f.process_id=p.process_id AND f.source IN ('paper','live')\n      AND f.timestamp_utc>=p.created_at\n  ) f\n  WHERE x.linked_order_id IS NOT NULL AND x.side='sell' AND x.applied_exit_size>0\n    AND x.applied_exit_size=x.size AND x.applied_exit_size=f.filled_size AND f.is_live\n    AND x.raw_payload#>>'{reconciliation,kind}'='manual_live_full_exit'\n    AND x.raw_payload#>>'{reconciliation,order_id}'=o.order_id\n    AND x.raw_payload#>>'{reconciliation,net_proceeds}'~'^[0-9]+([.][0-9]+)?$'\n), realized AS (\n  SELECT l.official_resolution_received_at AS realized_at,l.net_pnl\n  FROM selected_process p CROSS JOIN bounds b\n  JOIN polymarket.btc_paper_settlement_ledger l ON l.process_id=p.process_id\n    AND l.execution_mode IN ('paper','live') AND l.credit_status IN ('pending','credited')\n    AND l.official_resolution_received_at>=b.first_day AND l.official_resolution_received_at<=b.to_ts\n  WHERE (l.execution_mode='live' OR (l.credit_status='credited' AND l.credited_at IS NOT NULL))\n    AND NOT EXISTS (SELECT 1 FROM recognized_exits x WHERE x.process_id=l.process_id AND x.order_id=l.order_id)\n  UNION ALL\n  SELECT x.realized_at,x.net_pnl FROM recognized_exits x CROSS JOIN bounds b\n  WHERE x.realized_at>=b.first_day AND x.realized_at<=b.to_ts\n), days AS (\n  SELECT generate_series(first_day,date_trunc('day',to_ts AT TIME ZONE 'UTC') AT TIME ZONE 'UTC',interval '24 hours') AS day\n  FROM bounds WHERE EXISTS (SELECT 1 FROM selected_process)\n), points AS (\n  SELECT day,day AS time,0::numeric AS delta FROM days\n  UNION ALL\n  SELECT date_trunc('day',realized_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS day,\n         GREATEST(realized_at,(date_trunc('day',realized_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')+interval '1 millisecond') AS time,\n         net_pnl AS delta FROM realized\n  UNION ALL\n  SELECT day,LEAST(day+interval '24 hours'-interval '1 millisecond',b.to_ts),0::numeric FROM days CROSS JOIN bounds b\n  UNION ALL\n  SELECT first_day,from_ts,0::numeric FROM bounds\n  WHERE EXISTS (SELECT 1 FROM selected_process)\n), grouped_points AS (\n  SELECT day,time,SUM(delta) AS delta FROM points GROUP BY day,time\n), series AS (\n  SELECT day,time,SUM(delta) OVER (PARTITION BY day ORDER BY time ROWS UNBOUNDED PRECEDING) AS value\n  FROM grouped_points\n)\nSELECT s.time,to_char(s.day AT TIME ZONE 'UTC','YYYY-MM-DD') AS metric,s.value::double precision\nFROM series s CROSS JOIN bounds b WHERE s.time BETWEEN b.from_ts AND b.to_ts\nORDER BY s.time,metric;",
           "refId": "A",
           "sql": {
             "columns": [
@@ -2962,9 +3082,8 @@
           }
         }
       ],
-      "timeFrom": "30d",
-      "title": "Daily Net Realized PnL",
-      "type": "barchart"
+      "title": "Intraday Net Realized PnL (UTC)",
+      "type": "timeseries"
     },
     {
       "datasource": {
@@ -3592,7 +3711,7 @@
         ]
       },
       "gridPos": {
-        "h": 9,
+        "h": 10,
         "w": 18,
         "x": 6,
         "y": 31
@@ -3669,7 +3788,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 40
+        "y": 41
       },
       "id": 14,
       "panels": [],
@@ -3746,7 +3865,7 @@
               "options": {
                 "mode": "exclude",
                 "names": [
-                  "BTC 5m OpenAI agent paper"
+                  "BTC 5m conservative selective confidence 0.75 paper"
                 ],
                 "prefix": "All except:",
                 "readOnly": true
@@ -3769,7 +3888,7 @@
         "h": 20,
         "w": 15,
         "x": 0,
-        "y": 41
+        "y": 42
       },
       "id": 1,
       "options": {
@@ -3907,7 +4026,7 @@
         "h": 20,
         "w": 9,
         "x": 15,
-        "y": 41
+        "y": 42
       },
       "id": 19,
       "options": {
@@ -4029,6 +4148,6 @@
   "timezone": "browser",
   "title": "Trading, PNL & Market Metrics",
   "uid": "polymarket-bot",
-  "version": 59,
+  "version": 62,
   "weekStart": ""
 }
