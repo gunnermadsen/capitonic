@@ -69,9 +69,9 @@ Automated evidence covers authenticated HTTP dispatch, forbidden overrides, stat
 
 ## Process lifecycle control
 
-Authenticated `PATCH /admin/trading-processes/{process_id}/status` accepts only
-`{"status":"created|starting|running|stopping|stopped|failed|completed|expired"}`
-(with one actual status value). It returns the existing process response envelope.
+Authenticated `PATCH /admin/trading-processes/{process_id}/status` accepts a body such as `{"status":"completed"}`. Supported targets are created,
+starting, running, stopping, stopped, failed, completed and expired. It returns
+the existing process response envelope.
 Unknown fields/statuses are rejected. Existing GET status and POST start/stop/complete
 remain compatible and share the lifecycle manager's serialized transitions.
 
