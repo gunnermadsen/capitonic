@@ -42,6 +42,23 @@ class ProcessReuseTest(unittest.TestCase):
                       'config': json.loads((ROOT / f'docs/polymarket-execution-rail/examples/{mode}.json').read_text())}
                 for mode, pid in REUSABLE_PROCESS_IDS.items()}
 
+    def test_policy_comparison_reports_differences_without_mutation_or_certification(self):
+        processes = self.processes()
+        for difference in (False, True):
+            with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'POLYMARKET_HTTP_ADMIN_TOKEN': 'unused'}):
+                driver = Qualification(directory)
+                if difference:
+                    policies = processes[REUSABLE_PROCESS_IDS['live']]['config']['execution']['order_policies']
+                    next(p for p in policies if p['name'] == 'sizing_policy')['params']['default_share'] = 1
+                def request(method, path):
+                    self.assertEqual(method, 'GET')
+                    return 200, {'process': processes[path.rsplit('/', 1)[1]]}
+                with patch.object(driver, 'request', side_effect=request), patch('sys.stdout', new_callable=io.StringIO):
+                    result = driver.compare_policies()
+                self.assertEqual(result['shared_policies_equal'], not difference)
+                self.assertEqual(result['execution_parity'], 'unverified')
+                self.assertEqual(set(result['differences']), {'sizing_policy'} if difference else set())
+
     def test_repeated_runs_patch_same_pair_without_creating_processes(self):
         processes = self.processes()
         run_keys = []

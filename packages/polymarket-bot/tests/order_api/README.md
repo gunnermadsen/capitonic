@@ -66,3 +66,9 @@ ORDER_API_SQL_TESTS=1 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s 
 These checks cover process ownership, cancelled/expired reservations, stopped
 account sleeves, duplicate fills/credits, both fill modes, causal cutoffs, empty
 processes and conflicting settlement economics. They do not submit orders.
+
+`compare-policies --evidence-dir <directory>` reads both retained process definitions
+without starting or modifying either process. It records complete shared-policy
+differences and the paper adapter policy. A matching configuration alone never
+certifies execution parity. Different sizing or approved test budgets remain
+explicit differences; the paired preparation requirement is not relaxed.

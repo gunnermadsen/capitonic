@@ -152,6 +152,32 @@ class Qualification:
             self.state['processes'][mode] = response['process']
             self.save()
 
+    def compare_policies(self):
+        """Read the retained pair and report exact shared-policy differences."""
+        definitions = {}
+        for mode, pid in REUSABLE_PROCESS_IDS.items():
+            code, response = self.request('GET', '/admin/trading-processes/' + pid)
+            if code != 200 or response['process']['process_id'] != pid:
+                raise RuntimeError('Retained ' + mode + ' definition unavailable')
+            execution = response['process']['config']['execution']
+            if execution['mode'] != mode or execution['rail'] != {'name': 'polymarket', 'version': 1}:
+                raise RuntimeError('Retained process contract changed')
+            policies = execution['order_policies']
+            if len({p['name'] for p in policies}) != len(policies):
+                raise RuntimeError('Duplicate policy identity')
+            definitions[mode] = {p['name']: p for p in policies}
+        shared = (set(definitions['paper']) | set(definitions['live'])) - {'paper_execution_policy'}
+        differences = {name: {mode: definitions[mode].get(name) for mode in definitions}
+                       for name in sorted(shared)
+                       if definitions['paper'].get(name) != definitions['live'].get(name)}
+        result = {'shared_policies_equal': not differences, 'differences': differences,
+                  'execution_parity': 'unverified',
+                  'paper_adapter_policy': definitions['paper'].get('paper_execution_policy')}
+        self.state['policy_comparison'] = result
+        self.save()
+        print(json.dumps(result, indent=2))
+        return result
+
     def prepare(self):
         if self.state['processes']:
             raise RuntimeError('Use a new evidence directory for a new run')
@@ -448,12 +474,12 @@ class Qualification:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action',choices=['prepare','start','evaluate','prepare-orders','paper','settlement','next-order','latency','stop','audit'])
+    parser.add_argument('action',choices=['compare-policies','prepare','start','evaluate','prepare-orders','paper','settlement','next-order','latency','stop','audit'])
     parser.add_argument('--evidence-dir',required=True)
     parser.add_argument('--mode',choices=['both','paper'],default='both')
     parser.add_argument('--order-type',choices=['fak','fok'],default='fak')
     parser.add_argument('--timeout',type=int,default=360)
     args = parser.parse_args()
     q = Qualification(args.evidence_dir, args.order_type, args.mode)
-    {'prepare':q.prepare,'start':q.start,'evaluate':q.evaluate,'prepare-orders':lambda:q.poll_preparation(args.timeout),
+    {'compare-policies':q.compare_policies,'prepare':q.prepare,'start':q.start,'evaluate':q.evaluate,'prepare-orders':lambda:q.poll_preparation(args.timeout),
      'paper':lambda:q.paper(args.timeout),'settlement':lambda:q.settlement(args.timeout),'next-order':q.next_order,'latency':q.latency,'stop':q.stop,'audit':q.audit}[args.action]()
