@@ -289,3 +289,108 @@ workers for nine desired realtime profiles with no active backfill shards. No or
 were requested during this lifecycle verification. Evidence: `/tmp/rail-lifecycle-ci.log`,
 `/tmp/rail-lifecycle-cd.log`, and `/tmp/rail-test-process-completion.json`. The CD rollback
 snapshot is `/var/folders/6w/fnv3n0_569q0458hy9dvzyyh0000gn/T/local-image-cd.FpoZ9v`.
+
+## Shared book clocks and paper API execution — 2026-10-09
+
+The preparation defect was a source-clock interpretation mismatch: readiness and
+existing execution guards permit a bounded remote-source lead, while the new OMS
+called the frozen strategy validator's strict zero-lead check. The shared book
+validator now exposes the existing execution interpretation to both new paper/live
+OMS paths: source lead is bounded by `max_book_age_ms`, receipt time remains causal,
+and stale/incomplete/unhealthy evidence still rejects. No timestamp is rewritten,
+policy loosened, new tolerance configured, or legacy strategy behavior changed.
+Regression evidence covers selected/opposite books, the observed 50 ms lead, exact
+source boundaries, future receipts, stale evidence and automatic recovery in both
+modes, and preservation of the legacy strict validator.
+
+Unchanged local CI passed formatting, Clippy, **565 Rust tests** (five explicitly
+ignored) and **17 Python tooling tests**. The external driver/SQL suite passed all
+**12 tests**, including paper-only scope, process reuse and correct/incorrect official
+settlement payouts. The existing deterministic suite also passed FAK partial fills,
+FOK atomic rejection, failed paper persistence, lost commit response, capital recovery
+and idempotent positive/zero settlement-credit cases.
+
+Local CI built **v3.4.0-local.8**, source
+`f768a07a0af88319245038d23057f228539e3c2a`, image
+`sha256:521d99b26fcb17ed01bf6e8743e3d685a42321e40593123c85e3fd5343ff10a7`.
+The local CD script alone generated image/appVersion pins and deployed Helm revision
+52. Chart version remains 0.4.15. It verified exact image, recovery of all nine enabled
+processes, unchanged migrations, advancing feeds, 14 ready workers and nine desired
+realtime profiles with no active backfill allocations. Rollback is v3.4.0-local.7,
+image `sha256:1f2b4d63292cee273463860b0c4439426779eca3d4ad9ed95e6310fc5405bee6`;
+CD snapshot: `/var/folders/6w/fnv3n0_569q0458hy9dvzyyh0000gn/T/local-image-cd.z9GcQJ`.
+No CI/CD, ingester, schema, production or remote Git changes occurred.
+
+Only retained paper process `b4171f11-9fde-45e0-ad8c-37f6954769ec` was configured
+and started for testing, using its new `order_policies` contract. Fixed five-share
+sizing, 150 ms arrival delay, 80% visible depth, entry window, exposure limits and
+all other trading policies were preserved. Only FAK/FOK selection and the required
+fresh run identity changed. The live test process was neither changed nor started.
+
+| Order type | Market | Order | Execution ms | HTTP execute ms | Arrival ms | Final validation ms | Reservation wait ms | Persistence mean/sample ms |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| FAK | 5434508 | paper-0c777ea0-7e2e-4f89-9a99-ee9e2b007e25 | 273.979 | 299.185 | 151.578 | 34.721 | 0.225 | 2.100 |
+| FOK | 5435275 | paper-bfa61b2a-6a01-4dc6-9c4e-50a2bbf57a6f | 256.315 | 275.550 | 151.332 | 35.260 | 0.742 | 2.383 |
+| FAK | 5435432 | paper-da5196e1-00d1-49cd-923f-6b050737cccf | 287.522 | 302.913 | 150.701 | 38.214 | 0.747 | 3.285 |
+
+Each row has one successful execution and two persistence observations. Server times
+are from shared Prometheus histograms, independently confirmed in stored Prometheus
+samples; HTTP times are external monotonic measurements. Stages are nested, not
+additive. Each run has a separate process metrics owner, so restarted-owner counters
+are not combined. **Executed-order p95 remains unqualified:** only three fills were
+requested across these market-period samples, below the existing 20-observation
+minimum. The qualified Prometheus p95 query returns no series. No rejection/replay
+samples are substituted for successful executions. Twenty-one successful replays per
+run had external HTTP p95 of 22.194, 22.967 and 12.421 ms respectively; these are replay
+latencies, not new execution latency or live transport latency.
+
+All four order routes passed real-service qualification: preview and dry run created
+no economic records; execute returned durable fills; retrieval matched canonical
+ownership, configuration identity and fill evidence. Same-key retries returned the
+same order with no duplicate effects; changed payloads returned 409. Retrieval and
+replay remained valid after stop and after configuration/run changes. Authentication,
+forbidden overrides, malformed input, unknown resources and foreign ownership checks
+passed. No `future_input_timestamp` rejection recurred. An intervening one-sided
+market correctly prevented preparation; later eligible evidence recovered without
+changing gates. Entry-window and pending-exposure rejections also recovered normally.
+
+All three orders filled five shares and settled through official resolution, including
+two prior-run orders recovered by later runs of the same process. Each has one credited
+settlement with matching official winner, fill quantity, notional, fees and net PnL;
+repeat recovery/retrieval preserved the original settlement identity and credit time.
+All three were losing outcomes with zero payout. Total durable debit is **3.990750**,
+total payout **0**, and persisted-history-derived available paper collateral **996.009250**
+from the original 1000 seed. Positive payout and actual partial FAK fills were not
+observed in these market samples; their deterministic regression coverage is separate.
+The final process has three orders, three fills, three credited settlements and zero
+strategy decisions. It is stopped. All 68 process identities remain; all unrelated
+configurations/statuses/enabled states, including the live test process, are unchanged.
+The bot remains ready with zero restarts, bounded logs contain no ERROR/panic entries,
+and Prometheus reports no firing alerts. No extra whole-pod restart was injected;
+recovery here exercises process stop/start with unresolved settlement ownership.
+
+The external driver now supports `--mode paper` and a `settlement` action using normal
+GET endpoints and bounded read-only SQL. It retains the same fixed process identities
+and adds no runtime test implementation or trading pathway. Evidence is under
+`/tmp/rail-paper-fak-a`, `/tmp/rail-paper-fok-b`, `/tmp/rail-paper-fak-c`, with consolidated
+`/tmp/rail-paper-execution-report.json`, `/tmp/rail-clock-ci.log`,
+`/tmp/rail-clock-cd.log` and `/tmp/rail-paper-driver-tests.log`.
+
+### Read-only follow-up query analysis
+
+The separately requested subagent applied no source or database changes. Warmed
+prepared-query server planning/execution medians were:
+
+| Candidate | Existing ms | Combined ms | Round trips |
+| --- | ---: | ---: | --- |
+| Retained paper process capital | 16.296 | 13.692 | 3 → 1 |
+| Historical paper process capital | 14.313 | 13.621 | 3 → 1 |
+| Live account discovery + seven reservation reads | 7.073 | 6.359 | 8 → 1 |
+
+These exclude network/pool waits and do not prove end-to-end savings. Current-data
+result equivalence passed; live pending results were empty, so nonempty/overflow
+regressions would still be required before implementation. An alternative ownership
+query regressed from 31.077 to 47.320 ms in fresh-session total time and was rejected.
+Historical Timescale planning remains significant; no history/source/ownership checks
+were weakened. Full report: `/tmp/rail-query-followup-report.md`; plans and result
+comparisons: `/tmp/rail-query-followup/`. No proposed query optimization was applied.

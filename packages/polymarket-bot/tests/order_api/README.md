@@ -20,6 +20,7 @@ python3 packages/polymarket-bot/tests/order_api/qualify.py prepare --evidence-di
 python3 packages/polymarket-bot/tests/order_api/qualify.py evaluate --evidence-dir /tmp/order-api-run
 python3 packages/polymarket-bot/tests/order_api/qualify.py prepare-orders --evidence-dir /tmp/order-api-run --timeout 360
 python3 packages/polymarket-bot/tests/order_api/qualify.py paper --evidence-dir /tmp/order-api-run --timeout 360
+python3 packages/polymarket-bot/tests/order_api/qualify.py settlement --evidence-dir /tmp/order-api-run --timeout 720
 python3 packages/polymarket-bot/tests/order_api/qualify.py stop --evidence-dir /tmp/order-api-run
 python3 packages/polymarket-bot/tests/order_api/qualify.py audit --evidence-dir /tmp/order-api-run
 ```
@@ -32,9 +33,9 @@ Repeat in another evidence directory with `--order-type fok` to qualify that pol
 
 Missing/stale evidence must not be worked around by loosening policies. Repeated unavailability stops preparation for diagnosis. Paper execution permits at most three attempts and one filled order per run. The request identity is saved before submission; after any uncertain response, recover that exact request/order before initiating another execution. The driver does not automatically retry ambiguous submissions. Never delete evidence or use a fresh directory to bypass uncertainty.
 
-Stop the dedicated processes after a blocked run. Following a fill, retain maintenance until required settlement evidence is captured before stopping; settlement qualification itself is a later segment. Do not stop or change unrelated processes.
+Stop the dedicated processes after a blocked run. Following a fill, retain maintenance until official settlement evidence is captured with `qualify.py settlement --evidence-dir <directory> --timeout 720`. This checks the official winning token, fill quantity, fees, payout, net PnL and one canonical credited settlement. A restarted run of the same process may recover the original order; never assign it a new owner or reset capital. Do not stop or change unrelated processes.
 
-The driver covers actual HTTP and database boundaries; it does not replace deterministic Rust contract/fault tests. Successful preparation, paper fill, partial-fill scenarios and funded execution are distinct outcomes. A blocked preparation is not a paper execution pass. The `paper` action remains unqualified until run against a deployed candidate that passes preparation.
+The driver covers actual HTTP and database boundaries; it does not replace deterministic Rust contract/fault tests. Successful preparation, paper fill, partial-fill scenarios and funded execution are distinct outcomes. A blocked preparation is not a paper execution pass. Runtime qualification evidence is recorded in `docs/polymarket-execution-rail/verification.md`; a passing driver test alone does not establish a fill or settlement.
 
 Offline driver boundary tests:
 

@@ -260,6 +260,8 @@ class Qualification:
                         break
             if pending: time.sleep(5)
         self.check('selected modes prepared with real evidence',not pending,sorted(pending))
+        self.state.pop('blocked', None)
+        self.save()
 
     def paper(self, seconds):
         pid = self.state['processes']['paper']['process_id']
@@ -324,6 +326,43 @@ class Qualification:
             time.sleep(5)
         self.check('paper fill observed within bounded run',False)
 
+    def settlement(self, seconds):
+        pid = self.state['processes']['paper']['process_id']
+        order_id = self.state['executed']['order_id']
+        route = f'/orders/{pid}/order/' + urllib.parse.quote(order_id, safe='')
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            code, receipt = self.request('GET', route)
+            self.check('settlement receipt ownership', code == 200 and receipt['process_id'] == pid
+                       and receipt['order_id'] == order_id)
+            settlement = receipt['evidence']['accounting']['settlement']
+            if settlement is None or settlement['credit_status'] != 'credited':
+                time.sleep(5)
+                continue
+            snapshot = self.snapshot(pid)
+            order = next(x['raw_payload']['request'] for x in snapshot['orders'] if x['order_id'] == order_id)
+            fills = [x for x in snapshot['fills'] if x['order_id'] == order_id]
+            quantity = sum(Decimal(x['size']) for x in fills)
+            debit = sum(Decimal(x['price']) * Decimal(x['size']) + Decimal(x['fee']) for x in fills)
+            market = order['market_id'].replace("'", "''")
+            official = self.sql("SELECT json_build_object('winner',official_winning_token_id,'source',official_resolution_source) "
+                                "FROM polymarket.btc_interval_markets WHERE market_id='" + market + "'")
+            self.check('official resolution present', official is not None and official['winner'] is not None
+                       and official['source'] in ('clob_websocket', 'clob_rest_reconciliation'))
+            expected_payout = quantity if order['token_id'] == official['winner'] else Decimal(0)
+            self.check('settlement quantity matches fills', quantity > 0 and Decimal(str(settlement['filled_size'])) == quantity)
+            self.check('settlement debit matches notional and fees',
+                       Decimal(str(settlement['entry_notional'])) + Decimal(str(settlement['entry_fees'])) == debit)
+            self.check('settlement payout matches official winner', Decimal(str(settlement['payout'])) == expected_payout)
+            self.check('settlement net pnl matches credit minus debit', Decimal(str(settlement['net_pnl'])) == expected_payout - debit)
+            self.check('one canonical credited settlement', len([x for x in snapshot['settlements']
+                       if x['order_id'] == order_id and x['credit_status'] == 'credited']) == 1)
+            self.state['verified_settlement'] = settlement
+            self.state['settlement_snapshot'] = snapshot
+            self.save()
+            return
+        self.check('official settlement credited within bounded run', False)
+
     def latency(self):
         # Capture while process metrics owners still exist; stopping removes their series.
         code, response = self.request('GET', '/prometheus/metrics')
@@ -380,7 +419,7 @@ class Qualification:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action',choices=['prepare','start','evaluate','prepare-orders','paper','latency','stop','audit'])
+    parser.add_argument('action',choices=['prepare','start','evaluate','prepare-orders','paper','settlement','latency','stop','audit'])
     parser.add_argument('--evidence-dir',required=True)
     parser.add_argument('--mode',choices=['both','paper'],default='both')
     parser.add_argument('--order-type',choices=['fak','fok'],default='fak')
@@ -388,4 +427,4 @@ if __name__ == '__main__':
     args = parser.parse_args()
     q = Qualification(args.evidence_dir, args.order_type, args.mode)
     {'prepare':q.prepare,'start':q.start,'evaluate':q.evaluate,'prepare-orders':lambda:q.poll_preparation(args.timeout),
-     'paper':lambda:q.paper(args.timeout),'latency':q.latency,'stop':q.stop,'audit':q.audit}[args.action]()
+     'paper':lambda:q.paper(args.timeout),'settlement':lambda:q.settlement(args.timeout),'latency':q.latency,'stop':q.stop,'audit':q.audit}[args.action]()

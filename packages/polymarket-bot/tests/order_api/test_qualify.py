@@ -99,6 +99,30 @@ class ProcessReuseTest(unittest.TestCase):
                 self.assertFalse(driver.state['processes'])
 
 
+class SettlementEvidenceTest(unittest.TestCase):
+    def test_official_winner_and_loser_credits_are_verified_without_mutation(self):
+        for winner, payout, pnl in [('up', '5', '2.99'), ('down', '0', '-2.01'), ('up', '6', '3.99')]:
+            with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'POLYMARKET_HTTP_ADMIN_TOKEN': 'unused'}):
+                driver = Qualification(directory, mode='paper')
+                pid = REUSABLE_PROCESS_IDS['paper']
+                driver.state['processes'] = {'paper': {'process_id': pid}}
+                driver.state['executed'] = {'order_id': 'order'}
+                settlement = {'credit_status': 'credited', 'filled_size': '5', 'entry_notional': '2',
+                              'entry_fees': '0.01', 'payout': payout, 'net_pnl': pnl}
+                receipt = {'process_id': pid, 'order_id': 'order', 'evidence': {'accounting': {'settlement': settlement}}}
+                snapshot = {'orders': [{'order_id': 'order', 'raw_payload': {'request': {'market_id': 'market', 'token_id': 'up'}}}],
+                            'fills': [{'order_id': 'order', 'price': '0.4', 'size': '5', 'fee': '0.01'}],
+                            'settlements': [{'order_id': 'order', 'credit_status': 'credited'}]}
+                with patch.object(driver, 'request', return_value=(200, receipt)) as api, patch.object(driver, 'snapshot', return_value=snapshot), patch.object(driver, 'sql', return_value={'winner': winner, 'source': 'clob_websocket'}) as sql:
+                    if payout == '6':
+                        with self.assertRaises(AssertionError): driver.settlement(1)
+                    else:
+                        driver.settlement(1)
+                        self.assertEqual(driver.state['verified_settlement'], settlement)
+                    api.assert_called_once_with('GET', f'/orders/{pid}/order/order')
+                    self.assertTrue(sql.call_args.args[0].startswith('SELECT '))
+
+
 class LatencyEvidenceTest(unittest.TestCase):
     def test_request_duration_includes_http_error_and_transport_failure(self):
         import urllib.error
