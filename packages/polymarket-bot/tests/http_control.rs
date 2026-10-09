@@ -568,6 +568,8 @@ impl ControlApi for FakeControlApi {
             config_hash: "c".repeat(64),
             frozen_process_config: TradingProcessConfig {
                 execution: Some(ProcessExecutionConfig {
+                    rail: None,
+                    order_policies: None,
                     mode: Some("paper".to_string()),
                     execute_signals: true,
                     live_capital: false,

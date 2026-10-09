@@ -1,4 +1,5 @@
 pub mod live;
+pub mod polymarket;
 
 use anyhow::{bail, Result};
 use async_trait::async_trait;

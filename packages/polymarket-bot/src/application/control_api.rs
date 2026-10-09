@@ -389,7 +389,7 @@ impl ControlApi for RuntimeControl {
             HttpError::bad_request("BTC realtime capability is disabled for this deployment")
         })?;
         let now = Utc::now();
-        manager.validate_inactive_definition(&TradingProcess {
+        manager.validate_definition_for_storage(&TradingProcess {
             process_id: uuid::Uuid::nil(),
             name: name.to_string(),
             process_type: BTC_PROCESS_TYPE.to_string(),
@@ -595,7 +595,7 @@ impl ControlApi for RuntimeControl {
             if active_selector_update {
                 manager.validate_resume_definition(&candidate)?;
             } else {
-                manager.validate_inactive_definition(&candidate)?;
+                manager.validate_definition_for_storage(&candidate)?;
             }
         }
         let process = self

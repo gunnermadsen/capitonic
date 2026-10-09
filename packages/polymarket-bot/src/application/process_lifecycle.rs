@@ -38,6 +38,18 @@ impl BtcProcessManager {
         self.validate_definition(process, BtcDefinitionUse::ExplicitStart)
     }
 
+    pub(super) fn validate_definition_for_storage(
+        &self,
+        process: &TradingProcess,
+    ) -> Result<(), HttpError> {
+        if polymarket_bot::execution::polymarket::configuration::is_selected(&process.config) {
+            polymarket_bot::execution::polymarket::configuration::compile(&process.config)
+                .map_err(|error| HttpError::bad_request(format!("{error:#}")))?;
+            return Ok(());
+        }
+        self.validate_inactive_definition(process).map(|_| ())
+    }
+
     pub(super) fn validate_inactive_definition(
         &self,
         process: &TradingProcess,
@@ -57,6 +69,11 @@ impl BtcProcessManager {
         process: &TradingProcess,
         definition_use: BtcDefinitionUse,
     ) -> Result<ResolvedBtcProcessDefinition, HttpError> {
+        if polymarket_bot::execution::polymarket::configuration::is_selected(&process.config) {
+            return Err(HttpError::not_implemented(
+                polymarket_bot::execution::polymarket::EXECUTION_UNAVAILABLE,
+            ));
+        }
         match definition_use {
             BtcDefinitionUse::ExplicitStart => validate_btc_start_eligibility(process)?,
             BtcDefinitionUse::DurableResume => {

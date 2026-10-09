@@ -460,6 +460,10 @@ pub(super) fn resolve_btc_strategy(
     Ok(resolve_btc_members(control)?.remove(0).1)
 }
 pub(super) fn pin_router_config(config: &mut TradingProcessConfig) -> Result<(), HttpError> {
+    if polymarket_bot::execution::polymarket::configuration::is_selected(config) {
+        return polymarket_bot::execution::polymarket::configuration::pin_definition(config)
+            .map_err(|error| HttpError::bad_request(format!("{error:#}")));
+    }
     let Some(control) = config.raw.get_mut("btc_realtime_paper") else {
         return Ok(());
     };
@@ -1002,6 +1006,8 @@ pub(super) fn prepare_btc_start_definition_for_execution(
     }
     let frozen_process_config = TradingProcessConfig {
         execution: Some(ProcessExecutionConfig {
+            rail: None,
+            order_policies: None,
             mode: Some(execution_mode.as_str().to_string()),
             execute_signals: execution.execute_signals,
             live_capital: execution.live_capital,

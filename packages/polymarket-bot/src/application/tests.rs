@@ -111,6 +111,50 @@ mod lifecycle_tests {
         }
     }
 
+    #[tokio::test]
+    async fn new_order_contract_is_admitted_only_for_storage_and_never_legacy_execution() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://postgres:postgres@localhost/polymarket")
+            .unwrap();
+        let manager = BtcProcessManager::new(
+            Store::from_pool(pool.clone()),
+            pool.clone(),
+            BtcRepository::from_pool(pool),
+            BtcProcessManagerConfig {
+                live_venue: None,
+                live_reconcile_interval: Duration::from_secs(1),
+                grafana_live_enabled: false,
+            },
+        );
+        for fixture in [
+            include_str!("../../../../docs/polymarket-execution-rail/examples/paper.json"),
+            include_str!("../../../../docs/polymarket-execution-rail/examples/live.json"),
+        ] {
+            let mut process = eligible_btc_process();
+            process.config = serde_json::from_str(fixture).unwrap();
+            pin_router_config(&mut process.config).unwrap();
+            manager.validate_definition_for_storage(&process).unwrap();
+            let before = serde_json::to_value(&process).unwrap();
+            assert!(manager.validate_start_definition(&process).is_err());
+            process.enabled = true;
+            process.status = "running".into();
+            assert!(manager.validate_resume_definition(&process).is_err());
+            process.enabled = false;
+            process.status = "created".into();
+            assert_eq!(serde_json::to_value(&process).unwrap(), before);
+            process
+                .config
+                .execution
+                .as_mut()
+                .unwrap()
+                .order_policies
+                .as_mut()
+                .unwrap()
+                .clear();
+            assert!(manager.validate_definition_for_storage(&process).is_err());
+        }
+    }
+
     #[test]
     fn durable_resume_uses_only_explicit_running_live_capital_authorization() {
         let mut process = eligible_btc_process();
