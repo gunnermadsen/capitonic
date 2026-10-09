@@ -1,6 +1,6 @@
 # Polymarket execution core
 
-Candidate: **v3.4.0-local.1**. Rail and OMS contracts remain **1.0.0**. This implements the shared execution library and recovery boundary. The new HTTP controller, process runtime registration, UMR routing cutover, provisioned dashboards and funded qualification remain later work. Existing process start/resume still cannot route a new definition into a legacy runner.
+Candidate: **v3.4.0-local.2**. Rail and OMS contracts remain **1.0.0**. This implements the shared execution library and recovery boundary. The generic controller and API process registration now call this library; UMR routing cutover, deployment and funded qualification remain later work. New-contract definitions never enter a legacy strategy runner. See the API contract for read-only evaluation and durable request identity.
 
 ## Entry and ownership
 

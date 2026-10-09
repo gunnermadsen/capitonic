@@ -46,6 +46,7 @@ pub struct Candidate {
     pub(crate) probability: Decimal,
     pub(crate) conservative_probability: Decimal,
     pub(crate) decision: Option<BtcDecision>,
+    pub(crate) api_request_hash: Option<String>,
 }
 impl Candidate {
     pub fn synthetic(
@@ -69,6 +70,7 @@ impl Candidate {
             probability,
             conservative_probability: probability,
             decision: None,
+            api_request_hash: None,
         })
     }
     pub fn qualified(
@@ -174,7 +176,12 @@ impl Oms {
         Ok(Self { definition, owner })
     }
     pub fn strategy(&self) -> BtcStrategyConfig {
-        let p = &self.definition.execution.policies;
+        self.definition.strategy()
+    }
+}
+impl CompiledDefinition {
+    pub fn strategy(&self) -> BtcStrategyConfig {
+        let p = &self.execution.policies;
         BtcStrategyConfig {
             target_size: p.sizing.default_share,
             min_entry_price: p.sizing.min_entry_price,
@@ -196,6 +203,8 @@ impl Oms {
             ..BtcStrategyConfig::default()
         }
     }
+}
+impl Oms {
     pub(crate) fn validate_accounting(
         &self,
         market: &str,
@@ -204,11 +213,31 @@ impl Oms {
         exposure: &ProposedEntryExposure,
         now: DateTime<Utc>,
     ) -> Result<()> {
+        self.validate_accounting_report(
+            market,
+            probability,
+            accounting,
+            exposure,
+            now,
+            &mut super::admission_report::AdmissionReport::default(),
+        )
+    }
+    fn validate_accounting_report(
+        &self,
+        market: &str,
+        probability: Decimal,
+        accounting: &Accounting,
+        exposure: &ProposedEntryExposure,
+        now: DateTime<Utc>,
+        report: &mut super::admission_report::AdmissionReport,
+    ) -> Result<()> {
+        report.begin("collateral", "venue_requirement");
         let p = &self.definition.execution.policies;
         ensure!(
             accounting.available >= exposure.entry_debit_usd(),
             "insufficient_collateral"
         );
+        report.begin("exposure_policy", "process_policy");
         ensure!(
             p.exposure
                 .max_open_notional_usd
@@ -222,6 +251,7 @@ impl Oms {
                 || accounting.open_markets.len() < limit),
             "open_position_limit"
         );
+        report.begin("loss_limit_policy", "process_policy");
         ensure!(
             p.loss_limit
                 .max_daily_loss_usd
@@ -244,7 +274,11 @@ impl Oms {
                 "high_water_risk_budget_exceeded"
             );
         }
+        if p.loss_regime.is_none() {
+            report.not_applicable("loss_regime_policy", "process_policy", "not_configured");
+        }
         if let Some(policy) = &p.loss_regime {
+            report.begin("loss_regime_policy", "process_policy");
             ensure!(
                 accounting
                     .loss_regime
@@ -265,6 +299,39 @@ impl Oms {
         accounting: &Accounting,
         now: DateTime<Utc>,
     ) -> Result<ExecutionIntent> {
+        let (result, policy_results) = self.admit_report(candidate, books, accounting, now);
+        result.map_err(|error| {
+            super::AdmissionRejection {
+                reason: error.to_string(),
+                policy_results,
+            }
+            .into()
+        })
+    }
+    pub(crate) fn admit_report(
+        &self,
+        candidate: &Candidate,
+        books: [Option<&OrderbookCheckpoint>; 2],
+        accounting: &Accounting,
+        now: DateTime<Utc>,
+    ) -> (Result<ExecutionIntent>, serde_json::Value) {
+        let mut report = super::admission_report::AdmissionReport::default();
+        let mut result = self.admit_inner(candidate, books, accounting, now, &mut report);
+        let report = report.finish(result.as_ref().err());
+        if let Ok(intent) = &mut result {
+            intent.request.metadata["polymarket_execution"]["policy_results"] = report.clone();
+        }
+        (result, report)
+    }
+    fn admit_inner(
+        &self,
+        candidate: &Candidate,
+        books: [Option<&OrderbookCheckpoint>; 2],
+        accounting: &Accounting,
+        now: DateTime<Utc>,
+        report: &mut super::admission_report::AdmissionReport,
+    ) -> Result<ExecutionIntent> {
+        report.begin("execution_authority", "process_policy");
         let definition = &self.definition;
         let p = &definition.execution.policies;
         ensure!(
@@ -277,11 +344,13 @@ impl Oms {
             candidate.snapshot.process_id == self.owner.process_id,
             "candidate ownership mismatch"
         );
+        report.begin("order_execution_policy", "process_policy");
         let order_type = *p
             .order_execution
             .member_order_types
             .get(&candidate.member)
             .context("unknown member")?;
+        report.begin("market_availability", "venue_requirement");
         let snapshot = &candidate.snapshot;
         ensure!(
             snapshot.market_active && !snapshot.market_closed && snapshot.accepting_orders,
@@ -291,6 +360,7 @@ impl Oms {
             snapshot.observed_at <= now && now < snapshot.window_end,
             "market_closed_or_future_evidence"
         );
+        report.begin("entry_timing_policy", "process_policy");
         let elapsed = (now - snapshot.window_start).num_seconds();
         let fixed = p.entry_timing.min_seconds_after_open == 120
             && p.entry_timing.min_seconds_before_close == 180;
@@ -305,7 +375,9 @@ impl Oms {
             "outside_entry_window"
         );
         // Quantity is resolved before either depth walk and before any quantity-dependent cost.
+        report.begin("sizing_policy", "process_policy");
         let config = self.strategy();
+        report.begin("evidence_policy", "process_policy");
         let mut current = snapshot.clone();
         current.observed_at = now;
         for (book, original, outcome) in [
@@ -342,6 +414,7 @@ impl Oms {
             selected,
             strategy::BtcRejectReason::MissingUpBook,
         ))?;
+        report.begin("liquidity_policy", "process_policy");
         if p.liquidity.require_exit_book {
             check(strategy::validate_book(
                 &config,
@@ -350,6 +423,7 @@ impl Oms {
                 strategy::BtcRejectReason::MissingDownBook,
             ))?;
         }
+        report.begin("execution_cost_policy", "process_policy");
         check(strategy::validate_fee(&config, &current))?;
         let fee_rate = if current.fees_enabled {
             current.fee_rate.context("missing_fee_rate")?
@@ -364,6 +438,7 @@ impl Oms {
             current.minimum_order_size,
         )
         .map_err(|e| anyhow::anyhow!(e.as_str()))?;
+        report.begin("edge_policy", "process_policy");
         let directional = candidate
             .decision
             .as_ref()
@@ -382,7 +457,11 @@ impl Oms {
                 "edge_below_threshold"
             );
         }
+        if definition.control.risk_strategies.is_empty() {
+            report.not_applicable("risk_strategy", "process_policy", "not_configured");
+        }
         if let Some(selection) = definition.control.risk_strategies.first() {
+            report.begin("risk_strategy", "process_policy");
             use crate::btc::unified_model_runtime::risk;
             let intent = strategy::ApprovedIntent {
                 intent_id: candidate.id,
@@ -440,12 +519,13 @@ impl Oms {
             edge.marketable_limit_price,
             fee_rate,
         )?;
-        self.validate_accounting(
+        self.validate_accounting_report(
             &snapshot.market_id,
             candidate.conservative_probability,
             accounting,
             &exposure,
             now,
+            report,
         )?;
         if let Some(decision) = &candidate.decision {
             let qualified = decision
@@ -479,8 +559,9 @@ impl Oms {
                 "policy_evidence":{"order_policies":p,"book_received_at":selected.received_at,"book_source_at":selected.source_timestamp,
                 "fee_observed_at":current.fee_rate_observed_at,"max_entry_debit_usd":exposure.entry_debit_usd(),
                 "loss_regime_applied":p.loss_regime.is_some(),"high_water_applied":p.loss_limit.daily_realized_pnl_high_water_mark.is_some(),
-                "model_qualification_owner":if candidate.decision.is_some(){"umr"}else{"synthetic_api"}},"quantity_semantics":"buy_cash_budget","net_edge":edge.net_edge}}),
+                "model_qualification_owner":if candidate.decision.is_some(){"umr"}else{"synthetic_api"}},"quantity_semantics":"buy_cash_budget","api_request_sha256":candidate.api_request_hash,"net_edge":edge.net_edge}}),
         };
+        report.begin("marketable_depth", "venue_requirement");
         let selected_checkpoint = match candidate.outcome {
             BtcOutcome::Up => books[0],
             BtcOutcome::Down => books[1],
@@ -495,7 +576,11 @@ impl Oms {
             .is_none(),
             "orderbook_marketability"
         );
+        if candidate.decision.is_none() {
+            report.not_applicable("model_qualification", "artifact", "synthetic_api_candidate");
+        }
         if let Some(original) = &candidate.decision {
+            report.begin("model_qualification", "artifact");
             use crate::btc::execution_guard::{
                 BtcExecutionFreshnessBounds, BtcReferenceExecutionGuard,
             };

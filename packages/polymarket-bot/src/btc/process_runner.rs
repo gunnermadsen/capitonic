@@ -3485,7 +3485,7 @@ impl BtcStrategyRunner for BtcProcessRunner {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_snapshot(
+pub(crate) fn build_snapshot(
     process_id: Uuid,
     market: &BtcIntervalMarket,
     observed_at: DateTime<Utc>,

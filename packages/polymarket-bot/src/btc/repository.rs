@@ -289,6 +289,8 @@ fn ensure_unambiguous_order_run_identity(
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct BtcSettlementRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_origin: Option<String>,
     pub process_id: Uuid,
     pub run_id: Uuid,
     pub settlement_id: Uuid,
@@ -917,6 +919,7 @@ SELECT
 const LOAD_PENDING_SETTLEMENTS_SQL: &str = r#"
 SELECT ledger.settlement_id, ledger.run_id, ledger.process_id, ledger.execution_mode,
   ledger.order_id,
+  order_record.raw_payload #>> '{request,metadata,polymarket_execution,origin}' AS execution_origin,
   NULLIF(order_record.raw_payload #>> '{request,metadata,router,member_id}', '') AS member_id,
   order_record.raw_payload #> '{request,metadata,router}' AS model_attribution,
   ledger.market_id, ledger.token_id, ledger.fill_ids,
@@ -951,6 +954,7 @@ WITH settlements AS (
    AND order_record.order_id = ledger.order_id
   WHERE ledger.process_id = $1
     AND ledger.execution_mode = 'live'
+    AND COALESCE(order_record.raw_payload #>> '{request,metadata,polymarket_execution,origin}', 'umr') <> 'api'
 ), equity AS (
   SELECT
     settlements.*,
@@ -4942,6 +4946,7 @@ mod tests {
     fn settlement_record() -> BtcSettlementRecord {
         let at = Utc::now();
         BtcSettlementRecord {
+            execution_origin: None,
             process_id: Uuid::from_u128(3),
             run_id: Uuid::from_u128(2),
             settlement_id: Uuid::from_u128(1),

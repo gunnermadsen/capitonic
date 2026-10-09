@@ -26,6 +26,8 @@ use crate::{
     models::{TradingProcess, TradingProcessConfig},
 };
 
+mod orders;
+
 const SERVICE_NAME: &str = "polymarket-bot";
 
 pub type SharedControlApi = Arc<dyn ControlApi>;
@@ -56,6 +58,10 @@ impl AdminAuth {
 
 #[async_trait]
 pub trait ControlApi: Send + Sync + 'static {
+    fn orders(&self) -> Result<&dyn crate::execution::orders::OrderApplication, HttpError> {
+        Err(HttpError::not_implemented("order application unavailable"))
+    }
+
     async fn health(&self) -> Result<HealthResponse, HttpError> {
         Ok(HealthResponse {
             service: SERVICE_NAME.to_string(),
@@ -287,7 +293,10 @@ pub fn router(control: SharedControlApi, admin_bearer_token: impl Into<String>) 
             "/trading-processes/:process_id/complete",
             post(complete_trading_process),
         )
-        .route_layer(from_fn_with_state(admin_auth, require_admin_bearer));
+        .route_layer(from_fn_with_state(admin_auth.clone(), require_admin_bearer));
+
+    let order_routes =
+        orders::routes().route_layer(from_fn_with_state(admin_auth, require_admin_bearer));
 
     Router::new()
         .route("/health", get(health))
@@ -296,6 +305,7 @@ pub fn router(control: SharedControlApi, admin_bearer_token: impl Into<String>) 
         .route("/metrics", get(metrics))
         .route("/prometheus/metrics", get(prometheus_metrics))
         .nest("/admin", admin_routes)
+        .merge(order_routes)
         .with_state(state)
 }
 
@@ -737,6 +747,10 @@ impl HttpError {
 
     pub fn not_implemented(message: impl Into<String>) -> Self {
         Self::new(StatusCode::NOT_IMPLEMENTED, "not_implemented", message)
+    }
+
+    pub fn unavailable(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::SERVICE_UNAVAILABLE, "unavailable", message)
     }
 
     pub fn internal(message: impl Into<String>) -> Self {

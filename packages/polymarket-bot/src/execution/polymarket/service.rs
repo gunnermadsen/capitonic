@@ -5,6 +5,7 @@ use super::{
     lifecycle::{self, Resolution},
     oms::{candidate_identity, Accounting, Candidate, Oms, Ownership},
 };
+use crate::btc::execution_freshness::{OrderOutcome, OrderStage};
 use crate::{
     btc::{
         admission::LossRegimeConfidenceFloorState, BookRegistry, BtcRepository, PaperVenue,
@@ -20,6 +21,8 @@ use chrono::Utc;
 use rust_decimal::Decimal;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::RwLock;
+
+mod api;
 
 pub struct ExecutionService {
     oms: Arc<Oms>,
@@ -59,6 +62,7 @@ impl ExecutionService {
             "paper",
             p.evidence.max_book_age_ms,
         );
+        freshness.expect_order_recovery();
         let venue = PaperVenue::for_order_management(
             books.clone(),
             PaperVenueConfig {
@@ -103,6 +107,7 @@ impl ExecutionService {
             "live",
             definition.execution.policies.evidence.max_book_age_ms,
         );
+        freshness.expect_order_recovery();
         Ok(Self {
             oms: Arc::new(Oms::new(definition, owner)?),
             store,
@@ -116,6 +121,13 @@ impl ExecutionService {
     /// Called on startup and periodically by the owning application, including after transient
     /// failures. It never changes enabled/status or assigns outstanding orders to a new run.
     pub async fn reconcile(&self) -> Result<()> {
+        let result = self.reconcile_inner().await;
+        if result.is_err() {
+            self.freshness.order_recovery(false, None);
+        }
+        result
+    }
+    async fn reconcile_inner(&self) -> Result<()> {
         use crate::btc::execution_lifecycle::BtcExecutionLifecycle;
         self.restore_configured_authorization().await?;
         let reconciled = match &self.adapter {
@@ -154,15 +166,19 @@ impl ExecutionService {
                     && status.unresolved_live_order_count == 0
             }
         };
-        for order in self
+        let reserved = self
             .store
             .execution_reserved_orders(self.oms.owner.process_id)
-            .await?
-        {
-            if order.request.metadata.get("polymarket_execution").is_some() {
-                self.observe(order, true, reconciled).await?;
+            .await?;
+        let mut unresolved = 0;
+        for order in reserved {
+            if order.request.metadata.get("polymarket_execution").is_some()
+                && self.observe(order, true, reconciled).await?.resolution == Resolution::Pending
+            {
+                unresolved += 1;
             }
         }
+        self.freshness.order_recovery(reconciled, Some(unresolved));
         Ok(())
     }
 
@@ -202,6 +218,28 @@ impl ExecutionService {
     }
 
     pub async fn execute(&self, candidate: Candidate) -> Result<ExecutionReceipt> {
+        let origin = candidate.origin();
+        self.freshness
+            .order_event(origin, OrderStage::Candidate, OrderOutcome::Accepted);
+        let result = self.execute_inner(candidate).await;
+        if let Err(error) = &result {
+            self.freshness.order_event(
+                origin,
+                if error.is::<super::AdmissionRejection>() {
+                    OrderStage::Admission
+                } else {
+                    OrderStage::Submission
+                },
+                if error.is::<super::AdmissionRejection>() {
+                    OrderOutcome::Rejected
+                } else {
+                    OrderOutcome::Error
+                },
+            );
+        }
+        result
+    }
+    async fn execute_inner(&self, candidate: Candidate) -> Result<ExecutionReceipt> {
         let account = self
             .oms
             .definition
@@ -218,21 +256,37 @@ impl ExecutionService {
             .find_order_by_client_order_id(candidate.id)
             .await?
         {
+            let payload_matches = if let Some(hash) = &candidate.api_request_hash {
+                existing
+                    .request
+                    .metadata
+                    .pointer("/polymarket_execution/api_request_sha256")
+                    .and_then(|v| v.as_str())
+                    == Some(hash.as_str())
+            } else {
+                existing
+                    .request
+                    .metadata
+                    .pointer("/polymarket_execution/candidate_sha256")
+                    .and_then(|v| v.as_str())
+                    == Some(candidate_identity(&candidate)?.as_str())
+            };
             ensure!(
                 existing.request.process_id == Some(self.oms.owner.process_id)
-                    && existing
-                        .request
-                        .metadata
-                        .pointer("/polymarket_execution/config_sha256")
-                        .and_then(|v| v.as_str())
-                        == Some(self.oms.definition.config_sha256.as_str())
-                    && existing
-                        .request
-                        .metadata
-                        .pointer("/polymarket_execution/candidate_sha256")
-                        .and_then(|v| v.as_str())
-                        == Some(candidate_identity(&candidate)?.as_str()),
+                    && payload_matches
+                    && (candidate.api_request_hash.is_some()
+                        || existing
+                            .request
+                            .metadata
+                            .pointer("/polymarket_execution/config_sha256")
+                            .and_then(|v| v.as_str())
+                            == Some(self.oms.definition.config_sha256.as_str())),
                 "idempotency identity conflict"
+            );
+            self.freshness.order_event(
+                candidate.origin(),
+                OrderStage::Replay,
+                OrderOutcome::Accepted,
             );
             lease.release().await?;
             return self.recover(existing, true).await;
@@ -297,8 +351,31 @@ impl ExecutionService {
                 ],
                 &accounting,
                 now,
-            )?
+            )
         };
+        let intent = match intent {
+            Ok(intent) => intent,
+            Err(error) => {
+                if candidate.api_request_hash.is_some() {
+                    if let Some(rejection) = error.downcast_ref::<super::AdmissionRejection>() {
+                        if !rejection.evidence_unavailable() {
+                            let order = self.rejected_api_order(&candidate, rejection)?;
+                            self.store.insert_order(&order).await?;
+                            self.freshness.order_event(
+                                candidate.origin(),
+                                OrderStage::Admission,
+                                OrderOutcome::Rejected,
+                            );
+                            lease.release().await?;
+                            return self.observe(order, false, true).await;
+                        }
+                    }
+                }
+                return Err(error);
+            }
+        };
+        self.freshness
+            .order_event(intent.origin, OrderStage::Admission, OrderOutcome::Accepted);
         tracing::info!(event="order_intent_admitted",process_id=%self.oms.owner.process_id,client_order_id=%candidate.id,
             execution_mode=self.oms.definition.execution.mode.as_str(),origin=intent.origin.as_str(),config_hash=%self.oms.definition.config_sha256,"Polymarket OMS admitted order");
         let guard = Arc::new(SubmissionGuard {
@@ -311,6 +388,11 @@ impl ExecutionService {
             freshness: self.freshness.clone(),
             final_book: std::sync::Mutex::new(None),
         });
+        self.freshness.order_event(
+            intent.origin,
+            OrderStage::Submission,
+            OrderOutcome::Accepted,
+        );
         let order = match &self.adapter {
             Adapter::Paper(venue) => {
                 venue
@@ -382,6 +464,26 @@ impl ExecutionService {
                 )
                 .await?;
         }
+        let origin = if order
+            .request
+            .metadata
+            .pointer("/polymarket_execution/origin")
+            .and_then(|v| v.as_str())
+            == Some("api")
+        {
+            super::oms::Origin::Api
+        } else {
+            super::oms::Origin::Umr
+        };
+        self.freshness.order_event(
+            origin,
+            OrderStage::Observation,
+            match resolution {
+                Resolution::Pending => OrderOutcome::Pending,
+                Resolution::Executed => OrderOutcome::Executed,
+                Resolution::DefinitiveNonexecution => OrderOutcome::Nonexecution,
+            },
+        );
         tracing::info!(event="order_execution_observed",process_id=%self.oms.owner.process_id,execution_mode=self.oms.definition.execution.mode.as_str(),origin=order.request.metadata.pointer("/polymarket_execution/origin").and_then(|v|v.as_str()).unwrap_or("unknown"),order_id=%order.order_id,?resolution,replayed,"Polymarket order evidence observed");
         Ok(ExecutionReceipt {
             order,
@@ -408,6 +510,18 @@ impl LivePrePostGuard for SubmissionGuard {
         &self,
         request: &OrderRequest,
     ) -> Result<Option<LiveExecutionGateReason>> {
+        let process = self
+            .store
+            .get_trading_process(self.oms.owner.process_id)
+            .await?
+            .context("process authority unavailable")?;
+        if !process.enabled
+            || !matches!(process.status.as_str(), "running" | "starting")
+            || super::configuration::compile(&process.config)?.config_sha256
+                != self.oms.definition.config_sha256
+        {
+            return Ok(Some(LiveExecutionGateReason::OrderSubmissionDisabled));
+        }
         if self.candidate.decision.is_some() {
             let guard = crate::btc::execution_guard::reference_execution_guard(request)?;
             if guard

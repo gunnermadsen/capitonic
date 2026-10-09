@@ -7,6 +7,24 @@ pub(crate) struct ExecutionLease {
 }
 
 impl Store {
+    pub async fn execution_order_evidence(
+        &self,
+        process_id: Uuid,
+        order_id: &str,
+    ) -> Result<Option<serde_json::Value>> {
+        sqlx::query_scalar("SELECT jsonb_build_object('resolution',o.raw_payload #>> '{execution_resolution}','settlement',(SELECT jsonb_build_object('settlement_id',s.settlement_id,'execution_mode',s.execution_mode,'filled_size',s.filled_size,'entry_notional',s.entry_notional,'entry_fees',s.entry_fees,'payout',s.payout,'net_pnl',s.net_pnl,'credit_status',s.credit_status,'credited_at',s.credited_at,'resolved_at',s.official_resolution_received_at) FROM polymarket.btc_paper_settlement_ledger s WHERE s.process_id=o.process_id AND s.order_id=o.order_id LIMIT 1)) FROM polymarket.orders o WHERE o.process_id=$1 AND o.order_id=$2")
+            .bind(process_id).bind(order_id).fetch_optional(&self.pool).await.map_err(Into::into)
+    }
+
+    pub async fn execution_order(
+        &self,
+        process_id: Uuid,
+        order_id: &str,
+    ) -> Result<Option<OrderRecord>> {
+        sqlx::query_as::<_,OrderDbRow>("SELECT order_id,state,raw_payload,created_at,updated_at FROM polymarket.orders WHERE process_id=$1 AND order_id=$2")
+            .bind(process_id).bind(order_id).fetch_optional(&self.pool).await?.map(order_from_db_row).transpose()
+    }
+
     /// All new-path requests sharing an account serialize admission through this transaction.
     /// The lock survives awaited transport work and is released automatically on connection loss.
     pub(crate) async fn execution_lease(&self, account: &str) -> Result<ExecutionLease> {
@@ -27,7 +45,7 @@ impl Store {
         })
     }
 
-    pub(crate) async fn execution_fills(&self, order: &OrderRecord) -> Result<Vec<FillRecord>> {
+    pub async fn execution_fills(&self, order: &OrderRecord) -> Result<Vec<FillRecord>> {
         let rows = sqlx::query_scalar::<_, serde_json::Value>(
             "SELECT raw_payload FROM polymarket.fills WHERE order_id=$1 AND process_id=$2 ORDER BY timestamp_utc, fill_id LIMIT 2049"
         ).bind(&order.order_id).bind(order.request.process_id).fetch_all(&self.pool).await?;

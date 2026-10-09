@@ -15,3 +15,7 @@ pub mod service;
 
 #[cfg(test)]
 mod tests;
+
+mod admission_report;
+
+pub use admission_report::AdmissionRejection;

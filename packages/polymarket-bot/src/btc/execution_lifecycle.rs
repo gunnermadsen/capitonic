@@ -217,21 +217,25 @@ pub(crate) async fn reconcile_paper_orders(
             .await?;
         if marked {
             use rust_decimal::prelude::ToPrimitive;
-            super::unified_model_runtime::telemetry::settlement(
-                process_id,
-                settlement.net_pnl.to_f64().unwrap_or(0.0),
-                settlement.entry_fees.to_f64().unwrap_or(0.0),
-            );
-            super::unified_model_runtime::telemetry::member_settlement(
-                process_id,
-                settlement.member_id.as_deref(),
-                settlement.entry_notional.to_f64().unwrap_or(0.0),
-                settlement.net_pnl.to_f64().unwrap_or(0.0),
-                settlement.entry_fees.to_f64().unwrap_or(0.0),
-            );
+            if settlement.execution_origin.as_deref() != Some("api") {
+                super::unified_model_runtime::telemetry::settlement(
+                    process_id,
+                    settlement.net_pnl.to_f64().unwrap_or(0.0),
+                    settlement.entry_fees.to_f64().unwrap_or(0.0),
+                );
+                super::unified_model_runtime::telemetry::member_settlement(
+                    process_id,
+                    settlement.member_id.as_deref(),
+                    settlement.entry_notional.to_f64().unwrap_or(0.0),
+                    settlement.net_pnl.to_f64().unwrap_or(0.0),
+                    settlement.entry_fees.to_f64().unwrap_or(0.0),
+                );
+            }
             info!(
                 process_id = %process_id,
                 run_id = %settlement.run_id,
+                execution_mode = %settlement.execution_mode,
+                origin = settlement.execution_origin.as_deref().unwrap_or("umr"),
                 settlement_id = %settlement.settlement_id,
                 order_id = %settlement.order_id,
                 current_run = disposition.apply_venue_credit,
@@ -241,6 +245,8 @@ pub(crate) async fn reconcile_paper_orders(
         }
         if !marked {
             warn!(
+                execution_mode = %settlement.execution_mode,
+                origin = settlement.execution_origin.as_deref().unwrap_or("umr"),
                 settlement_id = %settlement.settlement_id,
                 run_id = %run_id,
                 "BTC paper settlement was already credited by a concurrent reconciliation"
@@ -347,7 +353,8 @@ impl BtcExecutionLifecycle for LiveExecutionLifecycle {
                             0.0,
                         );
                         use rust_decimal::prelude::ToPrimitive;
-                        super::unified_model_runtime::telemetry::settlement(
+                        if settlement.execution_origin.as_deref() != Some("api") {
+super::unified_model_runtime::telemetry::settlement(
                             process_id,
                             settlement.net_pnl.to_f64().unwrap_or(0.0),
                             settlement.entry_fees.to_f64().unwrap_or(0.0),
@@ -359,10 +366,13 @@ impl BtcExecutionLifecycle for LiveExecutionLifecycle {
                             settlement.net_pnl.to_f64().unwrap_or(0.0),
                             settlement.entry_fees.to_f64().unwrap_or(0.0),
                         );
+                        }
                         info!(
                             process_id = %process_id,
                             run_id = %settlement.run_id,
-                            settlement_id = %settlement.settlement_id,
+                            execution_mode = %settlement.execution_mode,
+                origin = settlement.execution_origin.as_deref().unwrap_or("umr"),
+                settlement_id = %settlement.settlement_id,
                             order_id = %settlement.order_id,
                             net_pnl = %settlement.net_pnl,
                             "BTC live zero-payout settlement recognized from official resolution"

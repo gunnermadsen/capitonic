@@ -50,7 +50,7 @@ fn book(token: &str) -> OrderbookCheckpoint {
         integrity_status: FeedIntegrityStatus::Ok,
     }
 }
-fn fixture(mode: &str) -> (Oms, Candidate, [OrderbookCheckpoint; 2], Accounting) {
+pub(super) fn fixture(mode: &str) -> (Oms, Candidate, [OrderbookCheckpoint; 2], Accounting) {
     let now = Utc::now();
     let process_id = Uuid::new_v4();
     let books = [book("up"), book("down")];
@@ -377,4 +377,84 @@ fn warmed_shared_admission_latency() {
     );
     assert!(times[50] < std::time::Duration::from_millis(2));
     assert!(times[95] < std::time::Duration::from_millis(10));
+}
+
+#[test]
+fn admission_report_records_actual_checks_and_stops_at_rejection() {
+    let (oms, candidate, books, account) = fixture("paper");
+    let (intent, report) = oms.admit_report(
+        &candidate,
+        [Some(&books[0]), Some(&books[1])],
+        &account,
+        Utc::now(),
+    );
+    let intent = intent.unwrap();
+    assert_eq!(
+        intent.request.metadata["polymarket_execution"]["policy_results"],
+        report
+    );
+    assert!(report
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["name"] == "model_qualification" && p["status"] == "not_applicable"));
+    let mut invalid = account;
+    invalid.available = Decimal::ZERO;
+    let (result, report) = oms.admit_report(
+        &candidate,
+        [Some(&books[0]), Some(&books[1])],
+        &invalid,
+        Utc::now(),
+    );
+    assert!(result.is_err());
+    let last = report.as_array().unwrap().last().unwrap();
+    assert_eq!(last["name"], "collateral");
+    assert_eq!(last["status"], "rejected");
+    assert_eq!(last["reason"], "insufficient_collateral");
+    assert!(!report
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["name"] == "marketable_depth"));
+}
+#[test]
+fn api_replay_uses_original_payload_and_owner_without_current_configuration() {
+    use crate::execution::orders::{validate_replay, EvaluationRequest};
+    let input = serde_json::json!({"version":1,"candidate":{"member_id":"m","market_id":"market","outcome":"up","synthetic_prediction":{"probability_up":"0.80"}}});
+    let request: EvaluationRequest = serde_json::from_value(input.clone()).unwrap();
+    let (mut order, _) = order_and_fill();
+    let owner = order.request.process_id.unwrap();
+    order.request.metadata["polymarket_execution"]["api_request_sha256"] =
+        serde_json::json!(request.identity().unwrap());
+    order.request.metadata["polymarket_execution"]["config_sha256"] =
+        serde_json::json!("historical_configuration");
+    validate_replay(&order, owner, &request).unwrap();
+    assert!(validate_replay(&order, Uuid::new_v4(), &request).is_err());
+    let mut equivalent: EvaluationRequest = serde_json::from_value(input).unwrap();
+    equivalent.candidate.synthetic_prediction.probability_up = dec!(0.8000);
+    validate_replay(&order, owner, &equivalent).unwrap();
+    equivalent.candidate.synthetic_prediction.probability_up = dec!(0.7);
+    assert!(validate_replay(&order, owner, &equivalent).is_err());
+}
+#[test]
+fn shared_order_metrics_keep_process_mode_origin_and_recovery_independent() {
+    use crate::btc::execution_freshness::{
+        prometheus_metrics, ExecutionFreshnessMetrics, OrderOutcome, OrderStage,
+    };
+    let a = Uuid::new_v4();
+    let b = Uuid::new_v4();
+    let paper = ExecutionFreshnessMetrics::new(a, "paper", 2000);
+    let live = ExecutionFreshnessMetrics::new(b, "live", 2000);
+    paper.order_event(Origin::Api, OrderStage::Preview, OrderOutcome::Rejected);
+    paper.order_recovery(false, Some(1));
+    live.order_recovery(true, Some(0));
+    let output = prometheus_metrics(&serde_json::json!({}));
+    assert!(output.contains(&format!("process_id=\"{a}\",execution_mode=\"paper\",origin=\"api\",stage=\"preview\",outcome=\"rejected\"")));
+    assert!(output.contains(&format!(
+        "polymarket_order_recovery_healthy{{process_id=\"{a}\",execution_mode=\"paper\"}} 0"
+    )));
+    assert!(output.contains(&format!(
+        "polymarket_order_recovery_healthy{{process_id=\"{b}\",execution_mode=\"live\"}} 1"
+    )));
+    assert!(!output.contains("order_id="));
 }

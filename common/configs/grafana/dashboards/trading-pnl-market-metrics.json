@@ -18,7 +18,7 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "links": [],
+  "links": [{"title": "Order execution (API / UMR)", "type": "link", "url": "/d/order-execution", "includeVars": true, "keepTime": true}],
   "panels": [
     {
       "collapsed": false,

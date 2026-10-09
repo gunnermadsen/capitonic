@@ -259,6 +259,9 @@ impl BtcProcessManager {
         &self,
         process: &TradingProcess,
     ) -> Result<PreparedBtcStartDefinition, HttpError> {
+        if polymarket_bot::execution::polymarket::configuration::is_selected(&process.config) {
+            return super::order_execution::prepare(process, false);
+        }
         prepare_btc_start_definition_for_execution(
             self.validate_start_definition(process)?,
             &process.effective_execution(),
@@ -269,6 +272,9 @@ impl BtcProcessManager {
         &self,
         process: &TradingProcess,
     ) -> Result<PreparedBtcStartDefinition, HttpError> {
+        if polymarket_bot::execution::polymarket::configuration::is_selected(&process.config) {
+            return super::order_execution::prepare(process, true);
+        }
         prepare_btc_start_definition_for_execution(
             self.validate_resume_definition(process)?,
             &process.effective_execution(),
@@ -665,7 +671,7 @@ impl BtcProcessManager {
             r#"
             SELECT p.process_id
             FROM polymarket.trading_processes p
-            JOIN LATERAL (
+            LEFT JOIN LATERAL (
               SELECT event.timestamp_utc
               FROM polymarket.trading_process_events event
               WHERE event.process_id = p.process_id
@@ -677,7 +683,8 @@ impl BtcProcessManager {
             ) run ON true
             WHERE p.process_type = 'btc_5m'
               AND p.process_scope = 'realtime_paper'
-              AND p.config #>> '{raw,btc_realtime_paper,schema_version}' IN ($1, $2, $3, $4, $5)
+              AND p.config #>> '{raw,btc_realtime_paper,schema_version}' IN ($1, $2, $3, $4, $5, $6)
+              AND (run.timestamp_utc IS NOT NULL OR p.config #>> '{raw,btc_realtime_paper,schema_version}'=$6)
               AND p.enabled
               AND p.status IN ('starting','running','stopping')
               AND p.stopped_at IS NULL
@@ -689,6 +696,7 @@ impl BtcProcessManager {
         .bind(BTC_PROCESS_SCHEMA_VERSION)
         .bind(LEGACY_BTC_PROCESS_SCHEMA_VERSION)
         .bind(AGENT_PROCESS_SCHEMA_VERSION)
+        .bind(polymarket_bot::execution::polymarket::PROCESS_SCHEMA_VERSION)
         .fetch_all(&self.pool)
         .await
         .map_err(|error| HttpError::internal(error.to_string()))?;
@@ -718,7 +726,23 @@ impl BtcProcessManager {
         let mut resumed = Vec::with_capacity(candidates.len());
         for process_id in candidates {
             self.ensure_start_slot_available(process_id).await?;
-            resumed.push(self.resume_durable_process_locked(process_id).await?);
+            match self.resume_durable_process_locked(process_id).await {
+                Ok(process) => resumed.push(process),
+                Err(error) => {
+                    let process = self
+                        .store
+                        .get_trading_process(process_id)
+                        .await
+                        .map_err(|e| HttpError::unavailable(e.to_string()))?;
+                    if process.as_ref().is_some_and(|p| {
+                        polymarket_bot::execution::polymarket::configuration::is_selected(&p.config)
+                    }) {
+                        warn!(process_id=%process_id,error=?error,"Order runtime resume deferred; durable intent preserved");
+                    } else {
+                        return Err(error);
+                    }
+                }
+            }
         }
         Ok(resumed)
     }
@@ -734,6 +758,25 @@ impl BtcProcessManager {
             .map_err(|error| HttpError::internal(error.to_string()))?
             .ok_or_else(|| HttpError::not_found("trading process not found"))?;
         let prepared = self.prepare_resume_definition(&process)?;
+        if polymarket_bot::execution::polymarket::configuration::is_selected(&process.config)
+            && !self
+                .repository
+                .run_manifest_exists(prepared.run_id, &prepared.run_key)
+                .await
+                .map_err(|_| HttpError::unavailable("run evidence unavailable"))?
+        {
+            self.repository
+                .claim_run_manifest(
+                    process_id,
+                    prepared.run_id,
+                    &prepared.run_key,
+                    &prepared.config_hash,
+                    &serde_json::to_value(&prepared.frozen_process_config)
+                        .map_err(|_| HttpError::bad_request("invalid frozen definition"))?,
+                )
+                .await
+                .map_err(|_| HttpError::unavailable("run evidence unavailable"))?;
+        }
         let manifest = self
             .repository
             .load_run_manifest(process_id, prepared.run_id, &prepared.run_key)
@@ -780,11 +823,26 @@ impl BtcProcessManager {
         .await;
         let active_strategy = strategy.clone();
 
-        let startup_result: Result<(BtcPlaybookRuntimeHandle, Option<Arc<LiveVenue>>)> = async {
+        let startup_result: Result<super::order_execution::OrderRuntime> = async {
             let (state, books) = self
                 .ensure_shared_runtime(&runtime_config, &sources)
                 .await
                 .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+            if polymarket_bot::execution::polymarket::configuration::is_selected(&process.config) {
+                return self
+                    .start_order_runtime(
+                        &process,
+                        run_id,
+                        &run_key,
+                        &config_hash,
+                        &frozen_process_config_value,
+                        runtime_config,
+                        state,
+                        books,
+                        true,
+                    )
+                    .await;
+            }
             let components = self.execution_components(
                 execution_mode,
                 &execution,
@@ -832,10 +890,11 @@ impl BtcProcessManager {
             Ok((
                 BtcPlaybookRuntimeHandle::start(runtime_config, process_runner, state, books)?,
                 live_process_venue,
+                None,
             ))
         }
         .await;
-        let (runtime, live_process_venue) = match startup_result {
+        let (runtime, live_process_venue, order_service) = match startup_result {
             Ok(runtime) => runtime,
             Err(resume_error) => {
                 return Err(HttpError::internal(format!(
@@ -843,6 +902,18 @@ impl BtcProcessManager {
                 )));
             }
         };
+        let process =
+            if polymarket_bot::execution::polymarket::configuration::is_selected(&process.config)
+                && process.status == "starting"
+            {
+                self.store
+                    .update_trading_process_status(process_id, "running", true, None)
+                    .await
+                    .map_err(|_| HttpError::unavailable("process state unavailable"))?
+                    .ok_or_else(|| HttpError::not_found("process not found"))?
+            } else {
+                process
+            };
         self.active_playbooks.lock().await.insert(
             process_id,
             ActiveBtcPlaybook {
@@ -854,6 +925,7 @@ impl BtcProcessManager {
                 strategy: active_strategy,
                 sources,
                 live_venue: live_process_venue,
+                order_service,
                 runtime,
             },
         );
@@ -961,11 +1033,26 @@ impl BtcProcessManager {
         )
         .await;
 
-        let startup_result: Result<(BtcPlaybookRuntimeHandle, Option<Arc<LiveVenue>>)> = async {
+        let startup_result: Result<super::order_execution::OrderRuntime> = async {
             let (state, books) = self
                 .ensure_shared_runtime(&runtime_config, &sources)
                 .await
                 .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+            if polymarket_bot::execution::polymarket::configuration::is_selected(&process.config) {
+                return self
+                    .start_order_runtime(
+                        &process,
+                        run_id,
+                        &run_key,
+                        &config_hash,
+                        &frozen_process_config_value,
+                        runtime_config,
+                        state,
+                        books,
+                        false,
+                    )
+                    .await;
+            }
             let components = self.execution_components(
                 execution_mode,
                 &execution,
@@ -1005,13 +1092,24 @@ impl BtcProcessManager {
             Ok((
                 BtcPlaybookRuntimeHandle::start(runtime_config, process_runner, state, books)?,
                 live_process_venue,
+                None,
             ))
         }
         .await;
 
-        let (runtime, live_process_venue) = match startup_result {
+        let (runtime, live_process_venue, order_service) = match startup_result {
             Ok(runtime) => runtime,
             Err(startup_error) => {
+                if polymarket_bot::execution::polymarket::configuration::is_selected(
+                    &process.config,
+                ) {
+                    self.terminal_pending.lock().await.remove(&process_id);
+                    warn!(process_id=%process_id,error=%startup_error,"Order startup deferred; durable intent preserved");
+                    return Err(HttpError::unavailable(
+                        "order runtime startup is recovering",
+                    ));
+                }
+
                 let reason = format!("btc_startup_failed: {startup_error:#}");
                 return Err(self
                     .terminalize_start_failure_locked(start_pending, reason)
@@ -1054,6 +1152,7 @@ impl BtcProcessManager {
                 strategy,
                 sources,
                 live_venue: live_process_venue,
+                order_service,
                 runtime,
             },
         );

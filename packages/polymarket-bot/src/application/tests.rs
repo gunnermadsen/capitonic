@@ -112,7 +112,7 @@ mod lifecycle_tests {
     }
 
     #[tokio::test]
-    async fn new_order_contract_is_admitted_only_for_storage_and_never_legacy_execution() {
+    async fn new_order_contract_is_stored_but_never_uses_the_legacy_definition_parser() {
         let pool = PgPoolOptions::new()
             .connect_lazy("postgres://postgres:postgres@localhost/polymarket")
             .unwrap();
@@ -152,6 +152,49 @@ mod lifecycle_tests {
                 .unwrap()
                 .clear();
             assert!(manager.validate_definition_for_storage(&process).is_err());
+        }
+    }
+
+    #[test]
+    fn api_order_preparation_preserves_policy_identity_and_never_selects_umr() {
+        for fixture in [
+            include_str!("../../../../docs/polymarket-execution-rail/examples/paper.json"),
+            include_str!("../../../../docs/polymarket-execution-rail/examples/live.json"),
+        ] {
+            let mut process = eligible_btc_process();
+            process.config = serde_json::from_str(fixture).unwrap();
+            let prepared = super::super::order_execution::prepare(&process, false).unwrap();
+            let definition =
+                polymarket_bot::execution::polymarket::configuration::compile(&process.config)
+                    .unwrap();
+            assert_eq!(prepared.config_hash, definition.config_sha256);
+            assert_eq!(
+                prepared.strategy.target_size,
+                definition.execution.policies.sizing.default_share
+            );
+            assert_eq!(
+                prepared.execution.max_open_notional_usd,
+                definition.execution.policies.exposure.max_open_notional_usd
+            );
+            assert_eq!(
+                serde_json::to_value(&prepared.frozen_process_config).unwrap(),
+                serde_json::to_value(&process.config).unwrap()
+            );
+            assert!(process
+                .config
+                .execution
+                .as_ref()
+                .unwrap()
+                .max_open_notional_usd
+                .is_none());
+            process.enabled = true;
+            process.status = "running".into();
+            let resumed = super::super::order_execution::prepare(&process, true).unwrap();
+            assert_eq!(resumed.run_id, prepared.run_id);
+            assert_eq!(resumed.config_hash, prepared.config_hash);
+            process.config.raw["btc_realtime_paper"]["runtime"]["trigger"] =
+                serde_json::json!("umr");
+            assert!(super::super::order_execution::prepare(&process, true).is_err());
         }
     }
 

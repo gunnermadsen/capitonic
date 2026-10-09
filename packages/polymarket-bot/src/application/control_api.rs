@@ -37,6 +37,15 @@ impl RuntimeControl {
 
 #[async_trait]
 impl ControlApi for RuntimeControl {
+    fn orders(
+        &self,
+    ) -> Result<&dyn polymarket_bot::execution::orders::OrderApplication, HttpError> {
+        self.btc_manager
+            .as_ref()
+            .map(|manager| manager as &dyn polymarket_bot::execution::orders::OrderApplication)
+            .ok_or_else(|| HttpError::not_implemented("order application unavailable"))
+    }
+
     async fn health(&self) -> Result<HealthResponse, HttpError> {
         self.store
             .healthcheck()

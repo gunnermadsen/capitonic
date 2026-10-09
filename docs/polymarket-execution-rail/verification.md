@@ -83,3 +83,20 @@ The unchanged `scripts/local-image-ci.sh polymarket-bot 3.4.0-local.1` completed
 - Scope check: no changes to charts/Helm versions, CI/CD, GitHub workflows, build/deploy tooling, ingesters, model/agent runtimes, database schema or root Cargo manifests/lockfile. Existing application routing remains inactive for the new definition.
 
 This verification record is a documentation-only follow-up to the image source. No deployment, process activation, database mutation, branch integration, registry publication or remote push occurred. Database-backed and funded qualification remain unverified as described above.
+
+
+## Order API and instrumentation acceptance evidence
+
+Candidate v3.4.0-local.2 implements the frozen plan's generic controller and instrumentation source. API-triggered definitions now use the existing process manager and shared feeds; UMR cutover remains unavailable. Existing legacy process behavior and dry-run routes are retained.
+
+Focused evidence before full CI:
+
+- Three authenticated HTTP tests cover all new routes, strict envelopes and override rejection, response/error mapping, unavailable preparation, and ownership-safe lookup using a registered deterministic application.
+- OMS tests cover actual policy reporting, original-owner/request replay despite a changed configuration, and distinct process/mode/origin metrics. API-specific boundary tests cover signing diagnostic redaction and a rejected record that cannot be mistaken for an approved execution intent.
+- Application configuration testing verifies paper/live policy projection, immutable run identity across resume and rejection of unactivated UMR routing.
+- Eight Prometheus query fixtures pass against the existing local Prometheus binary without provisioning. Provisioning YAML and dashboard JSON parse; alert IDs are unique; the existing provisioning entrypoint already includes the extended rule file.
+- Clippy passes with warnings denied. No production state, local process configuration, database, or running observability configuration was mutated.
+
+Qualification limits: these tests do not execute the new controller against a real PostgreSQL database, place a paper or funded live order through a running candidate, or prove restart recovery end to end. The new dashboard/alert sources are not deployed. Those runtime checks remain the dedicated development qualification boundary. No database-backed or funded parity claim is made by a successful image build.
+
+Full local CI and candidate provenance are recorded after the build below.

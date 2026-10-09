@@ -5876,5 +5876,6 @@
       ],
       "fieldConfig": { "defaults": { "unit": "s", "decimals": 1 }, "overrides": [] }
     }
-  ]
+  ],
+  "links": [{"title": "Order execution (API / UMR)", "type": "link", "url": "/d/order-execution", "includeVars": true, "keepTime": true}]
 }
