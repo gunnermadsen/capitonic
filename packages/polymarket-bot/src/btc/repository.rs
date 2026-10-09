@@ -570,7 +570,8 @@ WITH causal_credited_rows AS (
   JOIN polymarket.fills f
     ON f.process_id = o.process_id
    AND f.order_id = o.order_id
-  WHERE f.source IN ('paper', 'live')
+  WHERE f.process_id = $1
+    AND f.source IN ('paper', 'live')
     AND f.timestamp_utc <= $2
   GROUP BY o.process_id, o.order_id
 ), unsettled_orders AS (

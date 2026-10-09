@@ -1,6 +1,40 @@
 //! Transaction boundaries for admitted orders. Uses the existing order/fill identity ledger.
 use super::*;
 
+// Restrict rows before detoasting account JSON; retain cancelled/expired ambiguity.
+const EXECUTION_ACCOUNT_PROCESSES_SQL: &str = r#"
+WITH unresolved_orders AS MATERIALIZED (
+  SELECT process_id, raw_payload
+  FROM polymarket.orders
+  WHERE state NOT IN ('filled', 'rejected', 'cancelled', 'expired')
+     OR (state IN ('cancelled', 'expired')
+         AND COALESCE(raw_payload #>> '{execution_resolution}', '')
+             NOT IN ('definitive_nonexecution', 'executed'))
+)
+SELECT process_id FROM polymarket.trading_processes
+WHERE lower(config #>> '{execution,account_ref}') = lower($1)
+  AND config #>> '{execution,mode}' = 'live'
+UNION
+SELECT process_id FROM unresolved_orders
+WHERE lower(raw_payload #>> '{request,metadata,polymarket_execution,account_ref}') = lower($1)
+ORDER BY process_id
+"#;
+
+const EXECUTION_OPEN_MARKETS_SQL: &str = r#"
+WITH process_fill_orders AS MATERIALIZED (
+  SELECT DISTINCT order_id FROM polymarket.fills WHERE process_id = $1
+)
+SELECT DISTINCT o.market_id FROM polymarket.orders o
+WHERE o.process_id = $1
+  AND (o.state NOT IN ('filled', 'cancelled', 'rejected', 'expired')
+       OR (EXISTS (SELECT 1 FROM process_fill_orders f WHERE f.order_id = o.order_id)
+           AND NOT EXISTS (
+             SELECT 1 FROM polymarket.btc_paper_settlement_ledger s
+             WHERE s.process_id = $1 AND s.order_id = o.order_id AND s.credit_status = 'credited'
+           )))
+LIMIT 257
+"#;
+
 pub(crate) struct ExecutionLease {
     pub transaction: sqlx::Transaction<'static, sqlx::Postgres>,
     _permit: tokio::sync::OwnedSemaphorePermit,
@@ -65,8 +99,10 @@ impl Store {
     ) -> Result<Vec<Uuid>> {
         match account {
             None => Ok(vec![process_id]),
-            Some(account) => Ok(sqlx::query_scalar("SELECT process_id FROM polymarket.trading_processes WHERE lower(config #>> '{execution,account_ref}')=lower($1) AND config #>> '{execution,mode}'='live' UNION SELECT process_id FROM polymarket.orders WHERE lower(raw_payload #>> '{request,metadata,polymarket_execution,account_ref}')=lower($1) AND (state NOT IN ('filled','rejected','cancelled','expired') OR (state IN ('cancelled','expired') AND COALESCE(raw_payload #>> '{execution_resolution}', '') NOT IN ('definitive_nonexecution','executed'))) ORDER BY process_id")
-                .bind(account).fetch_all(&self.pool).await?),
+            Some(account) => Ok(sqlx::query_scalar(EXECUTION_ACCOUNT_PROCESSES_SQL)
+                .bind(account)
+                .fetch_all(&self.pool)
+                .await?),
         }
     }
 
@@ -104,8 +140,10 @@ impl Store {
     }
 
     pub(crate) async fn execution_open_markets(&self, process_id: Uuid) -> Result<Vec<String>> {
-        Ok(sqlx::query_scalar("SELECT DISTINCT o.market_id FROM polymarket.orders o WHERE o.process_id=$1 AND (o.state NOT IN ('filled','cancelled','rejected','expired') OR (EXISTS(SELECT 1 FROM polymarket.fills f WHERE f.process_id=$1 AND f.order_id=o.order_id) AND NOT EXISTS(SELECT 1 FROM polymarket.btc_paper_settlement_ledger s WHERE s.process_id=$1 AND s.order_id=o.order_id AND s.credit_status='credited'))) LIMIT 257")
-            .bind(process_id).fetch_all(&self.pool).await?)
+        Ok(sqlx::query_scalar(EXECUTION_OPEN_MARKETS_SQL)
+            .bind(process_id)
+            .fetch_all(&self.pool)
+            .await?)
     }
 
     /// Reconstruct process capital across runs; restarting never creates a fresh paper balance.
