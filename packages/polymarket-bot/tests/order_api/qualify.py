@@ -28,13 +28,14 @@ REUSABLE_PROCESS_IDS = {
 
 
 class Qualification:
-    def __init__(self, directory, order_type="fak"):
+    def __init__(self, directory, order_type="fak", mode="both"):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         self.state_path = self.directory / 'run.json'
         self.state = json.loads(self.state_path.read_text()) if self.state_path.exists() else {
             'run': str(uuid.uuid4()), 'processes': {}, 'checks': [], 'requests': []}
         self.state.setdefault('order_type', order_type)
+        self.state.setdefault('modes', ['paper', 'live'] if mode == 'both' else ['paper'])
         self.token = os.environ['POLYMARKET_HTTP_ADMIN_TOKEN']
         self.base = 'http://localhost/api/bot'
 
@@ -118,7 +119,8 @@ class Qualification:
         existing = {}
         # Check both identities before updating either definition. Missing/active
         # processes are an operator issue, never permission to create another pair.
-        for mode, pid in REUSABLE_PROCESS_IDS.items():
+        for mode in self.state['modes']:
+            pid = REUSABLE_PROCESS_IDS[mode]
             code, response = self.request('GET', '/admin/trading-processes/' + pid)
             if code != 200:
                 raise RuntimeError('Reusable ' + mode + ' process is unavailable; no replacement created')
@@ -154,8 +156,9 @@ class Qualification:
         self.state['image'] = json.loads(subprocess.check_output(['kubectl', '--context', 'rancher-desktop',
             '-n', 'capitonic', 'get', 'pods', '-l', 'app.kubernetes.io/name=polymarket-bot', '-o', 'json']))
         self.reuse_processes()
-        p, l = [self.state['processes'][m]['config']['execution']['order_policies'] for m in ('paper','live')]
-        self.check('matching shared policy definitions', [x for x in p if x['name'] != 'paper_execution_policy'] == l)
+        if 'live' in self.state['processes']:
+            p, l = [self.state['processes'][m]['config']['execution']['order_policies'] for m in ('paper','live')]
+            self.check('matching shared policy definitions', [x for x in p if x['name'] != 'paper_execution_policy'] == l)
         paper = self.state['processes']['paper']
         variants = {}
         for name in ('duplicate', 'unknown', 'mixed', 'unsupported'):
@@ -174,7 +177,7 @@ class Qualification:
         self.start()
 
     def start(self):
-        for mode in ('paper', 'live'):
+        for mode in self.state['modes']:
             pid = self.state['processes'][mode]['process_id']
             self.state[mode + '_before'] = self.snapshot(pid)
             code, response = self.request('GET', '/admin/trading-processes/' + pid + '/start-preview')
@@ -198,7 +201,7 @@ class Qualification:
     def evaluate(self):
         candidate = self.candidate()
         assert candidate
-        for mode in ('paper','live'):
+        for mode in self.state['modes']:
             pid = self.state['processes'][mode]['process_id']
             before = self.snapshot(pid)
             for route in ('preview','dry-run'):
@@ -221,7 +224,7 @@ class Qualification:
 
     def poll_preparation(self, seconds):
         deadline = time.monotonic() + seconds
-        pending = {'paper','live'}
+        pending = set(self.state['modes'])
         unavailable = {'paper': 0, 'live': 0}
         while pending and time.monotonic() < deadline:
             candidate = self.candidate()
@@ -256,14 +259,14 @@ class Qualification:
                         self.save()
                         break
             if pending: time.sleep(5)
-        self.check('both modes prepared with real evidence',not pending,sorted(pending))
+        self.check('selected modes prepared with real evidence',not pending,sorted(pending))
 
     def paper(self, seconds):
         pid = self.state['processes']['paper']['process_id']
         if self.state.get('executed') or self.state.get('pending_execute'):
             raise RuntimeError('Recover the recorded request before starting another execution')
-        if not all(self.state.get(m + '_dry_run') for m in ('paper', 'live')):
-            raise RuntimeError('Both preparations must pass before execution qualification')
+        if not all(self.state.get(m + '_dry_run') for m in self.state['modes']):
+            raise RuntimeError('Selected preparations must pass before execution qualification')
         attempts = 0
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
@@ -293,8 +296,9 @@ class Qualification:
                     self.check('receipt agrees with persisted lifecycle',retrieved['status'] == order['state'])
                     self.check('receipt agrees with canonical fills',{x['fill_id'] for x in retrieved['evidence']['fills']} == {x['fill_id'] for x in fills})
                     self.check('API activity creates no strategy decisions',snapshot['decisions'] == 0)
-                    self.check('live preparation never submits',self.snapshot(self.state['processes']['live']['process_id']) == self.state['live_before'])
-                    code, _ = self.request('GET',f"/orders/{self.state['processes']['live']['process_id']}/order/"+urllib.parse.quote(receipt['order_id'],safe=''))
+                    if 'live' in self.state['processes']:
+                        self.check('live preparation never submits',self.snapshot(self.state['processes']['live']['process_id']) == self.state['live_before'])
+                    code, _ = self.request('GET',f"/orders/{REUSABLE_PROCESS_IDS['live']}/order/"+urllib.parse.quote(receipt['order_id'],safe=''))
                     self.check('foreign order ownership',code == 404)
                     if not fills:
                         self.check('unfilled execution consumes no paper capital',Decimal(snapshot['fill_debit']) == Decimal(self.state['paper_before']['fill_debit']))
@@ -378,9 +382,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action',choices=['prepare','start','evaluate','prepare-orders','paper','latency','stop','audit'])
     parser.add_argument('--evidence-dir',required=True)
+    parser.add_argument('--mode',choices=['both','paper'],default='both')
     parser.add_argument('--order-type',choices=['fak','fok'],default='fak')
     parser.add_argument('--timeout',type=int,default=360)
     args = parser.parse_args()
-    q = Qualification(args.evidence_dir, args.order_type)
+    q = Qualification(args.evidence_dir, args.order_type, args.mode)
     {'prepare':q.prepare,'start':q.start,'evaluate':q.evaluate,'prepare-orders':lambda:q.poll_preparation(args.timeout),
      'paper':lambda:q.paper(args.timeout),'latency':q.latency,'stop':q.stop,'audit':q.audit}[args.action]()

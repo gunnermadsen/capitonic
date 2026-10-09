@@ -408,7 +408,7 @@ impl Oms {
         let check = |result: std::result::Result<(), strategy::BtcRejectReason>| {
             result.map_err(|e| anyhow::anyhow!(e.as_str()))
         };
-        check(strategy::validate_book(
+        check(strategy::validate_execution_book(
             &config,
             &current,
             selected,
@@ -416,7 +416,7 @@ impl Oms {
         ))?;
         report.begin("liquidity_policy", "process_policy");
         if p.liquidity.require_exit_book {
-            check(strategy::validate_book(
+            check(strategy::validate_execution_book(
                 &config,
                 &current,
                 opposite,

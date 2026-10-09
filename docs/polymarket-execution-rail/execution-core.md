@@ -50,3 +50,16 @@ Both modes validate fill ownership, immutable identities and authorized economic
 ## Qualification boundary
 
 Deterministic tests exercise the OMS, actual paper arrival simulator and injected commit failures. Existing live transport/reconciliation tests remain the evidence for ambiguous POST, REST/websocket fill recovery and settlement invariants. This candidate has not executed the new service against a database or a funded venue. The PostgreSQL transaction SQL, cross-service lock scheduling and full service restart wiring require isolated development integration qualification; unit tests are not evidence of a real database rollback or funded execution. No new process or run is created by this implementation.
+
+## Orderbook clock semantics
+
+The shared OMS uses the existing execution/readiness interpretation of book time:
+exchange source time may lead evaluation by at most the configured `max_book_age_ms`,
+while receipt time must never exceed evaluation time. Both source age and receipt age
+remain bounded by that same existing policy. Timestamps are preserved, not clamped or
+rewritten; no new tolerance, toggle, or waiting period is introduced. Evaluation takes
+its timestamp after acquiring the canonical book snapshot. These rules apply equally
+to selected/opposite books and paper/live admission, including final revalidation.
+The legacy frozen strategy validator retains its strict zero-source-lead semantics;
+both entry points reuse the same book validation implementation. Model/reference/fee
+causality and ingester behavior are unchanged.

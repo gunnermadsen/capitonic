@@ -67,6 +67,19 @@ class ProcessReuseTest(unittest.TestCase):
                 self.assertEqual(policy['params']['member_order_types']['conservative'], order_type)
         self.assertNotEqual(*run_keys)
 
+    def test_paper_only_qualification_never_reads_or_mutates_live_definition(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'POLYMARKET_HTTP_ADMIN_TOKEN': 'unused'}):
+            driver = Qualification(directory, mode='paper')
+            process = self.processes()[REUSABLE_PROCESS_IDS['paper']]
+            def request(method, path, body=None):
+                self.assertTrue(path.endswith(REUSABLE_PROCESS_IDS['paper']))
+                if method == 'PATCH': process['config'] = body['config']
+                return 200, {'process': process}
+            with patch.object(driver, 'request', side_effect=request) as api:
+                driver.reuse_processes()
+            self.assertEqual(list(driver.state['processes']), ['paper'])
+            self.assertEqual([c.args[0] for c in api.call_args_list], ['GET', 'PATCH'])
+
     def test_missing_or_active_pair_never_falls_back_to_creation(self):
         for unavailable in ('missing', 'active', 'wrong_mode'):
             with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'POLYMARKET_HTTP_ADMIN_TOKEN': 'unused'}):

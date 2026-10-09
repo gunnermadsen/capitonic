@@ -205,11 +205,107 @@ fn stale_fee_future_book_and_identity_mismatch_reject_before_submission() {
     candidate.snapshot.fee_rate_observed_at = Some(Utc::now() - Duration::hours(2));
     assert!(admit(&oms, &candidate, &books, &account).is_err());
     candidate.snapshot.fee_rate_observed_at = Some(Utc::now());
-    books[0].source_timestamp = Utc::now() + Duration::seconds(1);
+    books[0].source_timestamp = Utc::now()
+        + Duration::milliseconds(oms.definition.execution.policies.evidence.max_book_age_ms + 1);
     assert!(admit(&oms, &candidate, &books, &account).is_err());
     books[0] = book("different");
     assert!(admit(&oms, &candidate, &books, &account).is_err());
 }
+#[test]
+fn execution_book_clock_semantics_match_readiness_in_both_modes() {
+    use crate::btc::types::{BookReadiness, BtcIntervalMarket, RealtimeState};
+    for mode in ["paper", "live"] {
+        let (oms, candidate, original, account) = fixture(mode);
+        let now = Utc::now();
+        let bound = oms.definition.execution.policies.evidence.max_book_age_ms;
+        let market: BtcIntervalMarket = serde_json::from_value(serde_json::json!({
+            "event_id":"event","event_slug":"market","series_slug":"btc","market_id":"market",
+            "condition_id":"condition","window_start":candidate.snapshot.window_start,
+            "window_end":candidate.snapshot.window_end,"up_token_id":"up","down_token_id":"down",
+            "tick_size":"0.01","minimum_order_size":"1","resolution_source":"chainlink",
+            "active":true,"closed":false,"accepting_orders":true,"fees_enabled":false,
+            "fee_schedule":{},"raw_payload":{}
+        }))
+        .unwrap();
+        // Exercise selected and opposite books, exact bounds and sub-ms causality.
+        for side in 0..2 {
+            for (source_offset, receipt_offset, accepted) in [
+                (50_000, -1_000, true),
+                (bound * 1000, 0, true),
+                (bound * 1000 + 1, 0, false),
+                (0, 1, false),
+                (-bound * 1000 - 1000, 0, false),
+                (50_000, -bound * 1000 - 1000, false),
+            ] {
+                let mut books = original.clone();
+                books[side].source_timestamp = now + Duration::microseconds(source_offset);
+                books[side].received_at = now + Duration::microseconds(receipt_offset);
+                let state = RealtimeState {
+                    current_market: Some(market.clone()),
+                    books: books
+                        .iter()
+                        .map(|b| {
+                            (
+                                b.token_id.clone(),
+                                BookReadiness {
+                                    market_id: b.market_id.clone(),
+                                    token_id: b.token_id.clone(),
+                                    connection_id: b.connection_id,
+                                    bootstrapped: true,
+                                    integrity_status: b.integrity_status,
+                                    source_timestamp: Some(b.source_timestamp),
+                                    received_at: Some(b.received_at),
+                                    best_bid: b.best_bid,
+                                    best_ask: b.best_ask,
+                                },
+                            )
+                        })
+                        .collect(),
+                    ..Default::default()
+                };
+                let readiness =
+                    state.readiness(now, Duration::milliseconds(bound), Duration::seconds(2));
+                let books_ready = !readiness.reasons.iter().any(|r| r.contains("book"));
+                assert_eq!(
+                    books_ready, accepted,
+                    "{mode} side {side} {source_offset}/{receipt_offset}"
+                );
+                let result = oms.admit(
+                    &candidate,
+                    [Some(&books[0]), Some(&books[1])],
+                    &account,
+                    now,
+                );
+                assert_eq!(result.is_ok(), accepted, "{mode} side {side}: {result:?}");
+                if accepted && side == 0 {
+                    let mut snapshot = candidate.snapshot.clone();
+                    snapshot.observed_at = now;
+                    let feature =
+                        book_features(BtcOutcome::Up, "up", Some(&books[0]), now, dec!(5));
+                    assert_eq!(
+                        crate::btc::strategy::validate_book(
+                            &oms.strategy(),
+                            &snapshot,
+                            &feature,
+                            crate::btc::strategy::BtcRejectReason::MissingUpBook
+                        ),
+                        Err(crate::btc::strategy::BtcRejectReason::FutureInputTimestamp)
+                    );
+                }
+            }
+        }
+        // No durable latch: the same OMS accepts fresh evidence after rejection.
+        assert!(oms
+            .admit(
+                &candidate,
+                [Some(&original[0]), Some(&original[1])],
+                &account,
+                now
+            )
+            .is_ok());
+    }
+}
+
 #[test]
 fn changed_candidate_identity_cannot_reuse_the_same_execution_identity() {
     let (_, mut candidate, _, _) = fixture("paper");
