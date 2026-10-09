@@ -87,8 +87,9 @@ Repeated requests for an already consistent inactive state preserve timestamps.
 
 Loss-limit changes still use the existing process configuration PATCH while
 inactive. Legacy `execution.max_daily_loss_usd` and rail
-`loss_limit_policy.params.max_daily_loss_usd` accept null/omitted or positive
-representable Decimal values without a hardcoded ceiling. Order admission blocks
+`loss_limit_policy.params.max_daily_loss_usd` accept null or positive representable
+Decimal values without a hardcoded ceiling. Legacy omission remains supported;
+rail policy objects retain their existing required, nullable parameter keys. Order admission blocks
 when the configured UTC daily realized PnL is at or below the negative limit.
 This checks already realized loss; it is not a hard cap on an admitted order's
 possible subsequent loss. Runtime configuration remains bound until restart.

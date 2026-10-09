@@ -349,7 +349,7 @@ fn time_evidence_exposure_and_simulation_bounds_preserve_existing_constraints() 
         ("edge_policy", "min_net_edge_usd", json!("-1")),
         ("exposure_policy", "max_open_positions", json!(7)),
         ("exposure_policy", "max_open_notional_usd", json!("31")),
-        ("loss_limit_policy", "max_daily_loss_usd", json!("11")),
+        ("loss_limit_policy", "max_daily_loss_usd", json!("0")),
         ("paper_execution_policy", "arrival_latency_ms", json!(0)),
         (
             "paper_execution_policy",
@@ -398,6 +398,7 @@ fn daily_loss_policy_accepts_positive_decimals_without_a_ceiling_in_both_modes()
         for limit in [
             json!(null),
             json!("0.0000000000000000000000000001"),
+            json!("10.01"),
             json!("25"),
             json!("1000000"),
             json!("79228162514264337593543950335"),
@@ -411,7 +412,7 @@ fn daily_loss_policy_accepts_positive_decimals_without_a_ceiling_in_both_modes()
             .as_object_mut()
             .unwrap()
             .remove("max_daily_loss_usd");
-        compile(&config(omitted)).unwrap();
+        invalid(omitted, "missing field `max_daily_loss_usd`");
         for limit in ["0", "-1"] {
             let mut v = fixture(mode);
             policy(&mut v, "loss_limit_policy")["max_daily_loss_usd"] = json!(limit);
