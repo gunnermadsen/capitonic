@@ -674,3 +674,97 @@ implementation changed, and no Git refs were pushed.
 Evidence: `/tmp/rail-status-loss-ci.log`, `/tmp/rail-status-loss-cd.log`,
 `/tmp/rail-status-qualification/`, `/tmp/rail-status-qualification-restart.log`,
 `/tmp/rail-status-qualification-transitions.log`, `/tmp/rail-status-grafana/`.
+
+## Retained process paired qualification — 2026-10-10 UTC
+
+The external order API driver now supports read-only `compare-policies` and
+`compare-preview` actions. The latter sends the identical synthetic candidate
+through both existing preview endpoints and preserves the canonical receipts.
+Neither action certifies execution parity, submits live orders, or changes a rail
+contract. No Rust, schema, ingester, model/agent, CI/CD, or Helm source changed.
+
+The retained paper process received the explicitly approved simulated daily-loss
+limit of $25 through the existing process API. Live retained its $10 limit and
+one-share sizing. Shared policy comparison records these two differences; all
+other shared policy objects match. The current market minimum remains five.
+Live preview and dry-run return `below_minimum_order_size` before signing. Its
+runtime automatically progressed from initial unproven accounting to proven
+accounting, clean idempotency, enabled entries, a connected user websocket, and
+zero unresolved orders. No live execution request was made. This does not prove
+the provenance of previously unmatched wallet activity or funded reconciliation.
+The live process was stopped and its original configuration restored after checks.
+
+The existing paired preview returned `open_position_limit` for paper and
+`below_minimum_order_size` for live. Different configured sizes and account state
+prevent an admission-parity conclusion. Both canonical rejections are retained.
+
+All 17 external driver/accounting tests passed, including the opt-in read-only
+SQL fixtures. Full local CI initially failed three existing UMR telemetry tests
+under concurrency; the complete serial run passed 569 Rust tests (five ignored)
+and 17 tooling tests, plus formatting and Clippy. No unrelated telemetry repair
+was made; parallel-suite reliability remains a disclosed limitation.
+
+Local CI reused immutable image `v3.4.0-local.10`,
+`sha256:9dd3fff000fb434ad667b31b18fb6a042b60c4e8892fb2c39ab6c745574368d7`,
+source `19f14ac0c1c60215e095611d3bcec8b15b4593d6`, because application image
+inputs did not change. Local CD confirmed this exact image was already deployed
+and made no Helm release change. Its capacity check found 14 ready workers,
+nine desired realtime profiles, and zero active backfill shards. No version was
+artificially allocated, no merge or push occurred, and no chart version was edited.
+
+Grafana health passed, but the previously provisioned `order-execution` dashboard
+returned 404 and was absent from dashboard search during this run. Its source
+remains in this branch. The full Grafana chart was not reapplied over independent
+runtime changes. Rail metrics remain exposed by the bot; dashboard availability
+is an outstanding certification limitation. Both existing shared alert UIDs
+`order_execution_recovery_unhealthy` and `order_execution_errors` remain provisioned.
+
+Evidence is external: `/tmp/rail-paired-paper`, `/tmp/rail-paired-live`,
+`/tmp/rail-paired-live-second`, `/tmp/rail-paired-preview-active`,
+`/tmp/rail-paired-ci.log`, `/tmp/rail-paired-ci-serial.log`,
+`/tmp/rail-paired-cd.log`, and `/tmp/rail-paired-sql-tests.log`.
+
+The bounded paper run completed five FAK fills across five markets. Each passed
+preview, dry-run, execution, canonical retrieval, ownership isolation, fee-inclusive
+debit, authorized cash budget, and same-key replay checks. All five settled with
+exactly one credited ledger entry and zero payout. Replaying all five keys after
+stopping returned the original orders without changing fills or credits. The new
+simulated debit was $6.630595; lifetime retained-process debit is $17.920155000004
+and credited payout remains zero. No capital or history was reset.
+
+| Order | Fill price | Shares | Fee | Settlement payout |
+| --- | ---: | ---: | ---: | ---: |
+| `paper-01ea6b98-f1ea-4e18-a9cc-7082b26643d2` | 0.34 | 5 | 0.0785400000 | 0.0 |
+| `paper-3c480db0-70b4-4711-86e0-d57e36038128` | 0.11 | 5 | 0.0342650000 | 0.0 |
+| `paper-0b4804f6-4aa2-4047-a7e1-5919a2863769` | 0.07 | 5 | 0.0227850000 | 0.0 |
+| `paper-b0d76d58-9f1a-4005-ab5e-f7fe84b043a9` | 0.21 | 5 | 0.0580650000 | 0.0 |
+| `paper-628da61a-814e-4412-affc-835fec7a24e4` | 0.54 | 5 | 0.0869400000 | 0.0 |
+
+Final Prometheus evidence uses one unchanged process/pod metrics owner:
+
+| Stage | Observations | Mean ms | Maximum ms |
+| --- | ---: | ---: | ---: |
+| Execution completed | 5 | 290.033 | 328.792 |
+| Final validation | 5 | 46.386 | 52.318 |
+| Reservation wait | 5 | 0.343 | 0.524 |
+| Persistence | 10 | 5.110 | 28.084 |
+| Intentional paper arrival | 5 | 150.950 | 151.853 |
+
+Stages overlap and must not be added. Execution p95 remains unavailable under
+the established 20-sample reporting minimum. Live-labelled accounting, evidence,
+admission, preview and preparation series were present in Prometheus; submission
+was unexercised. Evidence: `/tmp/rail-live-latency-series.json`.
+
+Both retained processes ended stopped/disabled. Paper retains the approved $25
+limit; live configuration is restored. All nine unrelated enabled processes
+retained their configurations and remained running. An initial 45-second settlement
+probe expired before market close; continued observation subsequently verified all
+five official settlements without intervention.
+
+**Certification remains incomplete:** no paired funded live fill exists, the
+one-share live configuration is below the five-share venue minimum, positive
+paper credit/reuse was not observed, execution p95 is under-sampled, and the rail
+dashboard is unavailable. Existing deterministic FAK/FOK, partial-fill, failure,
+and shared admission tests passed; these do not replace funded FAK/FOK evidence.
+The bounded run did not expand capital, loosen policies, manufacture a winner, or
+claim an unobserved outcome. Funded submission must be performed by the user.
