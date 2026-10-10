@@ -8,10 +8,9 @@ WITH runs AS MATERIALIZED (
  SELECT event_id AS run_id FROM polymarket.trading_process_events
  WHERE process_id=$1 AND event_type='btc_run_manifest' AND timestamp_utc < $2
  ORDER BY timestamp_utc DESC, event_id DESC LIMIT 8
-), recent AS MATERIALIZED (
+), bounded_decisions AS MATERIALIZED (
  SELECT d.* FROM runs CROSS JOIN LATERAL (
-   SELECT market_id, decision_at, decision_id, status,
-     (metadata->'agent_evaluation') #- '{request,context}' AS e
+   SELECT market_id, decision_at, decision_id, status, metadata
    FROM polymarket.btc_strategy_decisions
    WHERE run_id=runs.run_id AND process_id=$1
      AND decision_at >= $2 - interval '24 hours' AND decision_at < $2
@@ -19,6 +18,11 @@ WITH runs AS MATERIALIZED (
    ORDER BY decision_at DESC LIMIT 5001
  ) d
  ORDER BY decision_at DESC, decision_id DESC LIMIT 5001
+), recent AS MATERIALIZED (
+ -- Decode large evaluation payloads only after the global history bound.
+ SELECT market_id, decision_at, decision_id, status,
+   (metadata->'agent_evaluation') #- '{request,context}' AS e
+ FROM bounded_decisions
 ), eligible AS (
  SELECT *, count(*) OVER() AS inspected_rows FROM recent
 ), forecasts AS (
@@ -149,6 +153,24 @@ pub fn summarize(cutoff: DateTime<Utc>, rows: Vec<Value>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_bounds_precede_large_payload_decoding() {
+        // MATERIALIZED is a performance boundary: decoding inside either limit
+        // processes discarded payloads and can exhaust the history-read timeout.
+        let (bounded, decoded) = HISTORY_SQL
+            .split_once(", recent AS MATERIALIZED (")
+            .unwrap();
+        assert!(bounded.contains("bounded_decisions AS MATERIALIZED"));
+        assert_eq!(bounded.matches("LIMIT 5001").count(), 2);
+        assert!(bounded.contains("run_id=runs.run_id AND process_id=$1"));
+        assert!(bounded.contains("decision_at >= $2 - interval '24 hours' AND decision_at < $2"));
+        assert!(!bounded.contains("metadata->"));
+        assert!(!bounded.contains("metadata#>"));
+        assert!(decoded.contains("(metadata->'agent_evaluation') #- '{request,context}'"));
+        assert!(decoded.contains("FROM bounded_decisions"));
+    }
+
     #[test]
     fn selected_side_rates_deduplicate_and_keep_cohorts_separate() {
         let at = Utc::now();
