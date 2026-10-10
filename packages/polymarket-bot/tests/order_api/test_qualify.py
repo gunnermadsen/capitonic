@@ -59,6 +59,17 @@ class ProcessReuseTest(unittest.TestCase):
                 self.assertEqual(result['execution_parity'], 'unverified')
                 self.assertEqual(set(result['differences']), {'sizing_policy'} if difference else set())
 
+    def test_paired_preview_uses_identical_candidate_and_never_submits(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'POLYMARKET_HTTP_ADMIN_TOKEN': 'unused'}):
+            driver = Qualification(directory)
+            candidate = {'version': 1, 'candidate': {'market_id': 'market'}}
+            with patch.object(driver, 'compare_policies'), patch.object(driver, 'candidate', return_value=candidate), patch.object(driver, 'request', side_effect=[(200, {'status': 'evaluated'}), (200, {'status': 'rejected'})]) as api, patch('sys.stdout', new_callable=io.StringIO):
+                result = driver.compare_preview()
+            self.assertEqual([c.args for c in api.call_args_list], [
+                ('POST', f'/orders/{pid}/preview', candidate) for pid in REUSABLE_PROCESS_IDS.values()])
+            self.assertEqual(result['execution_parity'], 'unverified')
+            self.assertEqual(result['results']['live']['receipt']['status'], 'rejected')
+
     def test_repeated_runs_patch_same_pair_without_creating_processes(self):
         processes = self.processes()
         run_keys = []

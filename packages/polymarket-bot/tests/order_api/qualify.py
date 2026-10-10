@@ -178,6 +178,22 @@ class Qualification:
         print(json.dumps(result, indent=2))
         return result
 
+    def compare_preview(self):
+        """Capture one candidate through both existing preview endpoints, without submission."""
+        self.compare_policies()
+        candidate = self.candidate()
+        if candidate is None:
+            raise RuntimeError('No current market candidate')
+        results = {}
+        for mode, pid in REUSABLE_PROCESS_IDS.items():
+            code, receipt = self.request('POST', f'/orders/{pid}/preview', candidate)
+            results[mode] = {'http_status': code, 'receipt': receipt}
+        result = {'candidate': candidate, 'results': results, 'execution_parity': 'unverified'}
+        self.state['paired_preview'] = result
+        self.save()
+        print(json.dumps(result, indent=2))
+        return result
+
     def prepare(self):
         if self.state['processes']:
             raise RuntimeError('Use a new evidence directory for a new run')
@@ -474,12 +490,12 @@ class Qualification:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action',choices=['compare-policies','prepare','start','evaluate','prepare-orders','paper','settlement','next-order','latency','stop','audit'])
+    parser.add_argument('action',choices=['compare-preview','compare-policies','prepare','start','evaluate','prepare-orders','paper','settlement','next-order','latency','stop','audit'])
     parser.add_argument('--evidence-dir',required=True)
     parser.add_argument('--mode',choices=['both','paper'],default='both')
     parser.add_argument('--order-type',choices=['fak','fok'],default='fak')
     parser.add_argument('--timeout',type=int,default=360)
     args = parser.parse_args()
     q = Qualification(args.evidence_dir, args.order_type, args.mode)
-    {'compare-policies':q.compare_policies,'prepare':q.prepare,'start':q.start,'evaluate':q.evaluate,'prepare-orders':lambda:q.poll_preparation(args.timeout),
+    {'compare-preview':q.compare_preview,'compare-policies':q.compare_policies,'prepare':q.prepare,'start':q.start,'evaluate':q.evaluate,'prepare-orders':lambda:q.poll_preparation(args.timeout),
      'paper':lambda:q.paper(args.timeout),'settlement':lambda:q.settlement(args.timeout),'next-order':q.next_order,'latency':q.latency,'stop':q.stop,'audit':q.audit}[args.action]()

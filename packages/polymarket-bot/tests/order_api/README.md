@@ -72,3 +72,9 @@ without starting or modifying either process. It records complete shared-policy
 differences and the paper adapter policy. A matching configuration alone never
 certifies execution parity. Different sizing or approved test budgets remain
 explicit differences; the paired preparation requirement is not relaxed.
+
+`compare-preview` captures one current synthetic candidate through both existing
+preview endpoints, retaining HTTP status and the full canonical receipts. Start
+the retained API-only processes through the normal lifecycle first. It performs
+no signing or submission, does not equate distinct book observations, and never
+labels matching previews as certified execution parity.
