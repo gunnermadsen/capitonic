@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import unittest
+import uuid
 from unittest.mock import patch
 
 from paired import PairedQualification, policies, validate_pair
@@ -68,7 +69,7 @@ class PairedTest(unittest.TestCase):
         bodies = self.requests()
         self.q.state['pair']['requests'] = bodies
         path = f"/orders/{REUSABLE_PROCESS_IDS['live']}/execute"
-        with patch.object(self.q, 'current', return_value=pair()):
+        with patch.object(self.q, 'current', return_value=pair()), patch.object(self.q, 'guard_opening_submission'):
             self.q.authorize_execution(path, bodies['live'])
             with self.assertRaises(RuntimeError):
                 self.q.authorize_execution(path, dict(bodies['live'], idempotency_key='new'))
@@ -87,7 +88,7 @@ class PairedTest(unittest.TestCase):
             self.assertEqual(set(saved), {'paper', 'live'})
             posted.append((mode, saved[mode]['idempotency_key']))
             if mode == 'live': raise TimeoutError('unknown submission')
-        with patch.object(self.q, 'preflight', return_value=candidate), patch.object(self.q, 'post_saved', side_effect=post):
+        with patch.object(self.q, 'wait_opening', return_value=candidate), patch.object(self.q, 'post_saved', side_effect=post):
             with self.assertRaisesRegex(RuntimeError, 'preserve evidence'):
                 self.q.execute_pair('up', '0.95')
         saved = copy.deepcopy(self.q.state['pair']['requests'])
@@ -141,6 +142,78 @@ class PairedTest(unittest.TestCase):
                 else:
                     with self.assertRaises(AssertionError): self.q.preflight('up', '0.95')
             self.assertFalse(self.q.state['pair']['requests'])
+
+    def test_opening_wait_pins_market_and_discards_preparation_that_runs_late(self):
+        for late in (False, True):
+            clock = [100.0]
+            current = pair()
+            for p in current.values():
+                policies(p)['entry_timing_policy']['params']['min_seconds_after_open'] = 0
+            market = {'market_id': 'opening-market', 'age_seconds': 1,
+                      'window_start': 'start', 'window_end': 'end'}
+            def prepare(outcome, probability, candidate):
+                self.assertEqual(candidate['candidate']['market_id'], 'opening-market')
+                if late: clock[0] += 30
+                return candidate
+            with patch('paired.time.monotonic', side_effect=lambda: clock[0]), patch('paired.time.sleep'), patch.object(self.q, 'current', return_value=current), patch.object(self.q, 'opening_market', return_value=(market, 100)), patch.object(self.q, 'preflight', side_effect=prepare), patch.object(self.q, 'request') as api:
+                if late:
+                    with self.assertRaisesRegex(RuntimeError, 'timeout'):
+                        self.q.wait_opening('up', '0.95', 10)
+                else:
+                    self.q.wait_opening('up', '0.95', 10)
+                    self.assertEqual(self.q.state['pair']['opening_window'], market)
+                api.assert_not_called()
+                self.assertFalse(self.q.state['pair']['requests'])
+
+    def test_opening_wait_skips_old_market_until_bounded_timeout(self):
+        clock = [100.0]
+        current = pair()
+        for p in current.values():
+            policies(p)['entry_timing_policy']['params']['min_seconds_after_open'] = 0
+        def sleep(seconds): clock[0] += seconds
+        with patch('paired.time.monotonic', side_effect=lambda: clock[0]), patch('paired.time.sleep', side_effect=sleep), patch.object(self.q, 'current', return_value=current), patch.object(self.q, 'opening_market', return_value=({'age_seconds': 26}, 100)), patch.object(self.q, 'preflight') as prepare:
+            with self.assertRaisesRegex(RuntimeError, 'timeout'):
+                self.q.wait_opening('up', '0.95', 2)
+            prepare.assert_not_called()
+            self.assertEqual(clock[0], 102)
+
+    def test_cutoff_blocks_new_or_ambiguous_submission_but_allows_durable_replay(self):
+        body = {'idempotency_key': str(uuid.uuid4()), 'candidate': {'market_id': 'market'}}
+        self.q.state['pair']['opening_window'] = {'market_id': 'market'}
+        with patch('paired.time.monotonic', return_value=100):
+            self.q._opening_deadline = 101
+            with patch.object(self.q, 'sql') as sql:
+                self.q.guard_opening_submission('live', body)
+                sql.assert_not_called()
+            self.q._opening_deadline = 100
+            with patch.object(self.q, 'sql', return_value=False):
+                with self.assertRaisesRegex(RuntimeError, 'cutoff'):
+                    self.q.guard_opening_submission('live', body)
+            with patch.object(self.q, 'sql', return_value=True):
+                self.q.guard_opening_submission('live', body)
+            with self.assertRaisesRegex(RuntimeError, 'differs'):
+                self.q.guard_opening_submission('live', dict(body, candidate={'market_id': 'other'}))
+
+    def test_setup_applies_only_matching_opening_policy_change(self):
+        self.q.state['processes'] = {}
+        self.q.state.pop('pair')
+        current = pair()
+        for p in current.values(): p.update(enabled=False, status='stopped')
+        updated = []
+        def api(method, path, body):
+            self.assertEqual(method, 'PATCH')
+            mode = next(m for m, pid in REUSABLE_PROCESS_IDS.items() if path.endswith(pid))
+            result = copy.deepcopy(current[mode])
+            result['config'] = body['config']
+            updated.append(result)
+            return 200, {'process': result}
+        with patch.object(self.q, 'current', return_value=current), patch.object(self.q, 'request', side_effect=api), patch('paired.subprocess.check_output', return_value=b'{"items": []}'), patch.object(self.q, 'start'):
+            self.q.setup('polymarket-primary', '5.500001', 'fak')
+        self.assertEqual(len(updated), 2)
+        for p in updated:
+            params = policies(p)['entry_timing_policy']['params']
+            self.assertEqual(params['min_seconds_after_open'], 0)
+            self.assertEqual(params['min_seconds_before_close'], 90)
 
     def test_setup_checks_both_definitions_before_any_mutation(self):
         self.q.state['processes'] = {}

@@ -47,7 +47,8 @@ cd /Users/gunnermadsen/development/polymarket-bot/worktrees/polymarket-execution
 export PYTHONDONTWRITEBYTECODE=1
 
 # Changes only this retained pair through existing process APIs:
-# fixed requested sizing/bounds = 5, selected FAK, fresh immutable run identity;
+# fixed requested sizing/bounds = 5, minimum seconds after open = 0, selected FAK;
+# fresh immutable run identity;
 # starts the API-only processes. No order submission.
 python3 packages/polymarket-bot/tests/order_api/paired.py setup \
   --evidence-dir "$HOME/rail-order-evidence/fak-pair" \
@@ -58,11 +59,12 @@ python3 packages/polymarket-bot/tests/order_api/paired.py preflight \
   --evidence-dir "$HOME/rail-order-evidence/fak-pair" \
   --outcome up --probability-up 0.95
 
-# FUNDED: repeats fresh preflight, then one live and one paper execute request.
+# FUNDED: waits up to 600 seconds for an eligible opening window, repeats
+# fresh preflight, then one live and one paper execute request.
 # Probability is explicit synthetic test input, not a model prediction.
 python3 packages/polymarket-bot/tests/order_api/paired.py execute \
   --evidence-dir "$HOME/rail-order-evidence/fak-pair" \
-  --outcome up --probability-up 0.95 --submit-live
+  --outcome up --probability-up 0.95 --wait-seconds 600 --submit-live
 
 # Read-only: repeat after reconciliation and after market resolution.
 python3 packages/polymarket-bot/tests/order_api/paired.py observe \
@@ -86,7 +88,8 @@ python3 packages/polymarket-bot/tests/order_api/paired.py stop \
 first and preserve `run.json`; then explicitly use `replay` if necessary. Replay
 requires the same active process configuration and cash bounds, because a request
 that never arrived may be submitted for the first time. No automatic new-key retry,
-outcome switching, market hunting, funded retry loop or process creation exists.
+outcome switching, funded retry loop or process creation exists. Before either
+submission, the runner may wait for another opening window within its bounded timeout.
 A local exclusive lock prevents simultaneous runner invocations across directories.
 Do not operate the same test processes manually while a paired run is in progress.
 
@@ -103,6 +106,36 @@ was certified. `latency.json` and `latency.prom` reuse existing metric semantics
 FOK requires a separately initiated pair after the FAK pair is resolved. Reuse the
 same two processes, stop them, and select `--order-type fok` with a new evidence
 directory. This is another funded order; it is never submitted by the FAK command.
+
+## Opening-window execution
+
+Setup changes only the retained pair's `entry_timing_policy.params.min_seconds_after_open`
+to zero, alongside the existing five-share setup. The 90-second before-close rule
+and all other policies remain intact. Already prepared runs need normal stopped
+process setup with a new evidence directory; active configurations are not hot-patched.
+Do not replace an evidence directory that contains attempted orders.
+
+`execute` reads the existing ingested market's authoritative start/end and database
+time through bounded read-only SQL. It accepts only five-minute markets and pins
+one market to both synthetic candidates. It can use the current opening window or
+wait for the next one. No UMR prediction, invocation, or clock-modulo market guess
+is involved. `preflight` alone remains a non-submitting diagnostic.
+
+New POSTs must begin before second **25**, leaving five seconds of margin within
+the requested 0–30 second window. Preparation that overruns the cutoff is discarded
+before keys are allocated; readiness/admission may be retried while waiting. The
+wait defaults to 600 seconds and accepts `--wait-seconds` from 1 through 900. Once
+keys are saved, no automatic next-market attempt is permitted, even if only one
+side was sent. Each transport authorization rechecks the cutoff after configuration
+reads. Network and execution latency mean fills are not guaranteed before second 30.
+
+Outside the cutoff, explicit same-key replay is allowed only when a read-only lookup
+proves that the original process/key already has a durable order. A timeout or saved
+attempt flag alone does not prove this. Undelivered requests cannot first execute
+late; preserve evidence and use read-only observation to resolve uncertainty.
+
+Opening prices are not guaranteed to be cheaper. Synthetic probability is test
+input, not evidence of positive expectancy; the existing TPC price/cash limits apply.
 
 ## Remaining certification boundaries
 
@@ -139,3 +172,5 @@ two explicit timing benchmarks were ignored. The external Python suite has 27
 checks: 24 offline checks passed, and the three opt-in accounting SQL checks also
 passed against the local read-only database. Funded submission remains user-run.
 The suite is runnable with standard unittest discovery; no CI workflow was edited.
+
+Opening-window extension: 28 offline Python tests passed; three existing opt-in SQL checks were skipped in this focused run. No runtime state or rail implementation changed.

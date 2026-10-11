@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import subprocess
 import threading
+import time
 import urllib.parse
 import uuid
 
@@ -101,6 +102,7 @@ class PairedQualification(Qualification):
         validate_pair(current, pair['account'], pair['max_cash_usd'], True)
         if any(current[m]['config'] != self.state['processes'][m]['config'] for m in current):
             raise RuntimeError('TPC changed since paired preparation')
+        self.guard_opening_submission(mode, body)
 
     def live_readiness(self, required=False):
         pid = REUSABLE_PROCESS_IDS['live']
@@ -129,6 +131,7 @@ class PairedQualification(Qualification):
             ps = policies(p)
             ps['sizing_policy']['params'].update(default_share=5, lower_share_bound=5, upper_share_bound=5)
             ps['order_execution_policy']['params']['member_order_types']['conservative'] = order_type
+            ps['entry_timing_policy']['params']['min_seconds_after_open'] = 0
             run_key = 'order-api-' + mode + '-' + self.state['run']
             control = p['config']['raw']['btc_realtime_paper']
             control['next_experiment_key'] = run_key
@@ -147,7 +150,7 @@ class PairedQualification(Qualification):
             '-n', 'capitonic', 'get', 'pods', '-l', 'app.kubernetes.io/name=polymarket-bot', '-o', 'json']))
         self.start()
 
-    def preflight(self, outcome, probability):
+    def preflight(self, outcome, probability, candidate=None):
         pair = self.state['pair']
         if pair['requests']:
             raise RuntimeError('Saved execution exists: use observe or replay, not a new candidate')
@@ -156,7 +159,7 @@ class PairedQualification(Qualification):
         self.check('prepared configuration unchanged', all(
             current[m]['config'] == self.state['processes'][m]['config'] for m in current))
         self.live_readiness(required=True)
-        candidate = self.candidate()
+        candidate = copy.deepcopy(candidate) if candidate is not None else self.candidate()
         if candidate is None:
             raise RuntimeError('No current market')
         candidate['candidate'].update(outcome=outcome, synthetic_prediction={'probability_up': probability})
@@ -195,10 +198,68 @@ class PairedQualification(Qualification):
         self.save()
         return candidate
 
-    def execute_pair(self, outcome, probability):
+    def opening_market(self):
+        started = time.monotonic()
+        rows = self.sql("SELECT coalesce(json_agg(m),'[]') FROM (SELECT market_id,window_start,window_end, "
+            "extract(epoch FROM (now()-window_start))::float8 AS age_seconds "
+            "FROM polymarket.btc_interval_markets WHERE window_start <= now() "
+            "AND window_start > now()-interval '5 minutes' AND window_end > now() "
+            "AND window_end-window_start=interval '5 minutes' ORDER BY window_start DESC LIMIT 1) m")
+        if not rows:
+            return None, started
+        return rows[0], started
+
+    def wait_opening(self, outcome, probability, wait_seconds):
+        if not 0 < wait_seconds <= 900:
+            raise ValueError('Opening wait must be between 1 and 900 seconds')
+        if self.state['pair']['requests']:
+            raise RuntimeError('Saved execution exists: use observe or replay')
+        current = self.current()
+        validate_pair(current, self.state['pair']['account'], self.state['pair']['max_cash_usd'], True)
+        if any(policies(p)['entry_timing_policy']['params']['min_seconds_after_open'] != 0
+               for p in current.values()):
+            raise RuntimeError('Run setup on the stopped pair to enable matching opening timing policies')
+        deadline = time.monotonic() + wait_seconds
+        while time.monotonic() < deadline:
+            market, sampled = self.opening_market()
+            if market and 0 <= market['age_seconds'] < 25:
+                # Anchor to DB time and include the query round trip conservatively.
+                self._opening_deadline = min(deadline, sampled + 25 - market['age_seconds'])
+                candidate = {'version': 1, 'candidate': {'member_id': 'conservative',
+                    'market_id': market['market_id'], 'outcome': outcome,
+                    'synthetic_prediction': {'probability_up': probability}}}
+                try:
+                    candidate = self.preflight(outcome, probability, candidate)
+                except AssertionError:
+                    # Preparation alone has no submission; fresh evidence can recover in-window.
+                    time.sleep(min(1, max(0, deadline - time.monotonic())))
+                    continue
+                if time.monotonic() < self._opening_deadline:
+                    self.state['pair']['opening_window'] = market
+                    self.save()
+                    return candidate
+            time.sleep(min(1, max(0, deadline - time.monotonic())))
+        raise RuntimeError('No qualified opening window before timeout; no orders submitted')
+
+    def guard_opening_submission(self, mode, body):
+        pair = self.state['pair']
+        window = pair.get('opening_window')
+        if window and body['candidate']['market_id'] != window['market_id']:
+            raise RuntimeError('Saved request differs from opening market')
+        if window and time.monotonic() < getattr(self, '_opening_deadline', 0):
+            return
+        # Outside the window only an already durable operation can be replayed.
+        # An attempted POST or a timeout is NOT evidence that the order exists.
+        key = str(uuid.UUID(body['idempotency_key']))
+        pid = REUSABLE_PROCESS_IDS[mode]
+        exists = self.sql(f"SELECT EXISTS(SELECT 1 FROM polymarket.orders WHERE process_id='{pid}' AND client_order_id='{key}')")
+        if not exists:
+            raise RuntimeError('Opening cutoff passed; no new submission or undelivered replay allowed')
+
+    def execute_pair(self, outcome, probability, wait_seconds=600):
         if not self.submit_live:
             raise RuntimeError('Funded execution requires --submit-live')
-        candidate = self.preflight(outcome, probability)
+        candidate = self.wait_opening(outcome, probability, wait_seconds)
         pair = self.state['pair']
         pair['requests'] = {m: dict(candidate, idempotency_key=str(uuid.uuid4())) for m in REUSABLE_PROCESS_IDS}
         self.save()  # Both identities durable before either POST; never replaced after timeout.
@@ -359,6 +420,7 @@ def main():
     parser.add_argument('--outcome', choices=['up', 'down'], default='up')
     parser.add_argument('--probability-up', default='0.95')
     parser.add_argument('--submit-live', action='store_true')
+    parser.add_argument('--wait-seconds', type=int, default=600, help='Opening-window wait, 1–900 seconds; default 600')
     args = parser.parse_args()
     probability = Decimal(args.probability_up)
     if not probability.is_finite() or not 0 <= probability <= 1:
@@ -370,7 +432,7 @@ def main():
         q = PairedQualification(args.evidence_dir, args.submit_live)
         if args.action == 'setup': q.setup(args.account, args.max_cash_usd, args.order_type)
         elif args.action == 'preflight': q.preflight(args.outcome, str(probability))
-        elif args.action == 'execute': q.execute_pair(args.outcome, str(probability))
+        elif args.action == 'execute': q.execute_pair(args.outcome, str(probability), args.wait_seconds)
         elif args.action == 'observe': q.observe()
         elif args.action == 'replay': q.replay()
         elif args.action == 'latency': q.latency()
