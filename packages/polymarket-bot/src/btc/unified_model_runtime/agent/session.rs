@@ -516,6 +516,7 @@ mod tests {
             super::super::CALIBRATION_PROFILE_KEY,
             super::super::MARKET_CONTEXT_PROFILE_KEY,
             super::super::EXECUTION_EVIDENCE_PROFILE_KEY,
+            super::super::MARKET_REFERENCE_PROFILE_KEY,
         ] {
             use rust_decimal_macros::dec;
             let mut result = entry_forecast("0.70", 2);
