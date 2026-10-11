@@ -171,6 +171,31 @@ mod lifecycle_tests {
         )
         .is_ok());
         assert!(validate_btc_live_model_authorization(&strategy).is_err());
+        let mut fresh = control.clone();
+        let profile = agent::profile_for_key(agent::FRESH_EVIDENCE_PROFILE_KEY).unwrap();
+        fresh.strategy["decision_strategy"]["models"][0]["selection"] = serde_json::json!({
+            "type":"openai_agent", "profile_key":profile.key,
+            "profile_sha256":agent::hash(&profile).unwrap()
+        });
+        assert!(resolve_btc_strategy(&fresh).is_err());
+        fresh.strategy["agent_reassessment_price_change"] = serde_json::json!("0.05");
+        let resolved = resolve_btc_strategy(&fresh).unwrap();
+        assert_eq!(
+            resolved.agent_reassessment_price_change,
+            Some(rust_decimal::Decimal::new(5, 2))
+        );
+        assert_eq!(
+            resolved.feature_schema_version,
+            agent::FRESH_EVIDENCE_CONTEXT_VERSION
+        );
+        assert!(validate_btc_live_model_authorization(&resolved).is_err());
+        fresh.strategy["agent_reassessment_price_change"] = serde_json::json!("0");
+        assert!(resolve_btc_strategy(&fresh).is_err());
+        assert!(strategy.agent_reassessment_price_change.is_none());
+        assert!(serde_json::to_value(&strategy)
+            .unwrap()
+            .get("agent_reassessment_price_change")
+            .is_none());
         control.sources.pop();
         assert!(resolve_btc_strategy(&control).is_err());
         control.sources = agent::REQUIRED_PRODUCTS

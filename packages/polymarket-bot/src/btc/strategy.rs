@@ -86,6 +86,9 @@ pub struct BtcStrategyConfig {
     pub max_fee_age_ms: i64,
     pub min_entry_price: Decimal,
     pub max_entry_price: Decimal,
+    /// Absolute share-price change requiring a fresh agent assessment; process-owned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_reassessment_price_change: Option<Decimal>,
     pub max_depth_participation: Decimal,
     pub max_probability_uncertainty: Decimal,
     pub spread_reserve_fraction: Decimal,
@@ -115,6 +118,7 @@ impl Default for BtcStrategyConfig {
             max_fee_age_ms: 3_600_000,
             min_entry_price: dec!(0.05),
             max_entry_price: dec!(0.95),
+            agent_reassessment_price_change: None,
             max_depth_participation: dec!(0.25),
             max_probability_uncertainty: dec!(0.10),
             spread_reserve_fraction: dec!(0.10),
@@ -1467,6 +1471,9 @@ fn validate_config(config: &BtcStrategyConfig) -> Result<(), BtcRejectReason> {
     }
     let strategy_contract_valid = if let Some(selection) = config.agent_selection() {
         selection.validate().is_ok()
+            && (selection.profile_key
+                != super::unified_model_runtime::agent::FRESH_EVIDENCE_PROFILE_KEY
+                || config.agent_reassessment_price_change.is_some())
             && config.strategy_version == super::unified_model_runtime::agent::STRATEGY_VERSION
             && config.feature_schema_version == selection.context_version()
             && config.unified_model.is_none()
@@ -1554,6 +1561,9 @@ fn validate_config(config: &BtcStrategyConfig) -> Result<(), BtcRejectReason> {
         && config.min_entry_price > Decimal::ZERO
         && config.max_entry_price < Decimal::ONE
         && config.min_entry_price < config.max_entry_price
+        && config
+            .agent_reassessment_price_change
+            .is_none_or(|change| change > Decimal::ZERO && change < Decimal::ONE)
         && config.max_depth_participation > Decimal::ZERO
         && config.max_depth_participation <= Decimal::ONE
         && config.max_probability_uncertainty < dec!(0.5)
@@ -2338,6 +2348,7 @@ mod tests {
             agent::ENTRY_REASSESSMENT_PROFILE_KEY,
             agent::CALIBRATION_PROFILE_KEY,
             agent::MARKET_CONTEXT_PROFILE_KEY,
+            agent::FRESH_EVIDENCE_PROFILE_KEY,
         ] {
             let profile = agent::profile_for_key(profile_key).unwrap();
             let mut entry_config = config.clone();
@@ -2346,6 +2357,18 @@ mod tests {
                 profile_key: profile_key.into(),
                 profile_sha256: agent::hash(&agent::profile_for_key(profile_key).unwrap()).unwrap(),
             });
+            if profile_key == agent::FRESH_EVIDENCE_PROFILE_KEY {
+                assert!(entry_config.validate().is_err());
+                for invalid in [dec!(0), dec!(-0.05), dec!(1)] {
+                    entry_config.agent_reassessment_price_change = Some(invalid);
+                    assert!(entry_config.validate().is_err());
+                }
+                entry_config.agent_reassessment_price_change = Some(dec!(0.05));
+                entry_config.validate().unwrap();
+                let roundtrip: BtcStrategyConfig =
+                    serde_json::from_value(serde_json::to_value(&entry_config).unwrap()).unwrap();
+                assert_eq!(roundtrip.agent_reassessment_price_change, Some(dec!(0.05)));
+            }
             let mut entry_data = data.clone();
             entry_data.feature_schema_version = profile.context_version.into();
             let entry_decision = evaluate_agent_prediction(

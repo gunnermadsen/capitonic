@@ -26,7 +26,7 @@ pub fn add_entry_reassessment_context(
     request.context["version"] = json!(super::ENTRY_REASSESSMENT_CONTEXT_VERSION);
     request.context["evaluation_slot"] = json!(evaluation_slot);
     request.context["entry_reassessment"] = json!({
-        "trigger": if affordability_trigger { "forecast_became_affordable" } else { "scheduled_evaluation" },
+        "trigger": if affordability_trigger { if request.selection.profile_key == super::FRESH_EVIDENCE_PROFILE_KEY { "forecast_evidence_changed" } else { "forecast_became_affordable" } } else { "scheduled_evaluation" },
         "max_entry_price": max_entry_price,
         "previous_request_id": previous.map(|result| result.request.request_id),
         "meaning": "The cap is an execution limit, not a settlement probability. Price changes and reference/TWAP changes are in previous_prediction_comparison; current Binance candles contain trade-flow evidence."
@@ -69,7 +69,7 @@ fn comparison(current: &EvaluationRequest, previous: &EvaluationResult) -> Optio
     };
     let price_path = format!("/execution_snapshot/{side}/executable_ask_vwap");
     let reference_path = "/execution_snapshot/chainlink_price";
-    Some(json!({
+    let mut value = json!({
         "previous_direction": prediction.direction,
         "previous_probability_up": prediction.probability_up,
         "previous_observed_at": prior.observed_at,
@@ -80,7 +80,21 @@ fn comparison(current: &EvaluationRequest, previous: &EvaluationResult) -> Optio
         "rtds_reference_price": pair(positive(before, reference_path), positive(now, reference_path)),
         "rtds_reference_change_bps": relative_change(positive(before, reference_path), positive(now, reference_path)),
         "previous_side_executable_price": pair(positive(before, &price_path), positive(now, &price_path)),
-    }))
+    });
+    if current.selection.profile_key == super::FRESH_EVIDENCE_PROFILE_KEY {
+        let fields = value.as_object_mut()?;
+        fields.remove("previous_direction");
+        fields.remove("previous_probability_up");
+        fields.remove("previous_side_executable_price");
+        for side in ["up", "down"] {
+            let path = format!("/execution_snapshot/{side}_book/executable_ask_vwap");
+            fields.insert(
+                format!("{side}_executable_price"),
+                pair(positive(before, &path), positive(now, &path)),
+            );
+        }
+    }
+    Some(value)
 }
 
 pub(super) fn positive(context: &Value, path: &str) -> Option<Decimal> {
@@ -271,6 +285,55 @@ mod tests {
         );
         previous.request.process_id = Uuid::new_v4();
         add_entry_reassessment_context(&mut current, Some(&previous), dec!(0.60), 2, true);
+        assert!(current.context["previous_prediction_comparison"].is_null());
+    }
+    #[test]
+    fn fresh_evidence_keeps_market_changes_without_revealing_previous_answer() {
+        use rust_decimal_macros::dec;
+        let (mut current, mut previous) = fixture();
+        let profile = profile_for_key(FRESH_EVIDENCE_PROFILE_KEY).unwrap();
+        current.selection = AgentSelection {
+            profile_key: profile.key.into(),
+            profile_sha256: hash(&profile).unwrap(),
+        };
+        previous.request.selection = current.selection.clone();
+        for context in [&mut current.context, &mut previous.request.context] {
+            context["execution_snapshot"]["down_book"]["executable_ask_vwap"] = json!("0.41");
+        }
+        previous.request.input_sha256 = hash(&previous.request.context).unwrap();
+        add_entry_reassessment_context(&mut current, Some(&previous), dec!(0.50), 2, true);
+        let comparison = current.context["previous_prediction_comparison"].clone();
+        for key in [
+            "previous_direction",
+            "previous_probability_up",
+            "previous_side_executable_price",
+        ] {
+            assert!(comparison.get(key).is_none(), "{key}");
+        }
+        assert_eq!(
+            comparison["up_executable_price"]["change"],
+            json!(dec!(0.05))
+        );
+        assert_eq!(
+            comparison["down_executable_price"]["change"],
+            json!(dec!(0))
+        );
+        assert!(comparison.get("twap_distance_from_open_bps").is_some());
+        assert!(comparison.get("rtds_reference_change_bps").is_some());
+        assert_eq!(
+            current.context["entry_reassessment"]["trigger"],
+            "forecast_evidence_changed"
+        );
+        // Changing the previous answer alone cannot change the context sent to the model.
+        previous.prediction.as_mut().unwrap().direction = crate::btc::types::BtcOutcome::Down;
+        previous.prediction.as_mut().unwrap().probability_up = 0.1;
+        add_entry_reassessment_context(&mut current, Some(&previous), dec!(0.50), 2, true);
+        assert_eq!(
+            comparison,
+            current.context["previous_prediction_comparison"]
+        );
+        previous.request.process_id = Uuid::new_v4();
+        add_entry_reassessment_context(&mut current, Some(&previous), dec!(0.50), 2, true);
         assert!(current.context["previous_prediction_comparison"].is_null());
     }
 }

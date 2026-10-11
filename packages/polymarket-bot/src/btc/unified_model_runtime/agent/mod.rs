@@ -41,11 +41,20 @@ pub const ENTRY_REASSESSMENT_CONTEXT_VERSION: &str =
 pub const CALIBRATION_PROFILE_KEY: &str = "btc-5m-openai-agent-calibration-v1";
 pub const CALIBRATION_CONTEXT_VERSION: &str = "capitonic-btc-agent-calibration-context-v1";
 pub const MARKET_CONTEXT_PROFILE_KEY: &str = "btc-5m-openai-agent-market-context-v1";
+pub const FRESH_EVIDENCE_PROFILE_KEY: &str = "btc-5m-openai-agent-fresh-evidence-v1";
+pub const FRESH_EVIDENCE_CONTEXT_VERSION: &str = "capitonic-btc-agent-fresh-evidence-v1";
+pub fn uses_market_context(key: &str) -> bool {
+    matches!(key, MARKET_CONTEXT_PROFILE_KEY | FRESH_EVIDENCE_PROFILE_KEY)
+}
+
 pub const MARKET_CONTEXT_VERSION: &str = "capitonic-btc-agent-market-context-v1";
 const MARKET_CONTEXT_INSTRUCTION: &str = "Use market_horizons to compare the 15-second, 5-minute and 15-minute RTDS midpoint paths: returns, sample volatility, path efficiency and reversals. Respect each window's source end, sampling interval and availability; closed-minute summaries lag the current observation. Use settlement_uncertainty to relate the observed official TWAP distance to remaining time, the supporting RTDS variability scale and changes in the reference/TWAP gap. The square-root-time scale assumes stationary independent returns, ignores drift and TWAP averaging, and is not a calibrated settlement distribution or probability. A zero or unavailable scale gives no certainty. Reference/TWAP gap changes can reflect different observation timestamps; they do not guarantee convergence. Missing optional summaries are unknown and do not alone require abstention. Preserve the exact settlement rule and distinguish directional evidence from entry price.";
 
 pub fn uses_calibration(key: &str) -> bool {
-    matches!(key, CALIBRATION_PROFILE_KEY | MARKET_CONTEXT_PROFILE_KEY)
+    matches!(
+        key,
+        CALIBRATION_PROFILE_KEY | MARKET_CONTEXT_PROFILE_KEY | FRESH_EVIDENCE_PROFILE_KEY
+    )
 }
 
 const CALIBRATION_INSTRUCTION: &str = "Use historical_calibration as historical reliability evidence when estimating probability_up. Its bands describe selected-side probabilities, not probability_up; respect direction when interpreting them. Source profiles are separate cohorts, not measured performance of this profile. Initial and latest reassessment populations can overlap markets and are not independent. Filled versus unfilled describes historical selection, not a known property of the current forecast. Small samples, wide intervals, unavailable outcomes and truncated coverage imply uncertainty; do not mechanically substitute a historical win rate, invent certainty, or abstain solely because history is unavailable. Forecast from the current causal observations with the existing settlement rule.";
@@ -53,7 +62,10 @@ const CALIBRATION_INSTRUCTION: &str = "Use historical_calibration as historical 
 pub fn uses_entry_reassessment(key: &str) -> bool {
     matches!(
         key,
-        ENTRY_REASSESSMENT_PROFILE_KEY | CALIBRATION_PROFILE_KEY | MARKET_CONTEXT_PROFILE_KEY
+        ENTRY_REASSESSMENT_PROFILE_KEY
+            | CALIBRATION_PROFILE_KEY
+            | MARKET_CONTEXT_PROFILE_KEY
+            | FRESH_EVIDENCE_PROFILE_KEY
     )
 }
 
@@ -153,6 +165,14 @@ pub fn profile_for_key(key: &str) -> Result<AgentProfile> {
             selected.instructions.push(' ');
             selected.instructions.push_str(MARKET_CONTEXT_INSTRUCTION);
         }
+        FRESH_EVIDENCE_PROFILE_KEY => {
+            selected = profile_for_key(MARKET_CONTEXT_PROFILE_KEY)?;
+            selected.key = FRESH_EVIDENCE_PROFILE_KEY;
+            selected.context_version = FRESH_EVIDENCE_CONTEXT_VERSION;
+            selected.instructions = selected.instructions
+                .replace(REASSESSMENT_INSTRUCTION, "Use previous_prediction_comparison only as a comparison of market observations. Make an independent settlement forecast from current evidence. Prior answers are deliberately omitted. Both UP and DOWN executable-price changes are supplied without selecting a prior side. Missing comparisons are unknown, not zero.")
+                .replace(ENTRY_REASSESSMENT_INSTRUCTION, "When entry_reassessment.trigger is forecast_evidence_changed, market prices changed since the prior observation. Reassess settlement using current reference, TWAP, Binance and book evidence. A cheaper entry alone is not evidence for a direction. The entry cap and price-change threshold are execution policy, not probabilities.");
+        }
         _ => anyhow::bail!("unsupported agent profile"),
     }
     Ok(selected)
@@ -167,7 +187,9 @@ impl AgentSelection {
         Ok(())
     }
     pub fn context_version(&self) -> &'static str {
-        if self.profile_key == MARKET_CONTEXT_PROFILE_KEY {
+        if self.profile_key == FRESH_EVIDENCE_PROFILE_KEY {
+            FRESH_EVIDENCE_CONTEXT_VERSION
+        } else if self.profile_key == MARKET_CONTEXT_PROFILE_KEY {
             MARKET_CONTEXT_VERSION
         } else if self.profile_key == CALIBRATION_PROFILE_KEY {
             CALIBRATION_CONTEXT_VERSION
@@ -462,5 +484,41 @@ mod tests {
         };
         selection.validate().unwrap();
         assert_eq!(selection.context_version(), MARKET_CONTEXT_VERSION);
+    }
+    #[test]
+    fn fresh_profile_preserves_market_profile_and_unrelated_behavior() {
+        let original = profile_for_key(MARKET_CONTEXT_PROFILE_KEY).unwrap();
+        assert_eq!(
+            hash(&original).unwrap(),
+            "241c71750a8211718288ae1dfa45ac7e2eea0ca96ba8898a6d9a2a4945165350"
+        );
+        let fresh = profile_for_key(FRESH_EVIDENCE_PROFILE_KEY).unwrap();
+        assert_eq!(fresh.model, original.model);
+        assert_eq!(fresh.attempts_seconds, original.attempts_seconds);
+        assert_eq!(
+            fresh.decision_ceiling_seconds,
+            original.decision_ceiling_seconds
+        );
+        assert_eq!(fresh.timeout_seconds, original.timeout_seconds);
+        assert!(fresh.instructions.contains(CALIBRATION_INSTRUCTION));
+        assert!(fresh.instructions.contains(MARKET_CONTEXT_INSTRUCTION));
+        assert!(fresh.instructions.contains(SETTLEMENT_RULE));
+        assert!(!fresh.instructions.contains(REASSESSMENT_INSTRUCTION));
+        assert!(!fresh.instructions.contains(ENTRY_REASSESSMENT_INSTRUCTION));
+        assert!(
+            uses_calibration(fresh.key)
+                && uses_market_context(fresh.key)
+                && uses_entry_reassessment(fresh.key)
+        );
+        let selection = AgentSelection {
+            profile_key: fresh.key.into(),
+            profile_sha256: hash(&fresh).unwrap(),
+        };
+        selection.validate().unwrap();
+        assert_eq!(selection.context_version(), FRESH_EVIDENCE_CONTEXT_VERSION);
+        println!(
+            "Fresh evidence profile SHA256: {}",
+            selection.profile_sha256
+        );
     }
 }

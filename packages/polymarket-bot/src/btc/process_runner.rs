@@ -1445,6 +1445,7 @@ impl BtcProcessRunner {
                 snapshot.up_book.executable_ask_vwap,
                 snapshot.down_book.executable_ask_vwap,
                 member.strategy.max_entry_price,
+                member.strategy.agent_reassessment_price_change,
             );
         }
         let affordability_trigger = session.entry_reassessment_due(elapsed);
@@ -1470,6 +1471,7 @@ impl BtcProcessRunner {
                     | agent::ENTRY_REASSESSMENT_PROFILE_KEY
                     | agent::CALIBRATION_PROFILE_KEY
                     | agent::MARKET_CONTEXT_PROFILE_KEY
+                    | agent::FRESH_EVIDENCE_PROFILE_KEY
             ) {
                 agent::build_volatility_context(&observation.state, &snapshot, &sources)
             } else if selection.profile_key == agent::SETTLEMENT_PROFILE_KEY {
@@ -1511,13 +1513,18 @@ impl BtcProcessRunner {
                     request.context["historical_calibration"] =
                         session.calibration.clone().unwrap();
                 }
-                if selection.profile_key == agent::MARKET_CONTEXT_PROFILE_KEY {
+                if agent::uses_market_context(&selection.profile_key) {
                     agent::add_market_context(
                         &mut request,
                         &observation.state,
                         &sources,
                         session.latest(),
                     );
+                }
+                if selection.profile_key == agent::FRESH_EVIDENCE_PROFILE_KEY {
+                    request.context["version"] = serde_json::json!(selection.context_version());
+                    request.context["entry_reassessment"]["price_change_threshold"] =
+                        serde_json::json!(member.strategy.agent_reassessment_price_change);
                 }
                 request.input_sha256 = agent::hash(&request.context)?;
                 // Record the slot before sending, so restart cannot replenish its budget.
@@ -1654,6 +1661,7 @@ impl BtcProcessRunner {
             snapshot.up_book.executable_ask_vwap,
             snapshot.down_book.executable_ask_vwap,
             member.strategy.max_entry_price,
+            member.strategy.agent_reassessment_price_change,
         );
         let mut decision = if entry_held {
             super::strategy::unavailable_agent_prediction(&member.strategy, &snapshot)
@@ -1674,7 +1682,7 @@ impl BtcProcessRunner {
             let entry_hold_evidence = entry_held.then(|| {
                 serde_json::json!({
                     "agent_evaluation":result,
-                    "agent_entry_reassessment":"forecast_became_affordable"
+                    "agent_entry_reassessment": if selection.profile_key == agent::FRESH_EVIDENCE_PROFILE_KEY { "forecast_evidence_changed" } else { "forecast_became_affordable" }
                 })
             });
             self.insert_process_strategy_decision(

@@ -303,6 +303,10 @@ pub(super) fn resolve_legacy_btc_strategy(
         serde_json::Value::Null,
     );
     object.insert("required_model_feeds".into(), serde_json::json!([]));
+    object.insert(
+        "agent_reassessment_price_change".into(),
+        serde_json::Value::Null,
+    );
     for (key, override_value) in overrides {
         let slot = object
             .get_mut(key)
@@ -436,6 +440,10 @@ pub(super) fn resolve_btc_members(
         serde_json::Value::Null,
     );
     object.insert("required_model_feeds".into(), serde_json::json!([]));
+    object.insert(
+        "agent_reassessment_price_change".into(),
+        serde_json::Value::Null,
+    );
     for (key, v) in overrides {
         if key == "decision_strategy" {
             continue;

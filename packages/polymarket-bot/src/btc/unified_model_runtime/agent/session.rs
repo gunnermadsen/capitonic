@@ -53,6 +53,7 @@ impl AgentSession {
         up_ask: Option<rust_decimal::Decimal>,
         down_ask: Option<rust_decimal::Decimal>,
         cap: rust_decimal::Decimal,
+        price_change: Option<rust_decimal::Decimal>,
     ) -> bool {
         if !super::uses_entry_reassessment(&result.request.selection.profile_key) {
             return false;
@@ -66,9 +67,19 @@ impl AgentSession {
                     crate::btc::types::BtcOutcome::Up => up_ask,
                     crate::btc::types::BtcOutcome::Down => down_ask,
                 });
-        if super::reassessment::selected_ask(result).is_some_and(|price| price > cap)
-            && current.is_some_and(|price| price > rust_decimal::Decimal::ZERO && price <= cap)
-        {
+        let observed = super::reassessment::selected_ask(result);
+        let became_affordable = observed.is_some_and(|price| price > cap)
+            && current.is_some_and(|price| price > rust_decimal::Decimal::ZERO && price <= cap);
+        let changed = result.request.selection.profile_key == super::FRESH_EVIDENCE_PROFILE_KEY
+            && observed
+                .zip(current)
+                .zip(price_change)
+                .is_some_and(|((before, now), threshold)| {
+                    now > rust_decimal::Decimal::ZERO
+                        && threshold > rust_decimal::Decimal::ZERO
+                        && (now - before).abs() >= threshold
+                });
+        if became_affordable || changed {
             self.entry_reassessment = Some(result.request.request_id);
         }
         self.entry_reassessment == Some(result.request.request_id)
@@ -96,7 +107,10 @@ impl AgentSession {
                     .attempts
                     .max(slot.min(profile().attempts_seconds.len() as u64) as usize);
             }
-            if request.context["entry_reassessment"]["trigger"] == "forecast_became_affordable" {
+            if matches!(
+                request.context["entry_reassessment"]["trigger"].as_str(),
+                Some("forecast_became_affordable" | "forecast_evidence_changed")
+            ) {
                 self.entry_reassessment_started = request.context["entry_reassessment"]
                     ["previous_request_id"]
                     .as_str()
@@ -372,12 +386,12 @@ mod tests {
         session.observe_market("a");
         let above = entry_forecast("0.70", 1);
         session.retain(above.clone());
-        assert!(!session.hold_entry(&above, Some(dec!(0.61)), Some(dec!(0.30)), dec!(0.60)));
-        assert!(!session.hold_entry(&above, None, Some(dec!(0.30)), dec!(0.60)));
-        assert!(session.hold_entry(&above, Some(dec!(0.60)), Some(dec!(0.30)), dec!(0.60)));
+        assert!(!session.hold_entry(&above, Some(dec!(0.61)), Some(dec!(0.30)), dec!(0.60), None));
+        assert!(!session.hold_entry(&above, None, Some(dec!(0.30)), dec!(0.60), None));
+        assert!(session.hold_entry(&above, Some(dec!(0.60)), Some(dec!(0.30)), dec!(0.60), None));
         assert!(session.entry_reassessment_due(60));
         // A price bounce cannot release the invalidated forecast.
-        assert!(session.hold_entry(&above, Some(dec!(0.65)), None, dec!(0.60)));
+        assert!(session.hold_entry(&above, Some(dec!(0.65)), None, dec!(0.60), None));
         let mut independent = AgentSession::default();
         independent.observe_market("a");
         independent.retain(above.clone());
@@ -386,15 +400,21 @@ mod tests {
         down.prediction.as_mut().unwrap().direction = crate::btc::types::BtcOutcome::Down;
         down.prediction.as_mut().unwrap().probability_up = 0.3;
         independent.retain(down.clone());
-        assert!(!independent.hold_entry(&down, Some(dec!(0.55)), Some(dec!(0.35)), dec!(0.60)));
+        assert!(!independent.hold_entry(
+            &down,
+            Some(dec!(0.55)),
+            Some(dec!(0.35)),
+            dec!(0.60),
+            None
+        ));
         down.request.context["execution_snapshot"]["down_book"]["executable_ask_vwap"] =
             serde_json::json!("0.80");
-        assert!(independent.hold_entry(&down, None, Some(dec!(0.59)), dec!(0.60)));
+        assert!(independent.hold_entry(&down, None, Some(dec!(0.59)), dec!(0.60), None));
         let affordable = entry_forecast("0.60", 1);
         session.retain(affordable.clone());
-        assert!(!session.hold_entry(&affordable, Some(dec!(0.55)), None, dec!(0.60)));
+        assert!(!session.hold_entry(&affordable, Some(dec!(0.55)), None, dec!(0.60), None));
         let legacy = forecast();
-        assert!(!session.hold_entry(&legacy, Some(dec!(0.55)), None, dec!(0.60)));
+        assert!(!session.hold_entry(&legacy, Some(dec!(0.55)), None, dec!(0.60), None));
     }
 
     #[tokio::test]
@@ -404,7 +424,7 @@ mod tests {
         session.observe_market("a");
         let old = entry_forecast("0.70", 1);
         session.retain(old.clone());
-        assert!(session.hold_entry(&old, Some(dec!(0.59)), None, dec!(0.60)));
+        assert!(session.hold_entry(&old, Some(dec!(0.59)), None, dec!(0.60), None));
         assert!(session.entry_reassessment_due(60));
         let mut refreshed = entry_forecast("0.59", 2);
         refreshed.request.attempt = 60;
@@ -423,13 +443,13 @@ mod tests {
         assert!(!session.due(75));
         session.pending.take().unwrap().abort();
         // A failed result consumes its slot but is not retained as a valid forecast.
-        assert!(session.hold_entry(&old, Some(dec!(0.58)), None, dec!(0.60)));
+        assert!(session.hold_entry(&old, Some(dec!(0.58)), None, dec!(0.60), None));
         assert!(!session.entry_reassessment_due(70));
         assert!(!session.due(104));
         assert!(session.due(105));
         // A valid refreshed prediction clears the affected hold and resumes retries.
         session.retain(refreshed.clone());
-        assert!(!session.hold_entry(&refreshed, Some(dec!(0.58)), None, dec!(0.60)));
+        assert!(!session.hold_entry(&refreshed, Some(dec!(0.58)), None, dec!(0.60), None));
         refreshed.request.context["evaluation_slot"] = serde_json::json!(3);
         session.retain(refreshed.clone());
         assert!(!session.due(119));
@@ -452,7 +472,7 @@ mod tests {
         restarted.observe_market("a");
         restarted.retain(old.clone());
         restarted.restore_request(&request);
-        assert!(restarted.hold_entry(&old, Some(dec!(0.58)), None, dec!(0.60)));
+        assert!(restarted.hold_entry(&old, Some(dec!(0.58)), None, dec!(0.60), None));
         assert!(!restarted.entry_reassessment_due(60));
         assert!(!restarted.due(75));
         assert!(restarted.due(105));
@@ -472,16 +492,22 @@ mod tests {
         session.observe_market("a");
         let old = entry_forecast("0.70", 1);
         session.retain(old.clone());
-        assert!(session.hold_entry(&old, Some(dec!(0.59)), None, dec!(0.60)));
+        assert!(session.hold_entry(&old, Some(dec!(0.59)), None, dec!(0.60), None));
         let still_expensive = entry_forecast("0.65", 2);
         session.retain(still_expensive.clone());
-        assert!(session.hold_entry(&still_expensive, Some(dec!(0.59)), None, dec!(0.60)));
+        assert!(session.hold_entry(&still_expensive, Some(dec!(0.59)), None, dec!(0.60), None));
         assert!(session.entry_reassessment_due(90));
         let mut revised = entry_forecast("0.70", 3);
         revised.prediction.as_mut().unwrap().direction = crate::btc::types::BtcOutcome::Down;
         revised.prediction.as_mut().unwrap().probability_up = 0.3;
         session.retain(revised.clone());
-        assert!(!session.hold_entry(&revised, Some(dec!(0.59)), Some(dec!(0.45)), dec!(0.60)));
+        assert!(!session.hold_entry(
+            &revised,
+            Some(dec!(0.59)),
+            Some(dec!(0.45)),
+            dec!(0.60),
+            None
+        ));
         assert!(!session.entry_reassessment_due(110));
     }
     #[test]
@@ -506,7 +532,7 @@ mod tests {
             assert_eq!(session.calibration, Some(evidence.clone()));
             assert_eq!(session.evaluation_slot(), 3);
             session.retain(result.clone());
-            assert!(session.hold_entry(&result, Some(dec!(0.55)), None, dec!(0.60)));
+            assert!(session.hold_entry(&result, Some(dec!(0.55)), None, dec!(0.60), None));
             assert!(session.entry_reassessment_due(100));
             assert!(!session.entry_reassessment_due(120));
             assert_eq!(
@@ -518,5 +544,107 @@ mod tests {
             assert_eq!(session.evaluation_slot(), 1);
             assert!(session.due(45));
         }
+    }
+    fn fresh_forecast(price: &str, slot: usize) -> EvaluationResult {
+        let mut result = entry_forecast(price, slot);
+        let profile =
+            super::super::profile_for_key(super::super::FRESH_EVIDENCE_PROFILE_KEY).unwrap();
+        result.request.selection.profile_key = profile.key.into();
+        result.request.selection.profile_sha256 = super::super::hash(&profile).unwrap();
+        result
+    }
+
+    #[test]
+    fn material_changes_below_cap_hold_only_new_profile_and_selected_side() {
+        use rust_decimal_macros::dec;
+        let mut session = AgentSession::default();
+        session.observe_market("a");
+        let old = fresh_forecast("0.49", 1);
+        session.retain(old.clone());
+        // Small moves, missing books, and unrelated-side moves do not invalidate it.
+        assert!(!session.hold_entry(
+            &old,
+            Some(dec!(0.45)),
+            Some(dec!(0.10)),
+            dec!(0.50),
+            Some(dec!(0.05))
+        ));
+        assert!(!session.hold_entry(&old, None, Some(dec!(0.10)), dec!(0.50), Some(dec!(0.05))));
+        assert!(!session.hold_entry(&old, Some(dec!(0.12)), None, dec!(0.50), None));
+        assert!(session.hold_entry(&old, Some(dec!(0.44)), None, dec!(0.50), Some(dec!(0.05))));
+        assert!(session.entry_reassessment_due(60));
+        assert!(session.hold_entry(&old, Some(dec!(0.49)), None, dec!(0.50), Some(dec!(0.05))));
+        let mut independent = AgentSession::default();
+        independent.observe_market("a");
+        assert!(!independent.entry_reassessment_due(60));
+        let legacy = entry_forecast("0.49", 1);
+        assert!(!independent.hold_entry(
+            &legacy,
+            Some(dec!(0.12)),
+            None,
+            dec!(0.50),
+            Some(dec!(0.05))
+        ));
+        // A successful refresh releases only the previous forecast's hold.
+        let refreshed = fresh_forecast("0.44", 2);
+        session.retain(refreshed.clone());
+        assert!(!session.hold_entry(
+            &refreshed,
+            Some(dec!(0.43)),
+            None,
+            dec!(0.50),
+            Some(dec!(0.05))
+        ));
+        assert!(session.hold_entry(
+            &refreshed,
+            Some(dec!(0.49)),
+            None,
+            dec!(0.50),
+            Some(dec!(0.05))
+        ));
+        // DOWN uses the DOWN book, not the UP book.
+        let mut down = fresh_forecast("0.49", 1);
+        down.prediction.as_mut().unwrap().direction = crate::btc::types::BtcOutcome::Down;
+        down.prediction.as_mut().unwrap().probability_up = 0.3;
+        assert!(independent.hold_entry(
+            &down,
+            Some(dec!(0.49)),
+            Some(dec!(0.35)),
+            dec!(0.50),
+            Some(dec!(0.05))
+        ));
+    }
+
+    #[test]
+    fn below_cap_collapse_during_inference_and_restart_preserve_budget_and_recovery() {
+        use rust_decimal_macros::dec;
+        let old = fresh_forecast("0.49", 1);
+        let mut session = AgentSession::default();
+        session.observe_market("a");
+        // Completion-time check catches the observed 49c -> 12c regression.
+        session.retain(old.clone());
+        assert!(session.hold_entry(&old, Some(dec!(0.12)), None, dec!(0.50), Some(dec!(0.05))));
+        let mut request = fresh_forecast("0.12", 2).request;
+        super::super::add_entry_reassessment_context(&mut request, Some(&old), dec!(0.50), 2, true);
+        let restored: EvaluationRequest =
+            serde_json::from_value(serde_json::to_value(&request).unwrap()).unwrap();
+        let mut restarted = AgentSession::default();
+        restarted.observe_market("a");
+        restarted.retain(old.clone());
+        restarted.restore_request(&restored);
+        assert!(restarted.hold_entry(&old, Some(dec!(0.12)), None, dec!(0.50), Some(dec!(0.05))));
+        assert!(!restarted.entry_reassessment_due(70));
+        assert!(!restarted.due(75));
+        assert!(restarted.due(105));
+        // No fourth request or release of invalid evidence after budget exhaustion.
+        request.context["evaluation_slot"] = serde_json::json!(3);
+        restarted.restore_request(&request);
+        assert!(!restarted.entry_reassessment_due(119));
+        assert!(!restarted.due(119));
+        assert!(!restarted.due(120));
+        restarted.observe_market("b");
+        assert!(restarted.due(45));
+        restarted.accept();
+        assert!(!restarted.due(75));
     }
 }
