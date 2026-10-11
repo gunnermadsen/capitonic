@@ -12,7 +12,7 @@ No CI/CD, Helm, image, UMR or ingester changes are required.
 | --- | --- | --- |
 | Setup | Existing retained process IDs, API trigger, Polymarket selector v1, canonical policies, five requested shares, expected live account | Wrong identity, active process, unsupported contract or unexpected policy difference stops setup before PATCH |
 | Shared preparation | Same synthetic candidate and token, five-share sizing, order type, matching shared policy decisions; current real evidence; no economic writes | Either mode rejects or dry-run fails: no execute POST |
-| Live boundary | Process-bound status has clean idempotency, accounting proven, no unresolved orders, fresh reconciliation, connected user stream and enabled entries; signing identities match | Startup HTTP success alone never qualifies readiness |
+| Live boundary | Process-bound status has clean idempotency, accounting proven, no unresolved orders, fresh reconciliation, connected user stream and enabled entries; wallet-type-appropriate signing identities match | Startup HTTP success alone never qualifies readiness |
 | Paired execution | Concurrent calls to existing `/orders/{process_id}/execute`; different process-scoped keys, same candidate | Separate observed books/times are retained; no assertion of identical fills |
 | Durable lifecycle | Order retrieval, operation identity, foreign ownership 404, canonical fill identities and source, debit delta equals fills plus fees, cash and price bounds | Acknowledgement, rejection, timeout, unknown state, or zero fills never proves successful execution |
 | FAK/FOK | FAK allows partial fills; a terminal filled FOK consumes its full cash authorization within existing rounding tolerance | Real markets may not yield desired partial/failure scenarios; existing deterministic tests remain authoritative for those cases |
@@ -174,3 +174,19 @@ passed against the local read-only database. Funded submission remains user-run.
 The suite is runnable with standard unittest discovery; no CI workflow was edited.
 
 Opening-window extension: 28 offline Python tests passed; three existing opt-in SQL checks were skipped in this focused run. No runtime state or rail implementation changed.
+
+
+Signing diagnostic correction: Poly1271 must report `signer_matches_funder=true`
+and `maker_matches_funder=true`; `signer_matches_client=false` is valid for this
+wallet type. Other supported wallet types retain signer-to-client validation. The
+API now exposes the existing signer-to-funder boolean through its redacted allowlist,
+without exposing addresses, signatures or signed payloads. An older deployed API
+missing this evidence produces an immediate instruction to deploy the updated bot;
+the runner never infers a match or bypasses the check.
+
+Structural assertion failures now stop the opening wait immediately. Only HTTP 503
+or explicitly recognized temporary market-admission rejections are retried. Waiting
+messages identify the current market and next boundary; missing metadata is explicit.
+Do not restart a still-running older runner in parallel. Preserve the existing run
+and keys; an unsuccessful preparation with no saved requests may be retried after
+the updated bot is deployed without rerunning setup.

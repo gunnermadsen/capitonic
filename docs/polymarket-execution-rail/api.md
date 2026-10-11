@@ -93,3 +93,9 @@ rail policy objects retain their existing required, nullable parameter keys. Ord
 when the configured UTC daily realized PnL is at or below the negative limit.
 This checks already realized loss; it is not a hard cap on an admitted order's
 possible subsequent loss. Runtime configuration remains bound until restart.
+
+
+Dry-run identity diagnostics include `signer_matches_funder`, copied from the existing
+live diagnostic alongside `signer_matches_client`. Poly1271 order signers identify
+the deposit wallet/funder, so signer-to-client inequality alone is not an identity
+failure. This additive redacted boolean changes no signing or execution behavior.

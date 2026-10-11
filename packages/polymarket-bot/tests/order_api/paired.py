@@ -20,6 +20,35 @@ import uuid
 from qualify import Qualification, REUSABLE_PROCESS_IDS, ROOT, ledger_amount
 
 
+class RetryablePreflight(RuntimeError):
+    """A non-submitting market/evidence rejection that can recover in this window."""
+
+
+def signing_identity_valid(preparation):
+    signature_type = str(preparation.get('signature_type', '')).lower().replace('_', '')
+    if signature_type in ('poly1271', '3'):
+        if 'signer_matches_funder' not in preparation:
+            raise RuntimeError('Dry-run API lacks signer_matches_funder; deploy the updated bot before funded testing')
+        signer_matches = preparation['signer_matches_funder'] is True
+    elif signature_type in ('eoa', 'proxy', 'gnosissafe', '0', '1', '2'):
+        signer_matches = preparation.get('signer_matches_client') is True
+    else:
+        raise RuntimeError('Unsupported or missing dry-run signature type')
+    return (signer_matches and preparation.get('maker_matches_funder') is True
+            and preparation.get('signature_redacted') is True
+            and preparation.get('owner_redacted') is True)
+
+
+def require_preflight_admission(code, receipt):
+    if code == 503:
+        raise RetryablePreflight('required market/evidence dependency unavailable (503)')
+    reasons = {p.get('reason') for p in receipt.get('policy_results', []) if p.get('status') == 'rejected'}
+    if code == 200 and receipt.get('status') == 'rejected' and reasons and reasons <= {
+            'price_outside_bounds', 'insufficient_depth', 'edge_below_threshold',
+            'crossed_book', 'stale_book', 'book_feed_unhealthy', 'runtime_not_ready'}:
+        raise RetryablePreflight('market admission: ' + ', '.join(sorted(reasons)))
+
+
 def policies(process):
     items = process['config']['execution']['order_policies']
     result = {p['name']: p for p in items}
@@ -168,6 +197,7 @@ class PairedQualification(Qualification):
         for route in ('preview', 'dry-run'):
             for mode, pid in REUSABLE_PROCESS_IDS.items():
                 code, receipt = self.request('POST', f'/orders/{pid}/{route}', candidate)
+                require_preflight_admission(code, receipt)
                 self.check(mode + ' ' + route + ' admitted', code == 200 and receipt.get('status') == 'evaluated', receipt)
                 self.check(mode + ' preparation has no durable identity', receipt['order_id'] is None)
                 order = receipt['evidence']['proposed_order']
@@ -181,9 +211,7 @@ class PairedQualification(Qualification):
                     self.check(mode + ' serialization/signing', prep.get('serialization') == 'performed'
                         and prep.get('signing') == ('performed' if mode == 'live' else 'inapplicable'))
                     if mode == 'live':
-                        self.check('live signing identities match', prep.get('signer_matches_client') is True
-                            and prep.get('maker_matches_funder') is True
-                            and prep.get('signature_redacted') is True and prep.get('owner_redacted') is True)
+                        self.check('live signing identities match', signing_identity_valid(prep), prep)
                     dry_runs[mode] = receipt
         self.check('same instrument and side', all(
             dry_runs['paper']['evidence']['proposed_order'][k] == dry_runs['live']['evidence']['proposed_order'][k]
@@ -220,6 +248,7 @@ class PairedQualification(Qualification):
                for p in current.values()):
             raise RuntimeError('Run setup on the stopped pair to enable matching opening timing policies')
         deadline = time.monotonic() + wait_seconds
+        last_wait_message = None
         while time.monotonic() < deadline:
             market, sampled = self.opening_market()
             if market and 0 <= market['age_seconds'] < 25:
@@ -230,14 +259,25 @@ class PairedQualification(Qualification):
                     'synthetic_prediction': {'probability_up': probability}}}
                 try:
                     candidate = self.preflight(outcome, probability, candidate)
-                except AssertionError:
-                    # Preparation alone has no submission; fresh evidence can recover in-window.
+                except RetryablePreflight as error:
+                    print(f'WAIT preflight: {error}; retrying within the bounded opening wait', flush=True)
+                    # Only explicit non-submitting transient failures are retried.
                     time.sleep(min(1, max(0, deadline - time.monotonic())))
                     continue
                 if time.monotonic() < self._opening_deadline:
                     self.state['pair']['opening_window'] = market
                     self.save()
                     return candidate
+                print('WAIT preparation exceeded opening cutoff; no submission; waiting for next market', flush=True)
+            else:
+                message = (f"WAIT opening window: market {market['market_id']} is {market['age_seconds']:.0f}s old; "
+                           f"next boundary {market['window_end']} (about {max(0, 300-market['age_seconds']):.0f}s); "
+                           "will require fresh market metadata" if market else
+                           'WAIT opening window: current five-minute market metadata unavailable')
+                identity = market['market_id'] if market else 'missing'
+                if last_wait_message != identity:
+                    print(message, flush=True)
+                    last_wait_message = identity
             time.sleep(min(1, max(0, deadline - time.monotonic())))
         raise RuntimeError('No qualified opening window before timeout; no orders submitted')
 

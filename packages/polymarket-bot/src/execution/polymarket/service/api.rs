@@ -280,7 +280,7 @@ impl ExecutionService {
 fn redacted_preparation(
     result: &crate::execution::LiveOrderDryRunDiagnostics,
 ) -> serde_json::Value {
-    json!({"status":"performed","signing":"performed","serialization":"performed","signer_matches_client":result.order_signer_matches_authenticated_client,"maker_matches_funder":result.order_maker_matches_configured_funder,"signature_type":result.resolved_signature_type,"owner_redacted":true,"signature_redacted":true,"checked_at":result.checked_at})
+    json!({"status":"performed","signing":"performed","serialization":"performed","signer_matches_client":result.order_signer_matches_authenticated_client,"signer_matches_funder":result.order_signer_matches_configured_funder,"maker_matches_funder":result.order_maker_matches_configured_funder,"signature_type":result.resolved_signature_type,"owner_redacted":true,"signature_redacted":true,"checked_at":result.checked_at})
 }
 #[cfg(test)]
 mod tests {
@@ -407,8 +407,8 @@ mod tests {
             order_signer: None,
             order_maker: None,
             order_signature_type: None,
-            order_signer_matches_authenticated_client: Some(true),
-            order_signer_matches_configured_funder: None,
+            order_signer_matches_authenticated_client: Some(false),
+            order_signer_matches_configured_funder: Some(true),
             order_maker_matches_configured_funder: Some(true),
             owner_redacted: false,
             signature_redacted: false,
@@ -418,6 +418,8 @@ mod tests {
         let output = redacted_preparation(&diagnostics);
         assert!(!output.to_string().contains("SECRET"));
         assert!(output.get("signed_order").is_none());
+        assert_eq!(output["signer_matches_client"], false);
+        assert_eq!(output["signer_matches_funder"], true);
         assert_eq!(output["owner_redacted"], true);
         assert_eq!(output["signature_redacted"], true);
     }

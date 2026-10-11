@@ -7,7 +7,8 @@ import unittest
 import uuid
 from unittest.mock import patch
 
-from paired import PairedQualification, policies, validate_pair
+from paired import (PairedQualification, policies, validate_pair, signing_identity_valid,
+                    require_preflight_admission, RetryablePreflight)
 from qualify import ROOT, REUSABLE_PROCESS_IDS
 
 
@@ -132,7 +133,7 @@ class PairedTest(unittest.TestCase):
                     'evidence': {'proposed_order': {'token_id': 'up', 'side': 'buy', 'size': '5', 'order_type': 'fak'},
                                  'execution': {'policy_evidence': {'max_entry_debit_usd': '2.1'}}},
                     'preparation': {'serialization': 'performed', 'signing': signing,
-                        'signer_matches_client': signing_ok, 'maker_matches_funder': True,
+                        'signature_type': 'Eoa', 'signer_matches_client': signing_ok, 'maker_matches_funder': True,
                         'signature_redacted': True, 'owner_redacted': True}}
             with patch.object(self.q, 'current', return_value=pair()), patch.object(self.q, 'live_readiness'), patch.object(self.q, 'candidate', return_value=copy.deepcopy(candidate)), patch.object(self.q, 'snapshot', return_value={}), patch.object(self.q, 'request', side_effect=api):
                 if signing_ok:
@@ -171,7 +172,7 @@ class PairedTest(unittest.TestCase):
         for p in current.values():
             policies(p)['entry_timing_policy']['params']['min_seconds_after_open'] = 0
         def sleep(seconds): clock[0] += seconds
-        with patch('paired.time.monotonic', side_effect=lambda: clock[0]), patch('paired.time.sleep', side_effect=sleep), patch.object(self.q, 'current', return_value=current), patch.object(self.q, 'opening_market', return_value=({'age_seconds': 26}, 100)), patch.object(self.q, 'preflight') as prepare:
+        with patch('paired.time.monotonic', side_effect=lambda: clock[0]), patch('paired.time.sleep', side_effect=sleep), patch.object(self.q, 'current', return_value=current), patch.object(self.q, 'opening_market', return_value=({'age_seconds': 26, 'market_id': 'old', 'window_end': 'next'}, 100)), patch.object(self.q, 'preflight') as prepare:
             with self.assertRaisesRegex(RuntimeError, 'timeout'):
                 self.q.wait_opening('up', '0.95', 2)
             prepare.assert_not_called()
@@ -214,6 +215,51 @@ class PairedTest(unittest.TestCase):
             params = policies(p)['entry_timing_policy']['params']
             self.assertEqual(params['min_seconds_after_open'], 0)
             self.assertEqual(params['min_seconds_before_close'], 90)
+
+    def test_signing_identity_depends_on_wallet_type_and_requires_explicit_evidence(self):
+        prep = {'signature_type': 'Poly1271', 'signer_matches_client': False,
+                'signer_matches_funder': True, 'maker_matches_funder': True,
+                'signature_redacted': True, 'owner_redacted': True}
+        self.assertTrue(signing_identity_valid(prep))
+        for value in (False, None):
+            self.assertFalse(signing_identity_valid(dict(prep, signer_matches_funder=value)))
+        old = dict(prep)
+        del old['signer_matches_funder']
+        with self.assertRaisesRegex(RuntimeError, 'deploy'):
+            signing_identity_valid(old)
+        for kind in ('Eoa', 'Proxy', 'GnosisSafe'):
+            self.assertFalse(signing_identity_valid(dict(prep, signature_type=kind)))
+            self.assertTrue(signing_identity_valid(dict(prep, signature_type=kind, signer_matches_client=True)))
+        with self.assertRaises(RuntimeError): signing_identity_valid(dict(prep, signature_type='unknown'))
+
+    def test_only_explicit_transient_admission_is_retryable(self):
+        with self.assertRaises(RetryablePreflight): require_preflight_admission(503, {})
+        with self.assertRaises(RetryablePreflight):
+            require_preflight_admission(200, {'status': 'rejected', 'policy_results': [
+                {'status': 'rejected', 'reason': 'price_outside_bounds'}]})
+        for code in (400, 401, 403, 409, 500): require_preflight_admission(code, {})
+        require_preflight_admission(200, {'status': 'rejected', 'policy_results': [
+            {'status': 'rejected', 'reason': 'daily_loss_limit'}]})
+
+    def test_opening_wait_does_not_swallow_structural_failure(self):
+        current = pair()
+        for p in current.values(): policies(p)['entry_timing_policy']['params']['min_seconds_after_open'] = 0
+        with patch.object(self.q, 'current', return_value=current), patch.object(self.q, 'opening_market', return_value=({'market_id': 'm', 'age_seconds': 1}, 100)), patch.object(self.q, 'preflight', side_effect=AssertionError('identity mismatch')) as preflight, patch('paired.time.sleep') as sleep:
+            with self.assertRaisesRegex(AssertionError, 'identity mismatch'):
+                self.q.wait_opening('up', '0.95', 10)
+            preflight.assert_called_once()
+            sleep.assert_not_called()
+
+    def test_opening_wait_retries_explicit_transient_then_prepares(self):
+        current = pair()
+        for p in current.values(): policies(p)['entry_timing_policy']['params']['min_seconds_after_open'] = 0
+        market = {'market_id': 'm', 'age_seconds': 1}
+        candidate = {'candidate': {'market_id': 'm'}}
+        with patch.object(self.q, 'current', return_value=current), patch.object(self.q, 'opening_market', return_value=(market, 100)), patch.object(self.q, 'preflight', side_effect=[RetryablePreflight('stale book'), candidate]) as preflight, patch('paired.time.monotonic', return_value=100), patch('paired.time.sleep') as sleep:
+            self.assertEqual(self.q.wait_opening('up', '0.95', 10), candidate)
+            self.assertEqual(preflight.call_count, 2)
+            sleep.assert_called_once()
+            self.assertFalse(self.q.state['pair']['requests'])
 
     def test_setup_checks_both_definitions_before_any_mutation(self):
         self.q.state['processes'] = {}
