@@ -89,6 +89,7 @@ impl BtcProcessManager {
                 }
             };
             permissions.push(ProcessEntryPermission {
+                execution_mode: execution.mode,
                 process_id: process.process_id,
                 permission,
             });
