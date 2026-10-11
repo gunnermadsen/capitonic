@@ -2865,8 +2865,11 @@ impl BtcRepository {
             agent::ENTRY_REASSESSMENT_PROFILE_KEY,
             agent::CALIBRATION_PROFILE_KEY,
         ];
-        if profile_key == agent::MARKET_CONTEXT_PROFILE_KEY {
+        if agent::uses_market_context(profile_key) {
             keys.push(agent::MARKET_CONTEXT_PROFILE_KEY);
+        }
+        if profile_key == agent::FRESH_EVIDENCE_PROFILE_KEY {
+            keys.push(agent::FRESH_EVIDENCE_PROFILE_KEY);
         }
         let hashes = keys
             .iter()
