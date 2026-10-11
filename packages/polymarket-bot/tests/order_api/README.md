@@ -1,5 +1,7 @@
 # Order API qualification
 
+For user-operated funded paper/live pairs, see [the funded test specification and commands](funded-parity.md). `paired.py` reuses this driver’s transport and accounting reader; its explicit funded action is separate from the paper-only default below.
+
 `qualify.py` is an opt-in external HTTP driver for the deployed application. It installs no code, switches, mocks or alternate contracts in the rail. It reuses the fixed local paper/live process pair through the existing API, preserves their new-contract policies, and audits existing tables through read-only PostgreSQL sessions. Its only order submission path checks both the owned paper process ID and its current configured mode. Live mode supports preview and signing preparation only.
 
 Prerequisites: local Rancher Desktop `capitonic`, the qualified bot image, healthy required ingester evidence, and the existing bot admin token inherited from the main worktree environment. Never put that token in arguments or evidence. The driver always targets `http://localhost/api/bot`; SQL always uses `kubectl --context rancher-desktop`, `default_transaction_read_only=on`, and a five-second statement timeout. No production target is supported.

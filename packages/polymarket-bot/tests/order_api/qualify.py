@@ -45,7 +45,20 @@ class Qualification:
         self.base = 'http://localhost/api/bot'
 
     def save(self):
-        self.state_path.write_text(json.dumps(self.state, indent=2) + '\n')
+        temporary = self.state_path.with_suffix('.tmp')
+        with temporary.open('w') as output:
+            output.write(json.dumps(self.state, indent=2) + '\n')
+            output.flush()
+            os.fsync(output.fileno())
+        temporary.replace(self.state_path)
+
+    def authorize_execution(self, path, body):
+        pid = path.split('/')[2]
+        if pid != self.state['processes']['paper']['process_id']:
+            raise RuntimeError('Only the owned paper process may execute')
+        code, actual = self.request('GET', '/admin/trading-processes/' + pid)
+        if code != 200 or actual['process']['config']['execution']['mode'] != 'paper':
+            raise RuntimeError('Current process must be paper before execution')
 
     def check(self, name, condition, detail=None):
         self.state['checks'].append({'name': name, 'passed': bool(condition), 'detail': detail})
@@ -57,12 +70,7 @@ class Qualification:
     def request(self, method, path, body=None, auth=True):
         # Enforce the funded-test boundary independently of request construction.
         if path.endswith('/execute'):
-            pid = path.split('/')[2]
-            if pid != self.state['processes']['paper']['process_id']:
-                raise RuntimeError('Only the owned paper process may execute')
-            code, actual = self.request('GET', '/admin/trading-processes/' + pid)
-            if code != 200 or actual['process']['config']['execution']['mode'] != 'paper':
-                raise RuntimeError('Current process must be paper before execution')
+            self.authorize_execution(path, body)
         headers = {'Content-Type': 'application/json'}
         if auth:
             headers['Authorization'] = 'Bearer ' + self.token
