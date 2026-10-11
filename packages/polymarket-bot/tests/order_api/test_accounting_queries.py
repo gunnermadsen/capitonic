@@ -40,12 +40,44 @@ def payload(account='primary', resolution=None):
 class AccountingQueries(unittest.TestCase):
     def run_query(self, sql, fixtures, params):
         sql = re.sub(r'\$(\d+)', lambda match: params[int(match[1]) - 1], sql)
-        for table in ('orders', 'fills', 'trading_processes', 'btc_paper_settlement_ledger'):
+        for table in ('orders', 'fills', 'trading_processes', 'btc_paper_settlement_ledger',
+                      'trading_process_events', 'btc_strategy_decisions'):
             sql = sql.replace('polymarket.' + table, 'fixture_' + table)
         # Reuse the qualification reader without initializing HTTP credentials/state.
         reader = object.__new__(Qualification)
         return reader.sql("SELECT COALESCE(json_agg(result),'[]'::json) FROM (WITH " +
                           ', '.join(fixtures) + ' SELECT * FROM (' + sql + ') rows) result')
+
+    def test_snapshot_decisions_include_all_owned_runs_once(self):
+        reader = object.__new__(Qualification)
+        reader.state = {'processes': {'paper': {
+            'process_id': PID, 'created_at': '2026-10-09T00:00:00Z'}}}
+        reader.sql = lambda sql: sql
+        # Exercise the actual snapshot expression with read-only inline fixtures.
+        expression = reader.snapshot(PID).split("'decisions',", 1)[1].split(",\n          'fill_debit'", 1)[0]
+        events = [{'process_id': owner, 'event_id': run, 'event_type': kind,
+                   'timestamp_utc': '2026-10-09T01:00:00Z'}
+                  for owner, run, kind in [(PID, PID, 'btc_run_manifest'),
+                                           (PID, PID, 'btc_run_manifest'),
+                                           (PID, OTHER, 'btc_run_manifest'),
+                                           (OTHER, 'unowned', 'btc_run_manifest'),
+                                           (PID, 'not-manifest', 'heartbeat')]]
+        decisions = [{'process_id': owner, 'run_id': run, 'decision_at': at}
+                     for owner, run, at in [(PID, PID, '2026-10-09T02:00:00Z'),
+                                            (PID, OTHER, '2026-10-09T03:00:00Z'),
+                                            (OTHER, PID, '2026-10-09T02:00:00Z'),
+                                            (PID, 'unowned', '2026-10-09T02:00:00Z'),
+                                            (PID, 'not-manifest', '2026-10-09T02:00:00Z'),
+                                            (PID, PID, '2026-10-08T02:00:00Z')]]
+        fixtures = [fixture('fixture_trading_process_events', events,
+                            'process_id uuid,event_id text,event_type text,timestamp_utc timestamptz'),
+                    fixture('fixture_btc_strategy_decisions', decisions,
+                            'process_id uuid,run_id text,decision_at timestamptz')]
+        self.assertEqual(self.run_query('SELECT ' + expression + ' AS count', fixtures, []),
+                         [{'count': 2}])
+        empty = expression.replace(PID, '00000000-0000-0000-0000-000000000099')
+        self.assertEqual(self.run_query('SELECT ' + empty + ' AS count', fixtures, []),
+                         [{'count': 0}])
 
     def test_account_ownership_preserves_ambiguous_and_stopped_sleeves(self):
         rows = []

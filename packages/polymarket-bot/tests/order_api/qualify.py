@@ -117,6 +117,7 @@ class Qualification:
         # Process ownership starts at creation, including all previous test runs. Prune historical
         # Timescale chunks without changing the audited economic scope or timeout.
         since = (datetime.fromisoformat(owned['created_at'].replace('Z', '+00:00')) - timedelta(seconds=1)).isoformat()
+        # Canonical manifests cover every owned run; run_id leads the decision index.
         return self.sql(f"""SELECT json_build_object(
           'orders',(SELECT coalesce(json_agg(x ORDER BY x.order_id),'[]') FROM
             (SELECT order_id,client_order_id,state,raw_payload FROM polymarket.orders WHERE process_id='{pid}' ORDER BY created_at DESC, order_id DESC LIMIT 30) x),
@@ -124,7 +125,13 @@ class Qualification:
             (SELECT fill_id,order_id,price::text,size::text,fee::text,source,raw_payload FROM polymarket.fills WHERE timestamp_utc >= '{since}'::timestamptz AND process_id='{pid}' ORDER BY timestamp_utc DESC, fill_id DESC LIMIT 30) x),
           'settlements',(SELECT coalesce(json_agg(x ORDER BY x.order_id),'[]') FROM
             (SELECT order_id,payout::text,net_pnl::text,credit_status FROM polymarket.btc_paper_settlement_ledger WHERE process_id='{pid}' ORDER BY created_at DESC, order_id DESC LIMIT 30) x),
-          'decisions',(SELECT count(*) FROM polymarket.btc_strategy_decisions WHERE decision_at >= '{since}'::timestamptz AND process_id='{pid}'),
+          'decisions',(SELECT coalesce(sum(d.n),0)::bigint FROM
+            (SELECT DISTINCT event_id AS run_id FROM polymarket.trading_process_events
+             WHERE process_id='{pid}' AND event_type='btc_run_manifest'
+               AND timestamp_utc >= '{since}'::timestamptz) runs
+            CROSS JOIN LATERAL (SELECT count(*) AS n FROM polymarket.btc_strategy_decisions
+              WHERE run_id=runs.run_id AND process_id='{pid}'
+                AND decision_at >= '{since}'::timestamptz) d),
           'fill_debit',coalesce((SELECT sum(price*size+fee) FROM polymarket.fills WHERE timestamp_utc >= '{since}'::timestamptz AND process_id='{pid}'),0)::text,
           'settlement_credit',(SELECT coalesce(sum(payout),0)::text FROM polymarket.btc_paper_settlement_ledger WHERE process_id='{pid}' AND credit_status='credited'))""")
 

@@ -219,7 +219,7 @@ class LatencyEvidenceTest(unittest.TestCase):
             with patch.object(driver, 'sql', return_value={}) as sql:
                 driver.snapshot(pid)
             query = sql.call_args.args[0]
-            self.assertEqual(query.count("timestamp_utc >= '2026-10-09T15:38:59+00:00'::timestamptz"), 2)
+            self.assertEqual(query.count("timestamp_utc >= '2026-10-09T15:38:59+00:00'::timestamptz"), 3)
             self.assertIn("decision_at >= '2026-10-09T15:38:59+00:00'::timestamptz", query)
             self.assertIn("process_id='" + pid + "'", query)
 
