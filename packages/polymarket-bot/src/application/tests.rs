@@ -177,7 +177,10 @@ mod lifecycle_tests {
             "type":"openai_agent", "profile_key":profile.key,
             "profile_sha256":agent::hash(&profile).unwrap()
         });
-        assert!(resolve_btc_strategy(&fresh).is_err());
+        assert!(resolve_btc_strategy(&fresh)
+            .unwrap()
+            .agent_reassessment_price_change
+            .is_none());
         fresh.strategy["agent_reassessment_price_change"] = serde_json::json!("0.05");
         let resolved = resolve_btc_strategy(&fresh).unwrap();
         assert_eq!(
