@@ -58,7 +58,7 @@ pub(super) fn number(v: &Value) -> Option<f64> {
         .or_else(|| v.as_str()?.parse().ok())
         .filter(|n| n.is_finite())
 }
-fn prior(up: f64, down: f64) -> Option<f64> {
+pub(super) fn prior(up: f64, down: f64) -> Option<f64> {
     ((0.0..1.0).contains(&up) && (0.0..1.0).contains(&down) && up > 0.0 && down > 0.0)
         .then_some(up / (up + down))
 }
@@ -194,7 +194,7 @@ pub fn summarize(cutoff: chrono::DateTime<chrono::Utc>, rows: Vec<Value>) -> Val
 /// Pure and repeatable from the original raw forecast on every entry attempt;
 /// never compound an adjustment on a retained or restored result.
 pub fn adjust(result: &EvaluationResult, snapshot: &BtcFeatureSnapshot) -> Option<(f64, Value)> {
-    if result.request.selection.profile_key != super::EXECUTION_EVIDENCE_PROFILE_KEY {
+    if !super::uses_execution_evidence(&result.request.selection.profile_key) {
         return None;
     }
     let raw = result.prediction.as_ref().ok()?.probability_up;
@@ -213,6 +213,7 @@ pub fn adjust(result: &EvaluationResult, snapshot: &BtcFeatureSnapshot) -> Optio
         .pointer("/historical_calibration/entry_calibration/cohorts")
         .and_then(Value::as_array);
     let selected = [
+        result.request.selection.profile_key.as_str(),
         super::EXECUTION_EVIDENCE_PROFILE_KEY,
         super::FRESH_EVIDENCE_PROFILE_KEY,
     ]

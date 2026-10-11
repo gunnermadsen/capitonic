@@ -48,17 +48,29 @@ pub const FRESH_EVIDENCE_PROFILE_KEY: &str = "btc-5m-openai-agent-fresh-evidence
 pub const FRESH_EVIDENCE_CONTEXT_VERSION: &str = "capitonic-btc-agent-fresh-evidence-v1";
 pub const EXECUTION_EVIDENCE_PROFILE_KEY: &str = "btc-5m-openai-agent-execution-evidence-v1";
 pub const EXECUTION_EVIDENCE_CONTEXT_VERSION: &str = "capitonic-btc-agent-execution-evidence-v1";
+pub const MARKET_REFERENCE_PROFILE_KEY: &str = "btc-5m-openai-agent-market-reference-v1";
+pub const MARKET_REFERENCE_CONTEXT_VERSION: &str = "capitonic-btc-agent-market-reference-v1";
+pub fn uses_execution_evidence(key: &str) -> bool {
+    matches!(
+        key,
+        EXECUTION_EVIDENCE_PROFILE_KEY | MARKET_REFERENCE_PROFILE_KEY
+    )
+}
+
 pub fn independent_forecast(key: &str) -> bool {
     matches!(
         key,
-        FRESH_EVIDENCE_PROFILE_KEY | EXECUTION_EVIDENCE_PROFILE_KEY
+        FRESH_EVIDENCE_PROFILE_KEY | EXECUTION_EVIDENCE_PROFILE_KEY | MARKET_REFERENCE_PROFILE_KEY
     )
 }
 
 pub fn uses_market_context(key: &str) -> bool {
     matches!(
         key,
-        MARKET_CONTEXT_PROFILE_KEY | FRESH_EVIDENCE_PROFILE_KEY | EXECUTION_EVIDENCE_PROFILE_KEY
+        MARKET_CONTEXT_PROFILE_KEY
+            | FRESH_EVIDENCE_PROFILE_KEY
+            | EXECUTION_EVIDENCE_PROFILE_KEY
+            | MARKET_REFERENCE_PROFILE_KEY
     )
 }
 
@@ -72,6 +84,7 @@ pub fn uses_calibration(key: &str) -> bool {
             | MARKET_CONTEXT_PROFILE_KEY
             | FRESH_EVIDENCE_PROFILE_KEY
             | EXECUTION_EVIDENCE_PROFILE_KEY
+            | MARKET_REFERENCE_PROFILE_KEY
     )
 }
 
@@ -85,6 +98,7 @@ pub fn uses_entry_reassessment(key: &str) -> bool {
             | MARKET_CONTEXT_PROFILE_KEY
             | FRESH_EVIDENCE_PROFILE_KEY
             | EXECUTION_EVIDENCE_PROFILE_KEY
+            | MARKET_REFERENCE_PROFILE_KEY
     )
 }
 
@@ -198,6 +212,12 @@ pub fn profile_for_key(key: &str) -> Result<AgentProfile> {
             selected.context_version = EXECUTION_EVIDENCE_CONTEXT_VERSION;
             selected.instructions.push_str(" Repeated time-series fields are encoded losslessly as columns and rows; each row follows the column order. rtds_contiguous_tail is a separate, explicitly shorter observed window when full-minute history is incomplete, never a replacement 60-second estimate. Its gap and age diagnostics explain missing context; unknown data is not quiet data. entry_calibration describes an execution-only adjustment fitted on prior filled markets and checked on a later chronological holdout. Return your independent raw probability; do not apply that adjustment yourself. Execution recomputes direction from the adjusted probability and transports its calibrated log-odds advantage over normalized two-sided executable asks to current books; a price decline cannot create an unchanged-probability bargain. Calibration policy: separate source-profile cohorts, 24-hour lookback, at most 300 filled decisions, minimum 40 training and 20 holdout markets, train-only squared-error blend weight in {1,.75,.5,.25,0}, holdout Brier improvement and nondecreasing quoted fee-net retained-entry PnL; unqualified cohorts leave raw probabilities unchanged. No fixed price-movement rejection is added.");
         }
+        MARKET_REFERENCE_PROFILE_KEY => {
+            selected = profile_for_key(EXECUTION_EVIDENCE_PROFILE_KEY)?;
+            selected.key = MARKET_REFERENCE_PROFILE_KEY;
+            selected.context_version = MARKET_REFERENCE_CONTEXT_VERSION;
+            selected.instructions = selected.instructions.replace("Distinguish your forecast from the market price.", "Use market_reference.probability_up as the starting reference for your snapshot-time probability_up. This normalized two-sided executable-ask proxy includes spread and liquidity effects; it is not a true or calibrated settlement probability. Justify any departure using the supplied current BTC movement, official settlement TWAP distance, time remaining and Binance trade-flow evidence. These observations may already be reflected in prices: their presence alone does not establish mispricing. Permit either direction and evidence-supported disagreement; do not manufacture an adjustment to satisfy entry limits. Express the supporting evidence through the existing reason_codes. If the reference is unavailable, forecast from the supplied causal observations without inventing a market probability. Return the probability at the request snapshot only; do not anticipate later book movements or apply execution calibration/current-book transport yourself.");
+        }
         _ => anyhow::bail!("unsupported agent profile"),
     }
     Ok(selected)
@@ -212,7 +232,9 @@ impl AgentSelection {
         Ok(())
     }
     pub fn context_version(&self) -> &'static str {
-        if self.profile_key == EXECUTION_EVIDENCE_PROFILE_KEY {
+        if self.profile_key == MARKET_REFERENCE_PROFILE_KEY {
+            MARKET_REFERENCE_CONTEXT_VERSION
+        } else if self.profile_key == EXECUTION_EVIDENCE_PROFILE_KEY {
             EXECUTION_EVIDENCE_CONTEXT_VERSION
         } else if self.profile_key == FRESH_EVIDENCE_PROFILE_KEY {
             FRESH_EVIDENCE_CONTEXT_VERSION
@@ -545,6 +567,43 @@ mod tests {
         assert_eq!(selection.context_version(), FRESH_EVIDENCE_CONTEXT_VERSION);
         println!(
             "Fresh evidence profile SHA256: {}",
+            selection.profile_sha256
+        );
+    }
+    #[test]
+    fn market_reference_profile_preserves_execution_profile_contract() {
+        let old = profile_for_key(EXECUTION_EVIDENCE_PROFILE_KEY).unwrap();
+        assert_eq!(
+            hash(&old).unwrap(),
+            "8e5c869843f9cb56ef503489e4aaccce8048db349b9c21351f9a478484f29ae9"
+        );
+        let new = profile_for_key(MARKET_REFERENCE_PROFILE_KEY).unwrap();
+        let selection = AgentSelection {
+            profile_key: new.key.into(),
+            profile_sha256: hash(&new).unwrap(),
+        };
+        selection.validate().unwrap();
+        assert_eq!(
+            selection.context_version(),
+            MARKET_REFERENCE_CONTEXT_VERSION
+        );
+        assert!(
+            independent_forecast(new.key)
+                && uses_execution_evidence(new.key)
+                && uses_market_context(new.key)
+                && uses_calibration(new.key)
+                && uses_entry_reassessment(new.key)
+        );
+        let mut unchanged = new.clone();
+        unchanged.key = old.key;
+        unchanged.context_version = old.context_version;
+        unchanged.instructions = old.instructions.clone();
+        assert_eq!(hash(&unchanged).unwrap(), hash(&old).unwrap());
+        assert!(new.instructions.contains(CALIBRATION_INSTRUCTION));
+        assert!(new.instructions.contains(MARKET_CONTEXT_INSTRUCTION));
+        assert!(new.instructions.contains("request snapshot only"));
+        eprintln!(
+            "market reference profile sha256: {}",
             selection.profile_sha256
         );
     }

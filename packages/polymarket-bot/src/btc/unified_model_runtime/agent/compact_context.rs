@@ -14,10 +14,29 @@ pub fn prepare(
     snapshot: &BtcFeatureSnapshot,
     sources: &[SourceSelector],
 ) {
-    if request.selection.profile_key != super::EXECUTION_EVIDENCE_PROFILE_KEY {
+    if !super::uses_execution_evidence(&request.selection.profile_key) {
         return;
     }
-    request.context["version"] = json!(super::EXECUTION_EVIDENCE_CONTEXT_VERSION);
+    request.context["version"] = json!(request.selection.context_version());
+    if request.selection.profile_key == super::MARKET_REFERENCE_PROFILE_KEY {
+        let probability = snapshot
+            .up_book
+            .executable_ask_vwap
+            .and_then(|p| p.to_f64())
+            .zip(
+                snapshot
+                    .down_book
+                    .executable_ask_vwap
+                    .and_then(|p| p.to_f64()),
+            )
+            .and_then(|(up, down)| super::entry_evidence::prior(up, down));
+        request.context["market_reference"] = json!({
+            "probability_up": probability,
+            "observed_at": snapshot.observed_at,
+            "source": "normalized_two_sided_executable_asks",
+            "meaning": "up_ask / (up_ask + down_ask), using the request snapshot and the existing execution proxy; not a calibrated settlement probability. Null means unavailable."
+        });
+    }
     request.context["rtds_contiguous_tail"] = tail(state, snapshot.observed_at, sources);
     // These arrays are not consumed by retained-entry/reassessment logic. Preserve
     // every field, null and timestamp; emit column names only once, not per tick.
