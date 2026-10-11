@@ -1093,6 +1093,22 @@ pub fn retained_agent_prediction(
         }
     });
 }
+/// Extend only this agent entry record; retained retries do not count as new inference.
+pub fn agent_entry_evidence(id: Uuid, snapshot: Uuid, evidence: serde_json::Value) {
+    update(id, |p| {
+        if let Some(record) = p
+            .records
+            .iter_mut()
+            .find(|r| r.feature_snapshot_id == snapshot)
+        {
+            if let Some(admission) = record.admission.as_mut() {
+                admission["uncalibrated"] =
+                    serde_json::json!(!evidence["calibration_applied"].as_bool().unwrap_or(false));
+                admission["agent_entry_evidence"] = evidence;
+            }
+        }
+    });
+}
 /// Resolutions are official observed facts. Remove pending predictions once so repeated
 /// delivery cannot double count. Counters cover this instrumentation session only.
 pub fn resolve(market: &str, up: bool) {

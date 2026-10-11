@@ -26,7 +26,7 @@ pub fn add_entry_reassessment_context(
     request.context["version"] = json!(super::ENTRY_REASSESSMENT_CONTEXT_VERSION);
     request.context["evaluation_slot"] = json!(evaluation_slot);
     request.context["entry_reassessment"] = json!({
-        "trigger": if affordability_trigger { if request.selection.profile_key == super::FRESH_EVIDENCE_PROFILE_KEY { "forecast_evidence_changed" } else { "forecast_became_affordable" } } else { "scheduled_evaluation" },
+        "trigger": if affordability_trigger { if super::independent_forecast(&request.selection.profile_key) { "forecast_evidence_changed" } else { "forecast_became_affordable" } } else { "scheduled_evaluation" },
         "max_entry_price": max_entry_price,
         "previous_request_id": previous.map(|result| result.request.request_id),
         "meaning": "The cap is an execution limit, not a settlement probability. Price changes and reference/TWAP changes are in previous_prediction_comparison; current Binance candles contain trade-flow evidence."
@@ -81,7 +81,7 @@ fn comparison(current: &EvaluationRequest, previous: &EvaluationResult) -> Optio
         "rtds_reference_change_bps": relative_change(positive(before, reference_path), positive(now, reference_path)),
         "previous_side_executable_price": pair(positive(before, &price_path), positive(now, &price_path)),
     });
-    if current.selection.profile_key == super::FRESH_EVIDENCE_PROFILE_KEY {
+    if super::independent_forecast(&current.selection.profile_key) {
         let fields = value.as_object_mut()?;
         fields.remove("previous_direction");
         fields.remove("previous_probability_up");

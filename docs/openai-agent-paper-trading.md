@@ -121,3 +121,34 @@ No rollback was needed for the repaired final candidate. The predeployment tuple
 ### Permanent hardening
 
 Focused tests now cover streamed terminal responses, missing/stale reference rejection, existing guard construction, bounded forecast retention/rollover, and signed directional edge persistence for the agent. No parallel execution, data, or accounting system was added.
+
+### Execution-evidence profile
+
+`btc-5m-openai-agent-execution-evidence-v1` is opt-in; earlier profile checksums and
+behavior remain frozen. It keeps the existing three-call schedule, paper-only
+restriction, process identity, price cap, and shared order/accounting controls.
+
+The profile sends RTDS and Binance arrays in lossless columns/rows form. It keeps
+missing complete-minute volatility unknown and adds a separately labeled causal
+contiguous-tail summary with actual coverage, gaps, and source age; it never
+interpolates a missing tick or changes the shared RTDS repository.
+
+Calibration uses only this process's prior resolved filled decisions, bounded to
+24 hours, eight runs, and 300 entries. Profiles remain separate. An older 2/3
+training split chooses a model-versus-normalized-book probability weight from
+`1, .75, .5, .25, 0`; at least 40 training and 20 later holdout markets are required.
+The holdout must improve Brier score without reducing retained-entry quoted
+fee-net P&L. Missing, truncated, or unqualified history leaves the weight at one.
+The new profile prefers its own qualified cohort, otherwise the preceding
+independent-forecast profile's qualified cohort. This is limited historical
+qualification, not evidence of profitability for a changed prompt or future run.
+
+On each entry attempt the agent-only path transports the calibrated forecast's
+log-odds difference from the request-time normalized executable asks to current
+normalized asks. It recomputes direction from that probability, then uses the
+existing admission and execution checks. The market proxy is not asserted to be
+a true probability. This adds no fixed move threshold, extra inference call, or
+persistent trading gate. Raw predictions remain intact; the execution adjustment
+and its calibration source are recorded under the existing model-evaluation
+admission evidence. Retried and restored forecasts always recompute from raw
+inputs, never from an already adjusted probability.

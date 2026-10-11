@@ -1,8 +1,10 @@
 //! Asynchronous decision providers within UMR. Process runners alone own execution.
 pub mod auth;
 pub(crate) mod calibration;
+mod compact_context;
 mod context;
 pub(super) mod diagnostics;
+pub(crate) mod entry_evidence;
 mod market_context;
 mod provider;
 mod reassessment;
@@ -11,6 +13,7 @@ mod usage;
 use anyhow::{ensure, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+pub use compact_context::prepare as prepare_execution_context;
 pub use context::{build_context, build_settlement_context, build_volatility_context};
 pub use diagnostics::FailureDiagnostic;
 pub use market_context::add_market_context;
@@ -43,8 +46,20 @@ pub const CALIBRATION_CONTEXT_VERSION: &str = "capitonic-btc-agent-calibration-c
 pub const MARKET_CONTEXT_PROFILE_KEY: &str = "btc-5m-openai-agent-market-context-v1";
 pub const FRESH_EVIDENCE_PROFILE_KEY: &str = "btc-5m-openai-agent-fresh-evidence-v1";
 pub const FRESH_EVIDENCE_CONTEXT_VERSION: &str = "capitonic-btc-agent-fresh-evidence-v1";
+pub const EXECUTION_EVIDENCE_PROFILE_KEY: &str = "btc-5m-openai-agent-execution-evidence-v1";
+pub const EXECUTION_EVIDENCE_CONTEXT_VERSION: &str = "capitonic-btc-agent-execution-evidence-v1";
+pub fn independent_forecast(key: &str) -> bool {
+    matches!(
+        key,
+        FRESH_EVIDENCE_PROFILE_KEY | EXECUTION_EVIDENCE_PROFILE_KEY
+    )
+}
+
 pub fn uses_market_context(key: &str) -> bool {
-    matches!(key, MARKET_CONTEXT_PROFILE_KEY | FRESH_EVIDENCE_PROFILE_KEY)
+    matches!(
+        key,
+        MARKET_CONTEXT_PROFILE_KEY | FRESH_EVIDENCE_PROFILE_KEY | EXECUTION_EVIDENCE_PROFILE_KEY
+    )
 }
 
 pub const MARKET_CONTEXT_VERSION: &str = "capitonic-btc-agent-market-context-v1";
@@ -53,7 +68,10 @@ const MARKET_CONTEXT_INSTRUCTION: &str = "Use market_horizons to compare the 15-
 pub fn uses_calibration(key: &str) -> bool {
     matches!(
         key,
-        CALIBRATION_PROFILE_KEY | MARKET_CONTEXT_PROFILE_KEY | FRESH_EVIDENCE_PROFILE_KEY
+        CALIBRATION_PROFILE_KEY
+            | MARKET_CONTEXT_PROFILE_KEY
+            | FRESH_EVIDENCE_PROFILE_KEY
+            | EXECUTION_EVIDENCE_PROFILE_KEY
     )
 }
 
@@ -66,6 +84,7 @@ pub fn uses_entry_reassessment(key: &str) -> bool {
             | CALIBRATION_PROFILE_KEY
             | MARKET_CONTEXT_PROFILE_KEY
             | FRESH_EVIDENCE_PROFILE_KEY
+            | EXECUTION_EVIDENCE_PROFILE_KEY
     )
 }
 
@@ -173,6 +192,12 @@ pub fn profile_for_key(key: &str) -> Result<AgentProfile> {
                 .replace(REASSESSMENT_INSTRUCTION, "Use previous_prediction_comparison only as a comparison of market observations. Make an independent settlement forecast from current evidence. Prior answers are deliberately omitted. Both UP and DOWN executable-price changes are supplied without selecting a prior side. Missing comparisons are unknown, not zero.")
                 .replace(ENTRY_REASSESSMENT_INSTRUCTION, "When entry_reassessment.trigger is forecast_evidence_changed, market prices changed since the prior observation. Reassess settlement using current reference, TWAP, Binance and book evidence. A cheaper entry alone is not evidence for a direction. The entry cap and price-change threshold are execution policy, not probabilities.");
         }
+        EXECUTION_EVIDENCE_PROFILE_KEY => {
+            selected = profile_for_key(FRESH_EVIDENCE_PROFILE_KEY)?;
+            selected.key = EXECUTION_EVIDENCE_PROFILE_KEY;
+            selected.context_version = EXECUTION_EVIDENCE_CONTEXT_VERSION;
+            selected.instructions.push_str(" Repeated time-series fields are encoded losslessly as columns and rows; each row follows the column order. rtds_contiguous_tail is a separate, explicitly shorter observed window when full-minute history is incomplete, never a replacement 60-second estimate. Its gap and age diagnostics explain missing context; unknown data is not quiet data. entry_calibration describes an execution-only adjustment fitted on prior filled markets and checked on a later chronological holdout. Return your independent raw probability; do not apply that adjustment yourself. Execution recomputes direction from the adjusted probability and transports its calibrated log-odds advantage over normalized two-sided executable asks to current books; a price decline cannot create an unchanged-probability bargain. Calibration policy: separate source-profile cohorts, 24-hour lookback, at most 300 filled decisions, minimum 40 training and 20 holdout markets, train-only squared-error blend weight in {1,.75,.5,.25,0}, holdout Brier improvement and nondecreasing quoted fee-net retained-entry PnL; unqualified cohorts leave raw probabilities unchanged. No fixed price-movement rejection is added.");
+        }
         _ => anyhow::bail!("unsupported agent profile"),
     }
     Ok(selected)
@@ -187,7 +212,9 @@ impl AgentSelection {
         Ok(())
     }
     pub fn context_version(&self) -> &'static str {
-        if self.profile_key == FRESH_EVIDENCE_PROFILE_KEY {
+        if self.profile_key == EXECUTION_EVIDENCE_PROFILE_KEY {
+            EXECUTION_EVIDENCE_CONTEXT_VERSION
+        } else if self.profile_key == FRESH_EVIDENCE_PROFILE_KEY {
             FRESH_EVIDENCE_CONTEXT_VERSION
         } else if self.profile_key == MARKET_CONTEXT_PROFILE_KEY {
             MARKET_CONTEXT_VERSION
