@@ -1471,9 +1471,6 @@ fn validate_config(config: &BtcStrategyConfig) -> Result<(), BtcRejectReason> {
     }
     let strategy_contract_valid = if let Some(selection) = config.agent_selection() {
         selection.validate().is_ok()
-            && (selection.profile_key
-                != super::unified_model_runtime::agent::FRESH_EVIDENCE_PROFILE_KEY
-                || config.agent_reassessment_price_change.is_some())
             && config.strategy_version == super::unified_model_runtime::agent::STRATEGY_VERSION
             && config.feature_schema_version == selection.context_version()
             && config.unified_model.is_none()
@@ -2388,7 +2385,7 @@ mod tests {
                 profile_sha256: agent::hash(&agent::profile_for_key(profile_key).unwrap()).unwrap(),
             });
             if profile_key == agent::FRESH_EVIDENCE_PROFILE_KEY {
-                assert!(entry_config.validate().is_err());
+                entry_config.validate().unwrap();
                 for invalid in [dec!(0), dec!(-0.05), dec!(1)] {
                     entry_config.agent_reassessment_price_change = Some(invalid);
                     assert!(entry_config.validate().is_err());

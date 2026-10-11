@@ -555,6 +555,22 @@ mod tests {
     }
 
     #[test]
+    fn absent_price_threshold_preserves_forecasts_and_original_affordability_check() {
+        use rust_decimal_macros::dec;
+        let mut session = AgentSession::default();
+        session.observe_market("a");
+        let result = fresh_forecast("0.49", 3);
+        session.retain(result.clone());
+        for price in [dec!(0.12), dec!(0.44), dec!(0.90)] {
+            assert!(!session.hold_entry(&result, Some(price), None, dec!(0.50), None));
+        }
+        assert!(!session.entry_reassessment_due(110));
+        let above_cap = fresh_forecast("0.70", 1);
+        session.retain(above_cap.clone());
+        assert!(session.hold_entry(&above_cap, Some(dec!(0.49)), None, dec!(0.50), None));
+    }
+
+    #[test]
     fn material_changes_below_cap_hold_only_new_profile_and_selected_side() {
         use rust_decimal_macros::dec;
         let mut session = AgentSession::default();
