@@ -2863,8 +2863,11 @@ impl BtcRepository {
         if agent::uses_market_context(profile_key) {
             keys.push(agent::MARKET_CONTEXT_PROFILE_KEY);
         }
-        if profile_key == agent::FRESH_EVIDENCE_PROFILE_KEY {
+        if agent::independent_forecast(profile_key) {
             keys.push(agent::FRESH_EVIDENCE_PROFILE_KEY);
+        }
+        if profile_key == agent::EXECUTION_EVIDENCE_PROFILE_KEY {
+            keys.push(agent::EXECUTION_EVIDENCE_PROFILE_KEY);
         }
         let hashes = keys
             .iter()
@@ -2882,12 +2885,24 @@ impl BtcRepository {
             let rows = sqlx::query_scalar::<_, serde_json::Value>(calibration::HISTORY_SQL)
                 .bind(process_id)
                 .bind(cutoff)
-                .bind(keys)
-                .bind(hashes)
+                .bind(&keys)
+                .bind(&hashes)
                 .fetch_all(&mut *tx)
                 .await?;
+            let mut summary = calibration::summarize(cutoff, rows);
+            if profile_key == agent::EXECUTION_EVIDENCE_PROFILE_KEY {
+                let entries =
+                    sqlx::query_scalar::<_, serde_json::Value>(agent::entry_evidence::HISTORY_SQL)
+                        .bind(process_id)
+                        .bind(cutoff)
+                        .bind(&keys)
+                        .bind(&hashes)
+                        .fetch_all(&mut *tx)
+                        .await?;
+                summary["entry_calibration"] = agent::entry_evidence::summarize(cutoff, entries);
+            }
             tx.commit().await?;
-            Ok::<_, anyhow::Error>(calibration::summarize(cutoff, rows))
+            Ok::<_, anyhow::Error>(summary)
         };
         tokio::time::timeout(std::time::Duration::from_millis(2250), operation)
             .await

@@ -1472,6 +1472,7 @@ impl BtcProcessRunner {
                     | agent::CALIBRATION_PROFILE_KEY
                     | agent::MARKET_CONTEXT_PROFILE_KEY
                     | agent::FRESH_EVIDENCE_PROFILE_KEY
+                    | agent::EXECUTION_EVIDENCE_PROFILE_KEY
             ) {
                 agent::build_volatility_context(&observation.state, &snapshot, &sources)
             } else if selection.profile_key == agent::SETTLEMENT_PROFILE_KEY {
@@ -1521,11 +1522,17 @@ impl BtcProcessRunner {
                         session.latest(),
                     );
                 }
-                if selection.profile_key == agent::FRESH_EVIDENCE_PROFILE_KEY {
+                if agent::independent_forecast(&selection.profile_key) {
                     request.context["version"] = serde_json::json!(selection.context_version());
                     request.context["entry_reassessment"]["price_change_threshold"] =
                         serde_json::json!(member.strategy.agent_reassessment_price_change);
                 }
+                agent::prepare_execution_context(
+                    &mut request,
+                    &observation.state,
+                    &snapshot,
+                    &sources,
+                );
                 request.input_sha256 = agent::hash(&request.context)?;
                 // Record the slot before sending, so restart cannot replenish its budget.
                 let mut pending =
@@ -1617,11 +1624,15 @@ impl BtcProcessRunner {
                 elapsed as f64,
             );
         }
+        let entry_adjustment = agent::entry_evidence::adjust(&result, &snapshot);
+        let entry_probability = entry_adjustment
+            .as_ref()
+            .map_or(prediction.probability_up, |(p, _)| *p);
         let score = RuntimeModelScore {
             raw_logit: 0.0,
-            probability_up: prediction.probability_up,
+            probability_up: entry_probability,
             confidence: prediction.confidence,
-            action: if prediction.direction == BtcOutcome::Up {
+            action: if entry_probability >= 0.5 {
                 RuntimeModelAction::Up
             } else {
                 RuntimeModelAction::Down
@@ -1649,6 +1660,13 @@ impl BtcProcessRunner {
                 score,
             );
         }
+        if let Some((_, evidence)) = entry_adjustment {
+            umr_telemetry::agent_entry_evidence(
+                self.config.process_id,
+                snapshot.snapshot_id,
+                evidence,
+            );
+        }
         session.retain(result.clone());
         umr_telemetry::attribute_member(
             self.config.process_id,
@@ -1669,7 +1687,7 @@ impl BtcProcessRunner {
             super::strategy::evaluate_agent_prediction(
                 &member.strategy,
                 &snapshot,
-                prediction.probability_up,
+                entry_probability,
                 self.config.directional_model_entry_policy,
             )?
         };
@@ -1682,7 +1700,7 @@ impl BtcProcessRunner {
             let entry_hold_evidence = entry_held.then(|| {
                 serde_json::json!({
                     "agent_evaluation":result,
-                    "agent_entry_reassessment": if selection.profile_key == agent::FRESH_EVIDENCE_PROFILE_KEY { "forecast_evidence_changed" } else { "forecast_became_affordable" }
+                    "agent_entry_reassessment": if agent::independent_forecast(&selection.profile_key) { "forecast_evidence_changed" } else { "forecast_became_affordable" }
                 })
             });
             self.insert_process_strategy_decision(
