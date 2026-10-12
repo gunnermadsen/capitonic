@@ -61,10 +61,12 @@ impl ControlApi for FakeControlApi {
             Utc::now(),
             vec![
                 ProcessEntryPermission {
+                    execution_mode: "live".to_string(),
                     process_id,
                     permission: EntryPermission::enabled(),
                 },
                 ProcessEntryPermission {
+                    execution_mode: "paper".to_string(),
                     process_id: Uuid::from_u128(2),
                     permission: EntryPermission::disabled(),
                 },
@@ -828,6 +830,29 @@ async fn authenticated_admin_can_read_all_process_entry_counts_without_changing_
     assert_eq!(json["total_count"], 2);
     assert_eq!(json["alert_enabled"], 0);
     assert_eq!(json["display"], "Blocked — 1 of 2");
+}
+
+#[tokio::test]
+async fn authenticated_admin_can_read_execution_mode_entry_counts() {
+    for (scope, enabled) in [("Live%20Processes", 1), ("Paper%20Processes", 0)] {
+        let app = http::router(Arc::new(FakeControlApi), "secret");
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/admin/strategy/btc-5m/entry-status?scope={scope}"))
+                    .header(AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["enabled_count"], enabled);
+        assert_eq!(json["total_count"], 1);
+        assert_eq!(json["alert_enabled"], enabled);
+    }
 }
 
 #[tokio::test]

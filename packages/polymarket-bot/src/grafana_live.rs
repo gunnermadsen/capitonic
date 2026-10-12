@@ -97,6 +97,8 @@ impl EntryPermission {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProcessEntryPermission {
+    #[serde(skip)]
+    pub execution_mode: String,
     pub process_id: Uuid,
     #[serde(flatten)]
     pub permission: EntryPermission,
@@ -123,6 +125,24 @@ impl TradingEntryStatusSnapshot {
     }
 
     pub fn select(&self, scope: &str, process_id: Option<Uuid>) -> EntryStatusSelection {
+        let execution_mode = if scope.eq_ignore_ascii_case("Live Processes") {
+            Some("live")
+        } else if scope.eq_ignore_ascii_case("Paper Processes") {
+            Some("paper")
+        } else {
+            None
+        };
+        if let Some(mode) = execution_mode {
+            return Self::new(
+                self.observed_at,
+                self.processes
+                    .iter()
+                    .filter(|process| process.execution_mode == mode)
+                    .cloned()
+                    .collect(),
+            )
+            .select("All processes", None);
+        }
         let all_processes = scope.eq_ignore_ascii_case("all processes") || scope == "all";
         let permission = if all_processes {
             self.aggregate.clone()
@@ -609,9 +629,50 @@ mod tests {
 
     fn process_permission(process_id: &str, permission: EntryPermission) -> ProcessEntryPermission {
         ProcessEntryPermission {
+            execution_mode: "paper".to_string(),
             process_id: Uuid::parse_str(process_id).unwrap(),
             permission,
         }
+    }
+
+    #[test]
+    fn entry_status_filters_execution_modes_without_changing_wire_fields() {
+        let now = Utc.timestamp_opt(1_800_000_000, 0).unwrap();
+        let processes = [
+            ("live", EntryPermission::enabled()),
+            ("paper", EntryPermission::enabled()),
+            ("live", EntryPermission::blocked(None)),
+            ("paper", EntryPermission::disabled()),
+            ("unspecified", EntryPermission::enabled()),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (mode, permission))| ProcessEntryPermission {
+            process_id: Uuid::from_u128(index as u128 + 1),
+            execution_mode: mode.to_string(),
+            permission,
+        })
+        .collect();
+        let snapshot = TradingEntryStatusSnapshot::new(now, processes);
+        for scope in ["Live Processes", "Paper Processes", "live processes"] {
+            let selection = snapshot.select(scope, Some(Uuid::from_u128(99)));
+            assert_eq!(selection.enabled_count, Some(1));
+            assert_eq!(selection.total_count, Some(2));
+            assert_eq!(selection.display, "Blocked — 1 of 2");
+            assert_eq!(selection.observed_at, now);
+        }
+        assert_eq!(snapshot.select("All processes", None).total_count, Some(5));
+        assert_eq!(
+            snapshot.select("All processes", None).enabled_count,
+            Some(3)
+        );
+        let wire = serde_json::to_value(&snapshot).unwrap();
+        assert!(wire["processes"][0].get("execution_mode").is_none());
+        let empty = TradingEntryStatusSnapshot::new(now, vec![snapshot.processes[0].clone()]);
+        let selection = empty.select("Paper Processes", None);
+        assert_eq!(selection.total_count, Some(0));
+        assert_eq!(selection.enabled_count, Some(0));
+        assert_eq!(selection.alert_enabled, 0);
     }
 
     #[test]
@@ -676,6 +737,7 @@ mod tests {
                 .into_iter()
                 .enumerate()
                 .map(|(index, permission)| ProcessEntryPermission {
+                    execution_mode: "paper".to_string(),
                     process_id: Uuid::from_u128(index as u128 + 1),
                     permission,
                 })
@@ -700,10 +762,12 @@ mod tests {
             now,
             vec![
                 ProcessEntryPermission {
+                    execution_mode: "paper".to_string(),
                     process_id: Uuid::from_u128(1),
                     permission: EntryPermission::enabled(),
                 },
                 ProcessEntryPermission {
+                    execution_mode: "paper".to_string(),
                     process_id: Uuid::from_u128(2),
                     permission: EntryPermission::disabled(),
                 },
