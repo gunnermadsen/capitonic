@@ -50,17 +50,29 @@ pub const EXECUTION_EVIDENCE_PROFILE_KEY: &str = "btc-5m-openai-agent-execution-
 pub const EXECUTION_EVIDENCE_CONTEXT_VERSION: &str = "capitonic-btc-agent-execution-evidence-v1";
 pub const MARKET_REFERENCE_PROFILE_KEY: &str = "btc-5m-openai-agent-market-reference-v1";
 pub const MARKET_REFERENCE_CONTEXT_VERSION: &str = "capitonic-btc-agent-market-reference-v1";
+pub const MARKET_REFERENCE_SOL_PROFILE_KEY: &str = "btc-5m-openai-agent-market-reference-sol-v1";
+pub fn uses_market_reference(key: &str) -> bool {
+    matches!(
+        key,
+        MARKET_REFERENCE_PROFILE_KEY | MARKET_REFERENCE_SOL_PROFILE_KEY
+    )
+}
 pub fn uses_execution_evidence(key: &str) -> bool {
     matches!(
         key,
-        EXECUTION_EVIDENCE_PROFILE_KEY | MARKET_REFERENCE_PROFILE_KEY
+        EXECUTION_EVIDENCE_PROFILE_KEY
+            | MARKET_REFERENCE_PROFILE_KEY
+            | MARKET_REFERENCE_SOL_PROFILE_KEY
     )
 }
 
 pub fn independent_forecast(key: &str) -> bool {
     matches!(
         key,
-        FRESH_EVIDENCE_PROFILE_KEY | EXECUTION_EVIDENCE_PROFILE_KEY | MARKET_REFERENCE_PROFILE_KEY
+        FRESH_EVIDENCE_PROFILE_KEY
+            | EXECUTION_EVIDENCE_PROFILE_KEY
+            | MARKET_REFERENCE_PROFILE_KEY
+            | MARKET_REFERENCE_SOL_PROFILE_KEY
     )
 }
 
@@ -71,6 +83,7 @@ pub fn uses_market_context(key: &str) -> bool {
             | FRESH_EVIDENCE_PROFILE_KEY
             | EXECUTION_EVIDENCE_PROFILE_KEY
             | MARKET_REFERENCE_PROFILE_KEY
+            | MARKET_REFERENCE_SOL_PROFILE_KEY
     )
 }
 
@@ -85,6 +98,7 @@ pub fn uses_calibration(key: &str) -> bool {
             | FRESH_EVIDENCE_PROFILE_KEY
             | EXECUTION_EVIDENCE_PROFILE_KEY
             | MARKET_REFERENCE_PROFILE_KEY
+            | MARKET_REFERENCE_SOL_PROFILE_KEY
     )
 }
 
@@ -99,6 +113,7 @@ pub fn uses_entry_reassessment(key: &str) -> bool {
             | FRESH_EVIDENCE_PROFILE_KEY
             | EXECUTION_EVIDENCE_PROFILE_KEY
             | MARKET_REFERENCE_PROFILE_KEY
+            | MARKET_REFERENCE_SOL_PROFILE_KEY
     )
 }
 
@@ -218,6 +233,11 @@ pub fn profile_for_key(key: &str) -> Result<AgentProfile> {
             selected.context_version = MARKET_REFERENCE_CONTEXT_VERSION;
             selected.instructions = selected.instructions.replace("Distinguish your forecast from the market price.", "Use market_reference.probability_up as the starting reference for your snapshot-time probability_up. This normalized two-sided executable-ask proxy includes spread and liquidity effects; it is not a true or calibrated settlement probability. Justify any departure using the supplied current BTC movement, official settlement TWAP distance, time remaining and Binance trade-flow evidence. These observations may already be reflected in prices: their presence alone does not establish mispricing. Permit either direction and evidence-supported disagreement; do not manufacture an adjustment to satisfy entry limits. Express the supporting evidence through the existing reason_codes. If the reference is unavailable, forecast from the supplied causal observations without inventing a market probability. Return the probability at the request snapshot only; do not anticipate later book movements or apply execution calibration/current-book transport yourself.");
         }
+        MARKET_REFERENCE_SOL_PROFILE_KEY => {
+            selected = profile_for_key(MARKET_REFERENCE_PROFILE_KEY)?;
+            selected.key = MARKET_REFERENCE_SOL_PROFILE_KEY;
+            selected.model = "gpt-6.1-sol";
+        }
         _ => anyhow::bail!("unsupported agent profile"),
     }
     Ok(selected)
@@ -232,7 +252,7 @@ impl AgentSelection {
         Ok(())
     }
     pub fn context_version(&self) -> &'static str {
-        if self.profile_key == MARKET_REFERENCE_PROFILE_KEY {
+        if uses_market_reference(&self.profile_key) {
             MARKET_REFERENCE_CONTEXT_VERSION
         } else if self.profile_key == EXECUTION_EVIDENCE_PROFILE_KEY {
             EXECUTION_EVIDENCE_CONTEXT_VERSION
@@ -606,5 +626,34 @@ mod tests {
             "market reference profile sha256: {}",
             selection.profile_sha256
         );
+    }
+    #[test]
+    fn sol_variant_changes_only_model_and_profile_identity() {
+        let astra = profile_for_key(MARKET_REFERENCE_PROFILE_KEY).unwrap();
+        assert_eq!(
+            hash(&astra).unwrap(),
+            "674fa7351ea66c957a8364e3cd9ef0368f99fda011ff9ab7f6a14f6fa2a1a7ef"
+        );
+        let sol = profile_for_key(MARKET_REFERENCE_SOL_PROFILE_KEY).unwrap();
+        assert_eq!(sol.model, "gpt-6.1-sol");
+        assert!(
+            uses_market_reference(sol.key)
+                && uses_execution_evidence(sol.key)
+                && independent_forecast(sol.key)
+                && uses_market_context(sol.key)
+                && uses_calibration(sol.key)
+                && uses_entry_reassessment(sol.key)
+        );
+        let selection = AgentSelection {
+            profile_key: sol.key.into(),
+            profile_sha256: hash(&sol).unwrap(),
+        };
+        selection.validate().unwrap();
+        assert_eq!(selection.context_version(), astra.context_version);
+        let mut comparable = sol.clone();
+        comparable.key = astra.key;
+        comparable.model = astra.model;
+        assert_eq!(hash(&comparable).unwrap(), hash(&astra).unwrap());
+        eprintln!("SOL profile SHA256: {}", selection.profile_sha256);
     }
 }

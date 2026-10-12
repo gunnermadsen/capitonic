@@ -1474,6 +1474,7 @@ impl BtcProcessRunner {
                     | agent::FRESH_EVIDENCE_PROFILE_KEY
                     | agent::EXECUTION_EVIDENCE_PROFILE_KEY
                     | agent::MARKET_REFERENCE_PROFILE_KEY
+                    | agent::MARKET_REFERENCE_SOL_PROFILE_KEY
             ) {
                 agent::build_volatility_context(&observation.state, &snapshot, &sources)
             } else if selection.profile_key == agent::SETTLEMENT_PROFILE_KEY {
