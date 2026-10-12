@@ -2348,6 +2348,7 @@ mod tests {
             agent::FRESH_EVIDENCE_PROFILE_KEY,
             agent::EXECUTION_EVIDENCE_PROFILE_KEY,
             agent::MARKET_REFERENCE_PROFILE_KEY,
+            agent::MARKET_REFERENCE_SOL_PROFILE_KEY,
         ] {
             let profile = agent::profile_for_key(profile_key).unwrap();
             let mut entry_config = config.clone();

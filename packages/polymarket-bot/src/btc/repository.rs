@@ -2869,8 +2869,11 @@ impl BtcRepository {
         if agent::uses_execution_evidence(profile_key) {
             keys.push(agent::EXECUTION_EVIDENCE_PROFILE_KEY);
         }
-        if profile_key == agent::MARKET_REFERENCE_PROFILE_KEY {
+        if agent::uses_market_reference(profile_key) {
             keys.push(agent::MARKET_REFERENCE_PROFILE_KEY);
+        }
+        if profile_key == agent::MARKET_REFERENCE_SOL_PROFILE_KEY {
+            keys.push(agent::MARKET_REFERENCE_SOL_PROFILE_KEY);
         }
         let hashes = keys
             .iter()

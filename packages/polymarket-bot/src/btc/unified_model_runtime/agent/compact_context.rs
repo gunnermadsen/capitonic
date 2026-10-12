@@ -18,7 +18,7 @@ pub fn prepare(
         return;
     }
     request.context["version"] = json!(request.selection.context_version());
-    if request.selection.profile_key == super::MARKET_REFERENCE_PROFILE_KEY {
+    if super::uses_market_reference(&request.selection.profile_key) {
         let probability = snapshot
             .up_book
             .executable_ask_vwap
