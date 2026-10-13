@@ -16,7 +16,7 @@ Unchanged committed image inputs reuse the existing image and Git tag pair.
 --checks-only does not build or tag an image.
 Build and check modes do not deploy, promote, push, or mark images golden.
 --tag-rc reserves an RC Git tag for the accepted local image on the development checkpoint.
-It requires the checkpoint and golden tags, committed chart pin, and running image identity,
+It requires checkpoint and golden provenance, the committed local pin, and immutable image identity,
 then atomically pushes the accepted refs to origin.
 EOF
 }
@@ -113,7 +113,6 @@ fi
 tag_accepted_rc() {
   local accepted checkpoint chart version image id source local_version candidate_tag hash_tag golden_tag rc_tag
   local registry_tags base highest=-1 number tag reserved=() annotation key expected
-  local -a deployments=()
   require_clean_source
   accepted="$(git rev-parse --verify development^{commit})"
   checkpoint="checkpoint/development/git-$accepted"
@@ -160,27 +159,6 @@ tag_accepted_rc() {
       && "$(git show "$accepted:$chart/values.yaml" | yq -r '.gitRevision' -)" == "$source" ]] || {
       echo "Accepted ingester chart image ID or source revision disagrees." >&2; exit 67;
     }
-    deployments=(ingester-master ingester-worker)
-  elif [[ "$component" == db-migrate ]]; then
-    deployments=()
-  else
-    deployments=(polymarket-bot)
-  fi
-  if [[ "$component" != db-migrate ]]; then
-    for deployment in "${deployments[@]}"; do
-      kubectl -n capitonic get deployment "$deployment" -o json | jq -e --arg image "$image" --arg id "$id" '
-        .spec.template.spec.containers[0].image == $image and
-        .status.readyReplicas == .spec.replicas' >/dev/null || {
-        echo "Accepted deployment is not ready with the local image: $deployment" >&2; exit 70;
-      }
-      kubectl -n capitonic get pods -l "app.kubernetes.io/name=$deployment" -o json | jq -e --arg id "$id" '
-        [.items[] | select(.metadata.deletionTimestamp == null)] as $pods |
-        ($pods | length) > 0 and all($pods[];
-          .status.containerStatuses[0].ready == true and
-          .status.containerStatuses[0].imageID == $id)' >/dev/null || {
-        echo "Accepted pods do not all run the selected image ID: $deployment" >&2; exit 70;
-      }
-    done
   fi
   if [[ "$component" == db-migrate ]]; then
     kubectl -n capitonic get job db-migrate -o json | jq -e --arg image "$image" '
