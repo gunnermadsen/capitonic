@@ -35,6 +35,19 @@ impl ControlApi for FakeControlApi {
         Ok(&FixtureOrders)
     }
 
+    async fn reconciliation_ownership_evidence(
+        &self,
+        request: polymarket_bot::account_reconcile::ownership::OwnershipRequest,
+    ) -> Result<polymarket_bot::account_reconcile::ownership::OwnershipEvidence, HttpError> {
+        Ok(serde_json::from_value(serde_json::json!({
+            "request_id": request.request_id, "environment": "production",
+            "account_address": request.account_address, "account_ref": request.account_ref,
+            "chain_id": request.chain_id, "observed_at": Utc::now(), "process_ids": [],
+            "orders": {}, "order_process_ids": {}, "fills": [], "positions": {}, "token_lineage": []
+        }))
+        .unwrap())
+    }
+
     async fn metrics(&self) -> Result<MetricsResponse, HttpError> {
         Ok(MetricsResponse {
             service: "polymarket-bot".to_string(),
@@ -1693,5 +1706,45 @@ async fn process_status_patch_is_authenticated_typed_and_process_scoped() {
         assert_eq!(body["process"]["process_id"], process_id.to_string());
         assert_eq!(body["process"]["status"], actual);
         assert_eq!(body["process"]["enabled"], actual == "running");
+    }
+}
+
+#[tokio::test]
+async fn reconciliation_ownership_endpoint_is_authenticated_read_only_delegation() {
+    let app = http::router(Arc::new(FakeControlApi), "test-token");
+    let request_id = Uuid::new_v4();
+    let body = serde_json::json!({
+        "request_id": request_id, "account_address": format!("0x{}", "1".repeat(40)),
+        "account_ref": "polymarket-primary", "chain_id": 137,
+        "window_start": Utc::now() - chrono::Duration::hours(1), "window_end": Utc::now(),
+        "venue_order_ids": [], "transaction_hashes": [], "token_ids": []
+    });
+    for (token, chain, expected) in [
+        (None, 137, StatusCode::UNAUTHORIZED),
+        (Some("test-token"), 1, StatusCode::BAD_REQUEST),
+        (Some("test-token"), 137, StatusCode::OK),
+    ] {
+        let mut body = body.clone();
+        body["chain_id"] = chain.into();
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/admin/live/reconciliation-ownership")
+            .header("content-type", "application/json");
+        if let Some(token) = token {
+            request = request.header(AUTHORIZATION, format!("Bearer {token}"));
+        }
+        let response = app
+            .clone()
+            .oneshot(request.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::OK {
+            let json: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), 8192).await.unwrap())
+                    .unwrap();
+            assert_eq!(json["request_id"], request_id.to_string());
+            assert_eq!(json["environment"], "production");
+        }
     }
 }

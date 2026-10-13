@@ -122,6 +122,7 @@ pub struct LiveVenue {
     config: LiveExecutionConfig,
     clob_base_url: String,
     http_client: reqwest::Client,
+    ownership_client: Option<crate::account_reconcile::ownership::OwnershipClient>,
     signer: Option<Arc<PrivateKeySigner>>,
     authenticated_client_cache: Arc<OnceCell<AuthenticatedClient>>,
     store: Option<Store>,

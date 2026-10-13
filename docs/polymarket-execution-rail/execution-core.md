@@ -47,6 +47,36 @@ Both modes validate fill ownership, immutable identities and authorized economic
 
 `reconcile` and cancellation-aware `run_recovery` reuse existing settlement/reconciliation owners. The application owns the recovery task and its cancellation token. Transient failures retry on the next interval without modifying enabled/status. Configured live authorization is restored once per service instance through the existing restart method, conditional on current durable intent. Paper settlement discovery and idempotent recognition share the legacy implementation; new balances read credited ledger rows, while legacy callers retain their existing in-memory credit behavior.
 
+## Shared-wallet environment ownership
+
+The shared live reconciliation owner (used by legacy execution and the new rail) can
+read a trusted peer's local ownership evidence through authenticated
+`POST /admin/live/reconciliation-ownership`. The endpoint performs bounded SELECTs
+only and never invokes reconciliation, its peer, order submission or accounting writes.
+Exact order/transaction evidence distinguishes foreign ownership from unknown activity;
+foreign order IDs are never imported as local accounting links. Process ownership
+conflicts remain errors. Combined wallet custody uses each environment's existing
+position evidence, while capital, fills and settlement stay process-local. Unowned
+manual sells and ambiguous shared-token redemptions cannot be assigned by size alone.
+
+Deployment settings, outside TPC, are `POLYMARKET_RECONCILIATION_ENVIRONMENT`,
+`POLYMARKET_RECONCILIATION_PEER_ENVIRONMENT`, and
+`POLYMARKET_RECONCILIATION_PEER_URL` (the complete endpoint URL).
+`POLYMARKET_RECONCILIATION_PEER_TOKEN` is the peer's existing admin bearer credential,
+provided through the established secret configuration. Both environments require
+reciprocal configuration for reciprocal protection. Unconfigured deployments retain
+existing behavior; no deployment settings are changed by this source implementation.
+The environments must refer to the same account alias and verified wallet/chain, and
+must not contain copied process/order ownership. Peer reads have a two-second bound,
+no redirects and no negative-ownership cache. Unavailable evidence is retried by the
+existing reconciliation cycle without changing durable process authorization.
+
+The peer lookup is in reconciliation, never signing or submission. Existing rail
+receipt recovery awaits reconciliation, so peer read latency can affect receipt
+completion. This does not provide cross-database atomic wallet reservations.
+Existing reconciliation status/report fields and process-scoped Prometheus metrics
+expose confirmed foreign activity, ambiguous accounting and peer evidence availability.
+
 ## Qualification boundary
 
 Deterministic tests exercise the OMS, actual paper arrival simulator and injected commit failures. Existing live transport/reconciliation tests remain the evidence for ambiguous POST, REST/websocket fill recovery and settlement invariants. This candidate has not executed the new service against a database or a funded venue. The PostgreSQL transaction SQL, cross-service lock scheduling and full service restart wiring require isolated development integration qualification; unit tests are not evidence of a real database rollback or funded execution. No new process or run is created by this implementation.

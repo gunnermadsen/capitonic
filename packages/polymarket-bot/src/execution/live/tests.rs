@@ -127,6 +127,7 @@ mod tests {
 
     fn live_config() -> LiveExecutionConfig {
         LiveExecutionConfig {
+            reconciliation_ownership: Default::default(),
             user_ws_url: "wss://ws-subscriptions-clob.polymarket.com/ws/user".to_string(),
             clob_api_base_url: "https://clob-v2.polymarket.com".to_string(),
             user_ws_stale: std::time::Duration::from_secs(20),
@@ -1375,6 +1376,8 @@ mod tests {
         let checked_at = Utc::now();
         let run_id = Uuid::new_v4();
         let mut account = AccountReconcileReport {
+            environment_ownership: None,
+            peer_owned_order_ids: Default::default(),
             process_id: Some(process_id),
             account_ref: Some("polymarket-test".into()),
             credential_account_fingerprint_sha256: Some("private-fingerprint".into()),

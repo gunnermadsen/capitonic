@@ -82,8 +82,12 @@ impl LiveVenue {
     ) -> Result<Self> {
         config.validate_for_live()?;
         let signer = configured_submit_signer(&config)?;
+        let ownership_client = crate::account_reconcile::ownership::OwnershipClient::new(
+            &config.reconciliation_ownership,
+        )?;
         let venue = Self {
             config,
+            ownership_client,
             clob_base_url,
             http_client: reqwest::Client::new(),
             signer,
@@ -115,8 +119,12 @@ impl LiveVenue {
     pub(super) fn new_for_test(config: LiveExecutionConfig) -> Result<Self> {
         config.validate_for_live()?;
         let signer = configured_submit_signer(&config)?;
+        let ownership_client = crate::account_reconcile::ownership::OwnershipClient::new(
+            &config.reconciliation_ownership,
+        )?;
         Ok(Self {
             config,
+            ownership_client,
             clob_base_url: "https://clob-v2.polymarket.com".to_string(),
             http_client: reqwest::Client::new(),
             signer,
@@ -166,6 +174,7 @@ impl LiveVenue {
         }
         Ok(Self {
             config: self.config.clone(),
+            ownership_client: self.ownership_client.clone(),
             clob_base_url: self.clob_base_url.clone(),
             http_client: self.http_client.clone(),
             signer: self.signer.clone(),
@@ -947,9 +956,45 @@ impl LiveVenue {
         Ok(identity)
     }
 
+    /// Authenticated HTTP controller supplies the request; this method only reads local evidence.
+    pub async fn reconciliation_ownership_evidence(
+        &self,
+        request: crate::account_reconcile::ownership::OwnershipRequest,
+    ) -> Result<crate::account_reconcile::ownership::OwnershipEvidence> {
+        request.validate()?;
+        let environment = self
+            .config
+            .reconciliation_ownership
+            .environment
+            .as_deref()
+            .context("reconciliation environment is not configured")?;
+        let identity = canonical_configured_account_identity(&self.config, &request.account_ref)?;
+        if !identity
+            .account_address
+            .eq_ignore_ascii_case(&request.account_address)
+        {
+            bail!("reconciliation ownership wallet does not match configured identity");
+        }
+        let store = self.store()?;
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            crate::account_reconcile::ownership::local_evidence(&store, environment, &request),
+        )
+        .await
+        .context("reconciliation ownership evidence read timed out")?
+    }
+
     pub(super) async fn run_account_reconcile(
         &self,
+        request: AccountReconcileRequest,
+    ) -> Result<AccountReconcileReport> {
+        self.run_account_reconcile_with_orders(request, &[]).await
+    }
+
+    pub(super) async fn run_account_reconcile_with_orders(
+        &self,
         mut request: AccountReconcileRequest,
+        open_order_ids: &[String],
     ) -> Result<AccountReconcileReport> {
         let mut canonical_identity = None;
         if let Some(process_id) = self.bound_process_id {
@@ -1024,7 +1069,14 @@ impl LiveVenue {
                     .clone(),
             );
         }
-        reconcile_account_positions(&store, data_api, request).await
+        crate::account_reconcile::reconcile_account_positions_with_peer(
+            &store,
+            data_api,
+            request,
+            self.ownership_client.as_ref(),
+            open_order_ids,
+        )
+        .await
     }
 
     pub(super) async fn poly1271_candidate_client(

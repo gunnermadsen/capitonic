@@ -3,6 +3,7 @@ use std::time::Instant;
 
 mod fill_read_telemetry;
 mod order_execution;
+mod reconciliation_ownership;
 pub use fill_read_telemetry::{FillEconomicsSite, FillIdentitySite};
 pub(crate) use order_execution::PaperCommit;
 
@@ -535,7 +536,7 @@ pub struct AccountTrade {
     pub raw_payload: serde_json::Value,
 }
 
-#[derive(Debug, Clone, PartialEq, FromRow)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, FromRow)]
 pub(crate) struct AccountLiveFillEvidence {
     pub transaction_hash: String,
     pub order_id: String,
@@ -611,7 +612,7 @@ pub struct AccountPositionSnapshot {
     pub raw_payload: serde_json::Value,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LiveAccountPositionEvidence {
     pub size: Decimal,
     pub credited_zero_payout_size: Decimal,

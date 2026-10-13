@@ -1,3 +1,5 @@
+pub mod ownership;
+
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{bail, Context, Result};
@@ -78,6 +80,10 @@ pub struct ProcessAccountingProof {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountReconcileReport {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_ownership: Option<ownership::EnvironmentOwnershipStatus>,
+    #[serde(skip)]
+    pub(crate) peer_owned_order_ids: HashSet<String>,
     pub process_id: Option<Uuid>,
     pub account_ref: Option<String>,
     pub credential_account_fingerprint_sha256: Option<String>,
@@ -110,6 +116,16 @@ pub async fn reconcile_account_positions(
     store: &Store,
     data_api: &DataApiClient,
     request: AccountReconcileRequest,
+) -> Result<AccountReconcileReport> {
+    reconcile_account_positions_with_peer(store, data_api, request, None, &[]).await
+}
+
+pub(crate) async fn reconcile_account_positions_with_peer(
+    store: &Store,
+    data_api: &DataApiClient,
+    request: AccountReconcileRequest,
+    peer: Option<&ownership::OwnershipClient>,
+    open_order_ids: &[String],
 ) -> Result<AccountReconcileReport> {
     let process_id = request.process_id;
     if process_id.is_some_and(|process_id| process_id.is_nil()) {
@@ -233,11 +249,24 @@ pub async fn reconcile_account_positions(
     }
     trades.sort_by_key(|trade| trade.timestamp_utc);
 
+    let mut peer_evidence = None;
+    let mut foreign_trades = HashSet::new();
+    let mut environment_ownership =
+        peer.filter(|_| process_id.is_some())
+            .map(|peer| ownership::EnvironmentOwnershipStatus {
+                environment: peer.environment().to_owned(),
+                peer_environment: peer.peer_environment().to_owned(),
+                peer_evidence_status: "unavailable".to_owned(),
+                confirmed_foreign_trades: 0,
+                confirmed_foreign_open_orders: 0,
+                ambiguous_accounting_events: 0,
+            });
     let normalization_failures = if process_id.is_some() {
         let mut venue_order_ids = trades
             .iter()
             .filter_map(|trade| trade.venue_order_id.clone())
             .collect::<Vec<_>>();
+        venue_order_ids.extend_from_slice(open_order_ids);
         venue_order_ids.sort_unstable();
         venue_order_ids.dedup();
         let owned_orders = account_owned_orders_for_reconciliation(
@@ -271,6 +300,77 @@ pub async fn reconcile_account_positions(
         )
         .await?;
         link_process_owned_trades(&mut trades, &owned_orders, &owned_fills);
+        if let Some(peer) = peer {
+            let mut token_ids: Vec<_> = trades
+                .iter()
+                .map(|t| t.token_id.clone())
+                .chain(redemption_activities.iter().filter_map(|r| r.asset.clone()))
+                .collect();
+            token_ids.sort_unstable();
+            token_ids.dedup();
+            let ownership_request = ownership::OwnershipRequest {
+                request_id: Uuid::new_v4(),
+                account_address: account_address.clone(),
+                account_ref: account_ref.clone().expect("validated process account"),
+                chain_id: 137,
+                window_start: trades
+                    .iter()
+                    .map(|t| t.timestamp_utc)
+                    .min()
+                    .unwrap_or(activity_window_start)
+                    .min(activity_window_start)
+                    - LIVE_EXTERNAL_EVENT_CLOCK_SKEW,
+                window_end: activity_window_end + LIVE_EXTERNAL_EVENT_CLOCK_SKEW,
+                venue_order_ids,
+                transaction_hashes,
+                token_ids,
+            };
+            match peer.fetch(&ownership_request).await {
+                Ok(evidence) => {
+                    let local_process_ids = store
+                        .reconciliation_account_process_ids(&ownership_request.account_ref)
+                        .await?;
+                    evidence.ensure_disjoint(&local_process_ids, &owned_orders)?;
+                    // A restored/copy database must not count the same order as foreign custody.
+                    let peer_order_ids = evidence
+                        .order_process_ids
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if !store
+                        .reconciliation_order_process_ids(&peer_order_ids)
+                        .await?
+                        .is_empty()
+                    {
+                        bail!("reconciliation_environment_ownership_conflict");
+                    }
+                    foreign_trades = evidence.foreign_trades(&trades)?;
+                    let status = environment_ownership
+                        .as_mut()
+                        .expect("configured peer status");
+                    status.peer_evidence_status = "verified".to_owned();
+                    status.confirmed_foreign_trades = foreign_trades.len();
+                    status.confirmed_foreign_open_orders = open_order_ids
+                        .iter()
+                        .filter(|id| evidence.orders.contains_key(*id))
+                        .collect::<HashSet<_>>()
+                        .len();
+                    peer_evidence = Some(evidence);
+                }
+                Err(error) => {
+                    // Never retain a negative ownership decision. Retry on the next existing pass.
+                    let reason = error.to_string();
+                    environment_ownership
+                        .as_mut()
+                        .expect("configured peer status")
+                        .peer_evidence_status = if reason.starts_with("reconciliation_peer_") {
+                        reason
+                    } else {
+                        "invalid_reconciliation_peer_evidence".to_owned()
+                    };
+                }
+            }
+        }
         external_trade_activities.saturating_sub(trades.len())
     } else {
         // Account-wide administrative reconciliation predates process ownership. Preserve its
@@ -305,7 +405,10 @@ pub async fn reconcile_account_positions(
     let mut inserted_trades = 0;
     let mut inserted_snapshots = 0;
     if !request.dry_run {
-        for trade in &trades {
+        for trade in trades
+            .iter()
+            .filter(|trade| !foreign_trades.contains(&trade.account_trade_id))
+        {
             if store.upsert_account_trade(trade).await? {
                 inserted_trades += 1;
             }
@@ -321,10 +424,15 @@ pub async fn reconcile_account_positions(
     let mut exits_applied = 0u64;
     let mut exit_size_applied = Decimal::ZERO;
     if process_id.is_some() {
-        for trade in trades
-            .iter_mut()
-            .filter(|trade| trade.linked_order_id.is_none() && trade.side == "sell")
-        {
+        for trade in trades.iter_mut().filter(|trade| {
+            trade.linked_order_id.is_none()
+                && trade.side == "sell"
+                && !foreign_trades.contains(&trade.account_trade_id)
+        }) {
+            // With a shared wallet, an unowned manual sell cannot be assigned by token/size.
+            if peer.is_some() {
+                continue;
+            }
             let recognition = store
                 .recognize_account_live_exit(
                     account_ref
@@ -353,7 +461,9 @@ pub async fn reconcile_account_positions(
     let unmatched_trades = if process_id.is_some() {
         trades
             .iter()
-            .filter(|trade| trade.linked_order_id.is_none())
+            .filter(|trade| {
+                trade.linked_order_id.is_none() && !foreign_trades.contains(&trade.account_trade_id)
+            })
             .count()
             .saturating_add(normalization_failures) as u64
     } else {
@@ -365,8 +475,30 @@ pub async fn reconcile_account_positions(
             .filter(|snapshot| snapshot.size > Decimal::ZERO)
             .map(|snapshot| snapshot.token_id.as_str())
             .collect::<HashSet<_>>();
+        let local_redemption_positions = if peer.is_some() && !redemption_evidence.is_empty() {
+            Some(store.live_process_position_sizes(process_id).await?)
+        } else {
+            None
+        };
         for redemption in &redemption_evidence {
+            if local_redemption_positions
+                .as_ref()
+                .is_some_and(|positions| !positions.contains_key(&redemption.token_id))
+            {
+                continue;
+            }
             if account_position_tokens.contains(redemption.token_id.as_str()) {
+                continue;
+            }
+            if peer.is_some()
+                && peer_evidence
+                    .as_ref()
+                    .is_none_or(|e| e.has_token_lineage(&redemption.token_id))
+            {
+                environment_ownership
+                    .as_mut()
+                    .expect("configured peer status")
+                    .ambiguous_accounting_events += 1;
                 continue;
             }
             let recognition = store
@@ -395,43 +527,68 @@ pub async fn reconcile_account_positions(
         }
     }
 
-    let (process_accounting_proof, mismatches, transitions) = if let Some(process_id) = process_id {
-        // Validate the bound sleeve's own immutable order/fill lineage independently, then prove
-        // custody against the aggregate of every sleeve assigned to the account.
-        let _process_positions = store.live_process_position_sizes(process_id).await?;
-        let unsettled_resolved_positions = store
-            .unsettled_resolved_live_position_sizes(process_id)
-            .await?;
-        let account_positions = store
-            .live_account_position_sizes(
-                account_ref
-                    .as_deref()
-                    .context("process-scoped reconciliation is missing account_ref")?,
+    let (mut process_accounting_proof, mismatches, transitions) =
+        if let Some(process_id) = process_id {
+            // Validate the bound sleeve's own immutable order/fill lineage independently, then prove
+            // custody against the aggregate of every sleeve assigned to the account.
+            let _process_positions = store.live_process_position_sizes(process_id).await?;
+            let unsettled_resolved_positions = store
+                .unsettled_resolved_live_position_sizes(process_id)
+                .await?;
+            let mut account_positions = store
+                .live_account_position_sizes(
+                    account_ref
+                        .as_deref()
+                        .context("process-scoped reconciliation is missing account_ref")?,
+                )
+                .await?;
+            if let Some(evidence) = &peer_evidence {
+                evidence.merge_positions(&mut account_positions)?;
+            }
+            process_accounting_proof(
+                &account_positions,
+                &snapshots,
+                unmatched_trades,
+                &unsettled_resolved_positions,
+                activity_window_end,
+            )?
+        } else {
+            (
+                ProcessAccountingProof {
+                    status: "legacy_unscoped".to_string(),
+                    position_ownership: "not_applicable".to_string(),
+                    realized_pnl: "not_applicable".to_string(),
+                    reason: "legacy_account_wide_admin_reconciliation".to_string(),
+                },
+                Vec::new(),
+                Vec::new(),
             )
-            .await?;
-        process_accounting_proof(
-            &account_positions,
-            &snapshots,
-            unmatched_trades,
-            &unsettled_resolved_positions,
-            activity_window_end,
-        )?
-    } else {
-        (
-            ProcessAccountingProof {
-                status: "legacy_unscoped".to_string(),
-                position_ownership: "not_applicable".to_string(),
-                realized_pnl: "not_applicable".to_string(),
-                reason: "legacy_account_wide_admin_reconciliation".to_string(),
-            },
-            Vec::new(),
-            Vec::new(),
-        )
-    };
+        };
+    if let Some(status) = &environment_ownership {
+        if status.ambiguous_accounting_events > 0 {
+            process_accounting_proof.status = "unproven".to_owned();
+            process_accounting_proof.position_ownership = "unproven".to_owned();
+            process_accounting_proof.realized_pnl = "unproven".to_owned();
+            process_accounting_proof.reason = "ambiguous_shared_wallet_accounting_event".to_owned();
+        } else if status.peer_evidence_status != "verified"
+            && (unmatched_trades > 0 || !mismatches.is_empty())
+        {
+            process_accounting_proof.reason = status.peer_evidence_status.clone();
+        }
+    }
     let process_accounting_proven = process_accounting_proof.status == "proven";
-    let process_accounting_entry_safe = unmatched_trades == 0 && mismatches.is_empty();
+    let process_accounting_entry_safe = unmatched_trades == 0
+        && mismatches.is_empty()
+        && environment_ownership
+            .as_ref()
+            .is_none_or(|s| s.ambiguous_accounting_events == 0);
     let process_accounting_status = process_accounting_proof.status.clone();
     let report = AccountReconcileReport {
+        environment_ownership,
+        peer_owned_order_ids: peer_evidence
+            .as_ref()
+            .map(|e| e.orders.keys().cloned().collect())
+            .unwrap_or_default(),
         process_id,
         account_ref,
         credential_account_fingerprint_sha256,

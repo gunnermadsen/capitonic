@@ -1189,16 +1189,19 @@ impl ExecutionVenue for LiveVenue {
                 ReconciliationStage::AccountReconciliation,
                 self.clob_operation(
                     "account_reconciliation",
-                    self.run_account_reconcile(AccountReconcileRequest {
-                        account_address: None,
-                        lookback_hours: Some(1),
-                        process_id: self.bound_process_id,
-                        account_ref: self.bound_account_ref.clone(),
-                        credential_account_fingerprint_sha256: None,
-                        dry_run: false,
-                        token_id: None,
-                        source: Some("poll".to_string()),
-                    }),
+                    self.run_account_reconcile_with_orders(
+                        AccountReconcileRequest {
+                            account_address: None,
+                            lookback_hours: Some(1),
+                            process_id: self.bound_process_id,
+                            account_ref: self.bound_account_ref.clone(),
+                            credential_account_fingerprint_sha256: None,
+                            dry_run: false,
+                            token_id: None,
+                            source: Some("poll".to_string()),
+                        },
+                        &open_orders.iter().map(|order| order.order_id.clone()).collect::<Vec<_>>(),
+                    ),
                 )
                 .await
                 .context("live account reconciliation polling backup failed"),
@@ -1214,7 +1217,10 @@ impl ExecutionVenue for LiveVenue {
             let foreign_venue_orders = if self.bound_process_id.is_some() {
                 open_orders
                     .iter()
-                    .filter(|order| !owned_venue_order_ids.contains(order.order_id.as_str()))
+                    .filter(|order| {
+                        !owned_venue_order_ids.contains(order.order_id.as_str())
+                            && !account_reconcile.peer_owned_order_ids.contains(&order.order_id)
+                    })
                     .count()
             } else {
                 0
@@ -1252,7 +1258,9 @@ impl ExecutionVenue for LiveVenue {
             let mismatches = missing_local_orders
                 .saturating_add(foreign_venue_orders)
                 .saturating_add(account_reconcile.mismatches.len())
-                .saturating_add(account_reconcile.unmatched_trades as usize);
+                .saturating_add(account_reconcile.unmatched_trades as usize)
+                .saturating_add(account_reconcile.environment_ownership.as_ref()
+                    .map(|status| status.ambiguous_accounting_events).unwrap_or(0));
             if self.global_entry_gate.lock().await.safety_generation
                 != reconciliation_safety_generation
             {
@@ -1429,6 +1437,7 @@ impl ExecutionVenue for LiveVenue {
         }
         if let Some(metrics) = &self.reconciliation_metrics {
             metrics.set_collateral_evidence_ready(reusable_collateral_ready);
+            metrics.record_environment_ownership(account_reconcile.environment_ownership.as_ref());
             metrics.record_report(&report, http_fills_recovered);
             if metrics.record_submit_unknown_state(
                 submit_unknown_count,

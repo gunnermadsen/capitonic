@@ -334,6 +334,7 @@ pub(super) fn is_transient_failure(error: &anyhow::Error) -> bool {
 
 #[derive(Default)]
 struct MetricsState {
+    environment_ownership: Option<crate::account_reconcile::ownership::EnvironmentOwnershipStatus>,
     attempts: [u64; 4],
     failures: BTreeMap<(ReconciliationStage, ReconciliationFailureClass), u64>,
     last_attempt_timestamp: i64,
@@ -406,6 +407,26 @@ impl LiveReconciliationMetrics {
         }
     }
 
+    pub(super) fn record_environment_ownership(
+        &self,
+        evidence: Option<&crate::account_reconcile::ownership::EnvironmentOwnershipStatus>,
+    ) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.environment_ownership.as_ref() != evidence {
+            if let Some(evidence) = evidence {
+                tracing::info!(event = "live_reconciliation_environment_ownership",
+                    process_id = %self.process_id, environment = %evidence.environment,
+                    peer_environment = %evidence.peer_environment,
+                    peer_evidence_status = %evidence.peer_evidence_status,
+                    confirmed_foreign_trades = evidence.confirmed_foreign_trades,
+                    confirmed_foreign_open_orders = evidence.confirmed_foreign_open_orders,
+                    ambiguous_accounting_events = evidence.ambiguous_accounting_events,
+                    "shared-wallet reconciliation ownership evidence changed");
+            }
+            state.environment_ownership = evidence.cloned();
+        }
+    }
+
     pub(super) fn record_report(&self, report: &ReconciliationReport, fills_recovered: usize) {
         let outcome = if report.balances_checked
             && report.mismatches_found == 0
@@ -466,6 +487,7 @@ impl LiveReconciliationMetrics {
         };
         let now = chrono::Utc::now().timestamp();
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.environment_ownership = None;
         let source = state.current_source;
         let elapsed = state
             .started_at
@@ -801,6 +823,28 @@ impl LiveReconciliationMetrics {
         for (reason, count) in &state.fallback_activations {
             let _ = writeln!(output, "polymarket_live_reconciliation_fallback_activations_total{{{labels},reason=\"{reason}\"}} {count}");
         }
+        if let Some(evidence) = &state.environment_ownership {
+            for (classification, value) in [
+                (
+                    "confirmed_foreign_trades",
+                    evidence.confirmed_foreign_trades,
+                ),
+                (
+                    "confirmed_foreign_open_orders",
+                    evidence.confirmed_foreign_open_orders,
+                ),
+                (
+                    "ambiguous_accounting_events",
+                    evidence.ambiguous_accounting_events,
+                ),
+                (
+                    "peer_evidence_verified",
+                    usize::from(evidence.peer_evidence_status == "verified"),
+                ),
+            ] {
+                let _ = writeln!(output, "polymarket_live_reconciliation_environment_ownership{{{labels},classification=\"{classification}\"}} {value}");
+            }
+        }
         for (metric, value) in [
             (
                 "last_attempt_timestamp_seconds",
@@ -835,6 +879,7 @@ impl LiveReconciliationMetrics {
 pub fn prometheus_metrics() -> String {
     let mut output = String::new();
     for (name, help, metric_type) in [
+        ("environment_ownership", "Latest shared-wallet reconciliation evidence by bounded classification.", "gauge"),
         ("attempts_total", "Live reconciliation attempts by terminal outcome.", "counter"),
         ("failures_total", "Live reconciliation failures by bounded stage and failure class.", "counter"),
         ("last_attempt_timestamp_seconds", "Unix timestamp of the latest live reconciliation attempt.", "gauge"),
@@ -1036,6 +1081,29 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use polymarket_client_sdk_v2::error::{Method, StatusCode};
+
+    #[test]
+    fn environment_ownership_metrics_are_process_scoped_and_clear_on_failure() {
+        let process_id = Uuid::new_v4();
+        let metrics = LiveReconciliationMetrics::new(process_id);
+        metrics.record_environment_ownership(Some(
+            &crate::account_reconcile::ownership::EnvironmentOwnershipStatus {
+                environment: "development".into(),
+                peer_environment: "production".into(),
+                peer_evidence_status: "verified".into(),
+                confirmed_foreign_trades: 2,
+                confirmed_foreign_open_orders: 1,
+                ambiguous_accounting_events: 0,
+            },
+        ));
+        let line = format!("polymarket_live_reconciliation_environment_ownership{{process_id=\"{process_id}\",classification=\"confirmed_foreign_trades\"}} 2");
+        assert!(prometheus_metrics().contains(&line));
+        metrics.record_failure(
+            ReconciliationStage::AccountReconciliation,
+            &anyhow::anyhow!("reconciliation_environment_ownership_conflict"),
+        );
+        assert!(!prometheus_metrics().contains(&line));
+    }
 
     #[test]
     fn transient_failure_preserves_entry_safety_and_uses_bounded_labels() {
