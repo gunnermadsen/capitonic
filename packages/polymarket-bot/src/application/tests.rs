@@ -74,11 +74,105 @@ mod lifecycle_tests {
 
     #[test]
     fn btc_process_terminal_validation_accepts_all_supported_terminal_states() {
-        for status in ["stopped", "failed", "completed"] {
+        for status in ["created", "stopped", "failed", "completed", "expired"] {
             validate_btc_process_terminal_request(status, "api_transition").unwrap();
         }
         assert!(validate_btc_process_terminal_request("running", "api_transition").is_err());
         assert!(validate_btc_process_terminal_request("completed", " ").is_err());
+    }
+
+    #[test]
+    fn inactive_operator_transitions_preserve_idempotency_and_stale_run_isolation() {
+        for current in [
+            "created",
+            "starting",
+            "running",
+            "stopping",
+            "stopped",
+            "failed",
+            "completed",
+            "expired",
+        ] {
+            let mut process = eligible_btc_process();
+            process.status = current.into();
+            for enabled in [false, true] {
+                process.enabled = enabled;
+                for target in ["created", "stopped", "failed", "completed", "expired"] {
+                    assert_eq!(
+                        should_transition_inactive_btc_process(&process, None, false, target)
+                            .unwrap(),
+                        current != target || enabled
+                    );
+                    assert!(!should_transition_inactive_btc_process(
+                        &process,
+                        Some(uuid::Uuid::new_v4()),
+                        false,
+                        target
+                    )
+                    .unwrap());
+                    assert!(
+                        !should_transition_inactive_btc_process(&process, None, true, target)
+                            .unwrap()
+                    );
+                }
+                assert!(
+                    should_transition_inactive_btc_process(&process, None, false, "running")
+                        .is_err()
+                );
+            }
+        }
+        for (requested, actual) in [
+            ("starting", "running"),
+            ("running", "running"),
+            ("stopping", "stopped"),
+            ("stopped", "stopped"),
+            ("created", "created"),
+            ("completed", "completed"),
+            ("failed", "failed"),
+            ("expired", "expired"),
+        ] {
+            assert_eq!(resolve_btc_status_target(requested).unwrap(), actual);
+        }
+        assert!(resolve_btc_status_target("arbitrary").is_err());
+    }
+
+    #[test]
+    fn legacy_daily_loss_has_no_ceiling_in_either_mode() {
+        for mode in ["paper", "live"] {
+            let mut process = eligible_btc_process();
+            let execution = process.config.execution.as_mut().unwrap();
+            execution.mode = Some(mode.into());
+            execution.live_capital = mode == "live";
+            execution.account_ref = (mode == "live").then(|| "polymarket-primary".into());
+            for limit in [
+                None,
+                Some(dec!(0.01)),
+                Some(dec!(25)),
+                Some(dec!(1000000)),
+                Some(Decimal::MAX),
+            ] {
+                process
+                    .config
+                    .execution
+                    .as_mut()
+                    .unwrap()
+                    .max_daily_loss_usd = limit;
+                validate_btc_process_capability(&process).unwrap();
+            }
+            for limit in [Decimal::ZERO, dec!(-1)] {
+                process
+                    .config
+                    .execution
+                    .as_mut()
+                    .unwrap()
+                    .max_daily_loss_usd = Some(limit);
+                assert!(validate_btc_process_capability(&process).is_err());
+            }
+        }
+        assert!(serde_json::from_value::<ProcessExecutionConfig>(
+            serde_json::json!({"max_daily_loss_usd":"79228162514264337593543950336"})
+        )
+        .is_err());
     }
 
     fn eligible_btc_process() -> TradingProcess {
@@ -108,6 +202,109 @@ mod lifecycle_tests {
             started_at: None,
             stopped_at: None,
             last_error: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn new_order_contract_is_stored_but_never_uses_the_legacy_definition_parser() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://postgres:postgres@localhost/polymarket")
+            .unwrap();
+        let manager = BtcProcessManager::new(
+            Store::from_pool(pool.clone()),
+            pool.clone(),
+            BtcRepository::from_pool(pool),
+            BtcProcessManagerConfig {
+                live_venue: None,
+                live_reconcile_interval: Duration::from_secs(1),
+                grafana_live_enabled: false,
+            },
+        );
+        for fixture in [
+            include_str!("../../../../docs/polymarket-execution-rail/examples/paper.json"),
+            include_str!("../../../../docs/polymarket-execution-rail/examples/live.json"),
+        ] {
+            let mut process = eligible_btc_process();
+            process.config = serde_json::from_str(fixture).unwrap();
+            pin_router_config(&mut process.config).unwrap();
+            manager.validate_definition_for_storage(&process).unwrap();
+            let execution = manager.inactive_execution(&process).unwrap();
+            let definition =
+                polymarket_bot::execution::polymarket::configuration::compile(&process.config)
+                    .unwrap();
+            assert_eq!(execution.mode, definition.execution.mode.as_str());
+            assert_eq!(execution.account_ref, definition.execution.account_ref);
+            assert_eq!(
+                execution.max_open_notional_usd,
+                definition.execution.policies.exposure.max_open_notional_usd
+            );
+            assert_eq!(
+                execution.execute_signals,
+                definition.execution.execute_signals
+            );
+            assert_eq!(execution.live_capital, definition.execution.live_capital);
+            let before = serde_json::to_value(&process).unwrap();
+            assert!(manager.validate_start_definition(&process).is_err());
+            process.enabled = true;
+            process.status = "running".into();
+            assert!(manager.validate_resume_definition(&process).is_err());
+            process.enabled = false;
+            process.status = "created".into();
+            assert_eq!(serde_json::to_value(&process).unwrap(), before);
+            process
+                .config
+                .execution
+                .as_mut()
+                .unwrap()
+                .order_policies
+                .as_mut()
+                .unwrap()
+                .clear();
+            assert!(manager.validate_definition_for_storage(&process).is_err());
+            assert!(manager.inactive_execution(&process).is_err());
+        }
+    }
+
+    #[test]
+    fn api_order_preparation_preserves_policy_identity_and_never_selects_umr() {
+        for fixture in [
+            include_str!("../../../../docs/polymarket-execution-rail/examples/paper.json"),
+            include_str!("../../../../docs/polymarket-execution-rail/examples/live.json"),
+        ] {
+            let mut process = eligible_btc_process();
+            process.config = serde_json::from_str(fixture).unwrap();
+            let prepared = super::super::order_execution::prepare(&process, false).unwrap();
+            let definition =
+                polymarket_bot::execution::polymarket::configuration::compile(&process.config)
+                    .unwrap();
+            assert_eq!(prepared.config_hash, definition.config_sha256);
+            assert_eq!(
+                prepared.strategy.target_size,
+                definition.execution.policies.sizing.default_share
+            );
+            assert_eq!(
+                prepared.execution.max_open_notional_usd,
+                definition.execution.policies.exposure.max_open_notional_usd
+            );
+            assert_eq!(
+                serde_json::to_value(&prepared.frozen_process_config).unwrap(),
+                serde_json::to_value(&process.config).unwrap()
+            );
+            assert!(process
+                .config
+                .execution
+                .as_ref()
+                .unwrap()
+                .max_open_notional_usd
+                .is_none());
+            process.enabled = true;
+            process.status = "running".into();
+            let resumed = super::super::order_execution::prepare(&process, true).unwrap();
+            assert_eq!(resumed.run_id, prepared.run_id);
+            assert_eq!(resumed.config_hash, prepared.config_hash);
+            process.config.raw["btc_realtime_paper"]["runtime"]["trigger"] =
+                serde_json::json!("umr");
+            assert!(super::super::order_execution::prepare(&process, true).is_err());
         }
     }
 

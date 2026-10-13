@@ -37,6 +37,15 @@ impl RuntimeControl {
 
 #[async_trait]
 impl ControlApi for RuntimeControl {
+    fn orders(
+        &self,
+    ) -> Result<&dyn polymarket_bot::execution::orders::OrderApplication, HttpError> {
+        self.btc_manager
+            .as_ref()
+            .map(|manager| manager as &dyn polymarket_bot::execution::orders::OrderApplication)
+            .ok_or_else(|| HttpError::not_implemented("order application unavailable"))
+    }
+
     async fn health(&self) -> Result<HealthResponse, HttpError> {
         self.store
             .healthcheck()
@@ -389,7 +398,7 @@ impl ControlApi for RuntimeControl {
             HttpError::bad_request("BTC realtime capability is disabled for this deployment")
         })?;
         let now = Utc::now();
-        manager.validate_inactive_definition(&TradingProcess {
+        manager.validate_definition_for_storage(&TradingProcess {
             process_id: uuid::Uuid::nil(),
             name: name.to_string(),
             process_type: BTC_PROCESS_TYPE.to_string(),
@@ -527,6 +536,20 @@ impl ControlApi for RuntimeControl {
         manager.preview_start(process_id).await
     }
 
+    async fn update_trading_process_status(
+        &self,
+        process_id: uuid::Uuid,
+        request: control_http::UpdateTradingProcessStatusRequest,
+    ) -> Result<TradingProcessResponse, HttpError> {
+        let manager = self.btc_manager.as_ref().ok_or_else(|| {
+            HttpError::bad_request("BTC realtime capability is disabled for this deployment")
+        })?;
+        let process = manager
+            .transition_process(process_id, request.status.as_str(), "api_status_patch")
+            .await?;
+        Ok(TradingProcessResponse { process })
+    }
+
     async fn update_trading_process(
         &self,
         process_id: uuid::Uuid,
@@ -595,7 +618,7 @@ impl ControlApi for RuntimeControl {
             if active_selector_update {
                 manager.validate_resume_definition(&candidate)?;
             } else {
-                manager.validate_inactive_definition(&candidate)?;
+                manager.validate_definition_for_storage(&candidate)?;
             }
         }
         let process = self

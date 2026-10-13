@@ -66,12 +66,14 @@ pub(super) async fn mark_btc_process_terminal(
             last_error = CASE WHEN $2 = 'failed' THEN $3 ELSE last_error END,
             updated_at = now()
         WHERE process_id = $1
-          AND status IN ('starting','running','stopping')
+          AND (status IN ('starting','running','stopping')
+               OR ($4 AND status IN ('created','stopped','failed','completed','expired')))
         "#,
     )
     .bind(process_id)
     .bind(status)
     .bind(reason)
+    .bind(allow_inactive_process)
     .execute(&mut *tx)
     .await
     .context("failed to mark BTC process terminal")?;
@@ -89,12 +91,6 @@ pub(super) async fn mark_btc_process_terminal(
         .context("failed to inspect existing BTC process terminal state")?;
         match existing_status {
             Some(existing_status) if existing_status == status => {}
-            Some(existing_status)
-                if allow_inactive_process
-                    && matches!(
-                        existing_status.as_str(),
-                        "created" | "stopped" | "failed" | "completed" | "expired"
-                    ) => {}
             Some(existing_status) => {
                 bail!("cannot overwrite BTC process terminal state {existing_status} with {status}")
             }
@@ -107,8 +103,43 @@ pub(super) async fn mark_btc_process_terminal(
     Ok(())
 }
 
+/// An operator may move an inactive definition between terminal states without
+/// manufacturing another run. Late runtime callbacks must not rewrite it.
+pub(super) fn should_transition_inactive_btc_process(
+    process: &TradingProcess,
+    expected_run_id: Option<uuid::Uuid>,
+    runtime_failed: bool,
+    target: &str,
+) -> Result<bool, HttpError> {
+    if expected_run_id.is_some() || runtime_failed {
+        return Ok(false);
+    }
+    if !matches!(
+        target,
+        "created" | "stopped" | "failed" | "completed" | "expired"
+    ) {
+        return Err(HttpError::bad_request(
+            "unsupported inactive BTC lifecycle transition",
+        ));
+    }
+    Ok(process.status != target || process.enabled)
+}
+
+pub(super) fn resolve_btc_status_target(status: &str) -> Result<&str, HttpError> {
+    match status {
+        "starting" | "running" => Ok("running"),
+        "stopping" | "stopped" => Ok("stopped"),
+        "created" | "failed" | "completed" | "expired" => Ok(status),
+        _ => Err(HttpError::bad_request("unsupported trading process status")),
+    }
+}
+
 pub(super) fn validate_btc_process_terminal_request(status: &str, reason: &str) -> Result<()> {
-    if !matches!(status, "stopped" | "failed" | "completed") || reason.trim().is_empty() {
+    if !matches!(
+        status,
+        "created" | "stopped" | "failed" | "completed" | "expired"
+    ) || reason.trim().is_empty()
+    {
         bail!("invalid BTC process terminal status or reason");
     }
     Ok(())
@@ -468,6 +499,10 @@ pub(super) fn resolve_btc_strategy(
     Ok(resolve_btc_members(control)?.remove(0).1)
 }
 pub(super) fn pin_router_config(config: &mut TradingProcessConfig) -> Result<(), HttpError> {
+    if polymarket_bot::execution::polymarket::configuration::is_selected(config) {
+        return polymarket_bot::execution::polymarket::configuration::pin_definition(config)
+            .map_err(|error| HttpError::bad_request(format!("{error:#}")));
+    }
     let Some(control) = config.raw.get_mut("btc_realtime_paper") else {
         return Ok(());
     };
@@ -675,7 +710,7 @@ pub(super) fn validate_btc_start_eligibility(process: &TradingProcess) -> Result
     }
     if !matches!(
         process.status.as_str(),
-        "created" | "stopped" | "failed" | "completed"
+        "created" | "stopped" | "failed" | "completed" | "expired"
     ) {
         return Err(HttpError::bad_request(format!(
             "BTC trading process cannot start from status {}",
@@ -756,13 +791,20 @@ pub(super) fn validate_optional_execution_controls(
             execution.max_open_notional_usd,
             dec!(30),
         ),
-        ("max_daily_loss_usd", execution.max_daily_loss_usd, dec!(10)),
     ] {
         if value.is_some_and(|value| value <= Decimal::ZERO || value > maximum) {
             return Err(HttpError::bad_request(format!(
                 "BTC execution.{name} must be greater than zero and at most {maximum}"
             )));
         }
+    }
+    if execution
+        .max_daily_loss_usd
+        .is_some_and(|value| value <= Decimal::ZERO)
+    {
+        return Err(HttpError::bad_request(
+            "BTC execution.max_daily_loss_usd must be greater than zero",
+        ));
     }
     if execution
         .max_open_positions
@@ -1010,6 +1052,8 @@ pub(super) fn prepare_btc_start_definition_for_execution(
     }
     let frozen_process_config = TradingProcessConfig {
         execution: Some(ProcessExecutionConfig {
+            rail: None,
+            order_policies: None,
             mode: Some(execution_mode.as_str().to_string()),
             execute_signals: execution.execute_signals,
             live_capital: execution.live_capital,

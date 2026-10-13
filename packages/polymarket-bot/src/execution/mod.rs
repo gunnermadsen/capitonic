@@ -1,4 +1,6 @@
 pub mod live;
+pub mod orders;
+pub mod polymarket;
 
 use anyhow::{bail, Result};
 use async_trait::async_trait;
@@ -108,6 +110,9 @@ pub trait LivePrePostGuard: live_pre_post_guard_sealed::Sealed + Send + Sync {
     /// Observe the actual POST boundary after awaited preparation and authorization.
     /// Telemetry only; this never changes durable trading authorization.
     fn observe_post_attempt(&self, _request: &OrderRequest) {}
+
+    /// Optional telemetry for the existing durable pending-order claim; never gates execution.
+    fn observe_persistence(&self, _elapsed: std::time::Duration, _success: bool) {}
 
     fn observe_post_result(
         &self,

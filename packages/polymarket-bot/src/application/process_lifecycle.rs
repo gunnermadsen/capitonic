@@ -38,6 +38,18 @@ impl BtcProcessManager {
         self.validate_definition(process, BtcDefinitionUse::ExplicitStart)
     }
 
+    pub(super) fn validate_definition_for_storage(
+        &self,
+        process: &TradingProcess,
+    ) -> Result<(), HttpError> {
+        if polymarket_bot::execution::polymarket::configuration::is_selected(&process.config) {
+            polymarket_bot::execution::polymarket::configuration::compile(&process.config)
+                .map_err(|error| HttpError::bad_request(format!("{error:#}")))?;
+            return Ok(());
+        }
+        self.validate_inactive_definition(process).map(|_| ())
+    }
+
     pub(super) fn validate_inactive_definition(
         &self,
         process: &TradingProcess,
@@ -57,6 +69,11 @@ impl BtcProcessManager {
         process: &TradingProcess,
         definition_use: BtcDefinitionUse,
     ) -> Result<ResolvedBtcProcessDefinition, HttpError> {
+        if polymarket_bot::execution::polymarket::configuration::is_selected(&process.config) {
+            return Err(HttpError::not_implemented(
+                polymarket_bot::execution::polymarket::EXECUTION_UNAVAILABLE,
+            ));
+        }
         match definition_use {
             BtcDefinitionUse::ExplicitStart => validate_btc_start_eligibility(process)?,
             BtcDefinitionUse::DurableResume => {
@@ -242,6 +259,9 @@ impl BtcProcessManager {
         &self,
         process: &TradingProcess,
     ) -> Result<PreparedBtcStartDefinition, HttpError> {
+        if polymarket_bot::execution::polymarket::configuration::is_selected(&process.config) {
+            return super::order_execution::prepare(process, false);
+        }
         prepare_btc_start_definition_for_execution(
             self.validate_start_definition(process)?,
             &process.effective_execution(),
@@ -252,10 +272,28 @@ impl BtcProcessManager {
         &self,
         process: &TradingProcess,
     ) -> Result<PreparedBtcStartDefinition, HttpError> {
+        if polymarket_bot::execution::polymarket::configuration::is_selected(&process.config) {
+            return super::order_execution::prepare(process, true);
+        }
         prepare_btc_start_definition_for_execution(
             self.validate_resume_definition(process)?,
             &process.effective_execution(),
         )
+    }
+
+    pub(super) fn inactive_execution(
+        &self,
+        process: &TradingProcess,
+    ) -> Result<EffectiveProcessExecutionConfig, HttpError> {
+        if polymarket_bot::execution::polymarket::configuration::is_selected(&process.config) {
+            validate_btc_process_capability(process)?;
+            let definition =
+                polymarket_bot::execution::polymarket::configuration::compile(&process.config)
+                    .map_err(|error| HttpError::bad_request(format!("{error:#}")))?;
+            return Ok(super::order_execution::effective(&definition));
+        }
+        self.validate_inactive_definition(process)?;
+        Ok(process.effective_execution())
     }
 
     pub(super) async fn live_preflight(
@@ -274,8 +312,7 @@ impl BtcProcessManager {
                 "credential preflight requires an inactive trading process",
             ));
         }
-        self.validate_inactive_definition(&process)?;
-        let execution = process.effective_execution();
+        let execution = self.inactive_execution(&process)?;
         if execution.mode != "live" {
             return Err(HttpError::bad_request(
                 "process-scoped live preflight requires execution.mode=live",
@@ -615,26 +652,93 @@ impl BtcProcessManager {
         &self,
         process_id: uuid::Uuid,
     ) -> Result<TradingProcess, HttpError> {
-        if self.shutting_down.load(Ordering::Acquire) {
-            return Err(HttpError::conflict(
-                "BTC runtime cannot start while the service is shutting down",
-            ));
-        }
+        self.transition_process(process_id, "running", "api_start")
+            .await
+    }
+
+    pub(super) async fn transition_process(
+        &self,
+        process_id: uuid::Uuid,
+        target: &str,
+        reason: &str,
+    ) -> Result<TradingProcess, HttpError> {
+        let target = resolve_btc_status_target(target)?.to_string();
         let transition_guard = self.transition.clone().lock_owned().await;
-        if self.shutting_down.load(Ordering::Acquire) {
-            return Err(HttpError::conflict(
-                "BTC runtime cannot start while the service is shutting down",
-            ));
-        }
         let manager = self.clone();
+        let reason = reason.to_string();
+        // Finish admitted transitions even if the HTTP client disconnects.
         tokio::spawn(async move {
             let _transition_guard = transition_guard;
-            manager.start_process_locked(process_id).await
+            manager
+                .transition_process_locked(process_id, &target, &reason)
+                .await
         })
         .await
         .map_err(|error| {
-            HttpError::internal(format!("BTC start transition task failed: {error}"))
+            HttpError::internal(format!("BTC status transition task failed: {error}"))
         })?
+    }
+
+    async fn transition_process_locked(
+        &self,
+        process_id: uuid::Uuid,
+        target: &str,
+        reason: &str,
+    ) -> Result<TradingProcess, HttpError> {
+        if target != "running" {
+            return self
+                .stop_process_locked(process_id, None, reason, false, target)
+                .await;
+        }
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(HttpError::conflict(
+                "BTC runtime cannot start while the service is shutting down",
+            ));
+        }
+        let pending = { self.terminal_pending.lock().await.get(&process_id).cloned() };
+        if let Some(pending) = pending {
+            self.finalize_pending_locked(pending).await?;
+        }
+        let process = self
+            .store
+            .get_trading_process(process_id)
+            .await
+            .map_err(|error| HttpError::internal(error.to_string()))?
+            .ok_or_else(|| HttpError::not_found("trading process not found"))?;
+        if !Self::is_managed_process(&process) {
+            return Err(HttpError::bad_request(
+                "process is not a managed BTC realtime execution process",
+            ));
+        }
+        let active = self.active_playbooks.lock().await.contains_key(&process_id);
+        if active {
+            if process.enabled && process.status == "running" {
+                return Ok(process);
+            }
+        } else if process.enabled
+            && matches!(process.status.as_str(), "starting" | "running" | "stopping")
+        {
+            // Reattach durable intent instead of manufacturing another run after restart.
+            let resumed = self.resume_durable_process_locked(process_id).await?;
+            if resumed.status == "running" {
+                return Ok(resumed);
+            }
+        } else {
+            if process.enabled
+                || matches!(process.status.as_str(), "starting" | "running" | "stopping")
+            {
+                self.store
+                    .update_trading_process_status(process_id, "stopped", false, None)
+                    .await
+                    .map_err(|error| HttpError::internal(error.to_string()))?;
+            }
+            return self.start_process_locked(process_id).await;
+        }
+        self.store
+            .update_trading_process_status(process_id, "running", true, None)
+            .await
+            .map_err(|error| HttpError::internal(error.to_string()))?
+            .ok_or_else(|| HttpError::not_found("trading process not found"))
     }
 
     pub(super) async fn resume_durable_processes(&self) -> Result<Vec<TradingProcess>, HttpError> {
@@ -648,7 +752,7 @@ impl BtcProcessManager {
             r#"
             SELECT p.process_id
             FROM polymarket.trading_processes p
-            JOIN LATERAL (
+            LEFT JOIN LATERAL (
               SELECT event.timestamp_utc
               FROM polymarket.trading_process_events event
               WHERE event.process_id = p.process_id
@@ -660,7 +764,8 @@ impl BtcProcessManager {
             ) run ON true
             WHERE p.process_type = 'btc_5m'
               AND p.process_scope = 'realtime_paper'
-              AND p.config #>> '{raw,btc_realtime_paper,schema_version}' IN ($1, $2, $3, $4, $5)
+              AND p.config #>> '{raw,btc_realtime_paper,schema_version}' IN ($1, $2, $3, $4, $5, $6)
+              AND (run.timestamp_utc IS NOT NULL OR p.config #>> '{raw,btc_realtime_paper,schema_version}'=$6)
               AND p.enabled
               AND p.status IN ('starting','running','stopping')
               AND p.stopped_at IS NULL
@@ -672,6 +777,7 @@ impl BtcProcessManager {
         .bind(BTC_PROCESS_SCHEMA_VERSION)
         .bind(LEGACY_BTC_PROCESS_SCHEMA_VERSION)
         .bind(AGENT_PROCESS_SCHEMA_VERSION)
+        .bind(polymarket_bot::execution::polymarket::PROCESS_SCHEMA_VERSION)
         .fetch_all(&self.pool)
         .await
         .map_err(|error| HttpError::internal(error.to_string()))?;
@@ -701,7 +807,23 @@ impl BtcProcessManager {
         let mut resumed = Vec::with_capacity(candidates.len());
         for process_id in candidates {
             self.ensure_start_slot_available(process_id).await?;
-            resumed.push(self.resume_durable_process_locked(process_id).await?);
+            match self.resume_durable_process_locked(process_id).await {
+                Ok(process) => resumed.push(process),
+                Err(error) => {
+                    let process = self
+                        .store
+                        .get_trading_process(process_id)
+                        .await
+                        .map_err(|e| HttpError::unavailable(e.to_string()))?;
+                    if process.as_ref().is_some_and(|p| {
+                        polymarket_bot::execution::polymarket::configuration::is_selected(&p.config)
+                    }) {
+                        warn!(process_id=%process_id,error=?error,"Order runtime resume deferred; durable intent preserved");
+                    } else {
+                        return Err(error);
+                    }
+                }
+            }
         }
         Ok(resumed)
     }
@@ -717,6 +839,25 @@ impl BtcProcessManager {
             .map_err(|error| HttpError::internal(error.to_string()))?
             .ok_or_else(|| HttpError::not_found("trading process not found"))?;
         let prepared = self.prepare_resume_definition(&process)?;
+        if polymarket_bot::execution::polymarket::configuration::is_selected(&process.config)
+            && !self
+                .repository
+                .run_manifest_exists(prepared.run_id, &prepared.run_key)
+                .await
+                .map_err(|_| HttpError::unavailable("run evidence unavailable"))?
+        {
+            self.repository
+                .claim_run_manifest(
+                    process_id,
+                    prepared.run_id,
+                    &prepared.run_key,
+                    &prepared.config_hash,
+                    &serde_json::to_value(&prepared.frozen_process_config)
+                        .map_err(|_| HttpError::bad_request("invalid frozen definition"))?,
+                )
+                .await
+                .map_err(|_| HttpError::unavailable("run evidence unavailable"))?;
+        }
         let manifest = self
             .repository
             .load_run_manifest(process_id, prepared.run_id, &prepared.run_key)
@@ -763,11 +904,26 @@ impl BtcProcessManager {
         .await;
         let active_strategy = strategy.clone();
 
-        let startup_result: Result<(BtcPlaybookRuntimeHandle, Option<Arc<LiveVenue>>)> = async {
+        let startup_result: Result<super::order_execution::OrderRuntime> = async {
             let (state, books) = self
                 .ensure_shared_runtime(&runtime_config, &sources)
                 .await
                 .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+            if polymarket_bot::execution::polymarket::configuration::is_selected(&process.config) {
+                return self
+                    .start_order_runtime(
+                        &process,
+                        run_id,
+                        &run_key,
+                        &config_hash,
+                        &frozen_process_config_value,
+                        runtime_config,
+                        state,
+                        books,
+                        true,
+                    )
+                    .await;
+            }
             let components = self.execution_components(
                 execution_mode,
                 &execution,
@@ -815,10 +971,11 @@ impl BtcProcessManager {
             Ok((
                 BtcPlaybookRuntimeHandle::start(runtime_config, process_runner, state, books)?,
                 live_process_venue,
+                None,
             ))
         }
         .await;
-        let (runtime, live_process_venue) = match startup_result {
+        let (runtime, live_process_venue, order_service) = match startup_result {
             Ok(runtime) => runtime,
             Err(resume_error) => {
                 return Err(HttpError::internal(format!(
@@ -826,6 +983,18 @@ impl BtcProcessManager {
                 )));
             }
         };
+        let process =
+            if polymarket_bot::execution::polymarket::configuration::is_selected(&process.config)
+                && process.status == "starting"
+            {
+                self.store
+                    .update_trading_process_status(process_id, "running", true, None)
+                    .await
+                    .map_err(|_| HttpError::unavailable("process state unavailable"))?
+                    .ok_or_else(|| HttpError::not_found("process not found"))?
+            } else {
+                process
+            };
         self.active_playbooks.lock().await.insert(
             process_id,
             ActiveBtcPlaybook {
@@ -837,6 +1006,7 @@ impl BtcProcessManager {
                 strategy: active_strategy,
                 sources,
                 live_venue: live_process_venue,
+                order_service,
                 runtime,
             },
         );
@@ -944,11 +1114,26 @@ impl BtcProcessManager {
         )
         .await;
 
-        let startup_result: Result<(BtcPlaybookRuntimeHandle, Option<Arc<LiveVenue>>)> = async {
+        let startup_result: Result<super::order_execution::OrderRuntime> = async {
             let (state, books) = self
                 .ensure_shared_runtime(&runtime_config, &sources)
                 .await
                 .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+            if polymarket_bot::execution::polymarket::configuration::is_selected(&process.config) {
+                return self
+                    .start_order_runtime(
+                        &process,
+                        run_id,
+                        &run_key,
+                        &config_hash,
+                        &frozen_process_config_value,
+                        runtime_config,
+                        state,
+                        books,
+                        false,
+                    )
+                    .await;
+            }
             let components = self.execution_components(
                 execution_mode,
                 &execution,
@@ -988,13 +1173,24 @@ impl BtcProcessManager {
             Ok((
                 BtcPlaybookRuntimeHandle::start(runtime_config, process_runner, state, books)?,
                 live_process_venue,
+                None,
             ))
         }
         .await;
 
-        let (runtime, live_process_venue) = match startup_result {
+        let (runtime, live_process_venue, order_service) = match startup_result {
             Ok(runtime) => runtime,
             Err(startup_error) => {
+                if polymarket_bot::execution::polymarket::configuration::is_selected(
+                    &process.config,
+                ) {
+                    self.terminal_pending.lock().await.remove(&process_id);
+                    warn!(process_id=%process_id,error=%startup_error,"Order startup deferred; durable intent preserved");
+                    return Err(HttpError::unavailable(
+                        "order runtime startup is recovering",
+                    ));
+                }
+
                 let reason = format!("btc_startup_failed: {startup_error:#}");
                 return Err(self
                     .terminalize_start_failure_locked(start_pending, reason)
@@ -1037,6 +1233,7 @@ impl BtcProcessManager {
                 strategy,
                 sources,
                 live_venue: live_process_venue,
+                order_service,
                 runtime,
             },
         );
@@ -1108,8 +1305,7 @@ impl BtcProcessManager {
         process_id: uuid::Uuid,
         reason: &str,
     ) -> Result<TradingProcess, HttpError> {
-        self.stop_process_for_generation(process_id, None, reason, false, "stopped")
-            .await
+        self.transition_process(process_id, "stopped", reason).await
     }
 
     pub(super) async fn complete_process(
@@ -1117,7 +1313,7 @@ impl BtcProcessManager {
         process_id: uuid::Uuid,
         reason: &str,
     ) -> Result<TradingProcess, HttpError> {
-        self.stop_process_for_generation(process_id, None, reason, false, "completed")
+        self.transition_process(process_id, "completed", reason)
             .await
     }
 
@@ -1162,7 +1358,7 @@ impl BtcProcessManager {
         runtime_failed: bool,
         successful_terminal_status: &str,
     ) -> Result<TradingProcess, HttpError> {
-        let process = self
+        let mut process = self
             .store
             .get_trading_process(process_id)
             .await
@@ -1179,7 +1375,10 @@ impl BtcProcessManager {
             if expected_run_id.is_some_and(|expected| expected != pending.run_id) {
                 return Ok(process);
             }
-            return self.finalize_pending_locked(pending).await;
+            process = self.finalize_pending_locked(pending).await?;
+            if expected_run_id.is_some() || runtime_failed {
+                return Ok(process);
+            }
         }
         let active_identity = self
             .active_playbooks
@@ -1188,17 +1387,36 @@ impl BtcProcessManager {
             .get(&process_id)
             .map(|active| (active.run_id, active.run_key.clone()));
         let Some((active_run_id, active_run_key)) = active_identity else {
-            if process.enabled
-                || matches!(process.status.as_str(), "starting" | "running" | "stopping")
-            {
-                return Err(HttpError::conflict(
-                    "BTC process claims to be active but this service owns no runtime handle",
-                ));
-            }
-            if successful_terminal_status == "completed" && process.status != "completed" {
-                return Err(HttpError::conflict(
-                    "only an active or already completed BTC process can be completed",
-                ));
+            if should_transition_inactive_btc_process(
+                &process,
+                expected_run_id,
+                runtime_failed,
+                successful_terminal_status,
+            )? {
+                let updated = self
+                    .store
+                    .update_trading_process_status(
+                        process_id,
+                        successful_terminal_status,
+                        false,
+                        (successful_terminal_status == "failed").then_some(reason),
+                    )
+                    .await
+                    .map_err(|error| HttpError::internal(error.to_string()))?
+                    .ok_or_else(|| HttpError::not_found("trading process not found"))?;
+                self.record_event(
+                    process_id,
+                    "info",
+                    match successful_terminal_status {
+                        "completed" => "btc_runtime_completed",
+                        "stopped" => "btc_runtime_stopped",
+                        _ => "btc_runtime_status_changed",
+                    },
+                    reason,
+                    serde_json::json!({"previous_status": process.status, "status": successful_terminal_status, "runtime_active": false}),
+                )
+                .await;
+                return Ok(updated);
             }
             return Ok(process);
         };
@@ -1350,7 +1568,8 @@ impl BtcProcessManager {
         let (level, event_type) = match pending.terminal_status.as_str() {
             "stopped" => ("info", "btc_runtime_stopped"),
             "completed" => ("info", "btc_runtime_completed"),
-            _ => ("error", "btc_runtime_stop_failed"),
+            "failed" => ("error", "btc_runtime_stop_failed"),
+            _ => ("info", "btc_runtime_status_changed"),
         };
         self.record_event(
             pending.process_id,

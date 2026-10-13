@@ -3172,7 +3172,7 @@ fn merge_risk_evidence(
     evidence
 }
 
-fn btc_entry_order_metadata(
+pub(crate) fn btc_entry_order_metadata(
     strategy: &BtcStrategyConfig,
     intent: &super::strategy::ApprovedIntent,
     prediction: Option<&BtcStrategyPrediction>,
@@ -3641,7 +3641,7 @@ impl BtcStrategyRunner for BtcProcessRunner {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_snapshot(
+pub(crate) fn build_snapshot(
     process_id: Uuid,
     market: &BtcIntervalMarket,
     observed_at: DateTime<Utc>,
@@ -3887,7 +3887,7 @@ fn process_sized_model_costs(
     Ok(costs)
 }
 
-fn book_features(
+pub(crate) fn book_features(
     outcome: BtcOutcome,
     token_id: &str,
     checkpoint: Option<&OrderbookCheckpoint>,

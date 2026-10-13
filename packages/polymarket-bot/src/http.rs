@@ -26,6 +26,8 @@ use crate::{
     models::{TradingProcess, TradingProcessConfig},
 };
 
+mod orders;
+
 const SERVICE_NAME: &str = "polymarket-bot";
 
 pub type SharedControlApi = Arc<dyn ControlApi>;
@@ -56,6 +58,10 @@ impl AdminAuth {
 
 #[async_trait]
 pub trait ControlApi: Send + Sync + 'static {
+    fn orders(&self) -> Result<&dyn crate::execution::orders::OrderApplication, HttpError> {
+        Err(HttpError::not_implemented("order application unavailable"))
+    }
+
     async fn health(&self) -> Result<HealthResponse, HttpError> {
         Ok(HealthResponse {
             service: SERVICE_NAME.to_string(),
@@ -184,6 +190,16 @@ pub trait ControlApi: Send + Sync + 'static {
         ))
     }
 
+    async fn update_trading_process_status(
+        &self,
+        _process_id: Uuid,
+        _request: UpdateTradingProcessStatusRequest,
+    ) -> Result<TradingProcessResponse, HttpError> {
+        Err(HttpError::not_implemented(
+            "trading process status transitions are not wired",
+        ))
+    }
+
     async fn update_trading_process(
         &self,
         _process_id: Uuid,
@@ -253,7 +269,7 @@ pub fn router(control: SharedControlApi, admin_bearer_token: impl Into<String>) 
         )
         .route(
             "/trading-processes/:process_id/status",
-            get(get_trading_process_status),
+            get(get_trading_process_status).patch(update_trading_process_status),
         )
         .route(
             "/trading-processes/:process_id/start-preview",
@@ -287,7 +303,10 @@ pub fn router(control: SharedControlApi, admin_bearer_token: impl Into<String>) 
             "/trading-processes/:process_id/complete",
             post(complete_trading_process),
         )
-        .route_layer(from_fn_with_state(admin_auth, require_admin_bearer));
+        .route_layer(from_fn_with_state(admin_auth.clone(), require_admin_bearer));
+
+    let order_routes =
+        orders::routes().route_layer(from_fn_with_state(admin_auth, require_admin_bearer));
 
     Router::new()
         .route("/health", get(health))
@@ -296,6 +315,7 @@ pub fn router(control: SharedControlApi, admin_bearer_token: impl Into<String>) 
         .route("/metrics", get(metrics))
         .route("/prometheus/metrics", get(prometheus_metrics))
         .nest("/admin", admin_routes)
+        .merge(order_routes)
         .with_state(state)
 }
 
@@ -487,6 +507,18 @@ async fn get_trading_process_status(
         .map(Json)
 }
 
+async fn update_trading_process_status(
+    State(state): State<HttpState>,
+    Path(process_id): Path<Uuid>,
+    Json(request): Json<UpdateTradingProcessStatusRequest>,
+) -> Result<Json<TradingProcessResponse>, HttpError> {
+    state
+        .control
+        .update_trading_process_status(process_id, request)
+        .await
+        .map(Json)
+}
+
 async fn preview_trading_process_start(
     State(state): State<HttpState>,
     Path(process_id): Path<Uuid>,
@@ -670,6 +702,40 @@ pub struct TradingProcessStatusResponse {
     pub status: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TradingProcessStatusTarget {
+    Created,
+    Starting,
+    Running,
+    Stopping,
+    Stopped,
+    Failed,
+    Completed,
+    Expired,
+}
+
+impl TradingProcessStatusTarget {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Starting => "starting",
+            Self::Running => "running",
+            Self::Stopping => "stopping",
+            Self::Stopped => "stopped",
+            Self::Failed => "failed",
+            Self::Completed => "completed",
+            Self::Expired => "expired",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateTradingProcessStatusRequest {
+    pub status: TradingProcessStatusTarget,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradingProcessStartPreviewResponse {
     pub process_id: Uuid,
@@ -737,6 +803,10 @@ impl HttpError {
 
     pub fn not_implemented(message: impl Into<String>) -> Self {
         Self::new(StatusCode::NOT_IMPLEMENTED, "not_implemented", message)
+    }
+
+    pub fn unavailable(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::SERVICE_UNAVAILABLE, "unavailable", message)
     }
 
     pub fn internal(message: impl Into<String>) -> Self {

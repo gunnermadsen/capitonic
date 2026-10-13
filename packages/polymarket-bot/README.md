@@ -80,3 +80,7 @@ Kafka publishing is deliberately inactive in v1. If enabled later, the event bou
 // kafka.publish("polymarket.fills.v1", fill_event).await?;
 // kafka.publish("polymarket.risk_events.v1", risk_event).await?;
 ```
+
+## Polymarket execution standard
+
+See the [execution rail contract](../../docs/polymarket-execution-rail/README.md) for the additive order-policy configuration, separation of concerns, API/dry-run standard, and rollout acceptance. New definitions are currently storage-only; existing trading and dry-run execution remain unchanged.

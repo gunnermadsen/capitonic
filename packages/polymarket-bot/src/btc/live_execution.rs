@@ -426,7 +426,7 @@ fn validate_market_pair_snapshot(
     Ok(None)
 }
 
-fn validate_marketable_depth(
+pub(crate) fn validate_marketable_depth(
     checkpoint: &OrderbookCheckpoint,
     request: &OrderRequest,
     max_depth_participation: Decimal,

@@ -11,6 +11,11 @@ use std::{
 };
 use uuid::Uuid;
 
+mod order_events;
+mod order_latency;
+pub use order_events::{OrderOutcome, OrderStage};
+pub use order_latency::{LatencyOutcome, OrderLatencyStage};
+
 static REGISTRY: OnceLock<Mutex<Vec<Weak<ExecutionFreshnessMetrics>>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy)]
@@ -48,6 +53,11 @@ impl BookEvidence {
 
 #[derive(Debug)]
 pub struct ExecutionFreshnessMetrics {
+    order_latency: order_latency::OrderLatencyMetrics,
+    order_events: Mutex<BTreeMap<(&'static str, &'static str, &'static str), u64>>,
+    recovery_healthy: AtomicI64,
+    last_recovery_at: AtomicI64,
+    unresolved_orders: AtomicI64,
     process_id: Uuid,
     mode: &'static str,
     limit_ms: i64,
@@ -68,6 +78,11 @@ pub struct ExecutionFreshnessMetrics {
 impl ExecutionFreshnessMetrics {
     pub fn new(process_id: Uuid, mode: &'static str, limit_ms: i64) -> Arc<Self> {
         let metrics = Arc::new(Self {
+            order_latency: Default::default(),
+            order_events: Mutex::new(BTreeMap::new()),
+            recovery_healthy: AtomicI64::new(-1),
+            last_recovery_at: AtomicI64::new(-1),
+            unresolved_orders: AtomicI64::new(-1),
             process_id,
             mode,
             limit_ms,
@@ -147,6 +162,8 @@ impl ExecutionFreshnessMetrics {
     }
 
     fn write(&self, out: &mut String) {
+        self.write_order_events(out);
+        self.order_latency.write(out, self.process_id, self.mode);
         let labels = format!(
             "process_id=\"{}\",execution_mode=\"{}\"",
             self.process_id, self.mode
@@ -203,6 +220,8 @@ impl ExecutionFreshnessMetrics {
 /// processes have zero counters and ready monitors; absence of orders is not missing telemetry.
 pub fn prometheus_metrics(runtime: &serde_json::Value) -> String {
     let mut out = String::from("# HELP polymarket_execution_freshness_exporter_ready Execution freshness exporter is available.\n# TYPE polymarket_execution_freshness_exporter_ready gauge\npolymarket_execution_freshness_exporter_ready 1\n");
+    out.push_str("# HELP polymarket_order_stage_events_total Stage observations including retries, never an economic ledger.\n# TYPE polymarket_order_stage_events_total counter\n# HELP polymarket_order_recovery_healthy Last recovery pass completed with authoritative evidence.\n# TYPE polymarket_order_recovery_healthy gauge\n# HELP polymarket_order_last_recovery_timestamp_seconds Last recovery attempt time.\n# TYPE polymarket_order_last_recovery_timestamp_seconds gauge\n# HELP polymarket_order_unresolved_orders Unresolved orders at the last successful recovery pass.\n# TYPE polymarket_order_unresolved_orders gauge\n");
+    out.push_str("# HELP polymarket_order_stage_duration_seconds Monotonic order operation duration; nested stages are not additive.\n# TYPE polymarket_order_stage_duration_seconds histogram\n# HELP polymarket_order_stage_duration_max_seconds Largest observed stage duration since metrics owner creation.\n# TYPE polymarket_order_stage_duration_max_seconds gauge\n");
     for (name, help) in [
         (
             "attempts_total",

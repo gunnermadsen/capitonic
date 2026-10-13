@@ -29,6 +29,12 @@ struct FakeControlApi;
 
 #[async_trait]
 impl ControlApi for FakeControlApi {
+    fn orders(
+        &self,
+    ) -> Result<&dyn polymarket_bot::execution::orders::OrderApplication, HttpError> {
+        Ok(&FixtureOrders)
+    }
+
     async fn metrics(&self) -> Result<MetricsResponse, HttpError> {
         Ok(MetricsResponse {
             service: "polymarket-bot".to_string(),
@@ -517,6 +523,30 @@ impl ControlApi for FakeControlApi {
         })
     }
 
+    async fn update_trading_process_status(
+        &self,
+        process_id: Uuid,
+        request: http::UpdateTradingProcessStatusRequest,
+    ) -> Result<http::TradingProcessResponse, HttpError> {
+        let status = match request.status {
+            http::TradingProcessStatusTarget::Starting => "running",
+            http::TradingProcessStatusTarget::Stopping => "stopped",
+            target => target.as_str(),
+        };
+        Ok(http::TradingProcessResponse {
+            process: test_process(
+                process_id,
+                "btc-paper-canary".into(),
+                "btc_5m".into(),
+                "realtime_paper".into(),
+                Some("btc-paper-canary".into()),
+                status,
+                status == "running",
+                TradingProcessConfig::default(),
+            ),
+        })
+    }
+
     async fn get_trading_process_status(
         &self,
         process_id: Uuid,
@@ -568,6 +598,8 @@ impl ControlApi for FakeControlApi {
             config_hash: "c".repeat(64),
             frozen_process_config: TradingProcessConfig {
                 execution: Some(ProcessExecutionConfig {
+                    rail: None,
+                    order_policies: None,
                     mode: Some("paper".to_string()),
                     execute_signals: true,
                     live_capital: false,
@@ -1385,5 +1417,277 @@ fn test_process(
         started_at: None,
         stopped_at: None,
         last_error: None,
+    }
+}
+
+// An independently registered application proves that the HTTP layer does not select an adapter.
+struct FixtureOrders;
+#[async_trait]
+impl polymarket_bot::execution::orders::OrderApplication for FixtureOrders {
+    async fn preview(
+        &self,
+        id: Uuid,
+        request: polymarket_bot::execution::orders::EvaluationRequest,
+        prepare: bool,
+    ) -> Result<polymarket_bot::execution::orders::Receipt, HttpError> {
+        match request.candidate.market_id.as_str() {
+            "missing" => return Err(HttpError::not_found("missing")),
+            "unsupported" => return Err(HttpError::bad_request("unsupported")),
+            "unavailable" => return Err(HttpError::unavailable("unavailable")),
+            "unimplemented" => return Err(HttpError::not_implemented("unimplemented")),
+            _ => {}
+        }
+        Ok(polymarket_bot::execution::orders::Receipt {
+            version: 1,
+            process_id: id,
+            operation_id: Uuid::from_u128(41),
+            order_id: None,
+            origin: "api".into(),
+            config_sha256: "fixture".into(),
+            status: if request.candidate.market_id == "reject" {
+                "rejected"
+            } else {
+                "evaluated"
+            }
+            .into(),
+            policy_results: serde_json::json!([]),
+            evidence: serde_json::json!({"economic_effects":false}),
+            preparation: prepare.then(|| serde_json::json!({"status":"unavailable"})),
+        })
+    }
+    async fn execute(
+        &self,
+        id: Uuid,
+        request: polymarket_bot::execution::orders::ExecuteRequest,
+    ) -> Result<polymarket_bot::execution::orders::Receipt, HttpError> {
+        if request.candidate.market_id == "conflict" {
+            return Err(HttpError::conflict("conflict"));
+        }
+        let mut receipt = self
+            .preview(
+                id,
+                polymarket_bot::execution::orders::EvaluationRequest {
+                    version: request.version,
+                    candidate: request.candidate,
+                },
+                false,
+            )
+            .await?;
+        receipt.operation_id = request.idempotency_key;
+        receipt.status = "acknowledged".into();
+        receipt.order_id = Some("fixture-order".into());
+        Ok(receipt)
+    }
+    async fn order(
+        &self,
+        id: Uuid,
+        order_id: String,
+    ) -> Result<polymarket_bot::execution::orders::Receipt, HttpError> {
+        if id != Uuid::from_u128(1) || order_id != "fixture-order" {
+            return Err(HttpError::not_found("order not found"));
+        }
+        let input = order_candidate("market");
+        self.preview(id, serde_json::from_value(input).unwrap(), false)
+            .await
+    }
+}
+fn order_candidate(market: &str) -> Value {
+    serde_json::json!({"version":1,"candidate":{"member_id":"member","market_id":market,"outcome":"up","synthetic_prediction":{"probability_up":"0.80"}}})
+}
+async fn order_http(method: &str, path: &str, body: Value, auth: bool) -> (StatusCode, Value) {
+    let app = http::router(Arc::new(FakeControlApi), "admin-secret");
+    let mut request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("content-type", "application/json");
+    if auth {
+        request = request.header(AUTHORIZATION, "Bearer admin-secret");
+    }
+    let response = app
+        .oneshot(request.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+#[tokio::test]
+async fn generic_order_routes_authenticate_and_delegate_without_adapter_names() {
+    let id = Uuid::from_u128(1);
+    for route in ["preview", "dry-run", "execute"] {
+        let mut body = order_candidate("market");
+        if route == "execute" {
+            body["idempotency_key"] = serde_json::json!(Uuid::new_v4());
+        }
+        let path = format!("/orders/{id}/{route}");
+        assert_eq!(
+            order_http("POST", &path, body.clone(), false).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        let (status, response) = order_http("POST", &path, body, true).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(response["process_id"], id.to_string());
+        if route == "execute" {
+            assert_eq!(response["status"], "acknowledged");
+        } else {
+            assert!(response["order_id"].is_null());
+            assert_eq!(response["evidence"]["economic_effects"], false);
+        }
+        if route == "dry-run" {
+            assert_eq!(response["preparation"]["status"], "unavailable");
+        }
+    }
+}
+#[tokio::test]
+async fn generic_order_routes_reject_overrides_and_malformed_contracts() {
+    let path = format!("/orders/{}/preview", Uuid::new_v4());
+    for field in ["quantity", "price", "mode", "account_ref", "rail", "policy"] {
+        let mut body = order_candidate("market");
+        body["candidate"][field] = serde_json::json!("override");
+        assert_eq!(
+            order_http("POST", &path, body, true).await.0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    for version in [0, 2] {
+        let mut body = order_candidate("market");
+        body["version"] = serde_json::json!(version);
+        assert_eq!(
+            order_http("POST", &path, body, true).await.0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let mut body = order_candidate("market");
+    body["candidate"]["synthetic_prediction"]["probability_up"] = serde_json::json!("1.1");
+    assert_eq!(
+        order_http("POST", &path, body, true).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let path = path.replace("preview", "execute");
+    assert_eq!(
+        order_http("POST", &path, order_candidate("market"), true)
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+}
+#[tokio::test]
+async fn generic_order_routes_preserve_application_error_and_ownership_semantics() {
+    let path = format!("/orders/{}/preview", Uuid::from_u128(1));
+    for (market, status) in [
+        ("missing", StatusCode::NOT_FOUND),
+        ("unsupported", StatusCode::BAD_REQUEST),
+        ("unavailable", StatusCode::SERVICE_UNAVAILABLE),
+        ("unimplemented", StatusCode::NOT_IMPLEMENTED),
+        ("reject", StatusCode::OK),
+    ] {
+        assert_eq!(
+            order_http("POST", &path, order_candidate(market), true)
+                .await
+                .0,
+            status
+        );
+    }
+    let mut body = order_candidate("conflict");
+    body["idempotency_key"] = serde_json::json!(Uuid::new_v4());
+    assert_eq!(
+        order_http("POST", &path.replace("preview", "execute"), body, true)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        order_http(
+            "GET",
+            &format!("/orders/{}/order/fixture-order", Uuid::from_u128(2)),
+            Value::Null,
+            true
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        order_http(
+            "GET",
+            &format!("/orders/{}/order/fixture-order", Uuid::from_u128(1)),
+            Value::Null,
+            true
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn process_status_patch_is_authenticated_typed_and_process_scoped() {
+    let app = http::router(Arc::new(FakeControlApi), "secret");
+    let process_id = Uuid::new_v4();
+    for (token, body, expected) in [
+        (None, r#"{"status":"completed"}"#, StatusCode::UNAUTHORIZED),
+        (
+            Some("Bearer wrong"),
+            r#"{"status":"completed"}"#,
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            Some("Bearer secret"),
+            r#"{"status":"unknown"}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            Some("Bearer secret"),
+            r#"{"status":"stopped","enabled":true}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+    ] {
+        let mut request = Request::builder()
+            .method("PATCH")
+            .uri(format!("/admin/trading-processes/{process_id}/status"))
+            .header("content-type", "application/json");
+        if let Some(token) = token {
+            request = request.header(AUTHORIZATION, token);
+        }
+        let response = app
+            .clone()
+            .oneshot(request.body(Body::from(body)).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+    for (target, actual) in [
+        ("created", "created"),
+        ("starting", "running"),
+        ("running", "running"),
+        ("stopping", "stopped"),
+        ("stopped", "stopped"),
+        ("failed", "failed"),
+        ("completed", "completed"),
+        ("expired", "expired"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/admin/trading-processes/{process_id}/status"))
+                    .header(AUTHORIZATION, "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::json!({"status":target}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["process"]["process_id"], process_id.to_string());
+        assert_eq!(body["process"]["status"], actual);
+        assert_eq!(body["process"]["enabled"], actual == "running");
     }
 }

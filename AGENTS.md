@@ -362,3 +362,7 @@ docker compose up -d --force-recreate --no-deps db-migrate
 - Maintain Kubernetes resources through their owning charts under `capitonic-helm-chart/charts/`. Keep `common/configs/` and `common/scripts/` authoritative; run `python3 scripts/helm/bake-assets.py` before Helm operations that need those assets and `--clean` afterward. Runtime `.env` files in the main worktree remain the secret source of truth.
 - Schedule realtime and backfill work through the ingester master's authenticated API. With Kubernetes worker scaling enabled, never use Helm replica values, `kubectl scale`, or direct Kubernetes API calls to satisfy operational worker demand; the master alone owns the worker Deployment `/scale` resource.
 - Use `docs/capitonic-k3s-cutover.md` for local routes, data backups, cutover acceptance, and routine Helm and Kubernetes commands. Never start both Compose and k3s trading runtimes against the same live process state.
+
+## Polymarket execution rail contract
+
+- Follow [the Polymarket execution rail standard](docs/polymarket-execution-rail/README.md) for the additive order contract and its implementation. Keep legacy model/agent execution unchanged; use the existing process API and persistence. New execution consumes compiled settings, never raw TPC JSON. Generic order controllers must not dispatch by exchange or paper/live mode.

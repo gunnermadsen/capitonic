@@ -360,6 +360,10 @@ impl Default for EffectiveProcessExecutionConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessExecutionConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rail: Option<crate::execution::polymarket::configuration::RailSelection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order_policies: Option<Vec<crate::execution::polymarket::policies::OrderPolicy>>,
     #[serde(default)]
     pub mode: Option<String>,
     #[serde(default)]

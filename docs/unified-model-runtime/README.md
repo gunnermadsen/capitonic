@@ -105,3 +105,7 @@ Missing, invalid, stale or wrong-epoch inputs block only the affected observatio
 UMR reference evaluation preserves immutable feature and golden-vector semantics. Runtime admission additionally receives the process-sized UP/DOWN executable VWAP from the shared causal feature-time book using the existing quantity-aware book walk, rather than treating frozen five-share features as requested order cost. Outcome and temporal predictors still consume their unchanged trained features. Existing admission thresholds, capital controls, identity checks, fees, order guards, and accounting remain active. Increasing size can change admission, not the learned parameters, and historical five-share results do not establish profitability at another size.
 
 No execution layer silently substitutes a model size or reduces the requested quantity. FOK requires the full requested fill; FAK may fill less and cancel the remainder. Actual fills remain distinct from requested quantity. Invalid venue precision, insufficient capital, stale evidence and unavailable depth retain their existing action-scoped rejection behavior.
+
+## Additive execution contract
+
+The [Polymarket execution rail standard](../polymarket-execution-rail/README.md) defines the new post-UMR execution boundary and minimal order-policy configuration. Its configuration foundation admits inactive definitions only; existing UMR and legacy execution behavior remain unchanged. Frozen artifact requirements remain authoritative and are not copied into editable order policies.

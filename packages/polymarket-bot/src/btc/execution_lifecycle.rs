@@ -133,62 +133,91 @@ impl BtcExecutionLifecycle for PaperExecutionLifecycle {
         run_id: Uuid,
         config_hash: &str,
     ) -> Result<()> {
-        recover_settlement_state(repository, process_id, run_id, BtcExecutionMode::Paper).await?;
-        let pending = repository
-            .discover_pending_paper_settlements(process_id, run_id)
+        reconcile_paper_orders(
+            Some(self.venue.as_ref()),
+            repository,
+            process_id,
+            run_id,
+            config_hash,
+        )
+        .await
+    }
+
+    async fn preview_order(
+        &self,
+        request: &OrderRequest,
+        config: &PaperPreviewConfig,
+    ) -> Result<Option<PaperPreviewResult>> {
+        self.venue.preview_order(request, config).await.map(Some)
+    }
+}
+
+/// Shares settlement discovery, identity and idempotent recognition. The OMS derives balances
+/// directly from credited ledger rows; legacy runners retain their existing venue credit behavior.
+pub(crate) async fn reconcile_paper_orders(
+    venue: Option<&PaperVenue>,
+    repository: &BtcRepository,
+    process_id: Uuid,
+    run_id: Uuid,
+    config_hash: &str,
+) -> Result<()> {
+    recover_settlement_state(repository, process_id, run_id, BtcExecutionMode::Paper).await?;
+    let pending = repository
+        .discover_pending_paper_settlements(process_id, run_id)
+        .await?;
+    for settlement in pending {
+        let disposition = paper_settlement_disposition(settlement.run_id, run_id);
+        let credit = if let Some(venue) = venue.filter(|_| disposition.apply_venue_credit) {
+            Some(
+                venue
+                    .apply_settlement_credit(settlement.settlement_id, settlement.payout)
+                    .await?,
+            )
+        } else {
+            None
+        };
+        let settlement_config_hash = if disposition.apply_venue_credit {
+            config_hash.to_string()
+        } else {
+            repository
+                .run_config_hash(process_id, settlement.run_id)
+                .await?
+        };
+        let evidence = serde_json::json!({
+            "evidence_version": if venue.is_none() { "polymarket_paper_process_capital_v1" } else { disposition.evidence_version },
+            "credit_kind": if venue.is_none() { "durable_process_capital_credit" } else { disposition.credit_kind },
+            "settlement_id": settlement.settlement_id,
+            "process_id": settlement.process_id,
+            "run_id": settlement.run_id,
+            "order_id": settlement.order_id,
+            "model_member_id": settlement.member_id,
+            "model_attribution": settlement.model_attribution,
+            "market_id": settlement.market_id,
+            "token_id": settlement.token_id,
+            "fill_ids": settlement.fill_ids,
+            "official_outcome": settlement.official_outcome,
+            "official_winning_token_id": settlement.official_winning_token_id,
+            "official_resolution_received_at": settlement.official_resolution_received_at,
+            "official_resolution_source": settlement.official_resolution_source,
+            "filled_size": settlement.filled_size,
+            "entry_notional": settlement.entry_notional,
+            "entry_fees": settlement.entry_fees,
+            "payout": settlement.payout,
+            "net_pnl": settlement.net_pnl,
+            "venue_credit": credit,
+            "credited_by_config_hash": settlement_config_hash,
+        });
+        let marked = repository
+            .mark_paper_settlement_credited(
+                process_id,
+                settlement.run_id,
+                settlement.settlement_id,
+                &evidence,
+            )
             .await?;
-        for settlement in pending {
-            let disposition = paper_settlement_disposition(settlement.run_id, run_id);
-            let credit = if disposition.apply_venue_credit {
-                Some(
-                    self.venue
-                        .apply_settlement_credit(settlement.settlement_id, settlement.payout)
-                        .await?,
-                )
-            } else {
-                None
-            };
-            let settlement_config_hash = if disposition.apply_venue_credit {
-                config_hash.to_string()
-            } else {
-                repository
-                    .run_config_hash(process_id, settlement.run_id)
-                    .await?
-            };
-            let evidence = serde_json::json!({
-                "evidence_version": disposition.evidence_version,
-                "credit_kind": disposition.credit_kind,
-                "settlement_id": settlement.settlement_id,
-                "process_id": settlement.process_id,
-                "run_id": settlement.run_id,
-                "order_id": settlement.order_id,
-                "model_member_id": settlement.member_id,
-                "model_attribution": settlement.model_attribution,
-                "market_id": settlement.market_id,
-                "token_id": settlement.token_id,
-                "fill_ids": settlement.fill_ids,
-                "official_outcome": settlement.official_outcome,
-                "official_winning_token_id": settlement.official_winning_token_id,
-                "official_resolution_received_at": settlement.official_resolution_received_at,
-                "official_resolution_source": settlement.official_resolution_source,
-                "filled_size": settlement.filled_size,
-                "entry_notional": settlement.entry_notional,
-                "entry_fees": settlement.entry_fees,
-                "payout": settlement.payout,
-                "net_pnl": settlement.net_pnl,
-                "venue_credit": credit,
-                "credited_by_config_hash": settlement_config_hash,
-            });
-            let marked = repository
-                .mark_paper_settlement_credited(
-                    process_id,
-                    settlement.run_id,
-                    settlement.settlement_id,
-                    &evidence,
-                )
-                .await?;
-            if marked {
-                use rust_decimal::prelude::ToPrimitive;
+        if marked {
+            use rust_decimal::prelude::ToPrimitive;
+            if settlement.execution_origin.as_deref() != Some("api") {
                 super::unified_model_runtime::telemetry::settlement(
                     process_id,
                     settlement.net_pnl.to_f64().unwrap_or(0.0),
@@ -201,40 +230,36 @@ impl BtcExecutionLifecycle for PaperExecutionLifecycle {
                     settlement.net_pnl.to_f64().unwrap_or(0.0),
                     settlement.entry_fees.to_f64().unwrap_or(0.0),
                 );
-                info!(
-                    process_id = %process_id,
-                    run_id = %settlement.run_id,
-                    settlement_id = %settlement.settlement_id,
-                    order_id = %settlement.order_id,
-                    current_run = disposition.apply_venue_credit,
-                    credit_kind = disposition.credit_kind,
-                    "BTC paper settlement credited from official resolution"
-                );
             }
-            if !marked {
-                warn!(
-                    settlement_id = %settlement.settlement_id,
-                    run_id = %run_id,
-                    "BTC paper settlement was already credited by a concurrent reconciliation"
-                );
-            }
+            info!(
+                process_id = %process_id,
+                run_id = %settlement.run_id,
+                execution_mode = %settlement.execution_mode,
+                origin = settlement.execution_origin.as_deref().unwrap_or("umr"),
+                settlement_id = %settlement.settlement_id,
+                order_id = %settlement.order_id,
+                current_run = disposition.apply_venue_credit,
+                credit_kind = disposition.credit_kind,
+                "BTC paper settlement credited from official resolution"
+            );
         }
-        observe_settlement_health(
-            process_id,
-            &repository
-                .settlement_health(process_id, run_id, BtcExecutionMode::Paper)
-                .await?,
-        );
-        Ok(())
+        if !marked {
+            warn!(
+                execution_mode = %settlement.execution_mode,
+                origin = settlement.execution_origin.as_deref().unwrap_or("umr"),
+                settlement_id = %settlement.settlement_id,
+                run_id = %run_id,
+                "BTC paper settlement was already credited by a concurrent reconciliation"
+            );
+        }
     }
-
-    async fn preview_order(
-        &self,
-        request: &OrderRequest,
-        config: &PaperPreviewConfig,
-    ) -> Result<Option<PaperPreviewResult>> {
-        self.venue.preview_order(request, config).await.map(Some)
-    }
+    observe_settlement_health(
+        process_id,
+        &repository
+            .settlement_health(process_id, run_id, BtcExecutionMode::Paper)
+            .await?,
+    );
+    Ok(())
 }
 
 pub struct LiveExecutionLifecycle {
@@ -328,7 +353,8 @@ impl BtcExecutionLifecycle for LiveExecutionLifecycle {
                             0.0,
                         );
                         use rust_decimal::prelude::ToPrimitive;
-                        super::unified_model_runtime::telemetry::settlement(
+                        if settlement.execution_origin.as_deref() != Some("api") {
+super::unified_model_runtime::telemetry::settlement(
                             process_id,
                             settlement.net_pnl.to_f64().unwrap_or(0.0),
                             settlement.entry_fees.to_f64().unwrap_or(0.0),
@@ -340,10 +366,13 @@ impl BtcExecutionLifecycle for LiveExecutionLifecycle {
                             settlement.net_pnl.to_f64().unwrap_or(0.0),
                             settlement.entry_fees.to_f64().unwrap_or(0.0),
                         );
+                        }
                         info!(
                             process_id = %process_id,
                             run_id = %settlement.run_id,
-                            settlement_id = %settlement.settlement_id,
+                            execution_mode = %settlement.execution_mode,
+                origin = settlement.execution_origin.as_deref().unwrap_or("umr"),
+                settlement_id = %settlement.settlement_id,
                             order_id = %settlement.order_id,
                             net_pnl = %settlement.net_pnl,
                             "BTC live zero-payout settlement recognized from official resolution"

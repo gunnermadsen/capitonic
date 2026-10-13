@@ -119,6 +119,7 @@ impl BtcProcessManager {
     }
 
     pub(super) async fn reconcile_failed_runtime(&self) {
+        self.recover_order_processes().await;
         let pending = self
             .terminal_pending
             .lock()

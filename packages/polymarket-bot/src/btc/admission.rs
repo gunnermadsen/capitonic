@@ -110,6 +110,8 @@ pub struct ProposedEntryExposure {
     pub limit_price: Decimal,
     pub fee_rate: Decimal,
     entry_debit_usd: Decimal,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    cash_budget: bool,
 }
 
 impl ProposedEntryExposure {
@@ -129,7 +131,24 @@ impl ProposedEntryExposure {
             limit_price,
             fee_rate,
             entry_debit_usd: size * limit_price + fee,
+            cash_budget: false,
         })
+    }
+
+    /// BUY matching can spend the requested cash amount at improved prices. Reserve the
+    /// mathematical fee upper bound (budget * observed rate), not a fee for only requested shares.
+    pub(crate) fn for_buy_cash_budget(
+        size: Decimal,
+        limit_price: Decimal,
+        fee_rate: Decimal,
+    ) -> Result<Self> {
+        let mut result = Self::new(size, limit_price, fee_rate)?;
+        result.entry_debit_usd = size
+            .checked_mul(limit_price)
+            .and_then(|notional| notional.checked_mul(Decimal::ONE + fee_rate))
+            .context("cash budget exposure overflow")?;
+        result.cash_budget = true;
+        Ok(result)
     }
 
     pub fn entry_debit_usd(&self) -> Decimal {
@@ -137,7 +156,11 @@ impl ProposedEntryExposure {
     }
 
     fn validate(&self) -> Result<()> {
-        let canonical = Self::new(self.size, self.limit_price, self.fee_rate)?;
+        let canonical = if self.cash_budget {
+            Self::for_buy_cash_budget(self.size, self.limit_price, self.fee_rate)?
+        } else {
+            Self::new(self.size, self.limit_price, self.fee_rate)?
+        };
         if canonical.entry_debit_usd != self.entry_debit_usd {
             bail!("proposed entry exposure debit is inconsistent with its price and fee inputs");
         }
