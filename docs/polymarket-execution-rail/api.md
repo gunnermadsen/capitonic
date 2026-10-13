@@ -69,6 +69,30 @@ Automated evidence covers authenticated HTTP dispatch, forbidden overrides, stat
 
 ## Process lifecycle control
 
+Process-scoped `btc_runtime.live_status` includes optional `reconciliation` diagnostics
+from the last durably recorded live reconciliation pass: `run_id` (the existing
+`live_reconciliation_runs` identity), `process_id`, `account_ref`, `checked_at`,
+`lookback_hours`, the existing `process_accounting_proof`, and separate counts for
+unmatched account trades, position mismatches, foreign open orders, unresolved orders
+and aggregate mismatches. Counts describe the bound account's reconciliation evidence;
+they do not attribute unmatched wallet activity to the requesting process. Detailed
+position identities remain in that referenced report. No additional database read or
+write is performed to serve status.
+
+The `live_process_accounting_not_proven:` reason prefix now carries the proof's
+specific reason, such as `unmatched_account_trades`, or
+`awaiting_initial_reconciliation` before a report exists. Optional
+`reconciliation_error` preserves the current reconciliation error even when another
+readiness reason has precedence. The snapshot's timestamp is essential: a retained
+completed report does not imply the latest attempt succeeded or its evidence is fresh.
+The existing `idempotency_clean` field remains an aggregate reconciliation-safety
+compatibility field; false does not itself establish duplicate submission.
+
+These fields explain existing decisions and do not authorize orders or change any
+gate. Paper omits these live-only diagnostics and retains `paper_mode` /
+`not_applicable`. Shared OMS policies, API order contracts, paper/live accounting,
+metrics and process authorization remain unchanged.
+
 Authenticated `PATCH /admin/trading-processes/{process_id}/status` accepts a body such as `{"status":"completed"}`. Supported targets are created,
 starting, running, stopping, stopped, failed, completed and expired. It returns
 the existing process response envelope.

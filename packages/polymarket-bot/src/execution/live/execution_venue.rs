@@ -1336,7 +1336,7 @@ impl ExecutionVenue for LiveVenue {
             checked_at,
         };
         let idempotency_clean = report.unresolved_count == 0 && report.mismatches_found == 0;
-        if let Err(error) = store
+        let reconciliation_run_id = match store
             .insert_live_reconciliation_run(
                 self.bound_process_id,
                 self.bound_account_ref.as_deref(),
@@ -1361,11 +1361,20 @@ impl ExecutionVenue for LiveVenue {
             )
             .await
         {
-            if let Some(metrics) = &self.reconciliation_metrics {
-                metrics.record_failure(ReconciliationStage::Persistence, &error);
+            Ok(run_id) => run_id,
+            Err(error) => {
+                if let Some(metrics) = &self.reconciliation_metrics {
+                    metrics.record_failure(ReconciliationStage::Persistence, &error);
+                }
+                return Err(error);
             }
-            return Err(error);
-        }
+        };
+        let reconciliation = Arc::new(LiveReconciliationStatus::from_report(
+            reconciliation_run_id,
+            &report,
+            &account_reconcile,
+            foreign_venue_orders,
+        ));
         {
             let mut state = self.readiness_state.lock().await;
             let global = self.global_entry_gate.lock().await;
@@ -1375,6 +1384,7 @@ impl ExecutionVenue for LiveVenue {
             state.process_accounting_proven = account_reconcile.process_accounting_proven;
             state.process_accounting_entry_safe = account_reconcile.process_accounting_entry_safe;
             state.process_accounting_status = account_reconcile.process_accounting_status.clone();
+            state.reconciliation = Some(reconciliation);
             state.credential_account_fingerprint_sha256 = account_reconcile
                 .credential_account_fingerprint_sha256
                 .clone();
@@ -1530,6 +1540,12 @@ impl ExecutionVenue for LiveVenue {
             && state.idempotency_clean
             && state.unresolved_live_order_count == 0
             && state.reconciliation_error.is_none();
+        let accounting_reason = state
+            .reconciliation
+            .as_ref()
+            .map_or("awaiting_initial_reconciliation", |report| {
+                report.process_accounting_proof.reason.as_str()
+            });
         let reason = if entries_enabled {
             None
         } else if !order_submit_enabled {
@@ -1546,7 +1562,7 @@ impl ExecutionVenue for LiveVenue {
         } else if !state.process_accounting_entry_safe {
             Some(format!(
                 "live_process_accounting_not_proven:{}",
-                state.process_accounting_status
+                accounting_reason
             ))
         } else if let Some(error) = state.reconciliation_error.as_deref() {
             Some(format!("live_reconciliation_degraded:{error}"))
@@ -1576,6 +1592,8 @@ impl ExecutionVenue for LiveVenue {
             unresolved_live_order_count: state.unresolved_live_order_count,
             process_accounting_proven: state.process_accounting_proven,
             process_accounting_status: state.process_accounting_status.clone(),
+            reconciliation: state.reconciliation.as_deref().cloned(),
+            reconciliation_error: state.reconciliation_error.clone(),
             max_order_notional_usd: self
                 .bound_execution
                 .as_ref()

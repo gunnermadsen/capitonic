@@ -1282,10 +1282,170 @@ mod tests {
         assert!(!status.idempotency_clean);
         assert_eq!(
             status.reason.as_deref(),
-            Some("live_process_accounting_not_proven:unproven")
+            Some("live_process_accounting_not_proven:awaiting_initial_reconciliation")
         );
+        assert!(status.reconciliation.is_none());
         assert!(venue.readiness_state.lock().await.manual_entries_enabled);
         assert!(!venue.global_entry_gate.lock().await.halted);
+    }
+
+    #[tokio::test]
+    async fn reconciliation_status_preserves_causes_scope_and_readiness() {
+        use crate::account_reconcile::{AccountPositionMismatch, ProcessAccountingProof};
+
+        let process_id = Uuid::new_v4();
+        let root = LiveVenue::new_for_test(live_config()).unwrap();
+        let venue = root
+            .bind_process(process_id, Utc::now(), &live_execution())
+            .unwrap();
+        let peer = root
+            .bind_process(Uuid::new_v4(), Utc::now(), &live_execution())
+            .unwrap();
+        venue
+            .restore_configured_entries_after_restart()
+            .await
+            .unwrap();
+        let checked_at = Utc::now();
+        let run_id = Uuid::new_v4();
+        let mut account = AccountReconcileReport {
+            process_id: Some(process_id),
+            account_ref: Some("polymarket-test".into()),
+            credential_account_fingerprint_sha256: Some("private-fingerprint".into()),
+            process_accounting_proven: false,
+            process_accounting_entry_safe: false,
+            process_accounting_status: "unproven".into(),
+            process_accounting_proof: ProcessAccountingProof {
+                status: "unproven".into(),
+                position_ownership: "unproven".into(),
+                realized_pnl: "unproven".into(),
+                reason: "unmatched_account_trades".into(),
+            },
+            account_address: "private-wallet".into(),
+            source: "poll".into(),
+            dry_run: false,
+            token_id: None,
+            lookback_hours: 1,
+            activities_fetched: 2,
+            account_trades_detected: 2,
+            account_trades_inserted: 0,
+            position_snapshots_detected: 1,
+            position_snapshots_inserted: 1,
+            exits_detected: 0,
+            exits_applied: 0,
+            exit_size_applied: Decimal::ZERO,
+            position_adjustments_detected: 0,
+            position_adjustments_applied: 0,
+            position_adjustment_size_applied: Decimal::ZERO,
+            mismatches: vec![AccountPositionMismatch {
+                token_id: "token".into(),
+                db_open_size: Decimal::ZERO,
+                account_size: dec!(16),
+                delta_size: dec!(16),
+                mismatch_type: "foreign_account_position".into(),
+            }],
+            transitions: vec![],
+            unmatched_trades: 2,
+        };
+        let mut report = ReconciliationReport {
+            open_orders: 0,
+            balances_checked: true,
+            mismatches_found: 3,
+            unresolved_count: 0,
+            checked_at,
+        };
+        for (unmatched, cause) in [
+            (2, "unmatched_account_trades"),
+            (
+                0,
+                "account_positions_do_not_match_aggregate_sleeve_live_fills",
+            ),
+        ] {
+            account.unmatched_trades = unmatched;
+            account.process_accounting_proof.reason = cause.into();
+            report.mismatches_found = unmatched as usize + 1;
+            let evidence = LiveReconciliationStatus::from_report(run_id, &report, &account, 0);
+            {
+                let mut state = venue.readiness_state.lock().await;
+                state.last_rest_reconcile_at = Some(checked_at);
+                state.reconciliation = Some(Arc::new(evidence));
+            }
+            let status = venue.live_status().await.unwrap();
+            assert!(!status.entries_enabled);
+            assert!(!status.idempotency_clean);
+            assert_eq!(status.unresolved_live_order_count, 0);
+            assert_eq!(
+                status.reason,
+                Some(format!("live_process_accounting_not_proven:{cause}"))
+            );
+            let json = serde_json::to_value(&status).unwrap();
+            let diagnostic = &json["reconciliation"];
+            assert_eq!(diagnostic["run_id"], run_id.to_string());
+            assert_eq!(diagnostic["process_id"], process_id.to_string());
+            assert_eq!(diagnostic["account_ref"], "polymarket-test");
+            assert_eq!(
+                diagnostic["checked_at"],
+                serde_json::to_value(checked_at).unwrap()
+            );
+            assert_eq!(diagnostic["lookback_hours"], 1);
+            assert_eq!(diagnostic["unmatched_account_trades"], unmatched);
+            assert_eq!(diagnostic["position_mismatch_count"], 1);
+            assert_eq!(diagnostic["foreign_open_order_count"], 0);
+            assert_eq!(diagnostic["unresolved_order_count"], 0);
+            assert_eq!(diagnostic["mismatches_found"], report.mismatches_found);
+            assert_eq!(diagnostic["process_accounting_proof"]["reason"], cause);
+            assert!(!json.to_string().contains("private-"));
+        }
+
+        venue
+            .update_live_reconciliation_health(0, Some("transport unavailable".into()))
+            .await
+            .unwrap();
+        let failed = venue.live_status().await.unwrap();
+        assert_eq!(
+            failed.reconciliation_error.as_deref(),
+            Some("transport unavailable")
+        );
+        assert_eq!(failed.reconciliation.as_ref().unwrap().run_id, run_id);
+        assert!(!failed.entries_enabled);
+        assert!(peer.live_status().await.unwrap().reconciliation.is_none());
+        assert!(root.live_status().await.unwrap().reconciliation.is_none());
+
+        // Diagnostics alone must never enable entries, even if the diagnostic proof is clean.
+        account.process_accounting_proof.reason = "clean_account_baseline".into();
+        account.process_accounting_proof.status = "proven".into();
+        account.unmatched_trades = 0;
+        account.mismatches.clear();
+        report.mismatches_found = 0;
+        {
+            let mut state = venue.readiness_state.lock().await;
+            state.reconciliation = Some(Arc::new(LiveReconciliationStatus::from_report(
+                Uuid::new_v4(),
+                &report,
+                &account,
+                0,
+            )));
+        }
+        assert!(!venue.live_status().await.unwrap().entries_enabled);
+        {
+            let mut state = venue.readiness_state.lock().await;
+            state.process_accounting_proven = true;
+            state.process_accounting_entry_safe = true;
+            state.process_accounting_status = "proven".into();
+            state.idempotency_clean = true;
+            state.last_rest_reconcile_at = Some(Utc::now());
+        }
+        venue
+            .update_live_reconciliation_health(0, None)
+            .await
+            .unwrap();
+        let recovered = venue.live_status().await.unwrap();
+        assert!(recovered.entries_enabled);
+        assert!(recovered.reason.is_none());
+        assert!(recovered.reconciliation_error.is_none());
+        assert_eq!(
+            recovered.reconciliation.unwrap().unmatched_account_trades,
+            0
+        );
     }
 
     #[tokio::test]
