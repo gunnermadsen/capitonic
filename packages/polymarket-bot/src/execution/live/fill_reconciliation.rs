@@ -445,6 +445,29 @@ pub(super) fn is_clob_operation_timeout(error: &anyhow::Error) -> bool {
     })
 }
 
+pub(super) fn live_event_has_local_order(event: &LiveVenueEvent, owned: &HashSet<String>) -> bool {
+    live_event_order_id_candidates(&event.raw_payload)
+        .iter()
+        .any(|id| owned.contains(id))
+}
+
+pub(super) fn merge_replayed_account_trade(
+    trades: &mut HashMap<Uuid, crate::store::AccountTrade>,
+    mut trade: crate::store::AccountTrade,
+) {
+    if let Some(previous) = trades.remove(&trade.account_trade_id) {
+        // Live event payloads are objects. Preserve evidence from earlier status messages,
+        // matching the account-trade upsert's shallow JSONB merge.
+        if let (Value::Object(mut earlier), Value::Object(later)) =
+            (previous.raw_payload, &trade.raw_payload)
+        {
+            earlier.extend(later.clone());
+            trade.raw_payload = Value::Object(earlier);
+        }
+    }
+    trades.insert(trade.account_trade_id, trade);
+}
+
 pub(super) fn live_event_order_id_candidates(payload: &Value) -> Vec<String> {
     let mut candidates = Vec::new();
     if let Some(order_id) = json_str(payload, "taker_order_id") {

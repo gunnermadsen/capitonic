@@ -401,23 +401,45 @@ impl LiveVenue {
     pub(super) async fn backfill_fills_from_live_events(&self) -> Result<usize> {
         let store = self.store()?;
         let mut processed = 0usize;
-        for (event_id, event) in store.unapplied_live_trade_events(500).await? {
-            let persisted = LiveVenue::persist_fill_from_live_event(
-                &store,
-                &event,
-                LiveEventPath::ReconciliationReplay,
-            )
-            .await?;
+        let events = store.unapplied_live_trade_events(500).await?;
+        let candidates = events
+            .iter()
+            .flat_map(|(_, event)| live_event_order_id_candidates(&event.raw_payload))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let owned = store.live_event_owned_order_ids(&candidates).await?;
+        let account_address = configured_account_address(&self.config)?;
+        let mut account_trades = HashMap::new();
+        // Oldest first lets later websocket statuses enrich the same account trade once.
+        for (event_id, event) in events.into_iter().rev() {
+            let persisted = if live_event_has_local_order(&event, &owned) {
+                LiveVenue::persist_fill_from_live_event(
+                    &store,
+                    &event,
+                    LiveEventPath::ReconciliationReplay,
+                )
+                .await?
+            } else {
+                0
+            };
             if persisted > 0 {
                 // The event is marked only after every resolved fill and its order progress are durable.
                 // Events without a local fill stay eligible if ownership is established later.
                 store.mark_live_trade_event_applied(event_id).await?;
                 processed = processed.saturating_add(persisted);
-            } else if let Some(account_address) = configured_account_address(&self.config)? {
-                if let Some(account_trade) = account_trade_from_live_event(&account_address, &event)
+            } else if let Some(account_address) = account_address.as_deref() {
+                if let Some(account_trade) = account_trade_from_live_event(account_address, &event)
                 {
-                    store.upsert_account_trade(&account_trade).await?;
+                    merge_replayed_account_trade(&mut account_trades, account_trade);
                 }
+            }
+        }
+        let account_trades = account_trades.into_values().collect::<Vec<_>>();
+        let updates = store.account_trade_replay_updates(&account_trades).await?;
+        for trade in &account_trades {
+            if updates.contains(&trade.account_trade_id) {
+                store.upsert_account_trade(trade).await?;
             }
         }
         for event in store.recent_live_order_events(500).await? {

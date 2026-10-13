@@ -11,6 +11,73 @@ mod tests {
     use super::*;
 
     #[test]
+    fn replay_ownership_recovers_late_taker_and_maker_orders_without_caching_absence() {
+        let event = LiveVenue::parse_user_event(json!({
+            "event_type": "trade", "id": "trade", "status": "MATCHED",
+            "taker_order_id": "taker", "maker_orders": [{"order_id": "maker"}]
+        }));
+        assert!(!live_event_has_local_order(&event, &HashSet::new()));
+        assert!(!live_event_has_local_order(
+            &event,
+            &HashSet::from(["other".into()])
+        ));
+        for id in ["taker", "maker"] {
+            assert!(live_event_has_local_order(
+                &event,
+                &HashSet::from([id.into()])
+            ));
+        }
+        let order_alias = LiveVenue::parse_user_event(json!({
+            "event_type": "trade", "order_id": "local-order", "status": "CONFIRMED"
+        }));
+        assert!(live_event_has_local_order(
+            &order_alias,
+            &HashSet::from(["local-order".into()])
+        ));
+    }
+
+    #[test]
+    fn replay_account_evidence_coalesces_statuses_without_changing_economics_or_account_identity() {
+        let mut trades = HashMap::new();
+        let mut latest = None;
+        for status in ["MATCHED", "MINED", "CONFIRMED"] {
+            let mut payload = json!({
+                "event_type": "trade", "id": "trade", "status": status,
+                "asset_id": "token", "side": "BUY", "price": "0.37", "size": "5",
+                "match_time": "1791762903", "taker_order_id": "venue-order"
+            });
+            if status == "MATCHED" {
+                payload["initial_evidence"] = json!(true);
+            }
+            let event = LiveVenue::parse_user_event(payload);
+            let trade = account_trade_from_live_event("account-a", &event).unwrap();
+            latest = Some(trade.clone());
+            merge_replayed_account_trade(&mut trades, trade);
+        }
+        let latest = latest.unwrap();
+        assert_eq!(trades.len(), 1);
+        let merged = trades.get(&latest.account_trade_id).unwrap();
+        assert_eq!(merged.raw_payload["status"], "CONFIRMED");
+        assert_eq!(merged.raw_payload["initial_evidence"], true);
+        assert_eq!(merged.price, dec!(0.37));
+        assert_eq!(merged.size, dec!(5));
+        assert_eq!(merged.timestamp_utc, latest.timestamp_utc);
+        assert_eq!(merged.linked_order_id, None);
+        let before = merged.raw_payload.clone();
+        merge_replayed_account_trade(&mut trades, latest.clone());
+        assert_eq!(trades[&latest.account_trade_id].raw_payload, before);
+
+        let other = account_trade_from_live_event(
+            "account-b",
+            &LiveVenue::parse_user_event(latest.raw_payload),
+        )
+        .unwrap();
+        assert_ne!(other.account_trade_id, latest.account_trade_id);
+        merge_replayed_account_trade(&mut trades, other);
+        assert_eq!(trades.len(), 2);
+    }
+
+    #[test]
     fn collateral_allowances_require_both_current_v2_exchanges_to_be_positive() {
         let exchange = CTF_EXCHANGE_V2_ADDRESS.parse::<Address>().unwrap();
         let neg_risk_exchange = NEG_RISK_CTF_EXCHANGE_V2_ADDRESS.parse::<Address>().unwrap();
