@@ -1,14 +1,13 @@
 # Implementation
-- The user’s requested outcome and any agreed implementation plan are the authoritative scope. If no separate plan exists, the request itself defines the implementation boundary.
-- Execute every in-scope requirement completely and verify the requested outcome. Do not add optional improvements, cleanup, redesigns, or unrelated fixes.
-- Before implementing functionality, identify the existing module, contract, registry, persistence path, instrumentation, or execution path that owns the capability. Reuse its supported extension point instead of creating another implementation.
-- Do not delete, disable, replace, rewrite, or modify existing systems, behavior, interfaces, or data outside the defined scope, even when doing so would simplify the implementation.
-- If completing the work requires a change outside the defined scope, stop before making that change, explain why it is required, and obtain explicit user authorization to amend the scope.
-- If an existing system cannot satisfy the request, stop and explain the specific incompatibility. Do not create a parallel or replacement system without explicit user authorization.
+- The user’s requested outcome and any agreed implementation plan define the scope. Complete and verify that outcome without adding optional cleanup, redesigns, or unrelated changes.
+- Before implementing functionality, identify and reuse the existing module, contract, registry, persistence path, instrumentation, or execution path that owns the capability.
+- Make the smallest coherent change that satisfies the request. Necessary adjacent changes to compilation, tests, or directly affected contracts are permitted when they do not materially broaden the requested outcome; report them after implementation.
+- Obtain explicit authorization before making destructive changes, changing unrelated behavior or data, materially expanding the requested outcome, or introducing a parallel or replacement system.
+- If the existing system cannot satisfy the request without one of those changes, stop and explain the specific incompatibility.
 - Use `trading_processes.process_id` as the canonical identity for trading-process ownership and scoping.
 
 ## Golden Rules
-- All Rust features and systems are implemented and optimized for latency, memory usage efficiency, CPU performance, zero downtime, and database resource usage, ensuring a performant and resiliant system.
+- Rust changes must avoid material regressions in latency, memory use, CPU use, database load, availability, and recovery behavior. Measure or benchmark when a change plausibly affects a performance-sensitive path.
 - Do not name artifacts, branches, files or code comments based on phases or stages of an implementation. use domain specific naming for the issue or feature being addresses. I dont' want to see 'phase X' in git history, code files, branches, or file names or code comments. 
 
 ## Always-On Trading Liveness
@@ -28,10 +27,6 @@
 - Do not copy or vendor third-party Rust crates into the repository. Declare registry dependencies in the owning `Cargo.toml`; inspect downloaded crate sources only in Cargo's external registry cache.
 - When an image build is explicitly requested, build only affected components: bot changes build `polymarket-bot`; ingester changes build the single `ingester` image used by both `ingester-master` and `ingester-worker` through runtime `INGESTER_MODE` configuration; database migration runner changes build `db-migrate`. Never build separate master and worker images.
 - Build the bot with `POLYMARKET_GIT_REVISION=<GIT_COMMIT_HASH>`, the ingester with `INGESTER_GIT_REVISION=<GIT_COMMIT_HASH>`, and db-migrate with `DB_MIGRATE_GIT_REVISION=<GIT_COMMIT_HASH>`.
-- put sensitive secrets in .env files
-- Treat the main worktree's `.env` file as the source of truth for API-key secrets. Worktrees and services must reference or inherit those secrets without creating independent secret values.
-- put non-sensitive runtime configuration in docker-compose files
-- .env example files are templates, do not put plaintext env vars in the example env files.
 
 ## Rust file organization
 - Organize Rust code by domain responsibility, with one clear purpose per module.
@@ -62,15 +57,13 @@
 - `development` contains accepted releases. Do not implement features or fixes directly on it.
 - `production` receives accepted `development` releases and reviewed deployment metadata only through user-approved release PRs merged in GitHub. Never implement features or fixes directly on it, push directly to it, or append CI/CD-generated admission commits after merge.
 - Before preparing another release, reconcile outstanding production release commits, including historical admission commits, into the latest integration branch, preserving deployed image and secret pins; never reset or force-push production to erase divergence.
-- Use one active integration branch named `integration-<YYYY-MM-DD>`, created from the accepted `development` tip. An optional annotated `integration-cycle/<YYYY-MM-DD>` tag may record its starting boundary.
+- Use one active integration branch created from the accepted `development` tip.
 - New feature, defect, and model-training branches use `feature/<name>`, `defect/<name>`, or `training/<name>`, start from the latest integration tip, and merge only into integration. Keep unrelated domains separate; follow-up work starts from its existing feature, training, or integration lineage.
-- Use `docs/<name>` for standalone documentation or repository-policy changes, including `AGENTS.md` and files under `docs/`. Create and work on documentation branches only in the main worktree from the latest integration tip; do not create a separate worktree. Documentation required by a feature or defect remains on its owning branch.
-- Keep integration and documentation branches in the main worktree. A narrowly scoped integration-policy or coordination correction may be committed directly on integration only when explicitly requested.
-- Tag a committed standalone documentation change with annotated `docs/<name>/git-<full-git-commit-id>` metadata recording its source branch, changed paths, purpose, and integration base. Documentation tags record provenance only and do not confer acceptance, image, or golden status.
+- Make standalone documentation and repository-policy changes directly on the active integration branch in the main worktree. Documentation required by a feature, defect, or training change remains on its owning branch.
 
 ## Branch Integration
 
-- Commit changes in coherent domain groups. Feature, defect, training, and documentation branches merge only into integration.
+- Commit changes in coherent domain groups. Feature, defect, and training branches merge only into integration.
 - Outside the golden image workflow, each merge requires explicit authorization naming the branch or commit.
 - Assess only branches selected for this checkpoint. If none are named, consider active-cycle branches with an existing worktree and commits outside integration. A branch qualifies when it is clean, committed, not abandoned, and passes its required checks. Report exclusions.
 - Before merging, give one compact summary of each selected branch's lineage, worktree state, checks, commits, and diff against integration. Stop only for an ambiguous target, potential loss of uncommitted work, or unauthorized destructive history rewriting.
@@ -97,7 +90,7 @@
 `Perform the golden image workflow` authorizes selected branch merges, local image build and deployment, checkpoint verification, promotion, and pushing Git refs to origin. Registry publication, CI completion, and worktree cleanup do not gate the local checkpoint.
 
 1. Inspect and merge the selected qualifying branches into integration under Branch Integration.
-2. Compare runtime and image inputs with the selected existing images. Run the affected packages' required tests once. Build only changed components with the full embedded Git revision. Reuse an immutable image when its inputs are unchanged, including after documentation-only commits.
+2. Compare runtime and image inputs with the selected existing images. Run the affected packages' required tests. Rerun relevant checks when the code changes afterward, a check did not execute validly, or its result is no longer current. Build only changed components with the full embedded Git revision. Reuse an immutable image when its inputs are unchanged, including after documentation-only commits.
 3. Record the running image IDs and revisions, material configuration, migration state, enabled trading processes, desired realtime profiles, active backfills, and worker capacity. Create an `image/...` provenance tag for each new image.
 4. Record local deployment and Development Checkpoint Verification results when performed. Trading-process readiness does not gate image acceptance, RC publication, or advancement of `development`; record failures as release limitations. Safe Image Deployment and production verification requirements remain in effect.
 5. After required source checks and immutable-image verification pass, fast-forward `development` with `--ff-only`. Create an annotated `checkpoint/development/git-<full-git-commit-id>` tag recording the selected images, configuration, model identity, checks, rollback images, and limitations. Create a `golden/...` tag only when an image is first accepted; do not move an existing tag when that image is reused.
@@ -174,14 +167,7 @@ Migration creation and initial feature or defect validation follow Database Chan
 
 - Whenever a deployment becomes unhealthy, automatically perform a read-only root-cause analysis after stabilizing or rolling back the stack. Correlate the deployment timestamp with image identities, container events and restart counts, recent bounded logs, profile leases, worker capacity and backfill allocations, route resolution, data freshness, migrations, trading-process recovery, and firing alerts.
 - Clearly separate the root cause from symptoms. Identify the first failed dependency or violated invariant, explain the resulting failure chain, and cite the concrete evidence used. Do not call a deployment healthy merely because containers or HTTP endpoints are alive.
-- Provide a short repair report in direct language using exactly these headings:
-  - `Problem`: one sentence describing what is broken.
-  - `Impact`: which ingestion products, trading processes, or services are affected.
-  - `Cause`: the proven root cause; say `not yet proven` when evidence is incomplete.
-  - `Immediate repair`: numbered commands or actions that restore service safely, including exact targets and required verification.
-  - `Verification`: the observable evidence that proves recovery, including advancing timestamps and cleared route/profile failures.
-  - `Rollback status`: the restored image IDs and revisions, or the precise reason rollback is blocked or partial.
-  - `Permanent hardening`: only the smallest code, configuration, alerting, or deployment change needed to prevent recurrence; do not implement it unless authorized.
+- Provide a short repair report stating the problem, impact, cause, immediate repair, recovery evidence, and rollback status. Say `not yet proven` when the cause is inconclusive. Include only the smallest permanent hardening needed to prevent recurrence, and do not implement it unless authorized.
 - Make repair instructions executable and unambiguous. Avoid vague directions such as “check the service,” “monitor it,” or “restart if needed”; name the service, condition, exact safe action, and success signal.
 
 ## Model Artifact Provenance
@@ -205,42 +191,9 @@ Migration creation and initial feature or defect validation follow Database Chan
 
 ## Worktree Environment Initialization
 
-- Immediately after creating any worktree, symlink every top-level runtime `.env` file from the main worktree into the new worktree. The main worktree remains the single source of truth; never copy secret values or create independent worktree environment files.
-- Exclude `.env.example` and other `*.example` templates. Do not run Docker Compose, application commands, tests that require runtime credentials, or deployment commands from the new worktree until the links have been created and verified.
-- Run the following from the main worktree, replacing `<feature-domain>` with the worktree directory name:
-
-```bash
-set -eu
-main_worktree="$(git rev-parse --show-toplevel)"
-worktree_path="$main_worktree/worktrees/<feature-domain>"
-
-for env_file in "$main_worktree"/.env "$main_worktree"/.env.*; do
-  [ -f "$env_file" ] || continue
-  case "$env_file" in
-    *.example) continue ;;
-  esac
-  ln -s "$env_file" "$worktree_path/$(basename "$env_file")"
-done
-```
-
-- Verify every runtime environment file resolves to the main worktree before using the worktree:
-
-```bash
-set -eu
-main_worktree="$(git rev-parse --show-toplevel)"
-worktree_path="$main_worktree/worktrees/<feature-domain>"
-
-for env_file in "$main_worktree"/.env "$main_worktree"/.env.*; do
-  [ -f "$env_file" ] || continue
-  case "$env_file" in
-    *.example) continue ;;
-  esac
-  link="$worktree_path/$(basename "$env_file")"
-  [ -L "$link" ]
-  [ "$(readlink "$link")" = "$env_file" ]
-  [ -r "$link" ]
-done
-```
+- Immediately after creating a worktree, run `scripts/link-worktree-env.sh <worktree-path>` from the main worktree. The script must symlink every top-level runtime `.env` file into the worktree, excluding `.env.example` and other `*.example` templates, and verify that each link resolves to the main worktree.
+- The main worktree remains the single source of truth for runtime secrets. Never copy secret values or create independent worktree environment files.
+- Do not run commands requiring runtime credentials from the worktree until the script succeeds.
 
 ## Model Training and Artifact Storage
 
@@ -249,7 +202,6 @@ done
 - Never create or commit a repository-root `training-results/` directory. Store all new training-result outcomes in their SSD run directory; Git may contain only concise reports and provenance pointers under maintained documentation or package paths.
 - Keep only maintained source code, configuration, tests, concise results, and provenance pointers in Git. Promote reusable Python modules into `packages/btc-directional-model` before merging the training branch.
 - Give every completed, partial, or exploratory SSD run a `manifests/run-status.md` that records its lifecycle status, completion evidence, missing outputs, qualification state, and deployment authorization without inferring unknown facts.
-- When a model-training tournament completes, include chronological trade-activity charts for the top 30% of distinct evaluated model candidates, rounded up (one of three candidates, three of ten). Follow the selection and chart contract in `docs/model-training-artifact-lifecycle.md`; show quiet periods and bursts across the full evaluated range, not only the best-performing dates.
 - Admit a selected immutable model artifact into `packages/btc-directional-model` only for an explicitly authorized UMR deployment. Record its source run, SHA-256, manifest, and qualification evidence.
 - UMR adapters may translate canonical inputs and model outputs only. They must reuse existing feature, inference, persistence, admission, observability, identity, and recovery contracts without duplicating their logic.
 - Follow `docs/model-training-artifact-lifecycle.md` for directory layout, manifests, archival, source promotion, and deployment admission. Stop before training if the canonical SSD root is unavailable.
@@ -270,10 +222,14 @@ done
 - Never force-remove a dirty worktree unless the user explicitly authorizes discarding its remaining contents.
 
 # System
-- Trading process parameters that affect trades, go in the trading playbook config stored in 'trading_processes'. parameters that affect global systems go in environment variables.
-- All plaintext env vars that are non sensitive, go in docker-compose files in the 'environment' section. do not put plantext env vars in .env file. 
-- Refactoring should not render trading processes as no longer compatible. 
-- Refactoring a system, introducing a new system, or removing a system and causing a lack of compatibility is an anti pattern in the trading bot.
+
+## Runtime Configuration
+
+- Store parameters that affect trading decisions in the trading playbook configuration owned by `trading_processes`.
+- Store sensitive runtime values only in the main worktree's applicable `.env` files. Materialize them into Kubernetes Secrets through the owning provisioned workflow; never place secret values in chart values, manifests, or committed configuration.
+- Store global non-sensitive runtime configuration in the owning Helm chart values or authoritative provisioned configuration. Do not store non-sensitive configuration in `.env` files.
+- Treat `.env.example` and other `*.example` files as documentation templates only. Never place real secret values in them.
+- Preserve compatibility for existing trading processes when refactoring, introducing, or removing systems. Any intentional incompatibility requires explicit authorization and a defined migration path.
 
 ## Backfills
 - Reuse the existing shared backfill infrastructure, standards, and contracts for every backfill domain; do not create domain-specific backfill workers or Docker Compose files.
