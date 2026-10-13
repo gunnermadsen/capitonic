@@ -55,6 +55,7 @@ grafana_changed=false
 coordinate_grafana=false
 verified=true
 for application in "${applications[@]}"; do
+ python3 scripts/production/prepare-runtime-secrets.py --preflight --component "$application"
  values="capitonic-helm-chart/environments/production/$application.yaml"
  entries="$(yq -o=json '.externalSecrets.entries' "$values" | jq -ce '
   if type == "array" and length > 0 and all(.[];
@@ -62,12 +63,15 @@ for application in "${applications[@]}"; do
   then . else error("Missing shared-secret consumer declarations") end')"
  while IFS= read -r entry; do
   name="$(jq -er .name <<< "$entry")"
-  current="$(kubectl -n capitonic get externalsecret "$name" -o json)"
+  current="$(kubectl -n capitonic get externalsecret "$name" --ignore-not-found -o json)"
   wanted="$(CONFIG="$(yq -o=json '.externalSecrets' "$values")" ENTRY="$entry" python3 -c '
 import json, os
 config, entry = json.loads(os.environ["CONFIG"]), json.loads(os.environ["ENTRY"])
 print(json.dumps({key: [config["secretId"], prop, "uuid/" + entry["version"]] for key, prop in entry["properties"].items()}, sort_keys=True))')"
-  actual="$(jq -cS '[.spec.data[] | {key: .secretKey, value: [.remoteRef.key, .remoteRef.property, .remoteRef.version]}] | from_entries' <<< "$current")"
+  actual='{}'
+  if [[ -n "$current" ]]; then
+   actual="$(jq -cS '[.spec.data[] | {key: .secretKey, value: [.remoteRef.key, .remoteRef.property, .remoteRef.version]}] | from_entries' <<< "$current")"
+  fi
   if [[ "$(jq -cS . <<< "$wanted")" != "$actual" ]]; then
    while IFS= read -r consumer; do
     case "$consumer" in

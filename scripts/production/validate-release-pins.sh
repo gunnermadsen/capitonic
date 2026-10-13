@@ -55,6 +55,18 @@ for component in ingester polymarket-bot db-migrate; do
       all(.entries[]; (.version | type == "string" and length > 0) and (.properties | length > 0))
     ' >/dev/null
   fi
+  if [[ "$component" == polymarket-bot ]]; then
+    openai_config="$(yq ea -o=json '. as $item ireduce ({}; . * $item) | .openaiAgent' \
+      "capitonic-helm-chart/charts/$component/values.yaml" "$values")"
+    if [[ "$(jq -r '.enabled' <<< "$openai_config")" == true ]]; then
+      openai_secret="$(jq -er '.secretName' <<< "$openai_config")"
+      yq -o=json '.externalSecrets.entries' "$values" | jq -e --arg name "$openai_secret" '
+        any(.[]; .name == $name and
+          .properties.POLYMARKET_OPENAI_CREDENTIAL_KEY == "POLYMARKET_OPENAI_CREDENTIAL_KEY" and
+          (.consumers | index("polymarket-bot")) != null)
+      ' >/dev/null || { echo "OpenAI credentials require a pinned ESO mapping for $openai_secret." >&2; exit 1; }
+    fi
+  fi
   printf '| %s | %s | %s | %s | %s | %s |\n' "$component" "$version" "$chart_version" "$app_version" "$actual_digest" "$source_revision" >> "$report"
   if [[ "$component" == db-migrate ]]; then
     migration_inputs="$(git ls-tree -r --name-only "$source_revision" -- packages/db-migrate/src/migrations packages/db-migrate/src/fresh-install | wc -l | tr -d ' ')"

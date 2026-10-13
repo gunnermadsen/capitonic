@@ -46,7 +46,7 @@ const KEY_ALIASES = {
 function parseArgs(argv) {
   const options = {
     directory: ".", secretId: "capitonic/polymarket-bot/production",
-    region: process.env.AWS_REGION || "eu-west-1", profile: "", dryRun: false,
+    region: process.env.AWS_REGION || "eu-west-1", profile: "", dryRun: false, keys: [],
   };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -54,14 +54,21 @@ function parseArgs(argv) {
     else if (argument === "--secret-id") options.secretId = argv[++index];
     else if (argument === "--region") options.region = argv[++index];
     else if (argument === "--profile") options.profile = argv[++index];
+    else if (argument === "--keys") {
+      options.keys = (argv[++index] || "").split(",");
+      if (!options.keys.every((key) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))) {
+        throw new Error("--keys requires comma-separated environment variable names");
+      }
+    }
     else if (argument === "--dry-run") options.dryRun = true;
     else if (argument === "--help" || argument === "-h") {
       console.log(`Usage:
-  node scripts/sync-aws-secret.mjs [--directory .] [--secret-id NAME] [--region eu-west-1] [--profile NAME] [--dry-run]
+  node scripts/sync-aws-secret.mjs [--directory .] [--secret-id NAME] [--region eu-west-1] [--profile NAME] [--keys KEY,...] [--dry-run]
 
 Merges every .env* file in the directory except .env.example* and writes one
 AWS Secrets Manager JSON secret. Files are applied in lexical order; later files
-override duplicate keys.`);
+override duplicate keys. --keys updates only those properties in an existing AWS
+secret, preserving every other property; it never creates a replacement secret.`);
       process.exit(0);
     } else throw new Error(`Unknown argument: ${argument}`);
   }
@@ -115,12 +122,33 @@ function main() {
   }
   const files = envFiles(options.directory);
   if (files.length === 0) throw new Error(`No eligible .env* files found in ${options.directory}`);
-  const values = Object.assign({}, ...files.map(parseEnvFile));
+  let values = Object.assign({}, ...files.map(parseEnvFile));
   for (const [source, target] of Object.entries(KEY_ALIASES)) {
     if (values[target] == null && values[source] != null) values[target] = values[source];
   }
-  const missing = REQUIRED_KEYS.filter((key) => !values[key]);
+  const missing = (options.keys.length ? options.keys : REQUIRED_KEYS).filter((key) => !values[key]);
   if (missing.length > 0) throw new Error(`Missing required keys: ${missing.join(", ")}`);
+
+  if (options.keys.length) {
+    const current = runAws(["secretsmanager", "get-secret-value", "--secret-id", options.secretId], options);
+    if (current.status !== 0) throw new Error("Cannot read existing AWS secret; no properties changed.");
+    let existing;
+    try {
+      existing = JSON.parse(JSON.parse(current.stdout).SecretString);
+    } catch {
+      throw new Error("Existing AWS secret must contain a JSON object; no properties changed.");
+    }
+    if (!existing || typeof existing !== "object" || Array.isArray(existing)) {
+      throw new Error("Existing AWS secret must contain a JSON object; no properties changed.");
+    }
+    const selected = Object.fromEntries(options.keys.map((key) => [key, values[key]]));
+    values = { ...existing, ...selected };
+    console.log(`Preserving existing AWS properties; selecting only: ${options.keys.join(", ")}`);
+    if (options.keys.every((key) => existing[key] === selected[key])) {
+      console.log("Selected properties already match; no AWS changes made.");
+      return;
+    }
+  }
 
   console.log(`Loaded ${Object.keys(values).length} keys from ${files.length} files:`);
   for (const file of files) console.log(`- ${basename(file)}`);
@@ -132,7 +160,8 @@ function main() {
   const payloadPath = join(tempDirectory, "secret.json");
   writeFileSync(payloadPath, `${JSON.stringify(values)}\n`, { mode: 0o600 });
   try {
-    const describe = runAws(["secretsmanager", "describe-secret", "--secret-id", options.secretId], options);
+    const describe = options.keys.length ? { status: 0 }
+      : runAws(["secretsmanager", "describe-secret", "--secret-id", options.secretId], options);
     const command = describe.status === 0
       ? ["secretsmanager", "put-secret-value", "--secret-id", options.secretId]
       : ["secretsmanager", "create-secret", "--name", options.secretId];

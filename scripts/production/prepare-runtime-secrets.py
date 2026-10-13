@@ -108,18 +108,21 @@ def prepare_headlamp(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--verify', action='store_true')
+    parser.add_argument('--preflight', action='store_true', help='Validate pinned AWS properties before Kubernetes reconciliation')
     parser.add_argument('--component', choices=(*COMPONENTS, 'headlamp'))
     parser.add_argument('--revision', help='Immutable rollback revision to verify')
     args = parser.parse_args()
     components = (args.component,) if args.component else COMPONENTS
-    if args.revision and not args.verify:
-        parser.error("--revision requires --verify")
+    if args.revision and not (args.verify or args.preflight):
+        parser.error("--revision requires --verify or --preflight")
+    if args.preflight and (args.verify or args.component == 'headlamp'):
+        parser.error('--preflight is a separate application-secret check')
     if args.component == 'headlamp':
         prepare_headlamp(args)
         return
     values = {component: (load_values(component, args.revision) if args.revision else load_values(component)) for component in components}
     credentials = {component: dict(v.get('credentialRevisions', {})) for component, v in values.items()}
-    if not args.verify:
+    if not (args.verify or args.preflight):
         credentials["grafana"] = load_values("grafana").get("credentialRevisions", {})
     aws_cache = {}
     changed_consumers = set()
@@ -127,7 +130,7 @@ def main():
     for component, configuration in values.items():
         config = configuration['externalSecrets']
         for entry in config['entries']:
-            version = entry['version'] if args.verify else None
+            version = entry['version'] if args.verify or args.preflight else None
             cache_key = (config['secretId'], version)
             if cache_key not in aws_cache:
                 request = ['aws', 'secretsmanager', 'get-secret-value', '--region', config['region'], '--secret-id', config['secretId'], '--output', 'json']
@@ -142,10 +145,22 @@ def main():
                 if not isinstance(value, str):
                     raise RuntimeError(f"Missing string AWS property {property_name} for {entry['name']}; no secret changed")
                 projected[key] = base64.b64encode(value.encode()).decode()
-            actual = json.loads(command('kubectl', '-n', 'capitonic', 'get', 'secret', entry['name'], '-o', 'json'))['data']
-            if set(actual) != set(projected):
+            if 'POLYMARKET_OPENAI_CREDENTIAL_KEY' in projected:
+                try:
+                    valid_key = len(base64.b64decode(source[entry['properties']['POLYMARKET_OPENAI_CREDENTIAL_KEY']], validate=True)) == 32
+                except (ValueError, TypeError):
+                    valid_key = False
+                if not valid_key:
+                    raise RuntimeError('OpenAI credential encryption key must encode 32 bytes; no secret changed')
+            if args.preflight:
+                continue
+            actual_source = command('kubectl', '-n', 'capitonic', 'get', 'secret', entry['name'], '--ignore-not-found', '-o', 'json')
+            actual = json.loads(actual_source).get('data', {}) if actual_source.strip() else None
+            if actual is None and args.verify:
+                raise RuntimeError(f"Managed Kubernetes Secret is missing: {entry['name']}")
+            if actual is not None and set(actual) != set(projected):
                 raise RuntimeError(f"Key set mismatch for {entry['name']}; refusing to discard existing keys")
-            differs = any(actual.get(key) != value for key, value in projected.items())
+            differs = actual is None or any(actual.get(key) != value for key, value in projected.items())
             mapping_requires_version = False
             if not args.verify and entry.get('version') and entry['version'] != selected_version:
                 old_key = (config['secretId'], entry['version'])
@@ -170,6 +185,9 @@ def main():
                 entry['refreshAfter'] = now
                 if differs:
                     changed_consumers.update(entry['consumers'])
+    if args.preflight:
+        print('Pinned AWS JSON properties and credential key formats validated; no Kubernetes changes')
+        return
     if args.verify:
         print('Selected AWS JSON properties exactly match all managed Kubernetes Secrets')
         return
