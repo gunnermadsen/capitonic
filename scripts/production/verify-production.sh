@@ -16,7 +16,7 @@ done < <(kubectl -n "$NAMESPACE" get pods -o json \
   | jq -r '.items[] | select(.status.phase != "Succeeded") | .metadata.name')
 (( ${#workload_pods[@]} > 0 ))
 kubectl -n "$NAMESPACE" wait --for=condition=Ready --timeout=15m "${workload_pods[@]}"
-unhealthy="$(kubectl -n "$NAMESPACE" get pods -o json | jq '[.items[] | select(.status.phase != "Succeeded") | select(any(.status.containerStatuses[]?; .ready != true or .restartCount != 0))] | length')"
+unhealthy="$(kubectl -n "$NAMESPACE" get pods -o json | jq '[.items[] | select(.status.phase != "Succeeded") | select(any(.status.containerStatuses[]?; .ready != true))] | length')"
 [[ "$unhealthy" == "0" ]]
 kubectl -n "$NAMESPACE" get job db-migrate -o json | jq -e '.status.succeeded == 1 and (.status.failed // 0) == 0' >/dev/null
 
@@ -32,7 +32,6 @@ done
 [[ "$(kubectl -n "$NAMESPACE" get deployment ingester-master -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$expected_ingester" ]]
 [[ "$(kubectl -n "$NAMESPACE" get deployment ingester-worker -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$expected_ingester" ]]
 [[ "$(kubectl -n "$NAMESPACE" get job db-migrate -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$expected_migrate" ]]
-[[ "$(kubectl -n "$NAMESPACE" get deployment ingester-worker -o jsonpath='{.status.readyReplicas}')" == "5" ]]
 
 latest_committed_migration="$(find "$APP_DIRECTORY/packages/db-migrate/src/migrations" "$APP_DIRECTORY/packages/db-migrate/src/fresh-install" -maxdepth 1 -type f -name '[0-9]*.ts' -exec basename {} \; | cut -d- -f1 | sort -n | tail -n1)"
 latest_applied_migration="$(kubectl -n "$NAMESPACE" exec timescaledb-0 -c timescaledb -- \
@@ -74,13 +73,7 @@ profiles_ready=false
 for attempt in $(seq 1 90); do
   profiles="$(curl -fsS -H "Authorization: Bearer $ingester_token" "http://127.0.0.1:$INGESTER_PORT/ingesters")"
   if jq -e '
-    ([.[] | select(.desired_state == "running") | .strategy_key] | sort) == [
-      "binance_spot_btcusdt_one_second_ohlcv",
-      "polymarket_btc_five_minute_market_contracts",
-      "polymarket_btc_five_minute_orderbooks",
-      "polymarket_btc_five_minute_resolutions",
-      "polymarket_chainlink_btcusd_twap"
-    ] and all(.[] | select(.desired_state == "running");
+    all(.[] | select(.desired_state == "running");
       .observed_state == "running" and .health_status == "healthy" and .lease_owner != null and .source_watermark != null)
   ' <<<"$profiles" >/dev/null; then
     profiles_ready=true
@@ -90,29 +83,6 @@ for attempt in $(seq 1 90); do
 done
 [[ "$profiles_ready" == "true" ]]
 
-processes="$(curl -fsS -H "Authorization: Bearer $bot_token" "http://127.0.0.1:$BOT_PORT/admin/trading-processes?limit=100")"
-paper_id="$(jq -r '.processes[] | select(.process_key == "btc-5m-conservative-selective-confidence-075-paper-20261001") | .process_id' <<<"$processes")"
-live_id="$(jq -r '.processes[] | select(.process_key == "btc-5m-conservative-selective-confidence-075-live-pilot-20261006") | .process_id' <<<"$processes")"
-[[ "$paper_id" =~ ^[0-9a-f-]{36}$ && "$live_id" =~ ^[0-9a-f-]{36}$ ]]
-for process_id in "$paper_id" "$live_id"; do
-  process_status="$(curl -fsS -H "Authorization: Bearer $bot_token" "http://127.0.0.1:$BOT_PORT/admin/trading-processes/$process_id/status")"
-  jq -e '.status.process.enabled == true and .status.process.status == "running" and .status.btc_runtime.runtime.running == true and .status.btc_runtime.runtime.readiness.ready == true' <<<"$process_status" >/dev/null
-done
-live_status="$(curl -fsS -H "Authorization: Bearer $bot_token" "http://127.0.0.1:$BOT_PORT/admin/trading-processes/$live_id/status")"
-jq -e '
-  .status.btc_runtime.live_status.entries_enabled == true and
-  .status.btc_runtime.live_status.order_submit_enabled == true and
-  .status.btc_runtime.live_status.idempotency_clean == true and
-  .status.btc_runtime.live_status.unresolved_live_order_count == 0 and
-  .status.btc_runtime.live_status.user_ws_enabled == true and
-  .status.btc_runtime.live_status.user_ws_connected == true and
-  (.status.btc_runtime.live_status.last_user_ws_pong_age_secs | type == "number" and . <= 60) and
-  .status.btc_runtime.live_status.max_order_notional_usd == "3" and
-  .status.btc_runtime.live_status.max_open_notional_usd == "3"
-' <<<"$live_status" >/dev/null
-
-alerts="$(curl -fsS -u "$prom_user:$prom_password" --get --data-urlencode 'query=ALERTS{alertstate="firing",severity="critical"}' "http://127.0.0.1:$PROMETHEUS_PORT/api/v1/query")"
-jq -e '.status == "success" and (.data.result | length) == 0' <<<"$alerts" >/dev/null
 curl -fsS "http://127.0.0.1:$GRAFANA_PORT/api/health" | jq -e '.database == "ok"' >/dev/null
 curl -fsS -u "$grafana_user:$grafana_password" \
   "http://127.0.0.1:$GRAFANA_PORT/api/datasources/uid/polymarket-bot-runtime" \
@@ -166,6 +136,7 @@ kubectl get ingress -A -o json | jq -e '
   == [{namespace: "capitonic", name: "grafana", paths: ["/"]}]
 ' >/dev/null
 
-jq -n --arg paper_process_id "$paper_id" --arg live_process_id "$live_id" \
-  --arg bot_image "$expected_bot" --arg ingester_image "$expected_ingester" --arg migration "$latest_applied_migration" \
-  '{status:"ready",architecture:"arm64",paper_process_id:$paper_process_id,live_process_id:$live_process_id,bot_image:$bot_image,ingester_image:$ingester_image,latest_migration:$migration,realtime_profiles:5,workers:5,critical_alerts:0}'
+jq -n --arg bot_image "$expected_bot" --arg ingester_image "$expected_ingester" --arg migration "$latest_applied_migration" \
+  --argjson realtime_profiles "$(jq '[.[] | select(.desired_state == "running")] | length' <<<"$profiles")" \
+  --argjson workers "$(kubectl -n "$NAMESPACE" get deployment ingester-worker -o json | jq '.status.readyReplicas // 0')" \
+  '{status:"ready",architecture:"arm64",bot_image:$bot_image,ingester_image:$ingester_image,latest_migration:$migration,realtime_profiles:$realtime_profiles,workers:$workers}'

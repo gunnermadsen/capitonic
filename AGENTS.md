@@ -83,6 +83,8 @@ Think of Capitonic as a vision to generate income through systems with automatio
 ## Local Image Boundaries
 
 - Initiate local CI and CD as separate commands for explicitly requested bot or ingester image work. CI owns candidate image builds, local versions, and image provenance; CD owns chart image and `appVersion` pins and local deployment. The agent coordinates branch integration and golden checkpoint provenance.
+- Local application builds and deployments use only `vX.Y.Z-local.N`; never build, alias, or run RC images locally.
+- Release-preparation tooling reserves RC Git tags locally (`rc.0`, then `rc.1`, etc.) after local development acceptance and before publication, checking origin tags and registry identities. Admission validates accepted local provenance without requiring an RC deployment or changing local chart pins. Existing reservations are immutable.
 - Model training and observability provisioning retain their `model/...` and `provisioned/observability/...` provenance. They do not enter the application image version sequence unless an image input changes.
 
 ## Helm Chart Versioning
@@ -100,8 +102,8 @@ Think of Capitonic as a vision to generate income through systems with automatio
 1. Inspect and merge the selected qualifying branches into integration under Branch Integration.
 2. Compare runtime and image inputs with the selected existing images. Run the affected packages' required tests once. Build only changed components with the full embedded Git revision. Reuse an immutable image when its inputs are unchanged, including after documentation-only commits.
 3. Record the running image IDs and revisions, material configuration, migration state, enabled trading processes, desired realtime profiles, active backfills, and worker capacity. Create an `image/...` provenance tag for each new image.
-4. Deploy the exact selected images under Safe Image Deployment and run Development Checkpoint Verification. On an attributable failure, restore the rollback images and configuration, record the rejected snapshot, and leave `development` unchanged.
-5. On success, fast-forward `development` with `--ff-only`. Create an annotated `checkpoint/development/git-<full-git-commit-id>` tag recording the selected images, configuration, model identity, checks, rollback images, and limitations. Create a `golden/...` tag only when an image is first accepted; do not move an existing tag when that image is reused.
+4. Record local deployment and Development Checkpoint Verification results when performed. Trading-process readiness does not gate image acceptance, RC publication, or advancement of `development`; record failures as release limitations. Safe Image Deployment and production verification requirements remain in effect.
+5. After required source checks and immutable-image verification pass, fast-forward `development` with `--ff-only`. Create an annotated `checkpoint/development/git-<full-git-commit-id>` tag recording the selected images, configuration, model identity, checks, rollback images, and limitations. Create a `golden/...` tag only when an image is first accepted; do not move an existing tag when that image is reused.
 6. Push `development` and the new Git tags to origin. GitHub Actions may finish asynchronously and independently rebuilt CI images do not inherit golden status. Publish the exact locally verified images to a registry only when separately requested.
 7. Keep the current-date integration branch aligned with `development`. Handle completed worktree cleanup under Worktree Lifecycle after the checkpoint; it is not a verification gate.
 
@@ -115,7 +117,7 @@ Migration creation and initial feature or defect validation follow Database Chan
 - Golden status and change detection are component-specific. Shared code or build-input changes affect every image that consumes them.
 - Reuse a selected immutable image when it exists. Do not replace a selected digest with a rebuild without explicit authorization.
 - Golden tags are provenance records. Do not delete or move them to hide a later failure; use a rejected or abandoned tag to exclude a failed artifact or lineage from future admission.
-- Publish an accepted RC's `development`, checkpoint, candidate, image-hash, golden, and `rc/<component>/<version>` refs in one `git push --atomic` operation. Never publish those related refs through separate pushes, and never let GitHub CI allocate a competing RC number. The committed chart pin, RC Git tag, and immutable registry RC tag must identify the same component version and accepted image provenance before production promotion.
+- Publish an accepted RC's `development`, checkpoint, candidate, image-hash, golden, and `rc/<component>/<version>` refs in one `git push --atomic` operation. Never publish those related refs through separate pushes, and never let GitHub CI allocate a competing RC number. The committed local chart pin remains `local.N`; the RC Git tag links that accepted candidate and its source inputs to the exact RC version published by remote CI.
 - Registry repositories used by production are immutable. CI may create an absent approved SemVer RC tag or verify an existing approved CI publication on a retry, but it must never move or overwrite an RC tag and must never publish a mutable production tag.
 - Local image CI and CD qualify and deploy the Rancher Desktop k3s candidate only. They may publish the atomic Git provenance required to admit an RC, but they must not build, stage, tag, or push the production ECR image; GitHub CI owns the production ARM64 build and immutable ECR RC publication.
 

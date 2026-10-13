@@ -1,17 +1,19 @@
 environment: production
-image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/polymarket-bot:v3.2.9-rc.0
+image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/polymarket-bot:v3.3.0-rc.1
 imagePullPolicy: IfNotPresent
 imagePullSecrets:
   - name: ecr-registry
+openaiAgent:
+  enabled: true
 release:
-  version: v3.2.9-rc.0
-  digest: sha256:e4ee16039b891f95d731b540c7d34aeaf758601fc7910a0330202ad059bd722e
-  sourceRevision: 98b1b0c41f1ef8ae0b89b247c81a77d6a496813b
+  version: v3.3.0-rc.1
+  digest: sha256:664cd81d63805121a9baebf9a00179c282778bbd58ffe9bdaa4a5c778be3f446
+  sourceRevision: 0e055f049ab338820cb14a2067b3fc5a635ff76a
 apiIngress:
   enabled: true
   host: api.capitonic.com
   tls:
     enabled: true
     secretName: api-tls
-externalSecrets: {"enabled": true, "entries": [{"consumers": ["polymarket-bot", "grafana"], "name": "polymarket-bot-auth", "properties": {"admin-token": "CAPITONIC_BOT_HTTP_ADMIN_TOKEN"}, "refreshAfter": "2026-09-30T23:24:04Z", "version": "d0eedfcf-5abb-46ba-9835-bf9a107b9163"}, {"consumers": ["polymarket-bot"], "name": "polymarket-live-auth", "properties": {"POLYMARKET_CLOB_API_KEY": "POLYMARKET_CLOB_API_KEY", "POLYMARKET_CLOB_PASSPHRASE": "POLYMARKET_CLOB_PASSPHRASE", "POLYMARKET_CLOB_SECRET": "POLYMARKET_CLOB_SECRET", "POLYMARKET_FUNDER_ADDRESS": "POLYMARKET_FUNDER_ADDRESS", "POLYMARKET_PRIVATE_KEY": "POLYMARKET_PRIVATE_KEY", "POLYMARKET_SIGNATURE_TYPE": "POLYMARKET_SIGNATURE_TYPE"}, "refreshAfter": "2026-09-30T22:06:41Z", "version": "7023cfad-642b-4a22-95d0-b36d9317489b"}], "region": "eu-west-1", "secretId": "capitonic/polymarket-bot/production"}
-credentialRevisions: {"polymarket-bot": "de694658-4954-4a4d-96ab-f44caa919b75"}
+externalSecrets: {"enabled": true, "entries": [{"consumers": ["polymarket-bot", "grafana"], "name": "polymarket-bot-auth", "properties": {"admin-token": "CAPITONIC_BOT_HTTP_ADMIN_TOKEN"}, "refreshAfter": "2026-09-30T23:24:04Z", "version": "d0eedfcf-5abb-46ba-9835-bf9a107b9163"}, {"consumers": ["polymarket-bot"], "name": "polymarket-live-auth", "properties": {"POLYMARKET_CLOB_API_KEY": "POLYMARKET_CLOB_API_KEY", "POLYMARKET_CLOB_PASSPHRASE": "POLYMARKET_CLOB_PASSPHRASE", "POLYMARKET_CLOB_SECRET": "POLYMARKET_CLOB_SECRET", "POLYMARKET_FUNDER_ADDRESS": "POLYMARKET_FUNDER_ADDRESS", "POLYMARKET_PRIVATE_KEY": "POLYMARKET_PRIVATE_KEY", "POLYMARKET_SIGNATURE_TYPE": "POLYMARKET_SIGNATURE_TYPE"}, "refreshAfter": "2026-09-30T22:06:41Z", "version": "7023cfad-642b-4a22-95d0-b36d9317489b"}, {"name": "polymarket-openai-auth", "consumers": ["polymarket-bot"], "properties": {"POLYMARKET_OPENAI_CREDENTIAL_KEY": "POLYMARKET_OPENAI_CREDENTIAL_KEY"}, "version": "10264cc1-d139-48d1-b96c-2723c127ce37", "refreshAfter": "2026-10-13T18:42:08Z"}], "region": "eu-west-1", "secretId": "capitonic/polymarket-bot/production"}
+credentialRevisions: {"polymarket-bot": "dd7c0542-da02-4b1f-918a-d6c7c445f96e"}

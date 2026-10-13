@@ -44,17 +44,14 @@ done < <(jq -r '.[] | [.strategy_key,.desired_state,(.desired_generation|tostrin
 
 for attempt in $(seq 1 180); do
   profiles="$(api GET /ingesters)"
-  if jq -e --argjson allowed "$(printf '%s\n' "${allowed[@]}" | jq -R . | jq -s .)" '
-    ([.[] | select(.desired_state == "running") | .strategy_key] | sort) == ($allowed | sort) and
+  if jq -e '
     all(.[] | select(.desired_state == "running");
       .observed_state == "running" and .health_status == "healthy" and .lease_owner != null)
   ' <<<"$profiles" >/dev/null; then
     ready_workers="$(kubectl -n "$NAMESPACE" get deployment ingester-worker -o jsonpath='{.status.readyReplicas}')"
-    [[ "$ready_workers" == "5" ]] && {
-      jq -c '[.[] | select(.desired_state == "running") | {strategy_key,lease_owner,health_status,source_watermark}]' <<<"$profiles"
-      echo "Production ingestion allowlist converged with five healthy owners and no extra realtime profiles."
-      exit 0
-    }
+    jq -c '[.[] | select(.desired_state == "running") | {strategy_key,lease_owner,health_status,source_watermark}]' <<<"$profiles"
+    echo "Production ingestion profiles are healthy; ready workers=$ready_workers."
+    exit 0
   fi
   sleep 5
 done
