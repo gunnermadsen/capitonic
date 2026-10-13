@@ -15,6 +15,32 @@ Frozen scope: additive order contract and Polymarket execution standard, no broa
 
 Use domain-scoped modules, commits and the owning feature worktree. Do not name artifacts/branches/comments after phase numbers. Tests belong with their owner. Documentation changes accompany contract changes. No speculative future exchange implementation.
 
+## Remaining completion boundary
+
+Integration refresh on 2026-10-13 merged the explicitly approved integration commit
+`5c925b47f1573ac1e453ac3c1cbff3dc909ac147` into the existing rail branch at
+`6f28243298418c9b0cc99fbf427ebacc376ca5a5`. The existing immutable local.18 image
+is still applicable because its image inputs are unchanged. Authenticated lifecycle
+status transitions and removal of the fixed daily-loss ceiling in both configuration
+paths are already implemented; they are not outstanding work.
+
+The remaining scope is bounded as follows. These are completion requirements, not
+claims that the behavior is already implemented or qualified.
+
+| Work | Required outcome |
+| --- | --- |
+| TPC policy ownership | Map adjustable model-owned trading/admission constraints into the new TPC contract and shared evaluation owners. TPC must be the sole authority for those controls, with no hidden duplicate artifact gate. Preserve feature semantics, weights, calibration, input compatibility and inference mathematics. Record the existing effective values and prove initial decision parity before activating the migration. Freeze exact policy fields and applicability before implementing this change; do not silently relax existing model restrictions. |
+| UMR connection | Route existing UMR/model/agent candidates through the same application entry and OMS used by the API, without a second runtime or HTTP loop. Prove exactly one execution owner, durable provenance, idempotency, restart recovery and unchanged unselected processes. API-triggered execution alone does not satisfy this requirement. |
+| Paired qualification | Use the two retained process identities and existing external drivers. Require comparable shared policies, actual paper and user-submitted live execution evidence, venue acknowledgement/fills, reconciliation, retrieval, accounting, settlement and replay without duplicate effects. Record FAK/FOK evidence separately. Keep deterministic partial-fill/failure coverage. Positive paper credit/reuse, latency sample sufficiency and deployed dashboard/alert availability remain explicit evidence gaps until reverified. Do not increase live size or capital implicitly to meet a venue minimum. |
+| Controlled cutover | Convert selected processes through the existing API only, preserve process identity and enabled intent, keep outstanding orders with their original owner, and verify a compatible code/configuration rollback. Retire legacy routing and flat order parameters only when no resumable process, unresolved order or unmigrated caller requires them. |
+
+The earlier frozen-model language describes current compatibility behavior; it does
+not mean model artifacts remain the intended authority for configurable trading
+policy after the ownership migration. The broader TPC reorganization, dynamic
+sizing, new exchanges, ingesters, new persistence systems and release-tooling changes
+remain outside this completion scope. Live execution certification is not implied
+by passing CI, deploying the image, or observing healthy processes.
+
 ## Phase 1 — Standards and baseline
 
 Accept only when parameter and gate ownership/default/applicability mappings are complete; existing readers and account/telemetry dependencies are recorded; candidate→order intent→execution intent→evidence contracts and adapter boundaries are documented; legacy model/agent/paper/live regression fixtures are identified; and performance limits are recorded before implementation qualification. Link this standard from repository instructions and UMR documentation. No duplicated documentation authority.

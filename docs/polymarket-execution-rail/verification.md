@@ -768,3 +768,45 @@ dashboard is unavailable. Existing deterministic FAK/FOK, partial-fill, failure,
 and shared admission tests passed; these do not replace funded FAK/FOK evidence.
 The bounded run did not expand capital, loosen policies, manufacture a winner, or
 claim an unobserved outcome. Funded submission must be performed by the user.
+
+## Integration refresh and local chart provisioning — 2026-10-13
+
+Approved integration commit `5c925b47f1573ac1e453ac3c1cbff3dc909ac147` was
+merged into the rail branch at `6f28243298418c9b0cc99fbf427ebacc376ca5a5`.
+The only merge conflicts were bot chart pins: retain local.18 and inherit the
+accepted chart version 0.4.18. No new image inputs or release-tooling edits were
+introduced by the conflict resolution.
+
+Local CI checks passed: 582 Rust tests, five ignored, formatting, Clippy, and
+17 tooling tests. Rust tests ran serially because of the previously recorded
+shared UMR telemetry test interference. External order API unittest discovery
+passed 32 tests with four opt-in tests skipped. Bot and db-migrate chart lint and
+named rendering passed; no migration Job was applied.
+
+The first local CD attempt stopped before mutation because its image-only manifest
+guard rejected an incoming PVC annotation. After explicit approval, the existing
+bot Helm chart provisioned only `argocd.argoproj.io/compare-options: IgnoreExtraneous`
+on `polymarket-openai-credentials`. Helm revision 66 is deployed with chart 0.4.18.
+The unchanged local CD script then passed and reported the exact image already
+deployed, with no additional Helm upgrade.
+
+Reused image: `v3.4.0-local.18`, digest
+`sha256:da47ddb40ca3b544e15e4b21bedd809bac20ca14cae720387280f8a48023483d`,
+source revision `b1c8685c45172804bf4b5d6bbc6ef6095d42dbb8`. All CI-defined bot
+image inputs match that source, so no rebuild or version allocation was needed.
+The original pod `polymarket-bot-5cb959b7dc-bxcls` remained ready with zero
+restarts. All 11 enabled process identities were preserved and running with
+heartbeats newer than two minutes. Migration ledger and backfill allocation
+snapshots were unchanged. Capacity remained 14 ready workers for nine desired
+realtime profiles and zero active backfill shards. The PVC remains Bound.
+
+This verifies the integration and chart-only deployment, not new order execution,
+model-policy ownership migration, UMR cutover or paired live certification. No
+process configuration, capital, production state or remote Git refs were changed.
+Grafana dashboard availability and the earlier qualification gaps were not
+requalified in this deployment.
+
+Local evidence: `/tmp/rail-integration-ci.log`,
+`/tmp/rail-refresh-offline-tests.log`, `/tmp/rail-merge-helm.log`,
+`/tmp/rail-integration-chart-provision.log`, `/tmp/rail-integration-cd.log`,
+and `/tmp/rail-integration-cd-recheck.log`.
