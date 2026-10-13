@@ -3,7 +3,6 @@ use std::time::Instant;
 
 mod fill_read_telemetry;
 mod order_execution;
-mod reconciliation_ownership;
 pub use fill_read_telemetry::{FillEconomicsSite, FillIdentitySite};
 pub(crate) use order_execution::PaperCommit;
 
@@ -13,20 +12,6 @@ use rust_decimal::{Decimal, RoundingStrategy};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
-
-const ACCOUNT_TRADE_REPLAY_UPDATES_SQL: &str = r#"
-SELECT incoming.account_trade_id
-FROM jsonb_to_recordset($1::jsonb) AS incoming(
-    account_trade_id uuid, source text, linked_order_id text, raw_payload jsonb
-)
-LEFT JOIN polymarket.account_trades AS stored USING (account_trade_id)
-WHERE stored.account_trade_id IS NULL
-   OR stored.source IS DISTINCT FROM incoming.source
-   OR stored.linked_order_id IS DISTINCT FROM COALESCE(stored.linked_order_id, incoming.linked_order_id)
-   OR stored.raw_payload IS DISTINCT FROM (stored.raw_payload || incoming.raw_payload)
-   OR (stored.linked_order_id IS NOT NULL AND incoming.linked_order_id IS NOT NULL
-       AND stored.linked_order_id <> incoming.linked_order_id)
-"#;
 
 use crate::{
     events::ServiceEvent,
@@ -536,7 +521,7 @@ pub struct AccountTrade {
     pub raw_payload: serde_json::Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, PartialEq, FromRow)]
 pub(crate) struct AccountLiveFillEvidence {
     pub transaction_hash: String,
     pub order_id: String,
@@ -612,7 +597,7 @@ pub struct AccountPositionSnapshot {
     pub raw_payload: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct LiveAccountPositionEvidence {
     pub size: Decimal,
     pub credited_zero_payout_size: Decimal,
@@ -3125,7 +3110,7 @@ impl Store {
         self.recent_live_events_by_type("trade", true, limit).await
     }
 
-    /// Recheck ownership on every replay pass, including events received before their order.
+    /// Admit incoming venue events only when their exact venue order ID exists locally.
     pub(crate) async fn live_event_owned_order_ids(
         &self,
         candidates: &[String],
@@ -3138,7 +3123,7 @@ impl Store {
             SELECT candidate FROM unnest($1::text[]) AS candidate
             WHERE EXISTS (
                 SELECT 1 FROM polymarket.orders
-                WHERE venue_order_id = candidate OR order_id = candidate
+                WHERE venue_order_id = candidate
             )
             "#,
         )
@@ -3148,26 +3133,6 @@ impl Store {
         .context("failed to resolve live event replay ownership")?
         .into_iter()
         .collect())
-    }
-
-    /// Match the existing upsert's merge semantics without rewriting unchanged evidence.
-    /// Conflicting links still reach upsert_account_trade and retain its integrity error.
-    pub(crate) async fn account_trade_replay_updates(
-        &self,
-        trades: &[AccountTrade],
-    ) -> Result<HashSet<Uuid>> {
-        if trades.is_empty() {
-            return Ok(HashSet::new());
-        }
-        Ok(
-            sqlx::query_scalar::<_, Uuid>(ACCOUNT_TRADE_REPLAY_UPDATES_SQL)
-                .bind(serde_json::to_value(trades)?)
-                .fetch_all(&self.pool)
-                .await
-                .context("failed to select account trade replay updates")?
-                .into_iter()
-                .collect(),
-        )
     }
 
     pub async fn recent_live_order_events(&self, limit: i64) -> Result<Vec<LiveVenueEvent>> {
@@ -3217,13 +3182,22 @@ impl Store {
 
         let rows = sqlx::query_as::<_, Row>(
             r#"
-            SELECT event_id, source, event_type, venue_event_id, venue_order_id,
-                   venue_trade_id, event_status, raw_payload
-            FROM polymarket.live_venue_events
-            WHERE source = 'user_ws'
-              AND event_type = $1
-              AND (NOT $3 OR applied = false)
-            ORDER BY created_at DESC
+            SELECT event.event_id, event.source, event.event_type, event.venue_event_id,
+                   event.venue_order_id, event.venue_trade_id, event.event_status, event.raw_payload
+            FROM polymarket.orders owned
+            JOIN LATERAL (
+                SELECT event_id, source, event_type, venue_event_id, venue_order_id,
+                       venue_trade_id, event_status, raw_payload, created_at
+                FROM polymarket.live_venue_events
+                WHERE venue_order_id = owned.venue_order_id
+                  AND source = 'user_ws'
+                  AND event_type = $1
+                  AND (NOT $3 OR applied = false)
+                ORDER BY created_at DESC
+                LIMIT $2
+            ) event ON true
+            WHERE owned.venue_order_id IS NOT NULL
+            ORDER BY event.created_at DESC
             LIMIT $2
             "#,
         )
@@ -3347,49 +3321,6 @@ impl Store {
             )
         })?;
         Ok(inserted)
-    }
-
-    pub(crate) async fn unapplied_account_live_sell_trades(
-        &self,
-        account_address: &str,
-        window_start: DateTime<Utc>,
-        window_end: DateTime<Utc>,
-        limit: i64,
-    ) -> Result<Vec<AccountTrade>> {
-        if account_address.trim().is_empty()
-            || window_start >= window_end
-            || !(1..=4_000).contains(&limit)
-        {
-            bail!("unapplied account live exit query requires bounded inputs");
-        }
-        let rows = sqlx::query_as::<_, AccountTrade>(
-            r#"
-            SELECT account_trade_id, account_address, token_id, market_id, side, price, size,
-              notional, timestamp_utc, transaction_hash, venue_order_id, venue_trade_id,
-              source, linked_order_id, raw_payload
-            FROM polymarket.account_trades
-            WHERE account_address = lower($1)
-              AND side = 'sell'
-              AND linked_order_id IS NULL
-              AND applied_exit_size = 0
-              AND timestamp_utc >= $2
-              AND timestamp_utc <= $3
-              AND raw_payload ? 'usdcSize'
-            ORDER BY timestamp_utc, account_trade_id
-            LIMIT $4
-            "#,
-        )
-        .bind(account_address.trim())
-        .bind(window_start)
-        .bind(window_end)
-        .bind(limit + 1)
-        .fetch_all(&self.pool)
-        .await
-        .context("failed to load unapplied account live exits")?;
-        if rows.len() > limit as usize {
-            bail!("unapplied account live exits exceed the bounded reconciliation window");
-        }
-        Ok(rows)
     }
 
     pub async fn insert_account_position_snapshot(

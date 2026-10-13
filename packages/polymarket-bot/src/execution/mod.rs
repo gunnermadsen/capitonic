@@ -136,9 +136,6 @@ pub struct ReconciliationReport {
 /// This snapshot is not an execution authorization or a duplicate-order verdict.
 #[derive(Debug, Clone, Serialize)]
 pub struct LiveReconciliationStatus {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub environment_ownership:
-        Option<crate::account_reconcile::ownership::EnvironmentOwnershipStatus>,
     pub run_id: uuid::Uuid,
     pub process_id: Option<uuid::Uuid>,
     pub account_ref: Option<String>,
@@ -160,7 +157,6 @@ impl LiveReconciliationStatus {
         foreign_open_order_count: usize,
     ) -> Self {
         Self {
-            environment_ownership: account.environment_ownership.clone(),
             run_id,
             process_id: account.process_id,
             account_ref: account.account_ref.clone(),

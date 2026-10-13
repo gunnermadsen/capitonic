@@ -280,18 +280,6 @@ impl ControlApi for RuntimeControl {
         serde_json::to_value(report).map_err(|error| HttpError::internal(error.to_string()))
     }
 
-    async fn reconciliation_ownership_evidence(
-        &self,
-        request: polymarket_bot::account_reconcile::ownership::OwnershipRequest,
-    ) -> Result<polymarket_bot::account_reconcile::ownership::OwnershipEvidence, HttpError> {
-        self.live_venue
-            .as_ref()
-            .ok_or_else(|| HttpError::bad_request("live execution is not configured"))?
-            .reconciliation_ownership_evidence(request)
-            .await
-            .map_err(|error| HttpError::internal(error.to_string()))
-    }
-
     async fn live_account_reconcile(
         &self,
         request: control_http::AccountReconcileRequest,

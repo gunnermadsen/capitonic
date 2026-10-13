@@ -56,7 +56,6 @@ pub struct PostgresConfig {
 
 #[derive(Debug, Clone)]
 pub struct LiveExecutionConfig {
-    pub reconciliation_ownership: crate::account_reconcile::ownership::OwnershipConfig,
     pub user_ws_url: String,
     pub clob_api_base_url: String,
     pub user_ws_stale: Duration,
@@ -82,8 +81,6 @@ impl AppConfig {
     pub fn from_env() -> Result<Self> {
         let clob_base_url = env_or("POLYMARKET_CLOB_BASE_URL", "https://clob.polymarket.com");
         let live = LiveExecutionConfig {
-            reconciliation_ownership:
-                crate::account_reconcile::ownership::OwnershipConfig::from_env()?,
             user_ws_url: env_or(
                 "POLYMARKET_LIVE_USER_WS_URL",
                 "wss://ws-subscriptions-clob.polymarket.com/ws/user",

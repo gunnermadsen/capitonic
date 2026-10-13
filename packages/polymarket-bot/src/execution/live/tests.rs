@@ -11,70 +11,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn replay_ownership_recovers_late_taker_and_maker_orders_without_caching_absence() {
+    fn event_admission_drops_unowned_ids_and_indexes_the_owned_taker_or_maker() {
         let event = LiveVenue::parse_user_event(json!({
             "event_type": "trade", "id": "trade", "status": "MATCHED",
             "taker_order_id": "taker", "maker_orders": [{"order_id": "maker"}]
         }));
-        assert!(!live_event_has_local_order(&event, &HashSet::new()));
-        assert!(!live_event_has_local_order(
-            &event,
-            &HashSet::from(["other".into()])
-        ));
+        for owned in [HashSet::new(), HashSet::from(["unrelated".into()])] {
+            let mut rejected = event.clone();
+            assert!(!scope_live_event_to_local_order(&mut rejected, &owned));
+        }
         for id in ["taker", "maker"] {
-            assert!(live_event_has_local_order(
-                &event,
+            let mut accepted = event.clone();
+            assert!(scope_live_event_to_local_order(
+                &mut accepted,
                 &HashSet::from([id.into()])
             ));
+            assert_eq!(accepted.venue_order_id.as_deref(), Some(id));
+            assert_eq!(accepted.raw_payload, event.raw_payload);
         }
-        let order_alias = LiveVenue::parse_user_event(json!({
-            "event_type": "trade", "order_id": "local-order", "status": "CONFIRMED"
+        let mut cancellation = LiveVenue::parse_user_event(json!({
+            "event_type": "order", "id": "owned-order", "type": "CANCELLATION"
         }));
-        assert!(live_event_has_local_order(
-            &order_alias,
-            &HashSet::from(["local-order".into()])
+        assert!(scope_live_event_to_local_order(
+            &mut cancellation,
+            &HashSet::from(["owned-order".into()])
         ));
-    }
-
-    #[test]
-    fn replay_account_evidence_coalesces_statuses_without_changing_economics_or_account_identity() {
-        let mut trades = HashMap::new();
-        let mut latest = None;
-        for status in ["MATCHED", "MINED", "CONFIRMED"] {
-            let mut payload = json!({
-                "event_type": "trade", "id": "trade", "status": status,
-                "asset_id": "token", "side": "BUY", "price": "0.37", "size": "5",
-                "match_time": "1791762903", "taker_order_id": "venue-order"
-            });
-            if status == "MATCHED" {
-                payload["initial_evidence"] = json!(true);
-            }
-            let event = LiveVenue::parse_user_event(payload);
-            let trade = account_trade_from_live_event("account-a", &event).unwrap();
-            latest = Some(trade.clone());
-            merge_replayed_account_trade(&mut trades, trade);
-        }
-        let latest = latest.unwrap();
-        assert_eq!(trades.len(), 1);
-        let merged = trades.get(&latest.account_trade_id).unwrap();
-        assert_eq!(merged.raw_payload["status"], "CONFIRMED");
-        assert_eq!(merged.raw_payload["initial_evidence"], true);
-        assert_eq!(merged.price, dec!(0.37));
-        assert_eq!(merged.size, dec!(5));
-        assert_eq!(merged.timestamp_utc, latest.timestamp_utc);
-        assert_eq!(merged.linked_order_id, None);
-        let before = merged.raw_payload.clone();
-        merge_replayed_account_trade(&mut trades, latest.clone());
-        assert_eq!(trades[&latest.account_trade_id].raw_payload, before);
-
-        let other = account_trade_from_live_event(
-            "account-b",
-            &LiveVenue::parse_user_event(latest.raw_payload),
-        )
-        .unwrap();
-        assert_ne!(other.account_trade_id, latest.account_trade_id);
-        merge_replayed_account_trade(&mut trades, other);
-        assert_eq!(trades.len(), 2);
+        assert_eq!(cancellation.venue_order_id.as_deref(), Some("owned-order"));
     }
 
     #[test]
@@ -127,7 +89,6 @@ mod tests {
 
     fn live_config() -> LiveExecutionConfig {
         LiveExecutionConfig {
-            reconciliation_ownership: Default::default(),
             user_ws_url: "wss://ws-subscriptions-clob.polymarket.com/ws/user".to_string(),
             clob_api_base_url: "https://clob-v2.polymarket.com".to_string(),
             user_ws_stale: std::time::Duration::from_secs(20),
@@ -1376,8 +1337,6 @@ mod tests {
         let checked_at = Utc::now();
         let run_id = Uuid::new_v4();
         let mut account = AccountReconcileReport {
-            environment_ownership: None,
-            peer_owned_order_ids: Default::default(),
             process_id: Some(process_id),
             account_ref: Some("polymarket-test".into()),
             credential_account_fingerprint_sha256: Some("private-fingerprint".into()),
