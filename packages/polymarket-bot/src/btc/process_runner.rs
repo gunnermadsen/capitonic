@@ -421,6 +421,7 @@ struct EntryAdmissionEvaluation {
 }
 
 struct RouterMemberRuntime {
+    agent: Mutex<super::unified_model_runtime::agent::AgentSession>,
     member_id: String,
     entry_order_type: OrderType,
     strategy: BtcStrategyConfig,
@@ -615,6 +616,11 @@ impl BtcProcessRunner {
             );
         }
         config.strategy.validate()?;
+        ensure!(
+            config.strategy.agent_selection().is_none()
+                || execution_lifecycle.mode() == BtcExecutionMode::Paper,
+            "openai_agent supports paper execution only"
+        );
         if config.strategy.attribution().is_none() {
             anyhow::bail!("BTC execution run strategy attribution is invalid");
         }
@@ -642,9 +648,13 @@ impl BtcProcessRunner {
             .frozen_process_config
             .pointer("/raw")
             .context("router requires frozen process configuration")?;
-        let member_strategies = if control["process_schema_version"].as_str()
-            == Some(super::unified_model_runtime::router::PROCESS_SCHEMA_VERSION)
-        {
+        let member_strategies = if matches!(
+            control["process_schema_version"].as_str(),
+            Some(
+                super::unified_model_runtime::router::PROCESS_SCHEMA_VERSION
+                    | super::unified_model_runtime::agent::PROCESS_SCHEMA_VERSION
+            )
+        ) {
             let definition: super::unified_model_runtime::router::RouterDefinition =
                 serde_json::from_value(
                     control
@@ -679,16 +689,26 @@ impl BtcProcessRunner {
         let router_members = member_strategies
             .into_iter()
             .map(|(member_id, strategy, entry_order_type)| {
-                let model = runtime_model(
-                    &directional_model_selection(&strategy).context("missing member model")?,
-                )?;
+                let model = if strategy.agent_selection().is_some() {
+                    None
+                } else {
+                    Some(runtime_model(
+                        &directional_model_selection(&strategy).context("missing member model")?,
+                    )?)
+                };
                 Ok(RouterMemberRuntime {
+                    agent: Mutex::new(super::unified_model_runtime::agent::AgentSession::default()),
                     member_id,
                     entry_order_type,
                     max_feature_age_ms: strategy.effective_max_directional_feature_age_ms()?,
                     strategy,
                     runtime: StdMutex::new(DirectionalModelProcessRuntime::default()),
-                    session: StdMutex::new(model.unified_adapter().map(|a| a.new_session())),
+                    session: StdMutex::new(
+                        model
+                            .as_ref()
+                            .and_then(|m| m.unified_adapter())
+                            .map(|a| a.new_session()),
+                    ),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1005,6 +1025,9 @@ impl BtcProcessRunner {
     }
 
     pub async fn shutdown(&self) -> Result<()> {
+        for member in &self.router_members {
+            member.agent.lock().await.cancel();
+        }
         umr_telemetry::enabled(self.config.process_id, false);
         if let Err(error) = self.force_refresh_settlement_and_reconcile().await {
             warn!(
@@ -1221,11 +1244,497 @@ impl BtcProcessRunner {
             .await
     }
 
+    async fn prepare_agent_proposal<'a>(
+        &self,
+        member: &'a RouterMemberRuntime,
+        observation: &StrategyObservation,
+    ) -> Result<Option<PreparedTradeProposal<'a>>> {
+        use super::directional_model::{RuntimeModelAction, RuntimeModelScore};
+        use super::unified_model_runtime::agent;
+        let Some(market) = observation.state.current_market.as_ref() else {
+            return Ok(None);
+        };
+        let at = observation.readiness.checked_at;
+        let elapsed = (at - market.window_start).num_seconds();
+        let mut session = member.agent.lock().await;
+        session.observe_market(&market.market_id);
+        if elapsed >= 300 - member.strategy.min_seconds_before_close {
+            if !session.finished() {
+                umr_telemetry::event(
+                    self.config.process_id,
+                    "execution_opportunity",
+                    "agent_deadline",
+                );
+                session.accept();
+            }
+            umr_telemetry::gauge(self.config.process_id, "agent_pending", 0.0);
+            return Ok(None);
+        }
+        if session.finished() || elapsed < member.strategy.min_seconds_after_open {
+            return Ok(None);
+        }
+        if !session.restored {
+            if let Some(result) = self
+                .repository
+                .load_agent_prediction(
+                    self.config.process_id,
+                    self.config.run_id,
+                    &self.config.config_hash,
+                    &market.market_id,
+                    market.window_start,
+                )
+                .await?
+            {
+                session.retain(result);
+            }
+            if member
+                .strategy
+                .agent_selection()
+                .is_some_and(|selection| agent::uses_entry_reassessment(&selection.profile_key))
+            {
+                if let Some(request) = self
+                    .repository
+                    .load_agent_entry_request(
+                        self.config.process_id,
+                        self.config.run_id,
+                        &self.config.config_hash,
+                        &market.market_id,
+                        market.window_start,
+                        member
+                            .strategy
+                            .agent_selection()
+                            .unwrap()
+                            .profile_key
+                            .as_str(),
+                    )
+                    .await?
+                {
+                    anyhow::ensure!(
+                        request.input_sha256 == agent::hash(&request.context)?,
+                        "persisted agent entry request hash mismatch"
+                    );
+                    session.restore_request(&request);
+                }
+            }
+            session.restored = true;
+        }
+        if member
+            .strategy
+            .agent_selection()
+            .is_some_and(|selection| agent::uses_calibration(&selection.profile_key))
+            && session.calibration.is_none()
+        {
+            session.calibration = Some(
+                self.repository
+                    .load_agent_calibration(
+                        self.config.process_id,
+                        market.window_start,
+                        member
+                            .strategy
+                            .agent_selection()
+                            .unwrap()
+                            .profile_key
+                            .as_str(),
+                    )
+                    .await
+                    .unwrap_or_else(|_| agent::calibration::unavailable(market.window_start)),
+            );
+            // Read history only once, then use a fresh observation on the next callback.
+            return Ok(None);
+        }
+        if self
+            .repository
+            .process_has_entry_fill(
+                self.config.process_id,
+                &market.market_id,
+                market.window_start,
+            )
+            .await?
+        {
+            session.accept();
+            umr_telemetry::gauge(self.config.process_id, "agent_pending", 0.0);
+            umr_telemetry::event(
+                self.config.process_id,
+                "execution_opportunity",
+                "agent_filled",
+            );
+            return Ok(None);
+        }
+        // The shared durable authorization/reconciliation path owns unresolved orders.
+        if self
+            .repository
+            .process_has_entry(self.config.process_id, &market.market_id)
+            .await?
+        {
+            return Ok(None);
+        }
+        let result = session.poll().await;
+        if result.is_none() && session.latest().is_none() && !session.due(elapsed) {
+            return Ok(None);
+        }
+        let readiness = process_runtime_readiness(&member.strategy, &observation.readiness);
+        umr_telemetry::member_readiness(self.config.process_id, &member.member_id, readiness.ready);
+        if !readiness.ready && result.is_none() {
+            return Ok(None);
+        }
+        let mut inputs = directional_model_execution_inputs_from_runtime(
+            &observation.state,
+            self.config.process_id,
+            market,
+            at,
+            at,
+            chrono::Duration::milliseconds(member.strategy.max_reference_age_ms),
+            chrono::Duration::milliseconds(member.strategy.max_book_age_ms),
+        )?;
+        inputs.chainlink_open = self
+            .repository
+            .load_market_opening_reference(
+                market,
+                at,
+                chrono::Duration::milliseconds(member.strategy.max_chainlink_open_delay_ms),
+            )
+            .await?;
+        inputs.chainlink_current = observation
+            .state
+            .reference_prices
+            .get(&ReferencePriceSource::RtdsChainlink)
+            .filter(|tick| {
+                tick.source_timestamp <= at
+                    && tick.received_at <= at
+                    && (at - tick.source_timestamp).num_milliseconds()
+                        <= member.strategy.max_reference_age_ms
+                    && (at - tick.received_at).num_milliseconds()
+                        <= member.strategy.max_reference_age_ms
+            })
+            .cloned();
+        // Keep one completed forecast until fresh shared execution evidence arrives.
+        // The market deadline and rollover checks above still expire it automatically.
+        if (result
+            .as_ref()
+            .is_some_and(|result| result.prediction.is_ok())
+            || session.latest().is_some())
+            && (inputs.chainlink_current.is_none()
+                || inputs.chainlink_open.is_none()
+                || inputs.up_book.is_none()
+                || inputs.down_book.is_none()
+                || !readiness.ready)
+        {
+            if let Some(result) = result {
+                session.defer(result);
+            }
+            return Ok(None);
+        }
+        let mut snapshot = build_snapshot(
+            self.config.process_id,
+            market,
+            at,
+            &inputs,
+            member.strategy.target_size,
+            &member.strategy.feature_schema_version,
+            at,
+            None,
+        );
+        snapshot.snapshot_id = Uuid::new_v5(&snapshot.snapshot_id, member.member_id.as_bytes());
+        let selection = member
+            .strategy
+            .agent_selection()
+            .context("missing agent selection")?;
+        if let Some(previous) = session.latest().cloned() {
+            session.hold_entry(
+                &previous,
+                snapshot.up_book.executable_ask_vwap,
+                snapshot.down_book.executable_ask_vwap,
+                member.strategy.max_entry_price,
+                member.strategy.agent_reassessment_price_change,
+            );
+        }
+        let affordability_trigger = session.entry_reassessment_due(elapsed);
+        if result.is_none() && (session.due(elapsed) || affordability_trigger) {
+            if inputs.chainlink_open.is_none()
+                || inputs.chainlink_current.is_none()
+                || inputs.up_book.is_none()
+                || inputs.down_book.is_none()
+            {
+                return Ok(None);
+            }
+            let sources: Vec<crate::market_data_stream::SourceSelector> = serde_json::from_value(
+                self.config
+                    .frozen_process_config
+                    .pointer("/raw/sources")
+                    .context("agent sources missing from frozen configuration")?
+                    .clone(),
+            )?;
+            let context = if matches!(
+                selection.profile_key.as_str(),
+                agent::VOLATILITY_PROFILE_KEY
+                    | agent::REASSESSMENT_PROFILE_KEY
+                    | agent::ENTRY_REASSESSMENT_PROFILE_KEY
+                    | agent::CALIBRATION_PROFILE_KEY
+                    | agent::MARKET_CONTEXT_PROFILE_KEY
+                    | agent::FRESH_EVIDENCE_PROFILE_KEY
+                    | agent::EXECUTION_EVIDENCE_PROFILE_KEY
+                    | agent::MARKET_REFERENCE_PROFILE_KEY
+                    | agent::MARKET_REFERENCE_SOL_PROFILE_KEY
+            ) {
+                agent::build_volatility_context(&observation.state, &snapshot, &sources)
+            } else if selection.profile_key == agent::SETTLEMENT_PROFILE_KEY {
+                agent::build_settlement_context(&observation.state, &snapshot, &sources)
+            } else {
+                agent::build_context(&observation.state, &snapshot, &sources)
+            };
+            let mut request = agent::EvaluationRequest {
+                version: agent::BRIDGE_VERSION.into(),
+                request_id: Uuid::new_v4(),
+                process_id: self.config.process_id,
+                run_id: self.config.run_id,
+                config_hash: self.config.config_hash.clone(),
+                selection: selection.clone(),
+                market_id: market.market_id.clone(),
+                window_start: market.window_start,
+                snapshot_id: snapshot.snapshot_id,
+                observed_at: at,
+                deadline: market.window_start
+                    + chrono::Duration::seconds(300 - member.strategy.min_seconds_before_close),
+                attempt: elapsed as usize,
+                input_sha256: agent::hash(&context)?,
+                context,
+            };
+            if selection.profile_key == agent::REASSESSMENT_PROFILE_KEY {
+                agent::add_reassessment_context(&mut request, session.latest());
+                request.input_sha256 = agent::hash(&request.context)?;
+            }
+            if agent::uses_entry_reassessment(&selection.profile_key) {
+                agent::add_entry_reassessment_context(
+                    &mut request,
+                    session.latest(),
+                    member.strategy.max_entry_price,
+                    session.evaluation_slot(),
+                    affordability_trigger,
+                );
+                if agent::uses_calibration(&selection.profile_key) {
+                    request.context["version"] = serde_json::json!(selection.context_version());
+                    request.context["historical_calibration"] =
+                        session.calibration.clone().unwrap();
+                }
+                if agent::uses_market_context(&selection.profile_key) {
+                    agent::add_market_context(
+                        &mut request,
+                        &observation.state,
+                        &sources,
+                        session.latest(),
+                    );
+                }
+                if agent::independent_forecast(&selection.profile_key) {
+                    request.context["version"] = serde_json::json!(selection.context_version());
+                    request.context["entry_reassessment"]["price_change_threshold"] =
+                        serde_json::json!(member.strategy.agent_reassessment_price_change);
+                }
+                agent::prepare_execution_context(
+                    &mut request,
+                    &observation.state,
+                    &snapshot,
+                    &sources,
+                );
+                request.input_sha256 = agent::hash(&request.context)?;
+                // Record the slot before sending, so restart cannot replenish its budget.
+                let mut pending =
+                    super::strategy::unavailable_agent_prediction(&member.strategy, &snapshot);
+                pending.decision_id = Uuid::new_v5(&request.request_id, b"agent_entry_request");
+                let feature_hash = sha256_json(&snapshot)?;
+                self.repository
+                    .insert_feature_snapshot(
+                        &snapshot,
+                        None,
+                        &feature_hash,
+                        "ready",
+                        &serde_json::json!({"router_member_id":member.member_id}),
+                    )
+                    .await?;
+                self.insert_process_strategy_decision(
+                    &member.strategy.strategy_version,
+                    &market.market_id,
+                    &pending,
+                    Some(&serde_json::json!({"agent_request":request})),
+                    None,
+                    "rejected",
+                )
+                .await?;
+            }
+            session.start(request)?;
+            umr_telemetry::eligible_market(self.config.process_id, &market.market_id);
+            umr_telemetry::event(self.config.process_id, "agent_requests", "started");
+            umr_telemetry::gauge(self.config.process_id, "agent_pending", 1.0);
+        }
+        let fresh_result = result.is_some();
+        let Some(result) = result.or_else(|| session.latest().cloned()) else {
+            return Ok(None);
+        };
+        umr_telemetry::gauge(
+            self.config.process_id,
+            "agent_pending",
+            if session.pending() { 1.0 } else { 0.0 },
+        );
+        if fresh_result {
+            umr_telemetry::duration(
+                self.config.process_id,
+                "agent_inference",
+                result.inference_seconds,
+            );
+        }
+        if result.request.version != agent::BRIDGE_VERSION
+            || result.request.process_id != self.config.process_id
+            || result.request.run_id != self.config.run_id
+            || result.request.config_hash != self.config.config_hash
+            || result.request.selection != selection
+            || result.request.market_id != market.market_id
+            || result.request.window_start != market.window_start
+            || result.completed_at >= result.request.deadline
+            || Utc::now() >= result.request.deadline
+            || result.request.input_sha256 != agent::hash(&result.request.context)?
+        {
+            umr_telemetry::event(self.config.process_id, "agent_requests", "superseded");
+            return Ok(None);
+        }
+        let prediction = match &result.prediction {
+            Ok(prediction) => prediction,
+            Err(failure) => {
+                umr_telemetry::event(self.config.process_id, "agent_requests", failure.code());
+                umr_telemetry::failure(self.config.process_id, "agent_inference", failure.code());
+                let decision =
+                    super::strategy::unavailable_agent_prediction(&member.strategy, &snapshot);
+                let feature_hash = sha256_json(&snapshot)?;
+                self.repository.insert_feature_snapshot(&snapshot, None, &feature_hash, "not_ready",
+                    &serde_json::json!({"router_member_id":member.member_id,"agent_provider_failure":failure.code()})).await?;
+                self.insert_process_strategy_decision(
+                    &member.strategy.strategy_version,
+                    &market.market_id,
+                    &decision,
+                    Some(&serde_json::json!({"agent_evaluation":result})),
+                    None,
+                    "rejected",
+                )
+                .await?;
+                return Ok(None);
+            }
+        };
+        prediction.validate()?;
+        if fresh_result {
+            umr_telemetry::event(self.config.process_id, "agent_requests", "completed");
+            umr_telemetry::gauge(
+                self.config.process_id,
+                "agent_decision_second",
+                elapsed as f64,
+            );
+        }
+        let entry_adjustment = agent::entry_evidence::adjust(&result, &snapshot);
+        let entry_probability = entry_adjustment
+            .as_ref()
+            .map_or(prediction.probability_up, |(p, _)| *p);
+        let score = RuntimeModelScore {
+            raw_logit: 0.0,
+            probability_up: entry_probability,
+            confidence: prediction.confidence,
+            action: if entry_probability >= 0.5 {
+                RuntimeModelAction::Up
+            } else {
+                RuntimeModelAction::Down
+            },
+            accepted: true,
+        };
+        if fresh_result {
+            umr_telemetry::prediction(
+                self.config.process_id,
+                snapshot.snapshot_id,
+                &market.market_id,
+                &selection.identity(),
+                result.request.observed_at,
+                &result.request.input_sha256,
+                score,
+                result.inference_seconds,
+                Some(serde_json::json!({"agent_evaluation":result,"uncalibrated":true})),
+            );
+            umr_telemetry::member_event(self.config.process_id, &member.member_id, "inferences");
+        } else {
+            umr_telemetry::retained_agent_prediction(
+                self.config.process_id,
+                snapshot.snapshot_id,
+                &result,
+                score,
+            );
+        }
+        if let Some((_, evidence)) = entry_adjustment {
+            umr_telemetry::agent_entry_evidence(
+                self.config.process_id,
+                snapshot.snapshot_id,
+                evidence,
+            );
+        }
+        session.retain(result.clone());
+        umr_telemetry::attribute_member(
+            self.config.process_id,
+            snapshot.snapshot_id,
+            &member.member_id,
+            "evaluated",
+        );
+        let entry_held = session.hold_entry(
+            &result,
+            snapshot.up_book.executable_ask_vwap,
+            snapshot.down_book.executable_ask_vwap,
+            member.strategy.max_entry_price,
+            member.strategy.agent_reassessment_price_change,
+        );
+        let mut decision = if entry_held {
+            super::strategy::unavailable_agent_prediction(&member.strategy, &snapshot)
+        } else {
+            super::strategy::evaluate_agent_prediction(
+                &member.strategy,
+                &snapshot,
+                entry_probability,
+                self.config.directional_model_entry_policy,
+            )?
+        };
+        enforce_runtime_readiness(&mut decision, &observation.readiness, &member.strategy);
+        let feature_hash = sha256_json(&snapshot)?;
+        self.repository.insert_feature_snapshot(&snapshot, decision.fair_value.as_ref(), &feature_hash, if readiness.ready { "ready" } else { "not_ready" },
+            &serde_json::json!({"router_member_id":member.member_id,"runtime_readiness":observation.readiness,"agent_request_snapshot_id":result.request.snapshot_id})).await?;
+        // Approved decisions are persisted by the existing execution seam with their order plan.
+        if decision.approved_intent.is_none() {
+            let entry_hold_evidence = entry_held.then(|| {
+                serde_json::json!({
+                    "agent_evaluation":result,
+                    "agent_entry_reassessment": if agent::independent_forecast(&selection.profile_key) { "forecast_evidence_changed" } else { "forecast_became_affordable" }
+                })
+            });
+            self.insert_process_strategy_decision(
+                &member.strategy.strategy_version,
+                &market.market_id,
+                &decision,
+                entry_hold_evidence.as_ref(),
+                None,
+                "rejected",
+            )
+            .await?;
+        }
+        if decision.approved_intent.is_none() {
+            return Ok(None);
+        }
+        umr_telemetry::member_event(self.config.process_id, &member.member_id, "qualified");
+        Ok(Some(PreparedTradeProposal {
+            snapshot,
+            decision,
+            feature_hash,
+            candidate: None,
+        }))
+    }
+
     async fn prepare_member_proposal<'a>(
         &self,
         member: &'a RouterMemberRuntime,
         observation: &StrategyObservation,
     ) -> Result<Option<PreparedTradeProposal<'a>>> {
+        if member.strategy.agent_selection().is_some() {
+            return self.prepare_agent_proposal(member, observation).await;
+        }
         let Some(market) = observation.state.current_market.as_ref() else {
             umr_telemetry::event(self.config.process_id, "skipped", "no_market");
             return Ok(None);
@@ -2006,6 +2515,20 @@ impl BtcProcessRunner {
         // Once this durable reservation succeeds, execution must proceed. A
         // crash after authorization cannot permit a different entry for the
         // same process and market on resume.
+        if member.strategy.agent_selection().is_some()
+            && Utc::now()
+                >= market.window_start
+                    + chrono::Duration::seconds(300 - member.strategy.min_seconds_before_close)
+        {
+            member.agent.lock().await.accept();
+            umr_telemetry::gauge(self.config.process_id, "agent_pending", 0.0);
+            umr_telemetry::event(
+                self.config.process_id,
+                "execution_opportunity",
+                "agent_deadline",
+            );
+            return Ok(());
+        }
         self.repository
             .authorize_pending_strategy_decision(
                 self.config.process_id,
@@ -2077,6 +2600,15 @@ impl BtcProcessRunner {
                 / 1_000.0,
         );
         self.store.persist_order_plan_report(&report).await?;
+        if member.strategy.agent_selection().is_some() && !report.fills.is_empty() {
+            member.agent.lock().await.accept();
+            umr_telemetry::gauge(self.config.process_id, "agent_pending", 0.0);
+            umr_telemetry::event(
+                self.config.process_id,
+                "execution_opportunity",
+                "agent_filled",
+            );
+        }
         for fill in &report.fills {
             if let (Some(price), Some(size), Some(fee)) =
                 (fill.price.to_f64(), fill.size.to_f64(), fill.fee.to_f64())
@@ -2688,14 +3220,16 @@ fn btc_entry_order_metadata(
             anyhow::bail!("BTC entry order cannot carry a no-prediction result");
         };
         ensure!(
-            matches!(attribution.family, BTC_DIRECTIONAL_MODEL_STRATEGY_FAMILY)
-                && *outcome == intent.outcome,
+            matches!(
+                attribution.family,
+                BTC_DIRECTIONAL_MODEL_STRATEGY_FAMILY | "btc_openai_agent"
+            ) && *outcome == intent.outcome,
             "BTC directional prediction attribution does not match its entry intent"
         );
         if *entry_policy == BtcDirectionalModelEntryPolicy::ExecuteDirectionalPrediction {
             ensure!(
-                attribution.family == BTC_DIRECTIONAL_MODEL_STRATEGY_FAMILY
-                    && intent.strategy_version == BTC_DIRECTIONAL_MODEL_STRATEGY_VERSION,
+                (attribution.family == BTC_DIRECTIONAL_MODEL_STRATEGY_FAMILY && intent.strategy_version == BTC_DIRECTIONAL_MODEL_STRATEGY_VERSION)
+                    || (attribution.family == "btc_openai_agent" && intent.strategy_version == super::unified_model_runtime::agent::STRATEGY_VERSION),
                 "BTC directional prediction execution policy requires directional-model attribution"
             );
         }
@@ -2938,6 +3472,9 @@ fn observation_clob_connection_id(
 
 fn directional_model_selection(config: &BtcStrategyConfig) -> Option<RuntimeModelSelection> {
     match config.decision_strategy.as_ref()? {
+        BtcDecisionStrategyConfig::OpenaiAgent { .. } => {
+            config.agent_selection().map(|s| s.identity())
+        }
         BtcDecisionStrategyConfig::BtcDirectionalModel {
             model_key,
             artifact_sha256,
@@ -2958,7 +3495,10 @@ fn directional_model_selection(config: &BtcStrategyConfig) -> Option<RuntimeMode
 fn directional_model_configured(config: &BtcStrategyConfig) -> bool {
     matches!(
         config.decision_strategy.as_ref(),
-        Some(BtcDecisionStrategyConfig::BtcDirectionalModel { .. })
+        Some(
+            BtcDecisionStrategyConfig::BtcDirectionalModel { .. }
+                | BtcDecisionStrategyConfig::OpenaiAgent { .. }
+        )
     )
 }
 

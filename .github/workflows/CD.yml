@@ -183,6 +183,7 @@ jobs:
           PIN_REPORT: ${{ runner.temp }}/production-pin-diagnostics/${{ matrix.task }}.md
         run: scripts/production/validate-release-pins.sh
       - name: Preserve diagnostic output
+        continue-on-error: true
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -190,48 +191,9 @@ jobs:
           path: ${{ runner.temp }}/production-pin-diagnostics/${{ matrix.task }}.md
           if-no-files-found: warn
 
-  diagnostics:
-    name: Report deployment plan
-    needs: [validate, admission, checks]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          pattern: production-pin-diagnostics-*
-          merge-multiple: true
-          path: ${{ runner.temp }}/production-pin-diagnostics
-      - name: Report inspected release and planned actions
-        env:
-          VALIDATION_RESULT: ${{ needs.checks.result }}
-          SCOPE_RESULT: ${{ needs.validate.result }}
-          ADMISSION_RESULT: ${{ needs.admission.result }}
-          LIVE_RELEASE: ${{ needs.admission.outputs.live }}
-          DEPLOY_COMPONENTS: ${{ needs.validate.outputs.deploy_components }}
-        run: |
-          set -euo pipefail
-          {
-            echo "Inspected revision: $GITHUB_SHA"
-            echo "Selected components: ${DEPLOY_COMPONENTS:-none (no-op)}"
-            for report in "$RUNNER_TEMP"/production-pin-diagnostics/*.md; do
-              [[ ! -f "$report" ]] || cat "$report"
-            done
-            if [[ "$LIVE_RELEASE" == true && -n "$DEPLOY_COMPONENTS" && "$VALIDATION_RESULT" == success && "$SCOPE_RESULT" == success && "$ADMISSION_RESULT" == success ]]; then
-              echo 'Approved live release: promote approved RC manifests, verify final tags, then deploy and verify selected components.'
-            else
-              echo 'Planning only or empty/invalid release: production execution skipped.'
-            fi
-            echo 'Planned selected execution uses existing ECR pull-secret refresh, Argo reconciliation for application charts, or Helm for other selected charts. A selected migration Job may be recreated; pending migrations require their separate approval.'
-            echo 'Configuration and secret-version changes are the committed values compared with the reported baseline; no new pins are generated.'
-            echo 'Live readiness, secret availability, migration ledger, worker capacity and rollback remain UNVERIFIED by planning.'
-            echo "Validation=$VALIDATION_RESULT; scope=$SCOPE_RESULT; admission=$ADMISSION_RESULT."
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-          [[ "$VALIDATION_RESULT" == success && "$SCOPE_RESULT" == success && "$ADMISSION_RESULT" == success ]]
-
   deploy:
     name: Promote, pin, deploy, and verify
-    needs: [validate, admission, checks, diagnostics]
+    needs: [validate, admission, checks]
     if: >-
       ${{ github.event_name == 'push' && github.ref == 'refs/heads/production' &&
           github.run_attempt == 1 &&

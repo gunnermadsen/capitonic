@@ -143,6 +143,29 @@ jobs:
           polymarket_bot_tests="$polymarket_bot"
           ingester_tests="$ingester"
           db_migrate_tests="$db_migrate"
+
+          # Development publishes components selected by an image-pin change.
+          if [[ "$GITHUB_REF" == refs/heads/development ]]; then
+            image_pin_changed() {
+              local chart="capitonic-helm-chart/charts/$1/values.yaml"
+              local previous current
+              previous="$(git show "$BASE_SHA:$chart" | sed -n '/^image:/p')"
+              current="$(git show "$CURRENT_SHA:$chart" | sed -n '/^image:/p')"
+              [[ -n "$previous" && -n "$current" ]] || {
+                echo "Missing image pin for $1" >&2
+                return 1
+              }
+              if [[ "$previous" != "$current" ]]; then
+                echo true
+              else
+                echo false
+              fi
+            }
+            polymarket_bot="$(image_pin_changed polymarket-bot)"
+            ingester="$(image_pin_changed ingester)"
+            db_migrate="$(image_pin_changed db-migrate)"
+          fi
+
           helm_inputs=(
             capitonic-helm-chart
             common/configs/alloy

@@ -15,8 +15,8 @@ Each new image receives one version tag and one image-ID provenance tag on its s
 Unchanged committed image inputs reuse the existing image and Git tag pair.
 --checks-only does not build or tag an image.
 Build and check modes do not deploy, promote, push, or mark images golden.
---tag-rc records an already accepted RC image on the development checkpoint commit.
-It requires the checkpoint and golden tags, committed chart pin, and running image identity,
+--tag-rc reserves an RC Git tag for the accepted local image on the development checkpoint.
+It requires checkpoint and golden provenance, the committed local pin, and immutable image identity,
 then atomically pushes the accepted refs to origin.
 EOF
 }
@@ -112,7 +112,7 @@ fi
 
 tag_accepted_rc() {
   local accepted checkpoint chart version image id source local_version candidate_tag hash_tag golden_tag rc_tag
-  local -a deployments=()
+  local registry_tags base highest=-1 number tag reserved=() annotation key expected
   require_clean_source
   accepted="$(git rev-parse --verify development^{commit})"
   checkpoint="checkpoint/development/git-$accepted"
@@ -124,17 +124,17 @@ tag_accepted_rc() {
   image="$(git show "$accepted:$chart/values.yaml" | yq -r '.image' -)"
   version="${image#capitonic/$component:}"
   [[ "$image" == "capitonic/$component:$version"
-    && "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.(0|[1-9][0-9]*)$
+    && "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-local\.(0|[1-9][0-9]*)$
     && "$(git show "$accepted:$chart/Chart.yaml" | yq -r '.appVersion' -)" == "$version" ]] || {
-    echo "Accepted Helm chart does not pin a matching RC image and appVersion." >&2; exit 67;
+    echo "Accepted Helm chart does not pin a matching local image and appVersion." >&2; exit 67;
   }
   id="$(nerdctl --namespace k8s.io image inspect --format '{{ .Id }}' "$image")"
   source="$(nerdctl --namespace k8s.io image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")"
   local_version="v$(nerdctl --namespace k8s.io image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$image")"
   [[ "$id" =~ ^sha256:[0-9a-f]{64}$ && "$source" =~ ^[0-9a-f]{40}$
     && "$local_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-local\.(0|[1-9][0-9]*)$
-    && "${version%%-*}" == "${local_version%%-*}" ]] || {
-    echo "RC image ID or embedded source labels are invalid." >&2; exit 67;
+    && "$version" == "$local_version" ]] || {
+    echo "Local image ID or embedded source labels are invalid." >&2; exit 67;
   }
   candidate_tag="image/$component/$local_version"
   hash_tag="image/$component/sha256-${id#sha256:}"
@@ -148,44 +148,23 @@ tag_accepted_rc() {
       echo "Provenance tag does not identify the selected image ID: $tag" >&2; exit 67;
     }
   done
-  [[ "$(nerdctl --namespace k8s.io image inspect --format '{{ .Id }}' "capitonic/$component:$local_version")" == "$id" ]] || {
-    echo "RC alias differs from the tested candidate bytes." >&2; exit 67;
-  }
   git merge-base --is-ancestor "$source" "$accepted" || {
     echo "Image source commit is outside the accepted checkpoint." >&2; exit 67;
+  }
+  [[ "$(python3 scripts/ci/component-fingerprint.py "$component" "$source")" == "$(python3 scripts/ci/component-fingerprint.py "$component" "$accepted")" ]] || {
+    echo "Accepted component inputs differ from the qualified candidate." >&2; exit 67;
   }
   if [[ "$component" == ingester ]]; then
     [[ "$(git show "$accepted:$chart/values.yaml" | yq -r '.imageDigest' -)" == "$id"
       && "$(git show "$accepted:$chart/values.yaml" | yq -r '.gitRevision' -)" == "$source" ]] || {
       echo "Accepted ingester chart image ID or source revision disagrees." >&2; exit 67;
     }
-    deployments=(ingester-master ingester-worker)
-  elif [[ "$component" == db-migrate ]]; then
-    deployments=()
-  else
-    deployments=(polymarket-bot)
-  fi
-  if [[ "$component" != db-migrate ]]; then
-    for deployment in "${deployments[@]}"; do
-      kubectl -n capitonic get deployment "$deployment" -o json | jq -e --arg image "$image" --arg id "$id" '
-        .spec.template.spec.containers[0].image == $image and
-        .status.readyReplicas == .spec.replicas' >/dev/null || {
-        echo "Accepted deployment is not ready with the RC image: $deployment" >&2; exit 70;
-      }
-      kubectl -n capitonic get pods -l "app.kubernetes.io/name=$deployment" -o json | jq -e --arg id "$id" '
-        [.items[] | select(.metadata.deletionTimestamp == null)] as $pods |
-        ($pods | length) > 0 and all($pods[];
-          .status.containerStatuses[0].ready == true and
-          .status.containerStatuses[0].imageID == $id)' >/dev/null || {
-        echo "Accepted pods do not all run the selected image ID: $deployment" >&2; exit 70;
-      }
-    done
   fi
   if [[ "$component" == db-migrate ]]; then
     kubectl -n capitonic get job db-migrate -o json | jq -e --arg image "$image" '
       .spec.template.spec.containers[0].image == $image and
       .status.succeeded == 1 and (.status.failed // 0) == 0' >/dev/null || {
-      echo "Accepted db-migrate Job is not complete with the RC image." >&2; exit 70;
+      echo "Accepted db-migrate Job is not complete with the local image." >&2; exit 70;
     }
     kubectl -n capitonic get pods -l job-name=db-migrate -o json | jq -e --arg id "$id" '
       [.items[] | select(.metadata.deletionTimestamp == null)] as $pods |
@@ -194,26 +173,72 @@ tag_accepted_rc() {
       echo "Accepted db-migrate pod does not use the selected image ID." >&2; exit 70;
     }
   fi
-  rc_tag="rc/$component/$version"
+  # Origin and ECR are authoritative allocation inputs; lookup failures must stop admission.
+  git fetch origin --tags
+  registry_tags="$(aws ecr list-images --region "${AWS_REGION:-eu-west-1}" \
+    --repository-name "capitonic/$component" --filter tagStatus=TAGGED \
+    --query 'imageIds[].imageTag' --output json)"
+  base="${local_version%%-*}"
+  while IFS= read -r tag; do
+    reserved+=("$tag")
+  done < <(git tag --points-at "$accepted" --list "rc/$component/$base-rc.*")
+  (( ${#reserved[@]} <= 1 )) || {
+    echo "Multiple RC reservations identify this component checkpoint." >&2; exit 67;
+  }
+  if (( ${#reserved[@]} == 1 )); then
+    rc_tag="${reserved[0]}"
+    version="${rc_tag##*/}"
+  else
+    if jq -e --arg base "$base" 'index($base) != null' <<< "$registry_tags" >/dev/null; then
+      echo "Final $base already exists; this release base is closed." >&2; exit 67;
+    fi
+    for tag in $(git tag --list "rc/$component/$base-rc.*"); do
+      number="${tag##*.}"
+      [[ "$number" =~ ^(0|[1-9][0-9]*)$ ]] || continue
+      (( number <= highest )) || highest="$number"
+    done
+    while IFS= read -r tag; do
+      [[ "$tag" == "$base-rc."* ]] || continue
+      number="${tag##*.}"
+      [[ "$number" =~ ^(0|[1-9][0-9]*)$ ]] || continue
+      (( number <= highest )) || highest="$number"
+    done < <(jq -r '.[]' <<< "$registry_tags")
+    version="$base-rc.$((highest + 1))"
+    rc_tag="rc/$component/$version"
+  fi
   if git show-ref --verify --quiet "refs/tags/$rc_tag"; then
     [[ "$(git cat-file -t "refs/tags/$rc_tag")" == tag
       && "$(git rev-list -n 1 "refs/tags/$rc_tag")" == "$accepted" ]] || {
       echo "RC Git tag already identifies a different checkpoint." >&2; exit 67;
     }
-    grep -Fqx "image_id: $id" < <(git cat-file -p "refs/tags/$rc_tag") || {
-      echo "RC Git tag already identifies different image bytes." >&2; exit 67;
-    }
-    echo "Reusing $rc_tag on accepted checkpoint $accepted; no Git tag was changed."
-  else
-    git tag -a "$rc_tag" "$accepted" -m "component: $component
+    annotation="$(git for-each-ref --format='%(contents)' "refs/tags/$rc_tag")"
+    while IFS=' ' read -r key expected; do
+      grep -Fqx "$key $expected" <<< "$annotation" || {
+        echo "RC Git tag disagrees on $key" >&2; exit 67;
+      }
+    done <<EOF
+component: $component
 version: $version
-image: $image
+image: capitonic/$component:$version
+local_image: $image
 image_id: $id
 source_revision: $source
 candidate_tag: $candidate_tag
 golden_tag: $golden_tag
 checkpoint_tag: $checkpoint
-status: accepted local k3s RC; no registry manifest digest claimed"
+EOF
+    echo "Reusing $rc_tag on accepted checkpoint $accepted; no Git tag was changed."
+  else
+    git tag -a "$rc_tag" "$accepted" -m "component: $component
+version: $version
+image: capitonic/$component:$version
+local_image: $image
+image_id: $id
+source_revision: $source
+candidate_tag: $candidate_tag
+golden_tag: $golden_tag
+checkpoint_tag: $checkpoint
+status: accepted local k3s candidate; RC reserved for remote CI; no registry manifest digest claimed"
     echo "Tagged accepted checkpoint $accepted with $rc_tag ($id)."
   fi
   if [[ "${CAPITONIC_DEFER_RC_PUSH:-false}" == true ]]; then
@@ -263,7 +288,7 @@ require_clean_source() {
 }
 
 if [[ "$mode" == "--tag-rc" ]]; then
-  for tool in yq jq nerdctl kubectl; do
+  for tool in yq jq nerdctl kubectl aws python3; do
     command -v "$tool" >/dev/null 2>&1 || { echo "Missing $tool" >&2; exit 69; }
   done
   tag_accepted_rc

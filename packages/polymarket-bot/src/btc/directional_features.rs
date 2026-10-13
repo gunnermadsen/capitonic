@@ -2985,7 +2985,7 @@ fn early_horizon_return(log_closes: &[f64], end: usize, seconds: usize) -> Optio
     (end >= seconds).then(|| (log_closes[end] - log_closes[end - seconds]) * BPS)
 }
 
-fn rolling_volatility(
+pub(crate) fn rolling_volatility(
     log_returns: &[f64],
     row: usize,
     window: usize,

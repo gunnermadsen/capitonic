@@ -2785,6 +2785,147 @@ impl BtcRepository {
             .context("failed to check existing BTC process entry")
     }
 
+    /// Restore the latest forecast from the process-owned decision ledger.
+    pub async fn load_agent_prediction(
+        &self,
+        process_id: Uuid,
+        run_id: Uuid,
+        config_hash: &str,
+        market_id: &str,
+        window_start: DateTime<Utc>,
+    ) -> Result<Option<super::unified_model_runtime::agent::EvaluationResult>> {
+        let value = sqlx::query_scalar::<_, serde_json::Value>("SELECT metadata->'agent_evaluation' FROM polymarket.btc_strategy_decisions WHERE process_id=$1 AND market_id=$2 AND strategy_version=$3 AND decision_at >= $4 AND decision_at < $4 + interval '120 seconds' AND run_id=$5 AND config_hash=$6 AND metadata #> '{agent_evaluation,prediction,Ok}' IS NOT NULL ORDER BY decision_at DESC LIMIT 1")
+            .bind(process_id).bind(market_id).bind(super::unified_model_runtime::agent::STRATEGY_VERSION)
+            .bind(window_start).bind(run_id).bind(config_hash)
+            .fetch_optional(&self.pool).await.context("failed to restore agent prediction ownership")?;
+        value
+            .map(serde_json::from_value)
+            .transpose()
+            .context("invalid persisted agent evaluation")
+    }
+
+    /// Restore the request budget, including interrupted affordability reassessments.
+    pub async fn load_agent_entry_request(
+        &self,
+        process_id: Uuid,
+        run_id: Uuid,
+        config_hash: &str,
+        market_id: &str,
+        window_start: DateTime<Utc>,
+        profile_key: &str,
+    ) -> Result<Option<super::unified_model_runtime::agent::EvaluationRequest>> {
+        let value = sqlx::query_scalar::<_, serde_json::Value>(
+            r#"
+            SELECT request FROM (
+                SELECT COALESCE(metadata #> '{entry_admission,agent_request}',
+                                metadata #> '{agent_evaluation,request}') AS request,
+                       decision_at
+                FROM polymarket.btc_strategy_decisions
+                WHERE process_id=$1 AND run_id=$2 AND config_hash=$3 AND market_id=$4
+                  AND decision_at >= $5 AND decision_at < $5 + interval '120 seconds'
+                  AND strategy_version=$6
+            ) requests
+            WHERE request #>> '{selection,profile_key}'=$7
+              AND request #>> '{context,evaluation_slot}' IN ('1','2','3')
+            ORDER BY (request #>> '{context,evaluation_slot}')::integer DESC, decision_at DESC
+            LIMIT 1
+        "#,
+        )
+        .bind(process_id)
+        .bind(run_id)
+        .bind(config_hash)
+        .bind(market_id)
+        .bind(window_start)
+        .bind(super::unified_model_runtime::agent::STRATEGY_VERSION)
+        .bind(profile_key)
+        .fetch_optional(&self.pool)
+        .await
+        .context("failed to restore agent entry request")?;
+        value
+            .map(serde_json::from_value)
+            .transpose()
+            .context("invalid persisted agent entry request")
+    }
+
+    /// Optional process-owned evidence; database time and returned history are bounded.
+    pub async fn load_agent_calibration(
+        &self,
+        process_id: Uuid,
+        cutoff: DateTime<Utc>,
+        profile_key: &str,
+    ) -> Result<serde_json::Value> {
+        use super::unified_model_runtime::agent::{self, calibration};
+        let mut keys = vec![
+            agent::REASSESSMENT_PROFILE_KEY,
+            agent::ENTRY_REASSESSMENT_PROFILE_KEY,
+            agent::CALIBRATION_PROFILE_KEY,
+        ];
+        if agent::uses_market_context(profile_key) {
+            keys.push(agent::MARKET_CONTEXT_PROFILE_KEY);
+        }
+        if agent::independent_forecast(profile_key) {
+            keys.push(agent::FRESH_EVIDENCE_PROFILE_KEY);
+        }
+        if agent::uses_execution_evidence(profile_key) {
+            keys.push(agent::EXECUTION_EVIDENCE_PROFILE_KEY);
+        }
+        if agent::uses_market_reference(profile_key) {
+            keys.push(agent::MARKET_REFERENCE_PROFILE_KEY);
+        }
+        if profile_key == agent::MARKET_REFERENCE_SOL_PROFILE_KEY {
+            keys.push(agent::MARKET_REFERENCE_SOL_PROFILE_KEY);
+        }
+        let hashes = keys
+            .iter()
+            .map(|key| agent::hash(&agent::profile_for_key(key)?))
+            .collect::<Result<Vec<_>>>()?;
+        // A transaction-local timeout also cancels work at the database, not just at the caller.
+        let operation = async {
+            let mut tx = self.pool.begin().await?;
+            sqlx::query("SET TRANSACTION READ ONLY")
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("SET LOCAL statement_timeout = '2000ms'")
+                .execute(&mut *tx)
+                .await?;
+            let rows = sqlx::query_scalar::<_, serde_json::Value>(calibration::HISTORY_SQL)
+                .bind(process_id)
+                .bind(cutoff)
+                .bind(&keys)
+                .bind(&hashes)
+                .fetch_all(&mut *tx)
+                .await?;
+            let mut summary = calibration::summarize(cutoff, rows);
+            if agent::uses_execution_evidence(profile_key) {
+                let entries =
+                    sqlx::query_scalar::<_, serde_json::Value>(agent::entry_evidence::HISTORY_SQL)
+                        .bind(process_id)
+                        .bind(cutoff)
+                        .bind(&keys)
+                        .bind(&hashes)
+                        .fetch_all(&mut *tx)
+                        .await?;
+                summary["entry_calibration"] = agent::entry_evidence::summarize(cutoff, entries);
+            }
+            tx.commit().await?;
+            Ok::<_, anyhow::Error>(summary)
+        };
+        tokio::time::timeout(std::time::Duration::from_millis(2250), operation)
+            .await
+            .context("agent calibration history timeout")?
+    }
+
+    pub async fn process_has_entry_fill(
+        &self,
+        process_id: Uuid,
+        market_id: &str,
+        window_start: DateTime<Utc>,
+    ) -> Result<bool> {
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM polymarket.orders o JOIN polymarket.fills f ON f.process_id=o.process_id AND f.order_id=o.order_id WHERE o.process_id=$1 AND o.market_id=$2 AND o.created_at >= $3 AND o.created_at < $3 + interval '300 seconds' AND f.timestamp_utc >= $3 AND f.timestamp_utc < $3 + interval '300 seconds' AND o.raw_payload #>> '{request,metadata,execution_intent}'='entry' AND f.source IN ('paper','live') AND f.size > 0)")
+            .bind(process_id).bind(market_id).bind(window_start).fetch_one(&self.pool).await
+            .context("failed to check process entry fills")
+    }
+
     pub async fn load_resolved_loss_regime_candidates(
         &self,
         process_id: Uuid,
@@ -2986,9 +3127,19 @@ impl BtcRepository {
             process_id,
             decision.feature_snapshot_id,
         ) {
+            if let Some(evidence) = record
+                .admission
+                .as_ref()
+                .and_then(|value| value.get("agent_evaluation"))
+            {
+                metadata["agent_evaluation"] = evidence.clone();
+            }
             metadata["model_evaluation"] = serde_json::to_value(record)?;
         }
         if let Some(entry_admission_evidence) = entry_admission_evidence {
+            if let Some(evidence) = entry_admission_evidence.get("agent_evaluation") {
+                metadata["agent_evaluation"] = evidence.clone();
+            }
             metadata
                 .as_object_mut()
                 .context("serialized BTC decision metadata must be an object")?
@@ -3926,7 +4077,11 @@ fn decision_edge_projection(decision: &BtcDecision) -> Result<BtcDecisionEdgePro
                 || (*entry_policy == BtcDirectionalModelEntryPolicy::RequirePositiveDirectEdge
                     && net_edge_per_share <= Decimal::ZERO)
                 || (*entry_policy == BtcDirectionalModelEntryPolicy::ExecuteDirectionalPrediction
-                    && intent.strategy_version != BTC_DIRECTIONAL_MODEL_STRATEGY_VERSION)
+                    && !matches!(
+                        intent.strategy_version.as_str(),
+                        BTC_DIRECTIONAL_MODEL_STRATEGY_VERSION
+                            | super::unified_model_runtime::agent::STRATEGY_VERSION
+                    ))
                 || gross_edge_per_share - fee_per_share != net_edge_per_share
                 || intent.expected_net_edge_per_share != net_edge_per_share
                 || intent.expected_net_edge != net_edge_per_share * edge.size
@@ -4784,6 +4939,16 @@ mod tests {
             assert_eq!(projection.gross_edge_per_share, Some(dec!(-0.03)));
             assert_eq!(projection.fee_per_share, Some(dec!(0.002)));
             assert_eq!(projection.net_edge_per_share, Some(dec!(-0.032)));
+
+            let mut agent_decision = decision.clone();
+            agent_decision
+                .approved_intent
+                .as_mut()
+                .unwrap()
+                .strategy_version =
+                super::super::unified_model_runtime::agent::STRATEGY_VERSION.to_string();
+            let agent_projection = decision_edge_projection(&agent_decision).unwrap();
+            assert_eq!(agent_projection.net_edge_per_share, Some(dec!(-0.032)));
 
             let mut default_policy = decision.clone();
             let Some(BtcStrategyPrediction::DirectionalPrediction { entry_policy, .. }) =

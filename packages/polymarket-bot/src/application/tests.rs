@@ -142,6 +142,72 @@ mod lifecycle_tests {
         });
         control
     }
+    #[test]
+    fn agent_v5_preserves_sources_and_rejects_live_and_older_schema() {
+        use polymarket_bot::btc::unified_model_runtime::agent;
+        let mut control = BtcRealtimePaperControlConfig {
+            schema_version: AGENT_PROCESS_SCHEMA_VERSION.into(),
+            sources: agent::REQUIRED_PRODUCTS
+                .iter()
+                .map(|key| serde_json::from_value(serde_json::json!(key)).unwrap())
+                .collect(),
+            playbook_version: Some("v1.2".into()),
+            strategy: serde_json::json!({"target_size":"5","decision_strategy":{"type":"unified_model_router","version":1,
+                "routing":{"mode":"first_qualified","tie_break":"array_order"},"models":[{"member_id":"agent","selection":{"type":"openai_agent","profile_key":agent::PROFILE_KEY,"profile_sha256":agent::hash(&agent::profile()).unwrap()}}]}}),
+            ..BtcRealtimePaperControlConfig::default()
+        };
+        let strategy = resolve_btc_strategy(&control).unwrap();
+        assert!(strategy.agent_selection().is_some());
+        assert_eq!(
+            (
+                strategy.min_seconds_after_open,
+                strategy.min_seconds_before_close
+            ),
+            (45, 180)
+        );
+        assert!(validate_directional_model_entry_policy(
+            &strategy,
+            BtcDirectionalModelEntryPolicy::ExecuteDirectionalPrediction
+        )
+        .is_ok());
+        assert!(validate_btc_live_model_authorization(&strategy).is_err());
+        let mut fresh = control.clone();
+        let profile = agent::profile_for_key(agent::FRESH_EVIDENCE_PROFILE_KEY).unwrap();
+        fresh.strategy["decision_strategy"]["models"][0]["selection"] = serde_json::json!({
+            "type":"openai_agent", "profile_key":profile.key,
+            "profile_sha256":agent::hash(&profile).unwrap()
+        });
+        assert!(resolve_btc_strategy(&fresh)
+            .unwrap()
+            .agent_reassessment_price_change
+            .is_none());
+        fresh.strategy["agent_reassessment_price_change"] = serde_json::json!("0.05");
+        let resolved = resolve_btc_strategy(&fresh).unwrap();
+        assert_eq!(
+            resolved.agent_reassessment_price_change,
+            Some(rust_decimal::Decimal::new(5, 2))
+        );
+        assert_eq!(
+            resolved.feature_schema_version,
+            agent::FRESH_EVIDENCE_CONTEXT_VERSION
+        );
+        assert!(validate_btc_live_model_authorization(&resolved).is_err());
+        fresh.strategy["agent_reassessment_price_change"] = serde_json::json!("0");
+        assert!(resolve_btc_strategy(&fresh).is_err());
+        assert!(strategy.agent_reassessment_price_change.is_none());
+        assert!(serde_json::to_value(&strategy)
+            .unwrap()
+            .get("agent_reassessment_price_change")
+            .is_none());
+        control.sources.pop();
+        assert!(resolve_btc_strategy(&control).is_err());
+        control.sources = agent::REQUIRED_PRODUCTS
+            .iter()
+            .map(|key| serde_json::from_value(serde_json::json!(key)).unwrap())
+            .collect();
+        control.schema_version = ROUTER_PROCESS_SCHEMA_VERSION.into();
+        assert!(resolve_btc_strategy(&control).is_err());
+    }
     fn prepared_btc_definition_with_default_runtime() -> PreparedBtcStartDefinition {
         prepare_btc_start_definition(ResolvedBtcProcessDefinition {
             control: BtcRealtimePaperControlConfig {

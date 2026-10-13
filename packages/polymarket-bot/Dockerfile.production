@@ -18,7 +18,8 @@ COPY common/proto common/proto
 RUN mkdir -p packages/polymarket-bot/src/bin \
     && printf 'pub fn placeholder() {}\n' > packages/polymarket-bot/src/lib.rs \
     && printf 'fn main() {}\n' > packages/polymarket-bot/src/main.rs \
-    && printf 'fn main() {}\n' > packages/polymarket-bot/src/bin/derive-clob-creds.rs
+    && printf 'fn main() {}\n' > packages/polymarket-bot/src/bin/derive-clob-creds.rs \
+    && printf 'fn main() {}\n' > packages/polymarket-bot/src/bin/openai-agent-auth.rs
 
 # Keep compiled dependencies in a normal layer so remote BuildKit cache exporters
 # can reuse them on ephemeral GitHub Actions runners.
@@ -29,6 +30,7 @@ RUN cargo clean --release -p polymarket-bot \
     && cargo build --locked --release --package polymarket-bot \
     && cp /app/target/release/polymarket-bot /usr/local/bin/polymarket-bot \
     && cp /app/target/release/derive-clob-creds /usr/local/bin/derive-clob-creds \
+    && cp /app/target/release/openai-agent-auth /usr/local/bin/openai-agent-auth \
     && cargo clean --release -p polymarket-bot
 
 # Model changes and packaging tools must not invalidate Rust compilation layers.
@@ -71,6 +73,7 @@ LABEL org.opencontainers.image.source="https://github.com/gunnermadsen/polymarke
 
 COPY --from=builder /usr/local/bin/polymarket-bot /usr/local/bin/polymarket-bot
 COPY --from=builder /usr/local/bin/derive-clob-creds /usr/local/bin/derive-clob-creds
+COPY --from=builder /usr/local/bin/openai-agent-auth /usr/local/bin/openai-agent-auth
 COPY --from=models /opt/polymarket-models /usr/local/share/polymarket-bot/models
 
 USER polymarket
