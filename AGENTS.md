@@ -54,7 +54,7 @@
 - `development` contains accepted releases. Do not implement features or fixes directly on it.
 - `production` receives accepted `development` releases and reviewed deployment metadata only through user-approved release PRs merged in GitHub. Never implement features or fixes directly on it, push directly to it, or append CI/CD-generated admission commits after merge.
 - Before preparing another release, reconcile outstanding production release commits, including historical admission commits, into the latest integration branch, preserving deployed image and secret pins; never reset or force-push production to erase divergence.
-- Use one active integration branch created from the accepted `development` tip.
+- Keep local and remote `development` aligned with accepted integration; after advancing `development`, continue integration only from that same accepted tip and never retain a competing local `development` lineage.
 - New feature, defect, and model-training branches use `feature/<name>`, `defect/<name>`, or `training/<name>`, start from the latest integration tip, and merge only into integration. Keep unrelated domains separate; follow-up work starts from its existing feature, training, or integration lineage.
 - Make standalone documentation and repository-policy changes directly on the active integration branch in the main worktree. Documentation required by a feature, defect, or training change remains on its owning branch.
 
