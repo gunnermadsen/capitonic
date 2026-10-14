@@ -3110,6 +3110,31 @@ impl Store {
         self.recent_live_events_by_type("trade", true, limit).await
     }
 
+    /// Admit incoming venue events only when their exact venue order ID exists locally.
+    pub(crate) async fn live_event_owned_order_ids(
+        &self,
+        candidates: &[String],
+    ) -> Result<HashSet<String>> {
+        if candidates.is_empty() {
+            return Ok(HashSet::new());
+        }
+        Ok(sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT candidate FROM unnest($1::text[]) AS candidate
+            WHERE EXISTS (
+                SELECT 1 FROM polymarket.orders
+                WHERE venue_order_id = candidate
+            )
+            "#,
+        )
+        .bind(candidates)
+        .fetch_all(&self.pool)
+        .await
+        .context("failed to resolve live event replay ownership")?
+        .into_iter()
+        .collect())
+    }
+
     pub async fn recent_live_order_events(&self, limit: i64) -> Result<Vec<LiveVenueEvent>> {
         Ok(self
             .recent_live_events_by_type("order", false, limit)
@@ -3157,13 +3182,22 @@ impl Store {
 
         let rows = sqlx::query_as::<_, Row>(
             r#"
-            SELECT event_id, source, event_type, venue_event_id, venue_order_id,
-                   venue_trade_id, event_status, raw_payload
-            FROM polymarket.live_venue_events
-            WHERE source = 'user_ws'
-              AND event_type = $1
-              AND (NOT $3 OR applied = false)
-            ORDER BY created_at DESC
+            SELECT event.event_id, event.source, event.event_type, event.venue_event_id,
+                   event.venue_order_id, event.venue_trade_id, event.event_status, event.raw_payload
+            FROM polymarket.orders owned
+            JOIN LATERAL (
+                SELECT event_id, source, event_type, venue_event_id, venue_order_id,
+                       venue_trade_id, event_status, raw_payload, created_at
+                FROM polymarket.live_venue_events
+                WHERE venue_order_id = owned.venue_order_id
+                  AND source = 'user_ws'
+                  AND event_type = $1
+                  AND (NOT $3 OR applied = false)
+                ORDER BY created_at DESC
+                LIMIT $2
+            ) event ON true
+            WHERE owned.venue_order_id IS NOT NULL
+            ORDER BY event.created_at DESC
             LIMIT $2
             "#,
         )
@@ -3287,49 +3321,6 @@ impl Store {
             )
         })?;
         Ok(inserted)
-    }
-
-    pub(crate) async fn unapplied_account_live_sell_trades(
-        &self,
-        account_address: &str,
-        window_start: DateTime<Utc>,
-        window_end: DateTime<Utc>,
-        limit: i64,
-    ) -> Result<Vec<AccountTrade>> {
-        if account_address.trim().is_empty()
-            || window_start >= window_end
-            || !(1..=4_000).contains(&limit)
-        {
-            bail!("unapplied account live exit query requires bounded inputs");
-        }
-        let rows = sqlx::query_as::<_, AccountTrade>(
-            r#"
-            SELECT account_trade_id, account_address, token_id, market_id, side, price, size,
-              notional, timestamp_utc, transaction_hash, venue_order_id, venue_trade_id,
-              source, linked_order_id, raw_payload
-            FROM polymarket.account_trades
-            WHERE account_address = lower($1)
-              AND side = 'sell'
-              AND linked_order_id IS NULL
-              AND applied_exit_size = 0
-              AND timestamp_utc >= $2
-              AND timestamp_utc <= $3
-              AND raw_payload ? 'usdcSize'
-            ORDER BY timestamp_utc, account_trade_id
-            LIMIT $4
-            "#,
-        )
-        .bind(account_address.trim())
-        .bind(window_start)
-        .bind(window_end)
-        .bind(limit + 1)
-        .fetch_all(&self.pool)
-        .await
-        .context("failed to load unapplied account live exits")?;
-        if rows.len() > limit as usize {
-            bail!("unapplied account live exits exceed the bounded reconciliation window");
-        }
-        Ok(rows)
     }
 
     pub async fn insert_account_position_snapshot(

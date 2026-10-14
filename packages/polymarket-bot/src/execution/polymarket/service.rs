@@ -33,6 +33,7 @@ pub struct ExecutionService {
     books: Arc<RwLock<BookRegistry>>,
     adapter: Adapter,
     resumed: tokio::sync::OnceCell<()>,
+    live_lifecycle: tokio::sync::OnceCell<crate::btc::LiveExecutionLifecycle>,
     freshness: Arc<crate::btc::execution_freshness::ExecutionFreshnessMetrics>,
 }
 enum Adapter {
@@ -83,6 +84,7 @@ impl ExecutionService {
             adapter: Adapter::Paper(Box::new(venue.with_order_metrics(freshness.clone()))),
             freshness,
             resumed: tokio::sync::OnceCell::new(),
+            live_lifecycle: tokio::sync::OnceCell::new(),
         })
     }
     /// The caller supplies the existing process-bound LiveVenue, preserving account identity,
@@ -118,6 +120,7 @@ impl ExecutionService {
             adapter: Adapter::Live(venue),
             freshness,
             resumed: tokio::sync::OnceCell::new(),
+            live_lifecycle: tokio::sync::OnceCell::new(),
         })
     }
     /// Called on startup and periodically by the owning application, including after transient
@@ -145,14 +148,24 @@ impl ExecutionService {
                 true
             }
             Adapter::Live(venue) => {
-                let lifecycle =
-                    crate::btc::LiveExecutionLifecycle::new(venue.clone(), Duration::from_secs(5))?;
-                lifecycle
-                    .resume_run(
-                        &self.repository,
-                        self.oms.owner.process_id,
-                        self.oms.owner.run_id,
-                    )
+                // Hydration belongs to startup, not each maintenance pass. Failed hydration
+                // leaves the cell empty so recovery retries without disabling the process.
+                let lifecycle = self
+                    .live_lifecycle
+                    .get_or_try_init(|| async {
+                        let lifecycle = crate::btc::LiveExecutionLifecycle::new(
+                            venue.clone(),
+                            Duration::from_secs(5),
+                        )?;
+                        lifecycle
+                            .resume_run(
+                                &self.repository,
+                                self.oms.owner.process_id,
+                                self.oms.owner.run_id,
+                            )
+                            .await?;
+                        Ok::<_, anyhow::Error>(lifecycle)
+                    })
                     .await?;
                 lifecycle
                     .reconcile_run(

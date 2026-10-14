@@ -445,6 +445,22 @@ pub(super) fn is_clob_operation_timeout(error: &anyhow::Error) -> bool {
     })
 }
 
+/// Gate before persistence. Store a matching maker ID when the wallet was not the taker,
+/// so replay can use the existing venue-order index without inspecting unrelated payloads.
+pub(super) fn scope_live_event_to_local_order(
+    event: &mut LiveVenueEvent,
+    owned: &HashSet<String>,
+) -> bool {
+    let Some(order_id) = live_event_order_id_candidates(&event.raw_payload)
+        .into_iter()
+        .find(|id| owned.contains(id))
+    else {
+        return false;
+    };
+    event.venue_order_id = Some(order_id);
+    true
+}
+
 pub(super) fn live_event_order_id_candidates(payload: &Value) -> Vec<String> {
     let mut candidates = Vec::new();
     if let Some(order_id) = json_str(payload, "taker_order_id") {

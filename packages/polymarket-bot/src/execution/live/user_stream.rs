@@ -108,7 +108,12 @@ pub(super) async fn run_user_ws_once(
                 continue;
             };
             collateral_evidence_generation.fetch_add(1, Ordering::AcqRel);
-            let event = LiveVenue::parse_user_event(payload);
+            let mut event = LiveVenue::parse_user_event(payload);
+            let candidates = live_event_order_id_candidates(&event.raw_payload);
+            let owned = store.live_event_owned_order_ids(&candidates).await?;
+            if !scope_live_event_to_local_order(&mut event, &owned) {
+                continue;
+            }
             let inserted = store.insert_live_venue_event(&event).await?;
             let bot_fill_persisted = match LiveVenue::persist_fill_from_live_event(
                 store,

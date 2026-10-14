@@ -63,3 +63,11 @@ to selected/opposite books and paper/live admission, including final revalidatio
 The legacy frozen strategy validator retains its strict zero-source-lead semantics;
 both entry points reuse the same book validation implementation. Model/reference/fee
 causality and ingester behavior are unchanged.
+
+## Local live reconciliation ownership
+
+Both live execution paths reconcile venue order IDs against the existing local orders table. Account activity without an order ID may link only through existing exact transaction/fill evidence. Unowned activity is skipped before process accounting; it is not inferred to be a local manual exit from token or quantity similarity. Foreign open orders remain diagnostic counts, not process blockers. Unknown local submissions continue through the existing recovery path.
+
+Incoming websocket events are checked against exact local venue order IDs before event/account-trade persistence or websocket-triggered reconciliation. An unmatched event is dropped. A matched maker ID is stored as the event's indexed venue order ID without changing its raw payload. Stored replay joins local orders to that existing indexed column; unrelated historical rows remain untouched and never enter replay. There is no negative cache, retry queue or peer service. Events arriving before acknowledgement persistence may be dropped; the existing recovery of persisted pending/unknown orders and authenticated REST fills handles that race and venue propagation delay.
+
+Wallet positions must cover locally recorded live fills; additional wallet holdings do not belong to this database's accounting. Local shortages, unresolved local orders, immutable fill ownership, settlement credits and collateral checks remain enforced. This is custody coverage, not proof of exclusive ownership of the shared wallet. No peer endpoint, environment configuration or cross-environment request is required. Paper execution, TPC and OMS contracts are unchanged.

@@ -1060,6 +1060,8 @@ impl ExecutionVenue for PaperVenue {
             unresolved_live_order_count: 0,
             process_accounting_proven: false,
             process_accounting_status: "not_applicable".to_string(),
+            reconciliation: None,
+            reconciliation_error: None,
             max_order_notional_usd: Decimal::ZERO,
             max_open_notional_usd: Decimal::ZERO,
             entries_enabled: false,
@@ -1523,6 +1525,24 @@ mod tests {
 
     fn venue(registry: Arc<RwLock<BookRegistry>>, haircut: Decimal) -> PaperVenue {
         venue_with_participation_cap(registry, haircut, Decimal::ONE)
+    }
+
+    #[tokio::test]
+    async fn paper_status_does_not_fabricate_live_reconciliation_evidence() {
+        let venue = venue(
+            Arc::new(RwLock::new(BookRegistry::new(Uuid::new_v4()))),
+            Decimal::ONE,
+        );
+        let status = venue.live_status().await.unwrap();
+        assert_eq!(status.mode, "paper");
+        assert_eq!(status.process_accounting_status, "not_applicable");
+        assert_eq!(status.reason.as_deref(), Some("paper_mode"));
+        assert!(status.idempotency_clean);
+        assert!(status.reconciliation.is_none());
+        assert!(status.reconciliation_error.is_none());
+        let json = serde_json::to_value(status).unwrap();
+        assert!(json.get("reconciliation").is_none());
+        assert!(json.get("reconciliation_error").is_none());
     }
 
     fn venue_with_participation_cap(
