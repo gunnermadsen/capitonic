@@ -8,26 +8,39 @@ import sys
 
 INPUTS = {
     "polymarket-bot": [
-        "packages/polymarket-bot", "Cargo.toml", "Cargo.lock", ".dockerignore",
-        "packages/market-data-ingester/Cargo.toml", "common/proto",
-        "packages/btc-directional-model/runtime-models",
+        ".dockerignore", "Cargo.toml", "Cargo.lock",
+        "packages/polymarket-bot/Cargo.toml",
+        "packages/market-data-ingester/Cargo.toml",
+        "packages/polymarket-bot/build.rs", "packages/polymarket-bot/src",
+        "packages/polymarket-bot/Dockerfile.production",
+        "packages/polymarket-bot/model-manifest.json",
+        "packages/polymarket-bot/scripts/package_models.py",
+        "packages/btc-directional-model/runtime-models", "common/proto",
     ],
     "ingester": [
-        "packages/market-data-ingester", "Cargo.toml", "Cargo.lock", ".dockerignore",
-        "packages/polymarket-bot/Cargo.toml", "common/proto",
+        ".dockerignore", "Cargo.toml", "Cargo.lock",
+        "packages/polymarket-bot/Cargo.toml",
+        "packages/market-data-ingester/Cargo.toml",
+        "packages/market-data-ingester/build.rs",
+        "packages/market-data-ingester/src",
+        "packages/market-data-ingester/Dockerfile.production", "common/proto",
     ],
-    "db-migrate": ["packages/db-migrate", ".dockerignore"],
+    "db-migrate": [
+        ".dockerignore", "packages/db-migrate/package.json",
+        "packages/db-migrate/package-lock.json", "packages/db-migrate/tsconfig.json",
+        "packages/db-migrate/src", "packages/db-migrate/Dockerfile.production",
+    ],
 }
 
 
 def fingerprint(component, revision):
-    paths = INPUTS[component] + ["scripts/ci/component-fingerprint.py"]
+    paths = INPUTS[component]
     entries = subprocess.check_output(
         ["git", "ls-tree", "-rz", "--full-tree", revision, "--", *paths]
     ).split(b"\0")
     digest = hashlib.sha256()
     # Increment this contract when test/build requirements change.
-    digest.update(b"ci-component-v1:linux-arm64:rust-1.92.0\0")
+    digest.update(b"ci-component-v2:linux-arm64:rust-1.92.0\0")
     for entry in sorted(filter(None, entries)):
         metadata, path = entry.split(b"\t", 1)
         mode, kind, object_id = metadata.split()

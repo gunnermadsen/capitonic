@@ -466,10 +466,10 @@ jobs:
           registry_tags="$(aws ecr list-images --region "$AWS_REGION" \
             --repository-name "$REPOSITORY" --filter tagStatus=TAGGED \
             --query 'imageIds[].imageTag' --output json)"
-          jq -e --arg final "$base" 'index($final) == null' <<< "$registry_tags" >/dev/null || {
-            echo "Final image $base already exists for $COMPONENT; select a newer appVersion base." >&2
-            exit 1
-          }
+          final_exists=false
+          if jq -e --arg final "$base" 'index($final) != null' <<< "$registry_tags" >/dev/null; then
+            final_exists=true
+          fi
 
           highest=-1
           matching=()
@@ -487,11 +487,28 @@ jobs:
           }
           if (( ${#matching[@]} == 1 )); then
             rc_version="${matching[0]}"
+          elif [[ "$final_exists" == true ]]; then
+            production_values="capitonic-helm-chart/environments/production/$COMPONENT.yaml"
+            final_source="$(awk '$1 == "sourceRevision:" { print $2; exit }' "$production_values")"
+            pinned_version="$(awk '$1 == "version:" { print $2; exit }' "$production_values")"
+            [[ "$final_source" =~ ^[0-9a-f]{40}$ && "${pinned_version%-rc.*}" == "$base" ]]
+            final_digest="$(scripts/production/verify-ecr-arm64-image.sh \
+              "$REPOSITORY" "$base" "$final_source")"
+            final_fingerprint="$(python3 scripts/ci/component-fingerprint.py "$COMPONENT" "$final_source")"
+            if [[ "$final_fingerprint" != "$FINGERPRINT" ]]; then
+              echo "Final image $base has different $COMPONENT inputs; select a newer appVersion base." >&2
+              exit 1
+            fi
+            rc_version="$base"
+            source_revision="$final_source"
           else
             rc_version="$base-rc.$((highest + 1))"
           fi
-          existing_digest="$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$REPOSITORY" \
-            --image-ids imageTag="$rc_version" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
+          existing_digest="${final_digest:-}"
+          if [[ ! "$existing_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            existing_digest="$(aws ecr describe-images --region "$AWS_REGION" --repository-name "$REPOSITORY" \
+              --image-ids imageTag="$rc_version" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
+          fi
           {
             echo "rc_version=$rc_version"
             echo "source_revision=$source_revision"
