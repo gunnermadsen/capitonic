@@ -1,9 +1,12 @@
 # Implementation
 - The user’s requested outcome and any agreed implementation plan define the scope. Complete and verify that outcome without adding optional cleanup, redesigns, or unrelated changes.
+- A plan transferred to another task or thread is context only, not authorization to implement it; the receiving task must assimilate it, define the exact narrow file and behavior scope, and wait for explicit implementation authorization in that task.
 - Before implementing functionality, identify and reuse the existing module, contract, registry, persistence path, instrumentation, or execution path that owns the capability.
 - Make the smallest coherent change that satisfies the request. Necessary adjacent changes to compilation, tests, or directly affected contracts are permitted when they do not materially broaden the requested outcome; report them after implementation.
+- Do not extract, reorganize, rename, or rewrite existing logic solely for structure or testability; if the necessary diff materially exceeds the named behavior or owning files, stop and obtain explicit authorization for the expanded scope.
 - Obtain explicit authorization before making destructive changes, changing unrelated behavior or data, materially expanding the requested outcome, or introducing a parallel or replacement system.
 - If the existing system cannot satisfy the request without one of those changes, stop and explain the specific incompatibility.
+- Do not create, modify, rename, or delete files under `.github/workflows/` without explicit user authorization naming the workflow file and requested behavior; approval of a broader plan or adjacent release change does not authorize workflow changes.
 - Use `trading_processes.process_id` as the canonical identity for trading-process ownership and scoping.
 
 ## Golden Rules
