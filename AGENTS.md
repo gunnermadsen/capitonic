@@ -62,7 +62,7 @@
 
 - Commit changes in coherent domain groups. Feature, defect, and training branches merge only into integration.
 - Each merge requires explicit authorization naming the branch or commit.
-- Assess only branches selected for this checkpoint. If none are named, consider active-cycle branches with an existing worktree and commits outside integration. A branch qualifies when it is clean, committed, not abandoned, and passes its required checks. Report exclusions.
+- Assess only branches selected for merging. If none are named, consider active-cycle branches with an existing worktree and commits outside integration. A branch qualifies when it is clean, committed, not abandoned, and passes its required checks. Report exclusions.
 - Before merging, give one compact summary of each selected branch's lineage, worktree state, checks, commits, and diff against integration. Stop only for an ambiguous target, potential loss of uncommitted work, or unauthorized destructive history rewriting.
 - Use `--ff-only` when integration has not diverged from the branch merge base; otherwise use `--no-ff`. Do not rewrite or discard lineage to obtain a fast-forward.
 - Advance `development` from integration only with explicit authorization naming the integration branch or commit.
@@ -105,17 +105,17 @@
 - Before replacing containers, record the rollback tuple and keep it until deployment verification is complete.
 - Add any required worker capacity before replacing existing workers. Verify new workers are registered and healthy before proceeding with the remaining deployment.
 - Deploy the exact prebuilt image without rebuilding it or changing unrelated services. Preserve configured process intent and worker scale unless the verified allocation demand requires additional capacity.
-- Run Development Checkpoint Verification for a local golden checkpoint. Run Full Post-Deployment Verification for production or when explicitly requested. A failed check requires investigation, but triggers rollback only when the failure is attributable to the deployed image.
-- Record the candidate tuple, worker-capacity calculation, verification results, and unresolved alerts in the deployment result.
+- Run Local Deployment Verification after a local image deployment. Run Full Post-Deployment Verification for production or when explicitly requested. A failed check requires investigation, but triggers rollback only when the failure is attributable to the deployed image.
+- Record the selected image identity, rollback tuple, worker-capacity calculation, verification results, and unresolved alerts in the deployment result.
 
-### Development Checkpoint Verification
+### Local Deployment Verification
 
 - Use one bounded verification pass to confirm:
   1. Affected services run the exact selected image IDs and embedded revisions without restart loops; migration state matches the approved set and no unexpected migration is pending.
   2. Worker capacity covers desired realtime profiles and active backfills; every desired profile has a current healthy owner and required bot routes resolve.
   3. Every process enabled before deployment remains enabled, resumes automatically, and has a fresh heartbeat. Existing capital, identity, accounting, order, and market-safety controls remain active. Do not force a trade to prove readiness.
   4. Timestamps advance for feeds required by those processes, and there is no new sustained critical alert or affected-path error attributable to the deployment.
-- Recheck only a failed or transient condition. Record results and limitations in the checkpoint tag. A container health endpoint alone does not prove that trading can resume.
+- Recheck only a failed or transient condition. Record results and limitations in the deployment result. A container health endpoint alone does not prove that trading can resume.
 
 ### Full Post-Deployment Verification
 
@@ -133,7 +133,7 @@
 ### Automatic Rollback and Recovery
 
 - Roll back only when the intended fix remains defective or evidence reasonably attributes a regression in an affected path to the deployed image. A coincident, pre-existing, or unrelated failure must be reported and handled separately; it must not trigger rollback of the image.
-- On deployment failure, stop further rollout actions and preserve logs and the failed candidate tuple. Do not mint, move, or alter golden tags to disguise the failure.
+- On deployment failure, stop further rollout actions and preserve logs and the failed image identity.
 - If adding capacity or restarting a narrowly affected disposable worker safely restores an attributable failure without changing code, images, durable intent, or data, perform that recovery before rollback and repeat the affected verification checks. For production, perform this recovery only through the documented workflow or a specifically authorized procedure under Production Deployment Coordination.
 - If the attributable failure remains, restore each affected service to the exact immutable image that was running immediately before deployment, together with its recorded material runtime configuration and required worker capacity. Do not rebuild an old commit, use mutable tags as rollback identity, reset Git branches, or change unrelated services.
 - Before rolling back across a database change, verify that the previous image is compatible with the current database state. Never reverse or mutate database state outside a separately authorized migration. If compatibility is not proven, leave the database intact, restore only compatible services, and report the rollback as blocked or partial.
@@ -228,7 +228,7 @@
 - After provisioning Grafana, Prometheus, Loki, or Alloy configuration, create one annotated tag on the exact source commit. For the local development environment, use `provisioned/observability/<YYYYMMDDTHHMMSSZ>`; development is implicit in that name. For other environments, use `provisioned/observability/<environment>/<YYYYMMDDTHHMMSSZ>`.
 - Record the target environment, provisioning timestamp, originating branch, deployment result, configuration hash, and every component and configuration path provisioned.
 - Create one tag per provisioning event, including when multiple observability components are deployed together. Do not create separate component tags for the same event.
-- A provisioning tag records deployment history only; it does not imply image, integration, candidate, or golden-release status.
+- A provisioning tag records deployment history only; it does not imply image, integration, candidate, or release status.
 
 ## Data artifacts
 - Store all backtesting and model-training data only in Parquet format, including weather-model predictions and Kraken futures test data.
