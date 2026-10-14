@@ -205,6 +205,24 @@ impl CompiledDefinition {
             ..BtcStrategyConfig::default()
         }
     }
+
+    pub fn runtime_strategy(&self) -> Result<BtcStrategyConfig> {
+        let base = self.strategy();
+        let keys = self
+            .control
+            .sources
+            .iter()
+            .map(|source| source.key.as_str())
+            .collect();
+        self.control
+            .strategy
+            .decision_strategy
+            .compile_members(&base, &keys)?
+            .into_iter()
+            .next()
+            .map(|(_, strategy, _)| strategy)
+            .context("execution model router has no members")
+    }
 }
 impl Oms {
     pub(crate) fn validate_accounting(

@@ -87,7 +87,9 @@ pub(super) fn prepare(
         return Err(HttpError::conflict("order execution is not authorized"));
     }
     let p = &definition.execution.policies;
-    let strategy = definition.strategy();
+    let strategy = definition
+        .runtime_strategy()
+        .map_err(|_| HttpError::bad_request("invalid order configuration"))?;
     let execution_mode = if definition.execution.mode == ExecutionMode::Paper {
         BtcExecutionMode::Paper
     } else {
@@ -180,6 +182,7 @@ impl BtcProcessManager {
             run_id,
         };
         let strategy = definition.strategy();
+        let runtime_strategy = definition.runtime_strategy()?;
         let execution_mode = match definition.execution.mode {
             ExecutionMode::Paper => BtcExecutionMode::Paper,
             ExecutionMode::Live => BtcExecutionMode::Live,
@@ -207,7 +210,7 @@ impl BtcProcessManager {
                     .as_ref()
                     .map_or(Decimal::ONE, |policy| policy.starting_collateral_usd),
             },
-            &strategy,
+            &runtime_strategy,
         )?;
         let live = components.live_venue.clone();
         let service = match definition.execution.mode {

@@ -282,6 +282,11 @@ mod lifecycle_tests {
                 prepared.strategy.target_size,
                 definition.execution.policies.sizing.default_share
             );
+            prepared.strategy.validate().unwrap();
+            prepared
+                .strategy
+                .effective_max_directional_feature_age_ms()
+                .unwrap();
             assert_eq!(
                 prepared.execution.max_open_notional_usd,
                 definition.execution.policies.exposure.max_open_notional_usd
