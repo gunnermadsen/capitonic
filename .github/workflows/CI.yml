@@ -458,8 +458,8 @@ jobs:
           [[ "$source_revision" =~ ^[0-9a-f]{40}$ ]]
           chart="capitonic-helm-chart/charts/$COMPONENT/Chart.yaml"
           app_version="$(python3 -c 'import sys; print(next(line.split(":",1)[1].strip().strip(chr(34)).strip(chr(39)) for line in open(sys.argv[1]) if line.startswith("appVersion:")))' "$chart")"
-          [[ "$app_version" =~ ^(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))(-(local|rc)\.(0|[1-9][0-9]*))?$ ]] || {
-            echo "Chart appVersion must provide a SemVer base for $COMPONENT: $app_version" >&2
+          [[ "$app_version" =~ ^(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$ ]] || {
+            echo "Chart appVersion must be base-only vX.Y.Z for $COMPONENT: $app_version" >&2
             exit 1
           }
           base="${BASH_REMATCH[1]}"

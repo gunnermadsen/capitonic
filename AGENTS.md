@@ -73,16 +73,16 @@
 
 ## Local Image Boundaries
 
-- Initiate local CI and CD as separate commands for explicitly requested bot or ingester image work. CI owns candidate image builds, local versions, and image provenance; CD owns chart image and `appVersion` pins and local deployment.
+- Local CI owns `local.N` image builds and provenance. Local CD owns exact local image pins and deployment, but must not change the base-only chart `appVersion`.
 - Local application builds and deployments use only `vX.Y.Z-local.N`; never build, alias, or run RC images locally.
 - Model training and observability provisioning retain their `model/...` and `provisioned/observability/...` provenance. They do not enter the application image version sequence unless an image input changes.
 
 ## Helm Chart Versioning
 
-- Version each chart independently through `Chart.yaml` `version`, using SemVer `X.Y.Z`. The chart version identifies deployable chart structure; `appVersion` identifies the selected application version.
+- Version each chart independently through `Chart.yaml` `version`, using SemVer `X.Y.Z`. The chart version identifies deployable chart structure; `appVersion` identifies the component's base application version and uses base-only `vX.Y.Z`.
 - Bump the chart version only when the chart changes the rendered Kubernetes platform contract, such as resource kinds, pod configuration, environment variables, secrets, mounts, services, storage, scheduling, or RBAC; do not bump it for `appVersion`, image pins, digests, source revisions, or baked application and observability content.
 - An update limited to `appVersion` and its corresponding image tag, digest, or source-revision pins does not require a chart-version bump.
-- When the selected application image changes, update `appVersion` to the exact application version and keep all corresponding image identity fields consistent. If chart structure also changes, update `appVersion` and the chart version independently in the same commit.
+- Keep exact environment image versions in values files: local values may pin `vX.Y.Z-local.N`, and production values may pin `vX.Y.Z-rc.N` or final `vX.Y.Z`. A newly selected image pin must share the `appVersion` base.
 - Run Helm lint and render checks when chart structure changes. Run the applicable pin-consistency check when only application image identity changes.
 - Create an immutable annotated Git tag `helm/<chart-name>/vX.Y.Z` only when `Chart.yaml` `version` changes. Record the chart path and change summary. Never move or overwrite the tag. Do not create a new Helm tag for an `appVersion`-only update.
 
@@ -92,7 +92,7 @@
 - Before allocating a component version, check production release pins and registry tags. Treat promoted version bases as closed, select the next SemVer base for changed inputs, and keep RC, Helm, and release metadata consistent.
 - Reuse an existing immutable image when its component inputs are unchanged. Do not replace a selected digest with a rebuild without explicit authorization.
 - Local image CI and CD may build, tag, and deploy `local.N` images for Rancher Desktop k3s. Local image evidence does not gate advancing or pushing `development`.
-- GitHub CI owns production ARM64 image builds and immutable RC publication from `development`.
+- Remote GitHub CI reads the base-only chart `appVersion`, reuses an existing matching `vX.Y.Z-rc.N` image on retry, or allocates `N + 1` after the highest immutable matching RC tag in ECR; it owns production ARM64 image builds and RC publication from `development`.
 - Production registry repositories are immutable. CI may publish an absent SemVer RC tag or verify an existing publication on retry, but it must never move or overwrite an RC tag or publish a mutable production tag.
 - Successful remote CI completion, including verification of the immutable RC digest and embedded source revision, is sufficient development image evidence. Do not require golden, candidate-admission, image-hash, or development-checkpoint Git tags.
 

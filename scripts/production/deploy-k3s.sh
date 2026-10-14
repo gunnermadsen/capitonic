@@ -38,7 +38,7 @@ for component in "${components[@]}"; do
   [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
   [[ "$digest" != sha256:0000000000000000000000000000000000000000000000000000000000000000 ]]
   [[ "$source_revision" =~ ^[0-9a-f]{40}$ ]]
-  [[ "$(yq -r '.appVersion' "capitonic-helm-chart/charts/$component/Chart.yaml")" == "$version" ]]
+  [[ "$(yq -r '.appVersion' "capitonic-helm-chart/charts/$component/Chart.yaml")" == "${version%-rc.*}" ]]
   [[ "$(yq -r .environment "$values")" == production ]]
   # CD verifies the production-rendered version's immutable registry digest before invoking the host.
 done
