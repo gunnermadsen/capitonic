@@ -652,20 +652,6 @@ impl BtcProcessRunner {
                 "BTC execution lifecycle mode does not match the frozen process config"
             );
         }
-        config.strategy.validate()?;
-        ensure!(
-            config.strategy.agent_selection().is_none()
-                || execution_lifecycle.mode() == BtcExecutionMode::Paper,
-            "openai_agent supports paper execution only"
-        );
-        if config.strategy.attribution().is_none() {
-            anyhow::bail!("BTC execution run strategy attribution is invalid");
-        }
-        validate_directional_model_entry_policy(
-            &config.strategy,
-            config.directional_model_entry_policy,
-            config.execution_enabled,
-        )?;
         if let Some(entry_admission) = config.entry_admission.as_ref() {
             entry_admission.validate()?;
         }
@@ -727,6 +713,14 @@ impl BtcProcessRunner {
                 OrderType::Fok,
             )]
         };
+        for (_, strategy, _) in &member_strategies {
+            validate_process_strategy(
+                strategy,
+                config.directional_model_entry_policy,
+                config.execution_enabled,
+                execution_lifecycle.mode(),
+            )?;
+        }
         let router_members = member_strategies
             .into_iter()
             .map(|(member_id, strategy, entry_order_type)| {
@@ -3706,6 +3700,23 @@ fn validate_directional_model_entry_policy(
         );
     }
     Ok(())
+}
+
+fn validate_process_strategy(
+    strategy: &BtcStrategyConfig,
+    entry_policy: BtcDirectionalModelEntryPolicy,
+    execution_enabled: bool,
+    execution_mode: BtcExecutionMode,
+) -> Result<()> {
+    strategy.validate()?;
+    ensure!(
+        strategy.agent_selection().is_none() || execution_mode == BtcExecutionMode::Paper,
+        "openai_agent supports paper execution only"
+    );
+    if strategy.attribution().is_none() {
+        anyhow::bail!("BTC execution run strategy attribution is invalid");
+    }
+    validate_directional_model_entry_policy(strategy, entry_policy, execution_enabled)
 }
 
 fn latest_directional_model_candidate(

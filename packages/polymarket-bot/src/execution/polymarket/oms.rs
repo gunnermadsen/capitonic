@@ -200,6 +200,8 @@ impl CompiledDefinition {
             latency_reserve_per_share: p.execution_cost.latency_reserve_per_share,
             min_net_edge_per_share: p.edge.min_net_edge_per_share,
             min_net_edge_usd: p.edge.min_net_edge_usd,
+            max_directional_feature_age_ms: self.control.strategy.max_directional_feature_age_ms,
+            required_model_feeds: self.control.strategy.required_model_feeds.clone(),
             ..BtcStrategyConfig::default()
         }
     }
