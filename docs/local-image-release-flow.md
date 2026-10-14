@@ -7,9 +7,7 @@ This is the operator runbook for the bot and ingester image path in local k3s. E
 | Select work, commit code, choose branch merges, and initiate each command | Operator or agent |
 | Check image inputs, select `local.N`, build the image, and create `image/...` provenance tags | `scripts/local-image-ci.sh` |
 | Validate the candidate, pin the chart image and `appVersion`, and deploy the committed pin | `scripts/local-image-cd.sh` |
-| Record accepted checkpoint and first-use `golden/...` provenance | Operator or agent under `AGENTS.md` |
-| Validate one accepted RC and atomically push its Git refs with `development` | `scripts/local-image-ci.sh <component> --tag-rc` |
-| Validate and atomically push the component RC tags on the accepted checkpoint | `scripts/tag-accepted-rc-set.sh` |
+| Allocate and publish immutable RC images after changes reach `development` | GitHub CI |
 
 ## Feature or defect branch: local candidate
 
@@ -34,31 +32,17 @@ scripts/local-image-cd.sh deploy <component>
 
 CD updates the chart image and `appVersion`; for ingester it also pins the immutable image ID and embedded Git revision. It does not increment the Helm chart's own `version`. Confirm the running pods use the selected image ID and that CD's recovery checks pass. When validating another branch in the same cycle, preserve earlier deployed chart pins and their source lineage so the next chart does not regress an image. Branch integration between validations remains a deliberate source-control action.
 
-## Integration branch: golden checkpoint
+## Integration branch: development publication
 
 Before preparing a release, reconcile outstanding production admission commits into integration, preserving deployed image digests and secret-version pins. Production accepts qualified development promotions and scoped CD admission commits; reconcile generated production commits back into integration after deployment.
 
-Select qualifying branches and merge them into integration under `AGENTS.md`. Compare component image inputs with the tested candidates. Reuse an immutable candidate when its inputs match; do not rebuild it merely to assign an RC alias. Run required component checks once for changed inputs.
+Select qualifying branches and merge them into integration under `AGENTS.md`. Compare component image inputs with tested local candidates and run the required component checks for changed inputs. Local candidates and deployments remain available for development validation but do not admit or allocate an RC.
 
-For each selected component, invoke CD to alias the tested candidate as the next RC and generate its chart pin. The first RC for a new base version is `rc.0`; subsequent RCs increment on that same base. Review and commit the chart pins, then invoke deployment separately for each component:
-
-```sh
-scripts/local-image-cd.sh rc <component> <vMAJOR.MINOR.PATCH-local.N>
-# Commit the generated Chart.yaml and values.yaml changes.
-scripts/local-image-cd.sh deploy <component>
-```
-
-Record the predeployment rollback tuple and perform Development Checkpoint Verification from `AGENTS.md`. If accepted, fast-forward `development`, record its annotated checkpoint tag, and create a `golden/...` tag only when each image is first accepted. To validate and publish the complete three-component release set together:
-
-```sh
-scripts/tag-accepted-rc-set.sh
-```
-
-The command checks every accepted chart, running image ID, and provenance before publishing `development`, the aligned integration branch, checkpoint, candidate, image-hash, golden, and RC refs in one `git push --atomic` operation. The command selects exactly one annotated RC tag per component on the accepted checkpoint. This prevents CI from observing a partially published set of release tags. Use `scripts/local-image-ci.sh <component> --tag-rc` when publishing a single component. Never push those related refs separately. A golden image remains identified by its immutable image ID and embedded source revision; an RC alias does not change its bytes.
+After the authorized fast-forward of `development`, GitHub CI reads the committed chart `appVersion` as the component's SemVer base, allocates the next available `rc.N` from ECR, builds the affected production image from the `development` revision, and verifies its immutable digest and embedded source revision. CI reuses an existing RC only when it identifies the same source revision. No local checkpoint, golden tag, RC Git tag, or atomic release-ref push is required.
 
 ## Separate production boundary
 
-GitHub Actions retains the local CI component boundaries: it runs the bot and ingester formatting, Clippy, unit/integration tests, the existing Docker-backed outage-recovery integration workflow, ingester documentation checks, and the db-migrate TypeScript build/tests. Every production image publication depends on all of those checks. It builds only components whose image inputs changed or whose accepted RC selection changed. Production images are built by GitHub CI from the accepted component source as `linux/arm64`, then published under immutable component-source-revision and SemVer test or RC versions selected from component Git tags; no mutable `production` image tag is permitted. CI verifies the matching accepted `rc/<component>/<version>` Git provenance before publishing an absent ECR RC, and verifies an existing ECR RC's architecture and embedded revision without rebuilding or overwriting it. Local CI qualifies the local k3s image and publishes Git provenance only; it must not stage or push the production ECR image. An independently rebuilt CI image does not inherit local golden status merely because it has the same source.
+GitHub Actions retains the local CI component boundaries: it runs the bot and ingester formatting, Clippy, unit/integration tests, the existing Docker-backed outage-recovery integration workflow, ingester documentation checks, and the db-migrate TypeScript build/tests. Every production image publication depends on all of those checks. It builds only affected components. Production images are built by GitHub CI from the `development` revision as `linux/arm64`, then published under the next immutable SemVer RC allocated from the committed chart `appVersion` base and existing ECR tags; no mutable `production` image tag is permitted. CI verifies an existing matching RC's architecture and embedded revision without rebuilding or overwriting it. Local CI qualifies local k3s images and records local Git provenance only; it must not stage or push the production ECR image.
 
 ### Production CD release contract
 

@@ -247,34 +247,6 @@ state_file.write_text(json.dumps(state))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("image/ingester/v1.10.0-local.0", self.tags("ingester"))
 
-    def test_rc_set_publishes_checkpoint_tags_without_manifest(self):
-        shutil.copy2(SCRIPT.parent / "tag-accepted-rc-set.sh", self.repo / "scripts/tag-accepted-rc-set.sh")
-        (self.repo / "scripts/local-image-ci.sh").write_text("#!/bin/sh\nexit 0\n")
-        self.commit()
-        accepted = self.git("rev-parse", "HEAD")
-        self.git("branch", "development")
-        checkpoint = f"checkpoint/development/git-{accepted}"
-        self.git("tag", "-a", checkpoint, "-m", "fixture checkpoint")
-        for component in ("polymarket-bot", "ingester", "db-migrate"):
-            candidate = f"image/{component}/v1.0.0-local.0"
-            golden = f"golden/{component}/sha256-" + "1" * 64
-            image_hash = f"image/{component}/sha256-" + "1" * 64
-            for tag in (candidate, golden, image_hash):
-                self.git("tag", "-a", tag, "-m", "fixture image")
-            self.git("tag", "-a", f"rc/{component}/v1.0.0-rc.0", "-m",
-                     f"candidate_tag: {candidate}\ngolden_tag: {golden}\nimage_id: sha256:" + "1" * 64)
-        remote = self.root / "remote.git"
-        self.git("init", "--bare", str(remote))
-        self.git("remote", "add", "origin", str(remote))
-        result = subprocess.run(["bash", "scripts/tag-accepted-rc-set.sh"], cwd=self.repo,
-                                env=self.env, text=True, capture_output=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        refs = self.git("ls-remote", "origin")
-        for component in ("polymarket-bot", "ingester", "db-migrate"):
-            self.assertIn(f"refs/tags/rc/{component}/v1.0.0-rc.0", refs)
-        self.assertIn("refs/heads/development", refs)
-        self.assertFalse((self.repo / "infra/production/release.json").exists())
-
     def test_missing_version_tag_does_not_build(self):
         self.git("tag", "-d", "ci/ingester/v1.2.1-test.0")
         result = self.run_ci("ingester")
