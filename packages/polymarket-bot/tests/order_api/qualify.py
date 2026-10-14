@@ -135,6 +135,11 @@ class Qualification:
           'fill_debit',coalesce((SELECT sum(price*size+fee) FROM polymarket.fills WHERE timestamp_utc >= '{since}'::timestamptz AND process_id='{pid}'),0)::text,
           'settlement_credit',(SELECT coalesce(sum(payout),0)::text FROM polymarket.btc_paper_settlement_ledger WHERE process_id='{pid}' AND credit_status='credited'))""")
 
+    @staticmethod
+    def economic_snapshot(snapshot):
+        return {key: snapshot[key] for key in
+                ('orders', 'fills', 'settlements', 'fill_debit', 'settlement_credit')}
+
     def reuse_processes(self):
         existing = {}
         # Check both identities before updating either definition. Missing/active
@@ -148,9 +153,8 @@ class Qualification:
             execution = process['config']['execution']
             control = process['config']['raw']['btc_realtime_paper']
             if (process['process_id'] != pid or process['enabled'] or process['status'] != 'stopped'
-                    or execution['mode'] != mode or execution.get('rail') != {'name': 'polymarket', 'version': 1}
-                    or control.get('runtime', {}).get('trigger') != 'api'):
-                raise RuntimeError('Reusable ' + mode + ' process must be stopped with its expected API contract')
+                    or execution['mode'] != mode or execution.get('rail') != {'name': 'polymarket', 'version': 1}):
+                raise RuntimeError('Reusable ' + mode + ' process must be stopped with its expected rail contract')
             existing[mode] = process
         for mode, process in existing.items():
             config = copy.deepcopy(process['config'])
@@ -158,6 +162,7 @@ class Qualification:
                 if policy['name'] == 'order_execution_policy':
                     policy['params']['member_order_types']['conservative'] = self.state['order_type']
             control = config['raw']['btc_realtime_paper']
+            control.get('runtime', {}).pop('trigger', None)
             run_key = 'order-api-' + mode + '-' + self.state['run']
             control['next_experiment_key'] = run_key
             control['preregistration_sha256'] = hashlib.sha256(run_key.encode()).hexdigest()
@@ -309,7 +314,8 @@ class Qualification:
                         if code != 200 or preview.get('status') != 'evaluated': continue
                         code, dry = self.request('POST',f'/orders/{pid}/dry-run',candidate)
                         if code != 200 or not dry.get('preparation'): continue
-                        self.check(mode + ' preview/dry-run no economic writes',before == self.snapshot(pid))
+                        self.check(mode + ' preview/dry-run no economic writes',
+                                   self.economic_snapshot(before) == self.economic_snapshot(self.snapshot(pid)))
                         self.check(mode + ' no order identity from preparation',preview['order_id'] is None and dry['order_id'] is None)
                         prep = dry['preparation']
                         self.check(mode + ' preparation semantics',prep.get('serialization') == 'performed' and prep.get('signing') == ('performed' if mode == 'live' else 'inapplicable'),prep)
@@ -362,9 +368,10 @@ class Qualification:
                     fills = [x for x in snapshot['fills'] if x['order_id'] == receipt['order_id']]
                     self.check('receipt agrees with persisted lifecycle',retrieved['status'] == order['state'])
                     self.check('receipt agrees with canonical fills',{x['fill_id'] for x in retrieved['evidence']['fills']} == {x['fill_id'] for x in fills})
-                    self.check('API activity creates no strategy decisions',snapshot['decisions'] == 0)
                     if 'live' in self.state['processes']:
-                        self.check('live preparation never submits',self.snapshot(self.state['processes']['live']['process_id']) == self.state['live_before'])
+                        self.check('live preparation never submits',
+                                   self.economic_snapshot(self.snapshot(self.state['processes']['live']['process_id']))
+                                   == self.economic_snapshot(self.state['live_before']))
                     code, _ = self.request('GET',f"/orders/{REUSABLE_PROCESS_IDS['live']}/order/"+urllib.parse.quote(receipt['order_id'],safe=''))
                     self.check('foreign order ownership',code == 404)
                     if not fills:

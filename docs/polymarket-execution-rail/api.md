@@ -17,7 +17,7 @@ The controller handles HTTP/auth/request shape and delegates. It contains no exc
 
 Request inputs identify the candidate instrument/action/member and idempotency identity. Exchange, mode, credentials, account and policy overrides are forbidden. Quantity follows the sizing policy, not an unconstrained caller field. API candidates are synthetic, never model approvals. Real causal evidence is required for applicable risk/admission; inapplicable model checks are explicitly reported, not silently passed. The request envelope below is the version-1 controller contract. Its implementation must not add provider-specific fields or bypass the configured member policy.
 
-An API-driven process must not schedule UMR, including after restart. Trigger selection cannot bypass durable process authority. UMR calls the same application service directly, never through HTTP. Account exposure includes other sleeves sharing that account; process identity alone is not capital isolation.
+A rail-selected process schedules UMR independently of authenticated API availability, including after restart. API requests neither select nor suppress UMR; they call the same application service without passing through the model runtime. Account exposure includes other sleeves sharing that account; process identity alone is not capital isolation.
 
 ## Results, idempotency and errors
 

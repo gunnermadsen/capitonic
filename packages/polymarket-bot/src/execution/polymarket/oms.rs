@@ -165,15 +165,34 @@ pub(crate) struct ExecutionIntent {
 pub(crate) struct Oms {
     pub definition: CompiledDefinition,
     pub owner: Ownership,
+    pub run_config_sha256: String,
 }
 impl Oms {
+    #[cfg(test)]
     pub fn new(definition: CompiledDefinition, owner: Ownership) -> Result<Self> {
+        let run_config_sha256 = definition.config_sha256.clone();
+        Self::new_for_run(definition, owner, run_config_sha256)
+    }
+
+    pub fn new_for_run(
+        definition: CompiledDefinition,
+        owner: Ownership,
+        run_config_sha256: String,
+    ) -> Result<Self> {
         ensure!(
             !owner.process_id.is_nil() && !owner.run_id.is_nil(),
             "invalid order ownership"
         );
         definition.verify_identity()?;
-        Ok(Self { definition, owner })
+        ensure!(
+            definition.matches_config_sha256(&run_config_sha256),
+            "run configuration identity mismatch"
+        );
+        Ok(Self {
+            definition,
+            owner,
+            run_config_sha256,
+        })
     }
     pub fn strategy(&self) -> BtcStrategyConfig {
         self.definition.strategy()
@@ -573,7 +592,7 @@ impl Oms {
             metadata: serde_json::json!({"execution_intent":"entry","process_id":self.owner.process_id,"run_id":self.owner.run_id,
                 "model_member_id":candidate.member,"outcome":candidate.outcome,"dynamic_fee_rate":fee_rate,
                 "decision_at":snapshot.observed_at,"polymarket_execution":{"version":super::RAIL_CONTRACT_VERSION,"oms_version":super::OMS_CONTRACT_VERSION,
-                "config_sha256":definition.config_sha256,"origin":candidate.origin(),"mode":mode,"account_ref":definition.execution.account_ref,
+                "config_sha256":self.run_config_sha256,"origin":candidate.origin(),"mode":mode,"account_ref":definition.execution.account_ref,
                 "candidate_sha256":candidate_identity(candidate)?,"starting_collateral_usd":p.paper_execution.as_ref().map(|p|p.starting_collateral_usd),
                 "shared_admission_at":now,"quantity":edge.size,
                 "policy_evidence":{"order_policies":p,"book_received_at":selected.received_at,"book_source_at":selected.source_timestamp,

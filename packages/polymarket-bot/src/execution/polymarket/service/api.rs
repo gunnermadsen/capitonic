@@ -168,7 +168,7 @@ impl ExecutionService {
             operation_id: candidate.id,
             order_id: None,
             origin: "api".into(),
-            config_sha256: self.oms.definition.config_sha256.clone(),
+            config_sha256: self.oms.run_config_sha256.clone(),
             status: "evaluated".into(),
             policy_results,
             evidence: json!({"observed_at":candidate.snapshot.observed_at,"economic_effects":false}),
@@ -271,7 +271,7 @@ impl ExecutionService {
                 order_type,
                 price,
                 size: policies.sizing.default_share,
-                metadata: json!({"execution_intent":"entry","run_id":self.oms.owner.run_id,"polymarket_execution":{"origin":"api","mode":self.oms.definition.execution.mode.as_str(),"account_ref":self.oms.definition.execution.account_ref,"config_sha256":self.oms.definition.config_sha256,"candidate_sha256":candidate_identity(candidate)?,"api_request_sha256":candidate.api_request_hash,"intent_prepared":false,"price_kind":"observed_unapproved_ask","policy_results":rejection.policy_results,"starting_collateral_usd":policies.paper_execution.as_ref().map(|p|p.starting_collateral_usd),"rejection_reason":rejection.reason}}),
+                metadata: json!({"execution_intent":"entry","run_id":self.oms.owner.run_id,"polymarket_execution":{"origin":"api","mode":self.oms.definition.execution.mode.as_str(),"account_ref":self.oms.definition.execution.account_ref,"config_sha256":self.oms.run_config_sha256,"candidate_sha256":candidate_identity(candidate)?,"api_request_sha256":candidate.api_request_hash,"intent_prepared":false,"price_kind":"observed_unapproved_ask","policy_results":rejection.policy_results,"starting_collateral_usd":policies.paper_execution.as_ref().map(|p|p.starting_collateral_usd),"rejection_reason":rejection.reason}}),
             },
         })
     }
@@ -364,9 +364,11 @@ mod tests {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://unused:unused@localhost/unused")
             .unwrap();
+        let run_config_sha256 = oms.definition.config_sha256.clone();
         let service = ExecutionService::paper(
             oms.definition,
             oms.owner,
+            run_config_sha256,
             Store::from_pool(pool.clone()),
             BtcRepository::from_pool(pool),
             Arc::new(RwLock::new(BookRegistry::new(Uuid::new_v4()))),

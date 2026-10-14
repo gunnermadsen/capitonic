@@ -217,6 +217,7 @@ impl BtcProcessManager {
             ExecutionMode::Paper => ExecutionService::paper(
                 definition.clone(),
                 owner,
+                hash.to_string(),
                 self.store.clone(),
                 self.repository.clone(),
                 books.clone(),
@@ -224,6 +225,7 @@ impl BtcProcessManager {
             ExecutionMode::Live => ExecutionService::live(
                 definition.clone(),
                 owner,
+                hash.to_string(),
                 self.store.clone(),
                 self.repository.clone(),
                 books.clone(),

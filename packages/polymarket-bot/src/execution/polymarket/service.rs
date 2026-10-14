@@ -50,6 +50,7 @@ impl ExecutionService {
     pub fn paper(
         definition: CompiledDefinition,
         owner: Ownership,
+        run_config_sha256: String,
         store: Store,
         repository: BtcRepository,
         books: Arc<RwLock<BookRegistry>>,
@@ -77,7 +78,7 @@ impl ExecutionService {
             p.sizing.max_depth_participation,
         )?;
         Ok(Self {
-            oms: Arc::new(Oms::new(definition, owner)?),
+            oms: Arc::new(Oms::new_for_run(definition, owner, run_config_sha256)?),
             store,
             repository,
             books,
@@ -92,6 +93,7 @@ impl ExecutionService {
     pub fn live(
         definition: CompiledDefinition,
         owner: Ownership,
+        run_config_sha256: String,
         store: Store,
         repository: BtcRepository,
         books: Arc<RwLock<BookRegistry>>,
@@ -113,7 +115,7 @@ impl ExecutionService {
         );
         freshness.expect_order_recovery();
         Ok(Self {
-            oms: Arc::new(Oms::new(definition, owner)?),
+            oms: Arc::new(Oms::new_for_run(definition, owner, run_config_sha256)?),
             store,
             repository,
             books,
@@ -142,7 +144,7 @@ impl ExecutionService {
                     &self.repository,
                     self.oms.owner.process_id,
                     self.oms.owner.run_id,
-                    &self.oms.definition.config_sha256,
+                    &self.oms.run_config_sha256,
                 )
                 .await?;
                 true
@@ -172,7 +174,7 @@ impl ExecutionService {
                         &self.repository,
                         self.oms.owner.process_id,
                         self.oms.owner.run_id,
-                        &self.oms.definition.config_sha256,
+                        &self.oms.run_config_sha256,
                     )
                     .await?;
                 let status = venue.live_status().await?;
@@ -219,8 +221,8 @@ impl ExecutionService {
                 .context("unknown process")?;
             if process.enabled
                 && matches!(process.status.as_str(), "starting" | "running")
-                && super::configuration::compile(&process.config)?.config_sha256
-                    == self.oms.definition.config_sha256
+                && super::configuration::compile(&process.config)?
+                    .matches_config_sha256(&self.oms.run_config_sha256)
             {
                 self.resumed
                     .get_or_try_init(|| async {
@@ -313,7 +315,7 @@ impl ExecutionService {
                             .metadata
                             .pointer("/polymarket_execution/config_sha256")
                             .and_then(|v| v.as_str())
-                            == Some(self.oms.definition.config_sha256.as_str())),
+                            == Some(self.oms.run_config_sha256.as_str())),
                 "idempotency identity conflict"
             );
             self.freshness.order_event(
@@ -334,15 +336,15 @@ impl ExecutionService {
             "process_not_authorized"
         );
         ensure!(
-            super::configuration::compile(&process.config)?.config_sha256
-                == self.oms.definition.config_sha256,
+            super::configuration::compile(&process.config)?
+                .matches_config_sha256(&self.oms.run_config_sha256),
             "process_configuration_changed"
         );
         ensure!(
             self.repository
                 .run_config_hash(self.oms.owner.process_id, self.oms.owner.run_id)
                 .await?
-                == self.oms.definition.config_sha256,
+                == self.oms.run_config_sha256,
             "run_configuration_identity_mismatch"
         );
         self.restore_configured_authorization().await?;
@@ -425,7 +427,7 @@ impl ExecutionService {
         self.freshness
             .order_event(intent.origin, OrderStage::Admission, OrderOutcome::Accepted);
         tracing::info!(event="order_intent_admitted",process_id=%self.oms.owner.process_id,client_order_id=%candidate.id,
-            execution_mode=self.oms.definition.execution.mode.as_str(),origin=intent.origin.as_str(),config_hash=%self.oms.definition.config_sha256,"Polymarket OMS admitted order");
+            execution_mode=self.oms.definition.execution.mode.as_str(),origin=intent.origin.as_str(),config_hash=%self.oms.run_config_sha256,"Polymarket OMS admitted order");
         let guard = Arc::new(SubmissionGuard {
             oms: self.oms.clone(),
             store: self.store.clone(),
@@ -606,8 +608,8 @@ impl LivePrePostGuard for SubmissionGuard {
             .context("process authority unavailable")?;
         if !process.enabled
             || !matches!(process.status.as_str(), "running" | "starting")
-            || super::configuration::compile(&process.config)?.config_sha256
-                != self.oms.definition.config_sha256
+            || !super::configuration::compile(&process.config)?
+                .matches_config_sha256(&self.oms.run_config_sha256)
         {
             return Ok(Some(LiveExecutionGateReason::OrderSubmissionDisabled));
         }
@@ -881,7 +883,7 @@ async fn accounting(
             &repository
                 .load_resolved_loss_regime_candidates(
                     oms.owner.process_id,
-                    &oms.definition.config_sha256,
+                    &oms.run_config_sha256,
                     now,
                 )
                 .await?,
