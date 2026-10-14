@@ -204,11 +204,12 @@
 
 ## Runtime Configuration
 
-- Store parameters that affect trading decisions in the trading playbook configuration owned by `trading_processes`.
+- The trading process configuration (TPC) stored in the `trading_processes` playbook is the sole authority for non-secret controls affecting trading decisions. Any new or modified trade gate, admission or risk control, order-execution policy, or execution-rail selection must be represented in the TPC and consumed through the existing compiled-settings contract; do not introduce parallel configuration stores, flags, or control paths.
+- Creating, updating, enabling, disabling, or deleting a trading process requires explicit user authorization naming its `process_id` and exact intended change; use only the established API and verify the persisted result.
 - Store sensitive runtime values only in the main worktree's applicable `.env` files. Materialize them into Kubernetes Secrets through the owning provisioned workflow; never place secret values in chart values, manifests, or committed configuration.
 - Store global non-sensitive runtime configuration in the owning Helm chart values or authoritative provisioned configuration. Do not store non-sensitive configuration in `.env` files.
 - Treat `.env.example` and other `*.example` files as documentation templates only. Never place real secret values in them.
-- Preserve compatibility for existing trading processes when refactoring, introducing, or removing systems. Any intentional incompatibility requires explicit authorization and a defined migration path.
+- Changes to the TPC schema, defaults, templates, validation, compilation, or interpretation are reviewed source changes under the normal branch-integration lifecycle. TPC is not CI/CD state or release metadata; CI/CD must not create, select, mutate, promote, or version TPC values. Preserve compatibility for existing processes unless an incompatibility and migration path are explicitly authorized.
 
 ## Backfills
 - Reuse the existing shared backfill infrastructure, standards, and contracts for every backfill domain; do not create domain-specific workers or deployment definitions.
