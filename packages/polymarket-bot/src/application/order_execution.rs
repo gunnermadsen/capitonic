@@ -1,12 +1,17 @@
-//! API-triggered execution reuses the process lifecycle, shared feeds, and order service.
+//! Rail-selected execution reuses the process lifecycle, shared feeds, and order service.
 use super::*;
 use polymarket_bot::{
-    btc::{BtcStrategyRunner, StrategyObservation},
+    btc::{
+        BtcDecision, BtcFeatureSnapshot, BtcProcessConfig, BtcProcessRunner, QualifiedExecution,
+        QualifiedExecutionOutcome, QualifiedExecutionReceipt, QualifiedExecutionRejection,
+        QualifiedExecutionResolution,
+    },
     execution::{
         orders::{EvaluationRequest, ExecuteRequest, OrderApplication, Receipt},
         polymarket::{
-            configuration::{self, CompiledDefinition, ExecutionMode, ExecutionTrigger},
-            oms::Ownership,
+            configuration::{self, CompiledDefinition, ExecutionMode},
+            lifecycle::Resolution,
+            oms::{Candidate, Ownership},
             service::ExecutionService,
         },
     },
@@ -20,6 +25,53 @@ pub(super) type OrderRuntime = (
     Option<Arc<ExecutionService>>,
 );
 
+struct PolymarketQualifiedExecution {
+    service: Arc<ExecutionService>,
+}
+
+#[async_trait]
+impl QualifiedExecution for PolymarketQualifiedExecution {
+    async fn execute(
+        &self,
+        candidate_id: Uuid,
+        member: String,
+        snapshot: BtcFeatureSnapshot,
+        decision: BtcDecision,
+    ) -> Result<QualifiedExecutionOutcome> {
+        let candidate = Candidate::qualified(candidate_id, member, snapshot, decision)?;
+        match self.service.execute(candidate).await {
+            Ok(receipt) => Ok(QualifiedExecutionOutcome::Receipt(
+                QualifiedExecutionReceipt {
+                    order: receipt.order,
+                    resolution: match receipt.resolution {
+                        Resolution::Pending => QualifiedExecutionResolution::Pending,
+                        Resolution::Executed => QualifiedExecutionResolution::Executed,
+                        Resolution::DefinitiveNonexecution => {
+                            QualifiedExecutionResolution::DefinitiveNonexecution
+                        }
+                    },
+                    replayed: receipt.replayed,
+                },
+            )),
+            Err(error) => match error
+                .downcast_ref::<polymarket_bot::execution::polymarket::AdmissionRejection>()
+            {
+                Some(rejection) => Ok(QualifiedExecutionOutcome::Rejected(
+                    QualifiedExecutionRejection {
+                        reason: rejection.reason.clone(),
+                        policy_results: rejection.policy_results.clone(),
+                    },
+                )),
+                None => Err(error),
+            },
+        }
+    }
+
+    async fn reconcile(&self) -> Result<()> {
+        self.service.reconcile().await
+    }
+}
+
 pub(super) fn prepare(
     process: &TradingProcess,
     resume: bool,
@@ -31,11 +83,6 @@ pub(super) fn prepare(
     }
     let definition = configuration::compile(&process.config)
         .map_err(|_| HttpError::bad_request("invalid order configuration"))?;
-    if definition.control.runtime.trigger != ExecutionTrigger::Api {
-        return Err(HttpError::not_implemented(
-            "UMR order routing has not been activated",
-        ));
-    }
     if !definition.execution.execute_signals {
         return Err(HttpError::conflict("order execution is not authorized"));
     }
@@ -125,65 +172,93 @@ impl BtcProcessManager {
     ) -> Result<OrderRuntime> {
         let definition = configuration::compile(&process.config)?;
         anyhow::ensure!(
-            definition.control.runtime.trigger == ExecutionTrigger::Api
-                && definition.config_sha256 == hash,
+            definition.matches_config_sha256(hash),
             "order run identity mismatch"
         );
         let owner = Ownership {
             process_id: process.process_id,
             run_id,
         };
-        let (service, live) = match definition.execution.mode {
-            ExecutionMode::Paper => (
-                ExecutionService::paper(
-                    definition,
-                    owner,
-                    self.store.clone(),
-                    self.repository.clone(),
-                    books.clone(),
-                )?,
-                None,
-            ),
-            ExecutionMode::Live => {
-                let venue = Arc::new(
-                    self.config
-                        .live_venue
-                        .as_ref()
-                        .context("live credentials unavailable")?
-                        .bind_process(
-                            process.process_id,
-                            process.created_at,
-                            &effective(&definition),
-                        )?,
-                );
-                (
-                    ExecutionService::live(
-                        definition,
-                        owner,
-                        self.store.clone(),
-                        self.repository.clone(),
-                        books.clone(),
-                        venue.clone(),
-                    )?,
-                    Some(venue),
-                )
-            }
+        let strategy = definition.strategy();
+        let execution_mode = match definition.execution.mode {
+            ExecutionMode::Paper => BtcExecutionMode::Paper,
+            ExecutionMode::Live => BtcExecutionMode::Live,
         };
-        if resume {
-            self.repository
-                .verify_run_manifest(process.process_id, run_id, run_key, hash, frozen)
-                .await?;
-        } else {
-            self.repository
-                .claim_run_manifest(process.process_id, run_id, run_key, hash, frozen)
-                .await?;
-        }
+        let policies = &definition.execution.policies;
+        let components = self.execution_components(
+            execution_mode,
+            &effective(&definition),
+            (process.process_id, process.created_at),
+            books.clone(),
+            PaperVenueConfig {
+                arrival_latency: Duration::from_millis(
+                    policies
+                        .paper_execution
+                        .as_ref()
+                        .map_or(1, |policy| policy.arrival_latency_ms),
+                ),
+                visible_depth_haircut: policies
+                    .paper_execution
+                    .as_ref()
+                    .map_or(Decimal::ONE, |policy| policy.visible_depth_haircut),
+                max_book_age: chrono::Duration::milliseconds(policies.evidence.max_book_age_ms),
+                starting_collateral_usd: policies
+                    .paper_execution
+                    .as_ref()
+                    .map_or(Decimal::ONE, |policy| policy.starting_collateral_usd),
+            },
+            &strategy,
+        )?;
+        let live = components.live_venue.clone();
+        let service = match definition.execution.mode {
+            ExecutionMode::Paper => ExecutionService::paper(
+                definition.clone(),
+                owner,
+                self.store.clone(),
+                self.repository.clone(),
+                books.clone(),
+            )?,
+            ExecutionMode::Live => ExecutionService::live(
+                definition.clone(),
+                owner,
+                self.store.clone(),
+                self.repository.clone(),
+                books.clone(),
+                live.clone().context("live credentials unavailable")?,
+            )?,
+        };
         let service = Arc::new(service);
-        let observer = Arc::new(OrderMaintenance {
-            service: service.clone(),
-            process_id: process.process_id,
-            next: tokio::sync::Mutex::new(std::time::Instant::now()),
-        });
+        let observer = Arc::new(
+            BtcProcessRunner::new_with_execution(
+                self.repository.clone(),
+                self.store.clone(),
+                components.venue,
+                books.clone(),
+                components.lifecycle,
+                BtcProcessConfig {
+                    process_id: process.process_id,
+                    run_id,
+                    run_key: run_key.to_string(),
+                    config_hash: hash.to_string(),
+                    frozen_process_config: frozen.clone(),
+                    strategy,
+                    entry_admission: None,
+                    risk_strategies: definition.control.risk_strategies.clone(),
+                    directional_model_entry_policy: policies.edge.directional_model_entry_policy,
+                    execution_enabled: true,
+                    paper_stress_previews: Vec::new(),
+                },
+            )?
+            .with_primary_persistence_state(state.clone())
+            .with_qualified_execution(Arc::new(PolymarketQualifiedExecution {
+                service: service.clone(),
+            })),
+        );
+        if resume {
+            observer.resume().await?;
+        } else {
+            observer.initialize().await?;
+        }
         Ok((
             BtcPlaybookRuntimeHandle::start(config, observer, state, books)?,
             live,
@@ -211,16 +286,11 @@ impl BtcProcessManager {
         }
         let definition = configuration::compile(&process.config)
             .map_err(|_| HttpError::bad_request("invalid order configuration"))?;
-        if definition.control.runtime.trigger != ExecutionTrigger::Api {
-            return Err(HttpError::bad_request(
-                "process does not authorize API-triggered orders",
-            ));
-        }
         let active_guard = self.active_playbooks.lock().await;
         let active = active_guard
             .get(&id)
             .ok_or_else(|| HttpError::unavailable("process runtime is recovering"))?;
-        if active.config_hash != definition.config_sha256 {
+        if !definition.matches_config_sha256(&active.config_hash) {
             return Err(HttpError::conflict(
                 "process configuration differs from its active run",
             ));
@@ -242,30 +312,6 @@ impl BtcProcessManager {
             .clone()
             .ok_or_else(|| HttpError::unavailable("current market evidence unavailable"))?;
         Ok((service, market))
-    }
-}
-struct OrderMaintenance {
-    service: Arc<ExecutionService>,
-    process_id: Uuid,
-    next: tokio::sync::Mutex<std::time::Instant>,
-}
-#[async_trait]
-impl BtcStrategyRunner for OrderMaintenance {
-    fn process_id(&self) -> Option<Uuid> {
-        Some(self.process_id)
-    }
-    async fn on_observation(&self, _: StrategyObservation) -> Result<()> {
-        Ok(())
-    }
-    async fn reconcile_if_due(&self) -> Result<()> {
-        let Ok(mut next) = self.next.try_lock() else {
-            return Ok(());
-        };
-        if std::time::Instant::now() < *next {
-            return Ok(());
-        }
-        *next = std::time::Instant::now() + Duration::from_secs(5);
-        self.service.reconcile().await
     }
 }
 fn dependency(process_id: Uuid, error: anyhow::Error) -> HttpError {
@@ -408,7 +454,7 @@ impl BtcProcessManager {
             .keys()
             .copied()
             .collect::<Vec<_>>();
-        let ids=sqlx::query_scalar::<_,Uuid>("SELECT process_id FROM polymarket.trading_processes WHERE enabled AND status IN ('starting','running') AND NOT(process_id=ANY($1)) AND config #>> '{execution,rail,name}'='polymarket' AND config #>> '{raw,btc_realtime_paper,runtime,trigger}'='api' ORDER BY created_at LIMIT 64").bind(active_ids).fetch_all(&self.pool).await;
+        let ids=sqlx::query_scalar::<_,Uuid>("SELECT process_id FROM polymarket.trading_processes WHERE enabled AND status IN ('starting','running') AND NOT(process_id=ANY($1)) AND config #>> '{execution,rail,name}'='polymarket' ORDER BY created_at LIMIT 64").bind(active_ids).fetch_all(&self.pool).await;
         let Ok(ids) = ids else { return };
         for id in ids {
             let _transition = self.transition.lock().await;

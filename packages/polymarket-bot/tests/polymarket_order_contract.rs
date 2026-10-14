@@ -1,12 +1,14 @@
 //! Configuration admission tests require no database, account credentials, or network.
 use polymarket_bot::{
     execution::polymarket::{
-        configuration::{compile, is_selected, pin_definition, ExecutionMode, ExecutionTrigger},
+        configuration::{compile, is_selected, pin_definition, ExecutionMode},
         policies::OrderPolicies,
+        OMS_CONTRACT_VERSION, RAIL_CONTRACT_VERSION,
     },
     models::TradingProcessConfig,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 fn fixture(mode: &str) -> Value {
     serde_json::from_str(match mode {
@@ -41,11 +43,40 @@ fn paper_and_live_compile_with_identical_shared_policies() {
     let live = compile(&config(fixture("live"))).unwrap();
     assert_eq!(paper.execution.mode, ExecutionMode::Paper);
     assert_eq!(live.execution.mode, ExecutionMode::Live);
-    assert_eq!(paper.control.runtime.trigger, ExecutionTrigger::Api);
     let mut shared = paper.execution.policies.clone();
     shared.paper_execution = None;
     assert_eq!(shared, live.execution.policies);
     assert_ne!(paper.config_sha256, live.config_sha256);
+}
+
+#[test]
+fn retired_trigger_is_inert_and_absent_from_compiled_identity() {
+    let clean = fixture("paper");
+    let clean_hash = compile(&config(clean.clone())).unwrap().config_sha256;
+    for trigger in ["api", "umr"] {
+        let mut compatible = clean.clone();
+        compatible["raw"]["btc_realtime_paper"]["runtime"]["trigger"] = json!(trigger);
+        let compiled = compile(&config(compatible)).unwrap();
+        assert_eq!(compiled.config_sha256, clean_hash);
+        assert_eq!(
+            serde_json::to_value(&compiled.control.runtime).unwrap(),
+            json!({"strategy_interval_ms": 1000})
+        );
+        let mut legacy_control = serde_json::to_value(&compiled.control).unwrap();
+        legacy_control["runtime"]["trigger"] = json!(trigger);
+        let legacy_canonical = json!({
+            "rail_contract_version": RAIL_CONTRACT_VERSION,
+            "oms_contract_version": OMS_CONTRACT_VERSION,
+            "execution": compiled.execution,
+            "control": legacy_control,
+        });
+        let legacy_hash = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&legacy_canonical).unwrap())
+        );
+        assert_ne!(legacy_hash, clean_hash);
+        assert!(compiled.matches_config_sha256(&legacy_hash));
+    }
 }
 
 #[test]

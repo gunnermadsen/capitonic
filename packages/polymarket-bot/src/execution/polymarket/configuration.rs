@@ -40,18 +40,10 @@ impl ExecutionMode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ExecutionTrigger {
-    Umr,
-    Api,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeControl {
     pub strategy_interval_ms: u64,
-    pub trigger: ExecutionTrigger,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +83,7 @@ pub struct CompiledDefinition {
     pub execution: ExecutionSettings,
     pub control: ProcessControl,
     pub config_sha256: String,
+    compatible_config_sha256: Vec<String>,
 }
 
 impl CompiledDefinition {
@@ -101,6 +94,14 @@ impl CompiledDefinition {
             "compiled execution identity mismatch"
         );
         Ok(())
+    }
+
+    pub fn matches_config_sha256(&self, value: &str) -> bool {
+        self.config_sha256 == value
+            || self
+                .compatible_config_sha256
+                .iter()
+                .any(|compatible| compatible == value)
     }
 }
 
@@ -194,8 +195,21 @@ pub fn compile(config: &TradingProcessConfig) -> Result<CompiledDefinition> {
             "entry_order_type belongs only in order_execution_policy"
         );
     }
-    let mut control: ProcessControl =
-        serde_json::from_value(value.clone()).context("invalid execution process configuration")?;
+    // The v6 contract was not certified with `runtime.trigger`. Ignore that retired draft
+    // member when reattaching already-persisted test definitions; it has no compiled meaning.
+    let retired_trigger = value
+        .pointer("/runtime/trigger")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| matches!(*value, "api" | "umr"));
+    let mut compatible_value = value.clone();
+    if let Some(runtime) = compatible_value
+        .get_mut("runtime")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        runtime.remove("trigger");
+    }
+    let mut control: ProcessControl = serde_json::from_value(compatible_value)
+        .context("invalid execution process configuration")?;
     ensure!(
         control.schema_version == PROCESS_SCHEMA_VERSION && control.playbook_version == "v1.2",
         "unsupported process schema or playbook version"
@@ -294,10 +308,24 @@ pub fn compile(config: &TradingProcessConfig) -> Result<CompiledDefinition> {
     };
     let canonical = serde_json::json!({"rail_contract_version": super::RAIL_CONTRACT_VERSION, "oms_contract_version": super::OMS_CONTRACT_VERSION, "execution": execution, "control": control});
     let config_sha256 = format!("{:x}", Sha256::digest(serde_json::to_vec(&canonical)?));
+    let compatible_config_sha256 = retired_trigger
+        .map(|trigger| {
+            let mut legacy_control = serde_json::to_value(&control)?;
+            legacy_control["runtime"]["trigger"] = serde_json::json!(trigger);
+            let legacy = serde_json::json!({"rail_contract_version": super::RAIL_CONTRACT_VERSION, "oms_contract_version": super::OMS_CONTRACT_VERSION, "execution": execution, "control": legacy_control});
+            Ok::<_, anyhow::Error>(format!(
+                "{:x}",
+                Sha256::digest(serde_json::to_vec(&legacy)?)
+            ))
+        })
+        .transpose()?
+        .into_iter()
+        .collect();
     Ok(CompiledDefinition {
         execution,
         control,
         config_sha256,
+        compatible_config_sha256,
     })
 }
 

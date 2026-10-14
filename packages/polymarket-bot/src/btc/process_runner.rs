@@ -458,6 +458,42 @@ struct PreparedTradeProposal<'a> {
     candidate: Option<DirectionalModelCandidateLease<'a>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QualifiedExecutionResolution {
+    Pending,
+    Executed,
+    DefinitiveNonexecution,
+}
+
+pub struct QualifiedExecutionReceipt {
+    pub order: crate::models::OrderRecord,
+    pub resolution: QualifiedExecutionResolution,
+    pub replayed: bool,
+}
+
+pub struct QualifiedExecutionRejection {
+    pub reason: String,
+    pub policy_results: serde_json::Value,
+}
+
+pub enum QualifiedExecutionOutcome {
+    Receipt(QualifiedExecutionReceipt),
+    Rejected(QualifiedExecutionRejection),
+}
+
+#[async_trait]
+pub trait QualifiedExecution: Send + Sync {
+    async fn execute(
+        &self,
+        candidate_id: Uuid,
+        member: String,
+        snapshot: BtcFeatureSnapshot,
+        decision: BtcDecision,
+    ) -> Result<QualifiedExecutionOutcome>;
+
+    async fn reconcile(&self) -> Result<()>;
+}
+
 struct LiveEntryIntentDisposition<'a> {
     process_id: Uuid,
     member_id: &'a str,
@@ -559,6 +595,7 @@ pub struct BtcProcessRunner {
     primary_persistence_state: Option<Arc<RwLock<RealtimeState>>>,
     stress_preview_slot: Arc<Semaphore>,
     stress_preview_tasks: StdMutex<Vec<tokio::task::JoinHandle<()>>>,
+    qualified_execution: Option<Arc<dyn QualifiedExecution>>,
 }
 
 pub type BtcPaperProcessRunner = BtcProcessRunner;
@@ -644,15 +681,19 @@ impl BtcProcessRunner {
                 );
             }
         }
-        let control = config
+        let raw = config
             .frozen_process_config
             .pointer("/raw")
             .context("router requires frozen process configuration")?;
+        let control = raw.get("btc_realtime_paper").unwrap_or(raw);
         let member_strategies = if matches!(
-            control["process_schema_version"].as_str(),
+            control["process_schema_version"]
+                .as_str()
+                .or_else(|| control["schema_version"].as_str()),
             Some(
                 super::unified_model_runtime::router::PROCESS_SCHEMA_VERSION
                     | super::unified_model_runtime::agent::PROCESS_SCHEMA_VERSION
+                    | crate::execution::polymarket::PROCESS_SCHEMA_VERSION
             )
         ) {
             let definition: super::unified_model_runtime::router::RouterDefinition =
@@ -753,11 +794,17 @@ impl BtcProcessRunner {
             primary_persistence_state: None,
             stress_preview_slot: Arc::new(Semaphore::new(1)),
             stress_preview_tasks: StdMutex::new(Vec::new()),
+            qualified_execution: None,
         })
     }
 
     pub fn with_primary_persistence_state(mut self, state: Arc<RwLock<RealtimeState>>) -> Self {
         self.primary_persistence_state = Some(state);
+        self
+    }
+
+    pub fn with_qualified_execution(mut self, execution: Arc<dyn QualifiedExecution>) -> Self {
+        self.qualified_execution = Some(execution);
         self
     }
 
@@ -825,9 +872,15 @@ impl BtcProcessRunner {
                             &self.config.frozen_process_config,
                         )
                         .await?;
-                    self.execution_lifecycle
-                        .resume_run(&self.repository, self.config.process_id, self.config.run_id)
-                        .await?;
+                    if self.qualified_execution.is_none() {
+                        self.execution_lifecycle
+                            .resume_run(
+                                &self.repository,
+                                self.config.process_id,
+                                self.config.run_id,
+                            )
+                            .await?;
+                    }
                 } else {
                     self.repository
                         .claim_run_manifest(
@@ -1029,7 +1082,12 @@ impl BtcProcessRunner {
             member.agent.lock().await.cancel();
         }
         umr_telemetry::enabled(self.config.process_id, false);
-        if let Err(error) = self.force_refresh_settlement_and_reconcile().await {
+        let result = if let Some(execution) = &self.qualified_execution {
+            execution.reconcile().await
+        } else {
+            self.force_refresh_settlement_and_reconcile().await
+        };
+        if let Err(error) = result {
             warn!(
                 process_id = %self.config.process_id,
                 run_id = %self.config.run_id,
@@ -2406,6 +2464,145 @@ impl BtcProcessRunner {
             return Ok(());
         }
 
+        if member.strategy.agent_selection().is_some()
+            && Utc::now()
+                >= market.window_start
+                    + chrono::Duration::seconds(300 - member.strategy.min_seconds_before_close)
+        {
+            member.agent.lock().await.accept();
+            umr_telemetry::gauge(self.config.process_id, "agent_pending", 0.0);
+            umr_telemetry::event(
+                self.config.process_id,
+                "execution_opportunity",
+                "agent_deadline",
+            );
+            return Ok(());
+        }
+
+        if let Some(execution) = &self.qualified_execution {
+            let candidate_id = Uuid::new_v5(
+                &Uuid::NAMESPACE_URL,
+                format!("polymarket-rail-candidate:{}", intent.intent_id).as_bytes(),
+            );
+            self.insert_process_strategy_decision(
+                &member.strategy.strategy_version,
+                &snapshot.market_id,
+                &decision,
+                entry_admission_evidence,
+                Some(candidate_id),
+                "execution_pending",
+            )
+            .await?;
+            if !self.primary_persistence_available().await {
+                if let Some(disposition) = live_intent.as_mut() {
+                    disposition.finish("vetoed", "decision_persistence", "persistence_unavailable");
+                }
+                return Ok(());
+            }
+            self.repository
+                .authorize_pending_strategy_decision(
+                    self.config.process_id,
+                    self.config.run_id,
+                    decision.decision_id,
+                    decision.evaluated_at,
+                )
+                .await?;
+            if let Some(disposition) = live_intent.as_mut() {
+                disposition.stage = "execution";
+            }
+            let execution_started = Instant::now();
+            match execution
+                .execute(
+                    candidate_id,
+                    member.member_id.clone(),
+                    snapshot.clone(),
+                    decision.clone(),
+                )
+                .await?
+            {
+                QualifiedExecutionOutcome::Receipt(receipt) => {
+                    let state = receipt.order.state;
+                    let resolution = match receipt.resolution {
+                        QualifiedExecutionResolution::Pending => "pending",
+                        QualifiedExecutionResolution::Executed => "executed",
+                        QualifiedExecutionResolution::DefinitiveNonexecution => {
+                            "definitive_nonexecution"
+                        }
+                    };
+                    let status = if receipt.resolution == QualifiedExecutionResolution::Executed {
+                        "filled"
+                    } else {
+                        decision_execution_status(state)
+                    };
+                    let reject_reason = receipt
+                        .order
+                        .request
+                        .metadata
+                        .get("reject_reason")
+                        .and_then(serde_json::Value::as_str);
+                    self.repository
+                        .update_strategy_decision_execution(
+                            self.config.process_id,
+                            self.config.run_id,
+                            decision.decision_id,
+                            decision.evaluated_at,
+                            status,
+                            reject_reason,
+                            serde_json::json!({
+                                "execution_mode": self.execution_mode().as_str(),
+                                "origin": "umr",
+                                "order": receipt.order,
+                                "resolution": resolution,
+                                "replayed": receipt.replayed,
+                            }),
+                        )
+                        .await?;
+                    let seal_opportunity = !matches!(
+                        receipt.resolution,
+                        QualifiedExecutionResolution::DefinitiveNonexecution
+                    );
+                    complete_directional_model_candidate(
+                        &mut directional_candidate,
+                        seal_opportunity,
+                    )?;
+                    umr_telemetry::duration(
+                        self.config.process_id,
+                        "primary_execution",
+                        execution_started.elapsed().as_secs_f64(),
+                    );
+                    umr_telemetry::event(self.config.process_id, "execution", status);
+                    umr_telemetry::member_order(self.config.process_id, &member.member_id, status);
+                    if let Some(disposition) = live_intent.as_mut() {
+                        disposition.finish("no_local_veto", "execution", "order_returned");
+                    }
+                    return Ok(());
+                }
+                QualifiedExecutionOutcome::Rejected(rejection) => {
+                    self.repository
+                        .update_strategy_decision_execution(
+                            self.config.process_id,
+                            self.config.run_id,
+                            decision.decision_id,
+                            decision.evaluated_at,
+                            "rejected",
+                            Some(&rejection.reason),
+                            serde_json::json!({
+                                "execution_mode": self.execution_mode().as_str(),
+                                "origin": "umr",
+                                "policy_results": rejection.policy_results,
+                            }),
+                        )
+                        .await?;
+                    complete_directional_model_candidate(&mut directional_candidate, false)?;
+                    umr_telemetry::event(self.config.process_id, "execution", "policy_rejected");
+                    if let Some(disposition) = live_intent.as_mut() {
+                        disposition.finish("vetoed", "execution", "policy_rejected");
+                    }
+                    return Ok(());
+                }
+            }
+        }
+
         let plan_id = Uuid::new_v5(
             &Uuid::NAMESPACE_URL,
             format!("btc-paper-plan:{}", intent.intent_id).as_bytes(),
@@ -2515,20 +2712,6 @@ impl BtcProcessRunner {
         // Once this durable reservation succeeds, execution must proceed. A
         // crash after authorization cannot permit a different entry for the
         // same process and market on resume.
-        if member.strategy.agent_selection().is_some()
-            && Utc::now()
-                >= market.window_start
-                    + chrono::Duration::seconds(300 - member.strategy.min_seconds_before_close)
-        {
-            member.agent.lock().await.accept();
-            umr_telemetry::gauge(self.config.process_id, "agent_pending", 0.0);
-            umr_telemetry::event(
-                self.config.process_id,
-                "execution_opportunity",
-                "agent_deadline",
-            );
-            return Ok(());
-        }
         self.repository
             .authorize_pending_strategy_decision(
                 self.config.process_id,
@@ -3605,6 +3788,28 @@ impl BtcStrategyRunner for BtcProcessRunner {
 
     async fn reconcile_if_due(&self) -> Result<()> {
         if self.initialized.get().is_none() {
+            return Ok(());
+        }
+        if let Some(execution) = &self.qualified_execution {
+            let Ok(mut last_started_at) = self.execution_reconcile_started_at.try_lock() else {
+                return Ok(());
+            };
+            let now = Instant::now();
+            if last_started_at
+                .is_some_and(|last| now.duration_since(last) < TokioDuration::from_secs(5))
+            {
+                return Ok(());
+            }
+            *last_started_at = Some(now);
+            if let Err(error) = execution.reconcile().await {
+                *last_started_at = None;
+                warn!(
+                    process_id = %self.config.process_id,
+                    run_id = %self.config.run_id,
+                    error = %error,
+                    "timer-driven rail reconciliation deferred; strategy runtime remains active"
+                );
+            }
             return Ok(());
         }
         if let Err(error) = self.refresh_settlement_and_reconcile_if_due().await {

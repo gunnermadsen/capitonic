@@ -155,8 +155,7 @@
       },
       "risk_strategies": [],
       "runtime": {
-        "strategy_interval_ms": 1000,
-        "trigger": "api"
+        "strategy_interval_ms": 1000
       }
     }
   }

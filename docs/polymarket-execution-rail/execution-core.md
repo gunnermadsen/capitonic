@@ -1,6 +1,6 @@
 # Polymarket execution core
 
-Candidate: **v3.4.0-local.2**. Rail and OMS contracts remain **1.0.0**. This implements the shared execution library and recovery boundary. The generic controller and API process registration now call this library; UMR routing cutover, deployment and funded qualification remain later work. New-contract definitions never enter a legacy strategy runner. See the API contract for read-only evaluation and durable request identity.
+Candidate lineage began at **v3.4.0-local.2**. Rail and OMS contracts remain **1.0.0**. The shared execution library and recovery boundary serve both UMR candidates and authenticated API overrides whenever the TPC selects the rail. See the API contract for read-only evaluation and durable request identity.
 
 ## Entry and ownership
 

@@ -87,13 +87,13 @@ This verification record is a documentation-only follow-up to the image source. 
 
 ## Order API and instrumentation acceptance evidence
 
-Candidate v3.4.0-local.2 implements the frozen plan's generic controller and instrumentation source. API-triggered definitions now use the existing process manager and shared feeds; UMR cutover remains unavailable. Existing legacy process behavior and dry-run routes are retained.
+Candidate v3.4.0-local.2 was the initial generic controller and instrumentation source. The current rail-selected runtime adds UMR execution through the same service while keeping authenticated API overrides available. Existing legacy process behavior and dry-run routes are retained.
 
 Focused evidence before full CI:
 
 - Three authenticated HTTP tests cover all new routes, strict envelopes and override rejection, response/error mapping, unavailable preparation, and ownership-safe lookup using a registered deterministic application.
 - OMS tests cover actual policy reporting, original-owner/request replay despite a changed configuration, and distinct process/mode/origin metrics. API-specific boundary tests cover signing diagnostic redaction and a rejected record that cannot be mistaken for an approved execution intent.
-- Application configuration testing verifies paper/live policy projection, immutable run identity across resume and rejection of unactivated UMR routing.
+- Application configuration testing verifies paper/live policy projection, immutable run identity across resume, and one rail selector for concurrent UMR and API availability.
 - Eight Prometheus query fixtures pass against the existing local Prometheus binary without provisioning. Provisioning YAML and dashboard JSON parse; alert IDs are unique; the existing provisioning entrypoint already includes the extended rule file.
 - Clippy passes with warnings denied. No production state, local process configuration, database, or running observability configuration was mutated.
 
@@ -121,7 +121,7 @@ Tested the deployed combined source `43f896c7dd6f5300b501e66cfbc081c2ec93ebe4`, 
 
 - Dedicated paper process: `fff03502-3e34-416e-a8fc-7765b837e05e`.
 - Dedicated live preparation process: `99a8c962-33d1-43be-8dee-78b600145bd8`.
-- Both use `btc_realtime_paper_process_v6`, `runtime.trigger=api`, fixed five-share sizing, FAK, and matching shared `order_policies` from the maintained examples. Run identifiers are unique. Live execution was never requested.
+- Both use `btc_realtime_paper_process_v6`, fixed five-share sizing, FAK, and matching shared `order_policies` from the maintained examples. Rail selection alone activates UMR execution while the authenticated API remains available. Run identifiers are unique. Live execution was never requested.
 - 57 assertions passed over actual API/storage checks: definition admission, duplicate/unknown/mixed/unsupported policy rejection, invalid-update immutability, start-preview/start, inactive-process rejection, preview/dry-run/detail authentication, forbidden overrides, malformed requests, unavailable members/markets, unknown order lookup, and unchanged economic records.
 - Both processes were stopped through the existing API after the blocker was identified. Existing nine enabled processes retained their configurations and running state. Both test processes have zero orders, fills, settlements and strategy decisions. The test driver made zero execution requests.
 

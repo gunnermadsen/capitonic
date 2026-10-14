@@ -50,7 +50,7 @@ The compiler retains existing hard-coded configuration ceilings; changing them i
 ## Retained or intentionally excluded
 
 - `strategy.max_directional_feature_age_ms` remains inference configuration; null derives the artifact cadence, explicit values cannot exceed the supported cadence. `strategy.required_model_feeds` remains the existing feed-requirement contract. Neither appears in order policies.
-- `strategy.decision_strategy`, sources, risk_strategies, runtime.strategy_interval_ms (1..60000), run key and preregistration stay in their existing ownership domains. `runtime.trigger` is explicit `umr` or `api` for new definitions; no legacy field/default changes.
+- `strategy.decision_strategy`, sources, risk_strategies, runtime.strategy_interval_ms (1..60000), run key and preregistration stay in their existing ownership domains. Rail-selected definitions always support UMR execution and authenticated API overrides; there is no trigger selector.
 - `strategy_version`, `feature_schema_version`, unified_model bindings and artifact policy are derived, not configurable copies. Existing UMR compilation/pinning is reused for validation, never persisted as a legacy execution configuration.
 - `execution.taker_fee_rate` is already rejected for BTC; no new override is added. Fees use observed market evidence.
 - `max_order_notional_usd` is intentionally retired for new sizing; funds, reservations and aggregate USD accounting remain mandatory. Legacy values are not removed.

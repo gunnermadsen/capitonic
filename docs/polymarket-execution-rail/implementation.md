@@ -24,13 +24,12 @@ is still applicable because its image inputs are unchanged. Authenticated lifecy
 status transitions and removal of the fixed daily-loss ceiling in both configuration
 paths are already implemented; they are not outstanding work.
 
-The remaining scope is bounded as follows. These are completion requirements, not
-claims that the behavior is already implemented or qualified.
+The remaining scope is bounded as follows. UMR connection is implemented by the
+rail-selected runtime; the remaining items are not implied by that integration.
 
 | Work | Required outcome |
 | --- | --- |
 | TPC policy ownership | Map adjustable model-owned trading/admission constraints into the new TPC contract and shared evaluation owners. TPC must be the sole authority for those controls, with no hidden duplicate artifact gate. Preserve feature semantics, weights, calibration, input compatibility and inference mathematics. Record the existing effective values and prove initial decision parity before activating the migration. Freeze exact policy fields and applicability before implementing this change; do not silently relax existing model restrictions. |
-| UMR connection | Route existing UMR/model/agent candidates through the same application entry and OMS used by the API, without a second runtime or HTTP loop. Prove exactly one execution owner, durable provenance, idempotency, restart recovery and unchanged unselected processes. API-triggered execution alone does not satisfy this requirement. |
 | Paired qualification | Use the two retained process identities and existing external drivers. Require comparable shared policies, actual paper and user-submitted live execution evidence, venue acknowledgement/fills, reconciliation, retrieval, accounting, settlement and replay without duplicate effects. Record FAK/FOK evidence separately. Keep deterministic partial-fill/failure coverage. Positive paper credit/reuse, latency sample sufficiency and deployed dashboard/alert availability remain explicit evidence gaps until reverified. Do not increase live size or capital implicitly to meet a venue minimum. |
 | Controlled cutover | Convert selected processes through the existing API only, preserve process identity and enabled intent, keep outstanding orders with their original owner, and verify a compatible code/configuration rollback. Retire legacy routing and flat order parameters only when no resumable process, unresolved order or unmigrated caller requires them. |
 

@@ -266,7 +266,7 @@ mod lifecycle_tests {
     }
 
     #[test]
-    fn api_order_preparation_preserves_policy_identity_and_never_selects_umr() {
+    fn rail_order_preparation_preserves_policy_identity_for_umr_and_api() {
         for fixture in [
             include_str!("../../../../docs/polymarket-execution-rail/examples/paper.json"),
             include_str!("../../../../docs/polymarket-execution-rail/examples/live.json"),
@@ -304,7 +304,8 @@ mod lifecycle_tests {
             assert_eq!(resumed.config_hash, prepared.config_hash);
             process.config.raw["btc_realtime_paper"]["runtime"]["trigger"] =
                 serde_json::json!("umr");
-            assert!(super::super::order_execution::prepare(&process, true).is_err());
+            let compatible = super::super::order_execution::prepare(&process, true).unwrap();
+            assert_eq!(compatible.config_hash, prepared.config_hash);
         }
     }
 

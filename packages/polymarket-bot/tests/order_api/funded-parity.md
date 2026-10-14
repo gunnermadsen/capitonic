@@ -149,8 +149,8 @@ input, not evidence of positive expectancy; the existing TPC price/cash limits a
   tooling and bounded, explicitly chosen subsequent tests remain available.
 - Process/container restart recovery is covered by existing contracts but is not
   forced during a funded pair. No deployment or restart is performed by this runner.
-- Synthetic API qualification does not qualify UMR translation or selector cutover.
-  New `trigger=umr` routing remains unavailable until its separate integration work.
+- Synthetic API qualification and UMR qualification share the selected rail's order service,
+  while retaining distinct origin evidence and idempotency identities.
 
 ## Verified implementation evidence
 
