@@ -77,7 +77,7 @@
 ## Helm Chart Versioning
 
 - Version each chart independently through `Chart.yaml` `version`, using SemVer `X.Y.Z`. The chart version identifies deployable chart structure; `appVersion` identifies the selected application version.
-- Bump the chart version only when templates, dependencies, packaged assets, or default values other than application image identity change. Use PATCH for compatible fixes, MINOR for backward-compatible additions, and MAJOR for breaking changes requiring operator action, including while versions are `0.x`.
+- Bump the chart version only when the chart changes the rendered Kubernetes platform contract, such as resource kinds, pod configuration, environment variables, secrets, mounts, services, storage, scheduling, or RBAC; do not bump it for `appVersion`, image pins, digests, source revisions, or baked application and observability content.
 - An update limited to `appVersion` and its corresponding image tag, digest, or source-revision pins does not require a chart-version bump.
 - When the selected application image changes, update `appVersion` to the exact application version and keep all corresponding image identity fields consistent. If chart structure also changes, update `appVersion` and the chart version independently in the same commit.
 - Run Helm lint and render checks when chart structure changes. Run the applicable pin-consistency check when only application image identity changes.
