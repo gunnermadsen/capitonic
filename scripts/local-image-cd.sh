@@ -10,7 +10,6 @@ Usage: scripts/local-image-cd.sh pin <ingester|polymarket-bot|db-migrate> <vMAJO
 pin edits the local Helm image values and chart appVersion. Commit and review before deploy.
 prepare-ingester applies only the worker rolling-update strategy with the old image.
 deploy applies the exact committed, prebuilt image pinned in the chart.
-Database migration Jobs and golden promotion are separate workflows.
 EOF
 }
 
