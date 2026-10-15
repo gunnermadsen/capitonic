@@ -222,6 +222,7 @@
 
 ## Observability provisioning
 - Provision every Grafana, Prometheus, Loki, and Alloy deployment, including all environment configuration changes; do not make manual, unprovisioned changes.
+- Every Grafana alert, Prometheus metric, and Loki log must close a named visibility gap with a specific purpose and actionable condition; vague, general, duplicate, and catch-all instrumentation is prohibited.
 
 ## Websocket consumer latency
 - Follow [the websocket consumer latency contract](docs/websocket-consumer-latency.md) for every realtime provider socket.
