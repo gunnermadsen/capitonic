@@ -196,11 +196,11 @@ impl BtcProcessManager {
             .map_err(|error| HttpError::bad_request(error.to_string()))?;
         if !(1..=60_000).contains(&control.paper.arrival_latency_ms)
             || control.paper.starting_collateral_usd <= rust_decimal::Decimal::ZERO
-            || control.paper.starting_collateral_usd > dec!(1000000)
+            || control.paper.starting_collateral_usd > TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD
         {
-            return Err(HttpError::bad_request(
-                "BTC paper arrival latency and starting collateral must be positive",
-            ));
+            return Err(HttpError::bad_request(format!(
+                "BTC paper arrival latency must be supported and starting collateral must be positive and at most {TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD}"
+            )));
         }
         let paper_venue = PaperVenueConfig {
             arrival_latency: Duration::from_millis(control.paper.arrival_latency_ms),

@@ -1,9 +1,9 @@
-image: capitonic/ingester:v1.3.0-rc.0
+image: capitonic/ingester:v1.3.2-local.2
 environment: development
 imagePullPolicy: Never
 imagePullSecrets: []
-imageDigest: sha256:450fbac8eb8c0e942d115856009c8bc2859b2e67507104b4fa07393471ad5960
-gitRevision: 633b5e897a365e9444b14ce9ce4b3d522e0b5fc2
+imageDigest: sha256:e2f5e3fbbabb9e8ffa71ee940c1e79c9eed74e89be289fb91e5fb99489263aa9
+gitRevision: 0c8722d54a7cd3fbe6e870748cc47d14e0753c7e
 deploymentId: capitonic-k3s-dev
 master:
   replicaCount: 1

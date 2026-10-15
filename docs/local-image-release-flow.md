@@ -6,8 +6,9 @@ This is the operator runbook for the bot and ingester image path in local k3s. E
 | --- | --- |
 | Select work, commit code, choose branch merges, and initiate each command | Operator or agent |
 | Check image inputs, select `local.N`, build the image, and create `image/...` provenance tags | `scripts/local-image-ci.sh` |
-| Validate the candidate, pin the chart image and `appVersion`, and deploy the committed pin | `scripts/local-image-cd.sh` |
+| Validate the candidate, pin the exact local chart image without changing base-only `appVersion`, and deploy the committed pin | `scripts/local-image-cd.sh` |
 | Allocate and publish immutable RC images after changes reach `development` | GitHub CI |
+| Verify the selected RC, promote its digest to the final tag, and deploy the final tag | Production CD |
 
 ## Feature or defect branch: local candidate
 
@@ -30,7 +31,7 @@ git commit -m "Pin local <component> candidate in Helm chart"
 scripts/local-image-cd.sh deploy <component>
 ```
 
-CD updates the chart image and `appVersion`; for ingester it also pins the immutable image ID and embedded Git revision. It does not increment the Helm chart's own `version`. Confirm the running pods use the selected image ID and that CD's recovery checks pass. When validating another branch in the same cycle, preserve earlier deployed chart pins and their source lineage so the next chart does not regress an image. Branch integration between validations remains a deliberate source-control action.
+Local CD updates only the exact local chart image pin; for ingester it also pins the immutable image ID and embedded Git revision. The candidate's `vX.Y.Z` base must match the base-only chart `appVersion`. Local CD changes neither `appVersion` nor the Helm chart's own `version`. Confirm the running pods use the selected image ID and that CD's recovery checks pass. When validating another branch in the same cycle, preserve earlier deployed chart pins and their source lineage so the next chart does not regress an image. Branch integration between validations remains a deliberate source-control action.
 
 ## Integration branch: development publication
 
@@ -57,15 +58,18 @@ production deployment or a simulation of live checks.
 | 1 | Detect production components | Establish the exact revision and baseline; select committed chart/value/configuration changes, preserving an empty no-op. Application source changes alone do not select deployment components. |
 | 2 | Validate release scope | Validate the selected scope without implicitly adding components. |
 | 3 | Verify release authorization | In parallel with validation, admit only the first direct CD execution of a production push associated with a merged same-repository `development → production` PR. `gunnermadsen` must approve the final PR head before merging and must merge it. Direct pushes without this evidence fail closed. Manual runs, internal calls and reruns remain planning-only. |
-| 3 | Validate release pins / images / charts | Parallel matrix jobs reuse `validate-release-pins.sh`: committed version/secret declarations and RC/golden provenance; read-only ECR digest/ARM64/source verification; runner-local Helm lint/render. Each publishes a separate report. |
+| 3 | Validate release pins / images / charts | Parallel matrix jobs reuse `validate-release-pins.sh`: committed RC or final version declarations and secret pins; read-only ECR digest/ARM64/source verification; runner-local Helm lint/render of the final non-RC image tag. Each publishes a separate report. |
 | 4 | Report deployment plan | Collect all checks and report the revision, baseline, selected components, pins and planned actions. Any failed check blocks deployment. Live readiness, secret availability, migration ledger/compatibility, worker capacity and rollback remain unverified. |
 | 5 | Deploy and verify | Execute only after all preceding jobs succeed and live PR admission is true with a nonempty selection. Use the exact merged revision and existing selected-component helper. The historical job name remains for deployed-baseline lookup. Empty selections skip host checkout and all production execution. |
 
-Production values already contain immutable final version tags, expected digests,
-source revisions, chart metadata, secret-version pins and credential revisions.
-CD validates these inputs; it never prepares new pins, publishes final image tags,
-writes a release manifest, commits metadata, or creates/pushes Git tags. Unselected
-component pins are preserved. Existing helpers and unrelated workflows keep their
+Production values contain the exact immutable RC selected for release, its expected
+digest and source revision, chart metadata, secret-version pins and credential
+revisions. For an authorized live release, CD verifies that RC identity, promotes
+the same registry digest to the base-only final `vX.Y.Z` tag, and renders and deploys
+the final tag. The committed RC remains the reviewed promotion input and provenance
+record; CD does not rewrite values, commit metadata, or create/push Git tags.
+Already-final pins require no promotion. Unselected component pins are preserved.
+Existing helpers and unrelated workflows keep their
 owners. Live selected execution still uses ECR credential refresh and existing
 Argo/Helm reconciliation; planning does not promise those commands are no-ops.
 Selected-release scope, migration-ledger, worker-capacity, chart-rendering, tunnel
@@ -89,8 +93,11 @@ gh workflow run CD.yml --ref development
 ```
 
 The manual run compares that revision against `origin/production`, reports declared
-configuration/secret differences and renders selected charts without deploying.
-Cloudflared rendering uses a diagnostic tunnel-ID placeholder. Component Git tags own image version allocation; committed Helm values own deployment selection. The obsolete image `release.json` has been removed.
+configuration/secret differences and renders selected charts without deploying or
+publishing the final tag. Cloudflared rendering uses a diagnostic tunnel-ID
+placeholder. Base-only chart `appVersion` and immutable ECR tags own RC allocation;
+committed production values own the exact RC selected for promotion. The obsolete
+image `release.json` has been removed.
 
 GitHub production branch protection requires PR review, dismisses stale approvals
 and applies to administrators. CD additionally verifies the named approver and
@@ -110,7 +117,14 @@ A failed release stops rollout; live reruns require a new approved release PR.
 
 Once a final version is published, its base is closed: subsequent changed images use the next SemVer base with local.0 and rc.0, after checking remote Git and registry state. Local CI reads the selected base from the release manifest, rejects changed inputs under a promoted base, and only reuses candidates from the selected base.
 
-Final ECR version tags and matching production chart pins must already exist in the reviewed release revision. CD validates those immutable identities rather than promoting RCs or rewriting release metadata. Choose a new base version per component from the change: patch for a compatible fix, minor for compatible new behavior, or major for a breaking change. On that base, local candidates start at `local.0` and RCs start at `rc.0`; subsequent candidates increment within the same base version.
+The reviewed release revision commits the exact selected RC tag, digest, and source
+revision. Production CD verifies that immutable identity, promotes the same digest
+to the base-only final tag, and deploys the final tag while retaining the committed
+RC as release provenance. CD never rebuilds the image or rewrites release metadata.
+Choose a new base version per component from the change: patch for a compatible fix,
+minor for compatible new behavior, or major for a breaking change. On that base,
+local candidates start at `local.0` and RCs start at `rc.0`; subsequent candidates
+increment within the same base version.
 
 ## Production chart and runtime secret ownership
 

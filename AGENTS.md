@@ -1,9 +1,8 @@
 # Implementation
-- The user’s requested outcome and any agreed implementation plan define the scope. Complete and verify that outcome without adding optional cleanup, redesigns, or unrelated changes.
+- The user’s approved outcome and plan are a hard scope boundary. Implement only the minimum viable change: every changed file, behavior, abstraction, and line must be necessary to the named result.
 - A plan transferred to another task or thread is context only, not authorization to implement it; the receiving task must assimilate it, define the exact narrow file and behavior scope, and wait for explicit implementation authorization in that task.
 - Before implementing functionality, identify and reuse the existing module, contract, registry, persistence path, instrumentation, or execution path that owns the capability.
-- Make the smallest coherent change that satisfies the request. Necessary adjacent changes to compilation, tests, or directly affected contracts are permitted when they do not materially broaden the requested outcome; report them after implementation.
-- Do not extract, reorganize, rename, or rewrite existing logic solely for structure or testability; if the necessary diff materially exceeds the named behavior or owning files, stop and obtain explicit authorization for the expanded scope.
+- Do not add or expand machinery, features, systems, refactors, abstractions, dependencies, workflows, documentation, or test infrastructure beyond that boundary. If the minimum change cannot remain within it, stop before editing and obtain explicit authorization for the exact expansion.
 - Obtain explicit authorization before making destructive changes, changing unrelated behavior or data, materially expanding the requested outcome, or introducing a parallel or replacement system.
 - If the existing system cannot satisfy the request without one of those changes, stop and explain the specific incompatibility.
 - Do not create, modify, rename, or delete files under `.github/workflows/` without explicit user authorization naming the workflow file and requested behavior; approval of a broader plan or adjacent release change does not authorize workflow changes.
@@ -56,7 +55,7 @@
 - Once a branch is merged into integration, do not add commits to it; commit follow-up changes on integration or a new branch from the latest integration tip.
 - `development` contains accepted releases. Do not implement features or fixes directly on it.
 - `production` receives accepted `development` releases and reviewed deployment metadata only through user-approved release PRs merged in GitHub. Never implement features or fixes directly on it, push directly to it, or append CI/CD-generated admission commits after merge.
-- Before preparing another release, reconcile outstanding production release commits, including historical admission commits, into `integration`, preserving deployed image and secret pins; never reset or force-push production to erase divergence.
+- Before preparing another release, fetch and inspect `origin/production` for file changes absent from `integration`. Reconcile any production-only changes into `integration` with explicit merge authorization, preserving deployed image and secret pins. Do not merge tree-equivalent production PR merge commits solely to align ancestry, and never reset or force-push production.
 - Keep local and remote `development` aligned with accepted integration; after advancing `development`, continue integration only from that same accepted tip and never retain a competing local `development` lineage.
 - Maintain one permanent branch named `integration`; use it to aggregate accepted feature, defect, training, documentation, and repository-policy changes.
 - New feature, defect, and model-training branches use `feature/<name>`, `defect/<name>`, or `training/<name>`, start from the `integration` tip, and merge only into `integration`. Keep unrelated domains separate; follow-up work starts from its existing feature, training, or integration lineage.
@@ -205,7 +204,7 @@
 ## Runtime Configuration
 
 - The trading process configuration (TPC) stored in the `trading_processes` playbook is the sole authority for non-secret controls affecting trading decisions. Any new or modified trade gate, admission or risk control, order-execution policy, or execution-rail selection must be represented in the TPC and consumed through the existing compiled-settings contract; do not introduce parallel configuration stores, flags, or control paths.
-- Creating, updating, enabling, disabling, or deleting a trading process requires explicit user authorization naming its `process_id` and exact intended change; use only the established API and verify the persisted result.
+- Creating, updating—including any TPC or configuration field—enabling, disabling, or deleting a trading process requires prior written user authorization naming its `process_id` and exact intended change. Written authorization in the active task is sufficient and does not require a second confirmation; use only the established API and verify the persisted result.
 - Store sensitive runtime values only in the main worktree's applicable `.env` files. Materialize them into Kubernetes Secrets through the owning provisioned workflow; never place secret values in chart values, manifests, or committed configuration.
 - Store global non-sensitive runtime configuration in the owning Helm chart values or authoritative provisioned configuration. Do not store non-sensitive configuration in `.env` files.
 - Treat `.env.example` and other `*.example` files as documentation templates only. Never place real secret values in them.
@@ -222,6 +221,7 @@
 
 ## Observability provisioning
 - Provision every Grafana, Prometheus, Loki, and Alloy deployment, including all environment configuration changes; do not make manual, unprovisioned changes.
+- Every Grafana alert, Prometheus metric, and Loki log must close a named visibility gap with a specific purpose and actionable condition; vague, general, duplicate, and catch-all instrumentation is prohibited.
 
 ## Websocket consumer latency
 - Follow [the websocket consumer latency contract](docs/websocket-consumer-latency.md) for every realtime provider socket.

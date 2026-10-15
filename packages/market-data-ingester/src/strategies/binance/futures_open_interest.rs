@@ -137,6 +137,15 @@ struct OpenInterestObservation {
     payload_sha256: String,
 }
 
+#[derive(Debug)]
+struct ProviderPage {
+    observations: Vec<OpenInterestObservation>,
+    raw_row_count: usize,
+    oldest_raw_timestamp_ms: Option<i64>,
+    newest_raw_timestamp_ms: Option<i64>,
+    rejected_unaligned_rows: usize,
+}
+
 #[derive(Debug, Clone, FromRow)]
 struct StoredOpenInterest {
     sum_open_interest: Decimal,
@@ -320,6 +329,22 @@ impl BinanceFuturesOpenInterestStrategy {
     async fn capture(&self, checkpoint: &mut OpenInterestCheckpoint) -> Result<(), StrategyError> {
         let observations = self.fetch_observations(checkpoint).await?;
         if observations.is_empty() {
+            let marked = self
+                .profiles
+                .mark_degraded(
+                    STRATEGY_KEY,
+                    &self.lease_owner,
+                    self.lease_token,
+                    self.profile_generation,
+                    &current_interval_unavailable(
+                        "Binance returned no canonical open-interest rows for the current polling window",
+                    ),
+                )
+                .await
+                .map_err(database_error("open_interest_mark_empty_poll_degraded"))?;
+            if !marked {
+                return Err(lease_lost("recording an empty open-interest poll"));
+            }
             return Ok(());
         }
 
@@ -334,6 +359,7 @@ impl BinanceFuturesOpenInterestStrategy {
             .last()
             .expect("nonempty observations have a final timestamp")
             .source_timestamp;
+        let live_gap_floor = live_gap_floor(Utc::now(), self.config.overlap_periods)?;
 
         let mut transaction = self
             .pool
@@ -433,18 +459,38 @@ impl BinanceFuturesOpenInterestStrategy {
         };
         let advanced = self
             .profiles
-            .record_progress_in(
+            .record_progress_with_gap_floor_in(
                 &mut transaction,
                 STRATEGY_KEY,
                 &self.lease_owner,
                 self.lease_token,
                 self.profile_generation,
                 &progress,
+                Some(live_gap_floor),
             )
             .await
             .map_err(database_error("open_interest_record_progress"))?;
         if !advanced {
             return Err(lease_lost("committing open-interest progress"));
+        }
+        if maximum_source_timestamp < live_gap_floor {
+            let marked = self
+                .profiles
+                .mark_degraded_in(
+                    &mut transaction,
+                    STRATEGY_KEY,
+                    &self.lease_owner,
+                    self.lease_token,
+                    self.profile_generation,
+                    &current_interval_unavailable(format!(
+                        "latest Binance open-interest timestamp {maximum_source_timestamp} is older than the live polling floor {live_gap_floor}"
+                    )),
+                )
+                .await
+                .map_err(database_error("open_interest_mark_stale_poll_degraded"))?;
+            if !marked {
+                return Err(lease_lost("recording a stale open-interest poll"));
+            }
         }
         transaction
             .commit()
@@ -499,36 +545,33 @@ impl BinanceFuturesOpenInterestStrategy {
     ) -> Result<Vec<OpenInterestObservation>, StrategyError> {
         let mut page_end = requested_end;
         let mut observations = Vec::new();
+        let mut rejected_unaligned_rows = 0_usize;
 
         while requested_start <= page_end {
             let page = self.fetch_page(requested_start, page_end).await?;
-            if page.is_empty() {
+            if page.raw_row_count == 0 {
                 break;
             }
-            let page_len = page.len();
-            let first_timestamp = page
-                .first()
-                .expect("nonempty provider page has a first timestamp")
-                .source_timestamp
-                .timestamp_millis();
-            let final_timestamp = page
-                .last()
-                .expect("nonempty provider page has a final timestamp")
-                .source_timestamp
-                .timestamp_millis();
-            if first_timestamp < requested_start || final_timestamp > page_end {
-                return Err(integrity(
-                    "open_interest_page_outside_range",
-                    "provider page escaped the requested timestamp range",
-                ));
-            }
-            observations.extend(page);
-            if page_len < usize::from(self.config.request_limit)
-                || first_timestamp <= requested_start
-            {
+            let next_page_end = next_page_end(
+                &page,
+                requested_start,
+                usize::from(self.config.request_limit),
+            );
+            rejected_unaligned_rows =
+                rejected_unaligned_rows.saturating_add(page.rejected_unaligned_rows);
+            observations.extend(page.observations);
+            let Some(next_page_end) = next_page_end else {
                 break;
-            }
-            page_end = first_timestamp.saturating_sub(PERIOD_SECONDS * 1_000);
+            };
+            page_end = next_page_end;
+        }
+        if rejected_unaligned_rows > 0 {
+            warn!(
+                strategy = %STRATEGY_KEY,
+                error_code = "binance_open_interest_unaligned_rows_skipped",
+                rejected_row_count = rejected_unaligned_rows,
+                "skipped noncanonical Binance open-interest rows"
+            );
         }
         observations.sort_by_key(|observation| observation.source_timestamp);
         if observations
@@ -547,7 +590,7 @@ impl BinanceFuturesOpenInterestStrategy {
         &self,
         start_timestamp_ms: i64,
         end_timestamp_ms: i64,
-    ) -> Result<Vec<OpenInterestObservation>, StrategyError> {
+    ) -> Result<ProviderPage, StrategyError> {
         let endpoint = format!(
             "{}/futures/data/openInterestHist",
             self.config.rest_base_url.trim_end_matches('/')
@@ -598,23 +641,26 @@ impl BinanceFuturesOpenInterestStrategy {
         let received_at = Utc::now();
         let payload: Value = serde_json::from_slice(&body)
             .map_err(integrity_error("open_interest_decode_response"))?;
-        let observations = decode_provider_page(payload, &self.config.symbol, received_at)?;
-        if observations.len() > usize::from(self.config.request_limit) {
+        let page = decode_provider_page(payload, &self.config.symbol, received_at)?;
+        if page.raw_row_count > usize::from(self.config.request_limit) {
             return Err(integrity(
                 "open_interest_response_limit_exceeded",
                 "provider returned more rows than requested",
             ));
         }
-        if observations.iter().any(|observation| {
-            let timestamp = observation.source_timestamp.timestamp_millis();
-            timestamp < start_timestamp_ms || timestamp > end_timestamp_ms
-        }) {
+        if page
+            .oldest_raw_timestamp_ms
+            .is_some_and(|timestamp| timestamp < start_timestamp_ms)
+            || page
+                .newest_raw_timestamp_ms
+                .is_some_and(|timestamp| timestamp > end_timestamp_ms)
+        {
             return Err(integrity(
                 "open_interest_page_outside_range",
                 "provider row escaped the requested timestamp range",
             ));
         }
-        Ok(observations)
+        Ok(page)
     }
 
     async fn persist_observations(
@@ -1149,9 +1195,10 @@ impl BinanceFuturesOpenInterestStrategy {
             .iter()
             .map(|observation| observation.source_timestamp)
             .max();
+        let live_gap_floor = live_gap_floor(Utc::now(), self.config.overlap_periods)?;
         let advanced = self
             .profiles
-            .record_progress_in(
+            .record_progress_with_gap_floor_in(
                 &mut transaction,
                 STRATEGY_KEY,
                 &self.lease_owner,
@@ -1167,6 +1214,7 @@ impl BinanceFuturesOpenInterestStrategy {
                     source_watermark: maximum_source_timestamp,
                     availability_watermark: Some(received_at),
                 },
+                Some(live_gap_floor),
             )
             .await
             .map_err(database_error("open_interest_record_repair_progress"))?;
@@ -1288,11 +1336,26 @@ fn find_gaps(
     gaps
 }
 
+fn live_gap_floor(
+    now: DateTime<Utc>,
+    overlap_periods: u16,
+) -> Result<DateTime<Utc>, StrategyError> {
+    Ok(floor_period(now, PERIOD_SECONDS)?
+        - chrono::Duration::seconds(i64::from(overlap_periods) * PERIOD_SECONDS))
+}
+
+fn current_interval_unavailable(message: impl Into<String>) -> StrategyDegradation {
+    StrategyDegradation {
+        reason_code: "binance_open_interest_current_interval_unavailable".to_owned(),
+        reason_message: message.into(),
+    }
+}
+
 fn decode_provider_page(
     payload: Value,
     expected_symbol: &str,
     received_at: DateTime<Utc>,
-) -> Result<Vec<OpenInterestObservation>, StrategyError> {
+) -> Result<ProviderPage, StrategyError> {
     let rows = payload.as_array().ok_or_else(|| {
         integrity(
             "open_interest_invalid_payload",
@@ -1301,6 +1364,9 @@ fn decode_provider_page(
     })?;
     let mut observations = Vec::with_capacity(rows.len());
     let mut previous_timestamp = None;
+    let mut oldest_raw_timestamp_ms = None;
+    let mut newest_raw_timestamp_ms = None;
+    let mut rejected_unaligned_rows = 0_usize;
 
     for source_payload in rows {
         let row: ProviderOpenInterest = serde_json::from_value(source_payload.clone())
@@ -1311,11 +1377,15 @@ fn decode_provider_page(
                 format!("expected {expected_symbol}, received {}", row.symbol),
             ));
         }
+        oldest_raw_timestamp_ms = Some(
+            oldest_raw_timestamp_ms.map_or(row.timestamp, |oldest: i64| oldest.min(row.timestamp)),
+        );
+        newest_raw_timestamp_ms = Some(
+            newest_raw_timestamp_ms.map_or(row.timestamp, |newest: i64| newest.max(row.timestamp)),
+        );
         if row.timestamp.rem_euclid(PERIOD_SECONDS * 1_000) != 0 {
-            return Err(integrity(
-                "open_interest_unaligned_timestamp",
-                format!("timestamp {} is not five-minute aligned", row.timestamp),
-            ));
+            rejected_unaligned_rows = rejected_unaligned_rows.saturating_add(1);
+            continue;
         }
         if previous_timestamp.is_some_and(|previous| row.timestamp <= previous) {
             return Err(integrity(
@@ -1359,7 +1429,19 @@ fn decode_provider_page(
         });
         previous_timestamp = Some(row.timestamp);
     }
-    Ok(observations)
+    Ok(ProviderPage {
+        observations,
+        raw_row_count: rows.len(),
+        oldest_raw_timestamp_ms,
+        newest_raw_timestamp_ms,
+        rejected_unaligned_rows,
+    })
+}
+
+fn next_page_end(page: &ProviderPage, requested_start: i64, request_limit: usize) -> Option<i64> {
+    let oldest_raw_timestamp = page.oldest_raw_timestamp_ms?;
+    (page.raw_row_count >= request_limit && oldest_raw_timestamp > requested_start)
+        .then(|| oldest_raw_timestamp.saturating_sub(1))
 }
 
 fn canonical_payload_sha256(
@@ -1560,8 +1642,9 @@ mod tests {
             .with_ymd_and_hms(2025, 1, 1, 0, 11, 0)
             .single()
             .expect("valid time");
-        let rows =
+        let page =
             decode_provider_page(fixture(), "BTCUSDT", received_at).expect("fixture should decode");
+        let rows = page.observations;
         assert_eq!(rows.len(), 3);
         assert_eq!(
             rows[0].source_timestamp,
@@ -1619,6 +1702,79 @@ mod tests {
     }
 
     #[test]
+    fn provider_page_skips_unaligned_rows_and_preserves_raw_pagination() {
+        let aligned = 1_735_689_600_000_i64;
+        let payload = json!([
+            {
+                "symbol": "BTCUSDT",
+                "sumOpenInterest": "not-parsed-for-rejected-row",
+                "sumOpenInterestValue": "also-not-parsed",
+                "timestamp": aligned - 1
+            },
+            {
+                "symbol": "BTCUSDT",
+                "sumOpenInterest": "1",
+                "sumOpenInterestValue": "2",
+                "timestamp": aligned
+            },
+            {
+                "symbol": "BTCUSDT",
+                "sumOpenInterest": "not-parsed-for-rejected-row",
+                "sumOpenInterestValue": "also-not-parsed",
+                "timestamp": aligned + 1
+            }
+        ]);
+        let page = decode_provider_page(payload, "BTCUSDT", Utc::now())
+            .expect("unaligned provider rows should not poison aligned observations");
+
+        assert_eq!(page.raw_row_count, 3);
+        assert_eq!(page.rejected_unaligned_rows, 2);
+        assert_eq!(page.oldest_raw_timestamp_ms, Some(aligned - 1));
+        assert_eq!(page.newest_raw_timestamp_ms, Some(aligned + 1));
+        assert_eq!(page.observations.len(), 1);
+        assert_eq!(
+            page.observations[0].source_timestamp.timestamp_millis(),
+            aligned
+        );
+        assert_eq!(next_page_end(&page, aligned - 10, 3), Some(aligned - 2));
+    }
+
+    #[test]
+    fn all_unaligned_saturated_page_still_advances_raw_cursor() {
+        let requested_start = 1_735_689_000_000_i64;
+        let oldest = requested_start + 101;
+        let payload = Value::Array(
+            (0..500)
+                .map(|offset| {
+                    json!({
+                        "symbol": "BTCUSDT",
+                        "sumOpenInterest": "1",
+                        "sumOpenInterestValue": "2",
+                        "timestamp": oldest + i64::from(offset)
+                    })
+                })
+                .collect(),
+        );
+        let page = decode_provider_page(payload, "BTCUSDT", Utc::now())
+            .expect("unaligned rows should be rejected individually");
+
+        assert!(page.observations.is_empty());
+        assert_eq!(page.rejected_unaligned_rows, 500);
+        assert_eq!(next_page_end(&page, requested_start, 500), Some(oldest - 1));
+    }
+
+    #[test]
+    fn invalid_aligned_values_remain_fatal() {
+        let payload = json!([{
+            "symbol": "BTCUSDT",
+            "sumOpenInterest": "invalid",
+            "sumOpenInterestValue": "2",
+            "timestamp": 1_735_689_600_000_i64
+        }]);
+        assert!(decode_provider_page(payload, "BTCUSDT", Utc::now()).is_err());
+    }
+
+    #[test]
     fn interval_gap_is_precisely_bounded() {
         let received_at = Utc::now();
         let first = Utc
@@ -1641,6 +1797,21 @@ mod tests {
                 start: first + ChronoDuration::minutes(5),
                 end: first + ChronoDuration::minutes(10),
             }]
+        );
+    }
+
+    #[test]
+    fn live_gap_floor_limits_health_to_the_realtime_overlap() {
+        let now = Utc
+            .with_ymd_and_hms(2025, 1, 1, 0, 17, 30)
+            .single()
+            .expect("valid time");
+
+        assert_eq!(
+            live_gap_floor(now, 2).expect("valid live gap floor"),
+            Utc.with_ymd_and_hms(2025, 1, 1, 0, 5, 0)
+                .single()
+                .expect("valid time")
         );
     }
 
@@ -1686,7 +1857,8 @@ mod tests {
             "timestamp": 1735689600000_i64
         }]);
         let rows = decode_provider_page(payload, "BTCUSDT", Utc::now())
-            .expect("zero is a factual nonnegative value");
+            .expect("zero is a factual nonnegative value")
+            .observations;
         assert_eq!(rows[0].sum_open_interest, Decimal::ZERO);
         assert_eq!(rows[0].sum_open_interest_value, Decimal::ZERO);
     }
