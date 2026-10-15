@@ -329,6 +329,22 @@ impl BinanceFuturesOpenInterestStrategy {
     async fn capture(&self, checkpoint: &mut OpenInterestCheckpoint) -> Result<(), StrategyError> {
         let observations = self.fetch_observations(checkpoint).await?;
         if observations.is_empty() {
+            let marked = self
+                .profiles
+                .mark_degraded(
+                    STRATEGY_KEY,
+                    &self.lease_owner,
+                    self.lease_token,
+                    self.profile_generation,
+                    &current_interval_unavailable(
+                        "Binance returned no canonical open-interest rows for the current polling window",
+                    ),
+                )
+                .await
+                .map_err(database_error("open_interest_mark_empty_poll_degraded"))?;
+            if !marked {
+                return Err(lease_lost("recording an empty open-interest poll"));
+            }
             return Ok(());
         }
 
@@ -343,6 +359,7 @@ impl BinanceFuturesOpenInterestStrategy {
             .last()
             .expect("nonempty observations have a final timestamp")
             .source_timestamp;
+        let live_gap_floor = live_gap_floor(Utc::now(), self.config.overlap_periods)?;
 
         let mut transaction = self
             .pool
@@ -442,18 +459,38 @@ impl BinanceFuturesOpenInterestStrategy {
         };
         let advanced = self
             .profiles
-            .record_progress_in(
+            .record_progress_with_gap_floor_in(
                 &mut transaction,
                 STRATEGY_KEY,
                 &self.lease_owner,
                 self.lease_token,
                 self.profile_generation,
                 &progress,
+                Some(live_gap_floor),
             )
             .await
             .map_err(database_error("open_interest_record_progress"))?;
         if !advanced {
             return Err(lease_lost("committing open-interest progress"));
+        }
+        if maximum_source_timestamp < live_gap_floor {
+            let marked = self
+                .profiles
+                .mark_degraded_in(
+                    &mut transaction,
+                    STRATEGY_KEY,
+                    &self.lease_owner,
+                    self.lease_token,
+                    self.profile_generation,
+                    &current_interval_unavailable(format!(
+                        "latest Binance open-interest timestamp {maximum_source_timestamp} is older than the live polling floor {live_gap_floor}"
+                    )),
+                )
+                .await
+                .map_err(database_error("open_interest_mark_stale_poll_degraded"))?;
+            if !marked {
+                return Err(lease_lost("recording a stale open-interest poll"));
+            }
         }
         transaction
             .commit()
@@ -1158,9 +1195,10 @@ impl BinanceFuturesOpenInterestStrategy {
             .iter()
             .map(|observation| observation.source_timestamp)
             .max();
+        let live_gap_floor = live_gap_floor(Utc::now(), self.config.overlap_periods)?;
         let advanced = self
             .profiles
-            .record_progress_in(
+            .record_progress_with_gap_floor_in(
                 &mut transaction,
                 STRATEGY_KEY,
                 &self.lease_owner,
@@ -1176,6 +1214,7 @@ impl BinanceFuturesOpenInterestStrategy {
                     source_watermark: maximum_source_timestamp,
                     availability_watermark: Some(received_at),
                 },
+                Some(live_gap_floor),
             )
             .await
             .map_err(database_error("open_interest_record_repair_progress"))?;
@@ -1295,6 +1334,21 @@ fn find_gaps(
     gaps.sort_unstable_by_key(|gap| gap.start);
     gaps.dedup();
     gaps
+}
+
+fn live_gap_floor(
+    now: DateTime<Utc>,
+    overlap_periods: u16,
+) -> Result<DateTime<Utc>, StrategyError> {
+    Ok(floor_period(now, PERIOD_SECONDS)?
+        - chrono::Duration::seconds(i64::from(overlap_periods) * PERIOD_SECONDS))
+}
+
+fn current_interval_unavailable(message: impl Into<String>) -> StrategyDegradation {
+    StrategyDegradation {
+        reason_code: "binance_open_interest_current_interval_unavailable".to_owned(),
+        reason_message: message.into(),
+    }
 }
 
 fn decode_provider_page(
@@ -1743,6 +1797,21 @@ mod tests {
                 start: first + ChronoDuration::minutes(5),
                 end: first + ChronoDuration::minutes(10),
             }]
+        );
+    }
+
+    #[test]
+    fn live_gap_floor_limits_health_to_the_realtime_overlap() {
+        let now = Utc
+            .with_ymd_and_hms(2025, 1, 1, 0, 17, 30)
+            .single()
+            .expect("valid time");
+
+        assert_eq!(
+            live_gap_floor(now, 2).expect("valid live gap floor"),
+            Utc.with_ymd_and_hms(2025, 1, 1, 0, 5, 0)
+                .single()
+                .expect("valid time")
         );
     }
 
