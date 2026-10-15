@@ -24,6 +24,13 @@ pub struct BinanceOpenInterestDay {
     pub records: Vec<BinanceBtcusdtOpenInterestRecord>,
     pub sha256: String,
     pub response_bytes: u64,
+    pub rejected_unaligned_rows: usize,
+}
+
+#[derive(Debug)]
+struct DecodedOpenInterestRecords {
+    records: Vec<BinanceBtcusdtOpenInterestRecord>,
+    rejected_unaligned_rows: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -109,11 +116,13 @@ impl BinanceOpenInterestConfig {
             u64::try_from(body.len()).context("open-interest response overflow")?;
         let payload: Vec<RawOpenInterestRecord> =
             serde_json::from_slice(&body).context("invalid Binance open-interest history JSON")?;
-        let records = decode_open_interest_records(payload, &self.symbol, Some(day_start), false)?;
+        let decoded =
+            decode_open_interest_records(payload, &self.symbol, Some(day_start), false, true)?;
         Ok(BinanceOpenInterestDay {
-            records,
+            records: decoded.records,
             sha256: format!("{:x}", Sha256::digest(&body)),
             response_bytes,
+            rejected_unaligned_rows: decoded.rejected_unaligned_rows,
         })
     }
 
@@ -151,7 +160,8 @@ impl BinanceOpenInterestConfig {
             .json::<Vec<RawOpenInterestRecord>>()
             .await
             .context("invalid latest Binance open-interest history JSON")?;
-        decode_open_interest_records(payload, &self.symbol, None, true)
+        decode_open_interest_records(payload, &self.symbol, None, true, false)
+            .map(|decoded| decoded.records)
     }
 }
 
@@ -160,20 +170,27 @@ fn decode_open_interest_records(
     expected_symbol: &str,
     utc_day_start: Option<DateTime<Utc>>,
     require_positive: bool,
-) -> Result<Vec<BinanceBtcusdtOpenInterestRecord>> {
+    skip_unaligned: bool,
+) -> Result<DecodedOpenInterestRecords> {
     let mut records = Vec::with_capacity(payload.len());
+    let mut rejected_unaligned_rows = 0_usize;
     for row in payload {
         let source_timestamp = Utc
             .timestamp_millis_opt(row.timestamp)
             .single()
             .context("invalid Binance open-interest timestamp")?;
-        if row.timestamp.rem_euclid(300_000) != 0
-            || utc_day_start.is_some_and(|day_start| {
-                source_timestamp < day_start
-                    || source_timestamp >= day_start + chrono::Duration::days(1)
-            })
-        {
-            bail!("Binance open-interest row escaped its requested range or five-minute alignment");
+        if row.timestamp.rem_euclid(300_000) != 0 {
+            if skip_unaligned {
+                rejected_unaligned_rows = rejected_unaligned_rows.saturating_add(1);
+                continue;
+            }
+            bail!("Binance open-interest row was not five-minute aligned");
+        }
+        if utc_day_start.is_some_and(|day_start| {
+            source_timestamp < day_start
+                || source_timestamp >= day_start + chrono::Duration::days(1)
+        }) {
+            bail!("Binance open-interest row escaped its requested range");
         }
         let sum_open_interest = decimal(&row.sum_open_interest, "sumOpenInterest")?;
         let sum_open_interest_value =
@@ -209,7 +226,13 @@ fn decode_open_interest_records(
     {
         bail!("Binance open-interest history contained duplicate timestamps");
     }
-    Ok(records)
+    if records.is_empty() && rejected_unaligned_rows > 0 {
+        bail!("Binance open-interest history contained no five-minute aligned rows");
+    }
+    Ok(DecodedOpenInterestRecords {
+        records,
+        rejected_unaligned_rows,
+    })
 }
 
 fn decimal(value: &str, field: &str) -> Result<Decimal> {
@@ -222,6 +245,16 @@ fn decimal(value: &str, field: &str) -> Result<Decimal> {
 mod tests {
     use super::*;
 
+    fn raw(timestamp: i64) -> RawOpenInterestRecord {
+        RawOpenInterestRecord {
+            symbol: DEFAULT_BINANCE_OPEN_INTEREST_SYMBOL.to_owned(),
+            sum_open_interest: "123.5".to_owned(),
+            sum_open_interest_value: "456.75".to_owned(),
+            cmc_circulating_supply: Some("19.5".to_owned()),
+            timestamp,
+        }
+    }
+
     #[test]
     fn config_rejects_an_unrelated_contract() {
         let mut config = BinanceOpenInterestConfig {
@@ -231,5 +264,67 @@ mod tests {
         assert!(config.validate().is_ok());
         config.symbol = "ETHUSDT".to_string();
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn historical_decode_skips_unaligned_rows_and_preserves_valid_records() {
+        let day_start = Utc.with_ymd_and_hms(2026, 10, 15, 0, 0, 0).unwrap();
+        let decoded = decode_open_interest_records(
+            vec![
+                raw(day_start.timestamp_millis() + 300_000),
+                raw(day_start.timestamp_millis() + 312_000),
+                raw(day_start.timestamp_millis() + 600_000),
+            ],
+            DEFAULT_BINANCE_OPEN_INTEREST_SYMBOL,
+            Some(day_start),
+            false,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(decoded.rejected_unaligned_rows, 1);
+        assert_eq!(decoded.records.len(), 2);
+        assert_eq!(
+            decoded.records[0].source_timestamp.timestamp_millis(),
+            day_start.timestamp_millis() + 300_000
+        );
+        assert_eq!(
+            decoded.records[1].source_timestamp.timestamp_millis(),
+            day_start.timestamp_millis() + 600_000
+        );
+    }
+
+    #[test]
+    fn historical_decode_rejects_an_entirely_unaligned_response() {
+        let day_start = Utc.with_ymd_and_hms(2026, 10, 15, 0, 0, 0).unwrap();
+        let error = decode_open_interest_records(
+            vec![raw(day_start.timestamp_millis() + 312_000)],
+            DEFAULT_BINANCE_OPEN_INTEREST_SYMBOL,
+            Some(day_start),
+            false,
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("contained no five-minute aligned rows"));
+    }
+
+    #[test]
+    fn historical_decode_keeps_requested_day_validation_strict() {
+        let day_start = Utc.with_ymd_and_hms(2026, 10, 15, 0, 0, 0).unwrap();
+        let error = decode_open_interest_records(
+            vec![raw(
+                (day_start - chrono::Duration::minutes(5)).timestamp_millis()
+            )],
+            DEFAULT_BINANCE_OPEN_INTEREST_SYMBOL,
+            Some(day_start),
+            false,
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("escaped its requested range"));
     }
 }

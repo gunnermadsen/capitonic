@@ -164,13 +164,6 @@ check_ingester_capacity() {
   (( ready >= desired + active )) || {
     echo "Worker capacity is below the conservative rollout requirement; master must add capacity first." >&2; return 1;
   }
-  jq -e 'all(.[] | select(.desired_state == "running");
-    .lease_owner != null and
-    ((.observed_state == "running" and .health_status == "healthy") or
-     (.observed_state == "degraded" and .health_status == "degraded")))' \
-    "$destination/profiles.json" >/dev/null || {
-    echo "A desired realtime profile lacks a running or degraded owner." >&2; return 1;
-  }
 }
 
 save_rollback_snapshot() {
@@ -180,6 +173,8 @@ save_rollback_snapshot() {
   helm -n "$namespace" get manifest "$component" > "$snapshot/helm-manifest.yaml"
   helm -n "$namespace" get values "$component" -a -o yaml > "$snapshot/helm-values.yaml"
   ingester_snapshot "$snapshot/pre"
+  # A pre-existing failed profile may be the reason this development image is being deployed.
+  # Preserve it as rollout evidence; post-deployment recovery remains mandatory below.
   check_ingester_capacity "$snapshot/pre"
   wait_for_process_recovery "$(($(date -u +%s) - 90))"
   [[ "$(route_failure_count)" -lt 2 ]] || {
