@@ -273,7 +273,7 @@ groups:
             model:
               datasource: {type: prometheus, uid: prometheus}
               editorMode: code
-              expr: '1 - min(polymarket_market_data_product_ready)'
+              expr: 'max by (product) (1 - polymarket_market_data_product_ready)'
               instant: true
               refId: A
           - refId: B
@@ -290,7 +290,7 @@ groups:
         noDataState: Alerting
         execErrState: Error
         for: 30s
-        annotations: {summary: At least one selector-required product is not ready on its owning worker route}
+        annotations: {summary: 'Required product {{ $labels.product }} is not ready on its owning worker route'}
         labels: {service: polymarket-bot, family: market_data_pipeline, severity: critical, environment: $GRAFANA_ALERT_ENVIRONMENT}
         isPaused: false
       - uid: mdp_binance_source_reconnects
