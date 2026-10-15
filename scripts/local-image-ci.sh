@@ -77,7 +77,10 @@ image_inputs_sha256() {
 }
 
 if [[ "$mode" == --build || "$mode" == --next-version ]]; then
-  base_version="$(
+  if [[ -n "$requested_version" ]]; then
+    base_version="${requested_version%-local.*}"
+  else
+    base_version="$(
     while IFS= read -r tag; do
       version="${tag##*/}"
       [[ "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(test|rc|local)\.(0|[1-9][0-9]*)$ ]] || continue
@@ -88,6 +91,7 @@ if [[ "$mode" == --build || "$mode" == --next-version ]]; then
     done < <(git tag --list "ci/$component/v*-test.*" "rc/$component/v*-rc.*" "image/$component/v*-local.*") |
       python3 -c 'import sys; versions=[tuple(map(int,line.strip().split("."))) for line in sys.stdin]; print(".".join(map(str,max(versions))) if versions else "")'
   )"
+  fi
   [[ -n "$base_version" ]] || {
     echo "No annotated component version tag reachable from HEAD for $component." >&2
     exit 67
