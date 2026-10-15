@@ -7,10 +7,9 @@ Usage: scripts/local-image-cd.sh pin <ingester|polymarket-bot|db-migrate> <vMAJO
        scripts/local-image-cd.sh prepare-ingester
        scripts/local-image-cd.sh deploy <ingester|polymarket-bot>
 
-pin edits the local Helm image values and chart appVersion. Commit and review before deploy.
+pin edits the local Helm image values without changing chart appVersion. Commit and review before deploy.
 prepare-ingester applies only the worker rolling-update strategy with the old image.
 deploy applies the exact committed, prebuilt image pinned in the chart.
-Database migration Jobs and golden promotion are separate workflows.
 EOF
 }
 
@@ -64,6 +63,13 @@ validate_candidate_tag() {
 candidate_identity() {
   [[ "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-local\.(0|[1-9][0-9]*)$ ]] || {
     echo "Local deployment requires a local.N candidate version." >&2; exit 64;
+  }
+  app_version="$(yq -r '.appVersion' "$chart/Chart.yaml")"
+  [[ "$app_version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+    echo "Chart appVersion must be base-only vX.Y.Z." >&2; exit 67;
+  }
+  [[ "${version%%-*}" == "$app_version" ]] || {
+    echo "Local candidate base ${version%%-*} disagrees with chart appVersion $app_version." >&2; exit 67;
   }
   image="capitonic/$component:$version"
   nerdctl --namespace k8s.io image inspect "$image" >/dev/null 2>&1 || {
@@ -362,7 +368,6 @@ if [[ "$1" == pin ]]; then
   else
     IMAGE="$image" yq -i '.image = strenv(IMAGE)' "$values"
   fi
-  VERSION="$version" yq -i '.appVersion = strenv(VERSION)' "$chart/Chart.yaml"
   echo "Pinned $image ($image_id) in $values; review and commit before deploy."
   exit 0
 fi
@@ -405,9 +410,6 @@ if [[ "$1" == deploy ]]; then
   version="${version#capitonic/$component:}"
   candidate_identity
   [[ "$(chart_image)" == "$image" ]] || exit 67
-  [[ "$(yq -r '.appVersion' "$chart/Chart.yaml")" == "$version" ]] || {
-    echo "Chart appVersion disagrees with its image." >&2; exit 67;
-  }
   if [[ "$component" == ingester ]]; then
     [[ "$(yq -r '.imageDigest' "$values")" == "$image_id" && "$(yq -r '.gitRevision' "$values")" == "$image_revision" ]] || {
       echo "Ingester chart image ID or revision does not match candidate provenance." >&2; exit 67;

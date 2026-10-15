@@ -1,4 +1,6 @@
 pub mod live;
+pub mod orders;
+pub mod polymarket;
 
 use anyhow::{bail, Result};
 use async_trait::async_trait;
@@ -109,6 +111,9 @@ pub trait LivePrePostGuard: live_pre_post_guard_sealed::Sealed + Send + Sync {
     /// Telemetry only; this never changes durable trading authorization.
     fn observe_post_attempt(&self, _request: &OrderRequest) {}
 
+    /// Optional telemetry for the existing durable pending-order claim; never gates execution.
+    fn observe_persistence(&self, _elapsed: std::time::Duration, _success: bool) {}
+
     fn observe_post_result(
         &self,
         _request: &OrderRequest,
@@ -127,6 +132,46 @@ pub struct ReconciliationReport {
     pub checked_at: DateTime<Utc>,
 }
 
+/// Diagnostic evidence from the last durably recorded live reconciliation pass.
+/// This snapshot is not an execution authorization or a duplicate-order verdict.
+#[derive(Debug, Clone, Serialize)]
+pub struct LiveReconciliationStatus {
+    pub run_id: uuid::Uuid,
+    pub process_id: Option<uuid::Uuid>,
+    pub account_ref: Option<String>,
+    pub checked_at: DateTime<Utc>,
+    pub lookback_hours: i64,
+    pub process_accounting_proof: crate::account_reconcile::ProcessAccountingProof,
+    pub unmatched_account_trades: u64,
+    pub position_mismatch_count: usize,
+    pub foreign_open_order_count: usize,
+    pub unresolved_order_count: usize,
+    pub mismatches_found: usize,
+}
+
+impl LiveReconciliationStatus {
+    fn from_report(
+        run_id: uuid::Uuid,
+        report: &ReconciliationReport,
+        account: &AccountReconcileReport,
+        foreign_open_order_count: usize,
+    ) -> Self {
+        Self {
+            run_id,
+            process_id: account.process_id,
+            account_ref: account.account_ref.clone(),
+            checked_at: report.checked_at,
+            lookback_hours: account.lookback_hours,
+            process_accounting_proof: account.process_accounting_proof.clone(),
+            unmatched_account_trades: account.unmatched_trades,
+            position_mismatch_count: account.mismatches.len(),
+            foreign_open_order_count,
+            unresolved_order_count: report.unresolved_count,
+            mismatches_found: report.mismatches_found,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct LiveVenueStatus {
     pub mode: String,
@@ -141,10 +186,15 @@ pub struct LiveVenueStatus {
     pub user_ws_connected: bool,
     pub last_user_ws_pong_age_secs: Option<i64>,
     pub last_rest_reconcile_age_secs: Option<i64>,
+    /// Compatibility field: aggregate reconciliation safety, not duplicate detection alone.
     pub idempotency_clean: bool,
     pub unresolved_live_order_count: usize,
     pub process_accounting_proven: bool,
     pub process_accounting_status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reconciliation: Option<LiveReconciliationStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reconciliation_error: Option<String>,
     pub max_order_notional_usd: Decimal,
     pub max_open_notional_usd: Decimal,
     pub entries_enabled: bool,

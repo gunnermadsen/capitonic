@@ -67,6 +67,7 @@ use polymarket_bot::btc::{
 
 mod control_api;
 mod grafana_publisher;
+mod order_execution;
 mod process_definition;
 mod process_lifecycle;
 mod process_manager;

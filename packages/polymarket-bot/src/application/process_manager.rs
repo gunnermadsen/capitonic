@@ -1,6 +1,8 @@
 use super::*;
 
 pub(super) struct ActiveBtcPlaybook {
+    pub(super) order_service:
+        Option<Arc<polymarket_bot::execution::polymarket::service::ExecutionService>>,
     pub(super) process_id: uuid::Uuid,
     pub(super) run_id: uuid::Uuid,
     pub(super) run_key: String,

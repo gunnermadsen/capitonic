@@ -88,7 +88,8 @@ pub use paper::{
 };
 pub use process_runner::{
     process_runtime_readiness, BtcPaperProcessConfig, BtcPaperProcessRunner, BtcProcessConfig,
-    BtcProcessRunner,
+    BtcProcessRunner, QualifiedExecution, QualifiedExecutionOutcome, QualifiedExecutionReceipt,
+    QualifiedExecutionRejection, QualifiedExecutionResolution,
 };
 pub use repository::{
     BtcMarketLabel, BtcOfficialResolutionWatch, BtcPaperSettlementRecord, BtcRepository,

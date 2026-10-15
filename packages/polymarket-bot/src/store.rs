@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 mod fill_read_telemetry;
+mod order_execution;
 pub use fill_read_telemetry::{FillEconomicsSite, FillIdentitySite};
+pub(crate) use order_execution::PaperCommit;
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
@@ -31,6 +33,7 @@ fn live_buy_notional_rounding_tolerance_usd() -> Decimal {
 #[derive(Clone)]
 pub struct Store {
     pool: PgPool,
+    order_admission_slots: std::sync::Arc<tokio::sync::Semaphore>,
 }
 
 const HEARTBEAT_ACTIVE_TRADING_PROCESS_SQL: &str = r#"
@@ -604,7 +607,11 @@ pub struct LiveAccountPositionEvidence {
 
 impl Store {
     pub fn from_pool(pool: PgPool) -> Self {
-        Self { pool }
+        let slots = pool.options().get_max_connections().saturating_sub(1) as usize;
+        Self {
+            pool,
+            order_admission_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(slots)),
+        }
     }
 
     pub async fn update_trading_process_status(
@@ -2947,12 +2954,26 @@ impl Store {
 
     pub async fn insert_fill(&self, fill: &FillRecord) -> Result<()> {
         let fill = canonical_fill_for_storage(fill)?;
-        let process_id = required_fill_process_id(&fill)?;
+        required_fill_process_id(&fill)?;
         let mut transaction = self
             .pool
             .begin()
             .await
             .context("failed to begin fill identity transaction")?;
+        Self::insert_fill_in_transaction(&mut transaction, &fill).await?;
+        transaction
+            .commit()
+            .await
+            .context("failed to commit canonical fill")?;
+        Ok(())
+    }
+
+    async fn insert_fill_in_transaction(
+        transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        fill: &FillRecord,
+    ) -> Result<()> {
+        let fill = canonical_fill_for_storage(fill)?;
+        let process_id = required_fill_process_id(&fill)?;
         let valid_process_order_boundary = sqlx::query_scalar::<_, bool>(
             r#"
             SELECT process.created_at <= $3 AND orders.process_id = process.process_id
@@ -2964,15 +2985,11 @@ impl Store {
         .bind(process_id)
         .bind(&fill.order_id)
         .bind(fill.filled_at)
-        .fetch_optional(&mut *transaction)
+        .fetch_optional(&mut **transaction)
         .await
         .context("failed to validate fill process creation boundary")?
         .context("fill references an unknown trading process or order")?;
         if !valid_process_order_boundary {
-            transaction
-                .rollback()
-                .await
-                .context("failed to release pre-process fill transaction")?;
             bail!("fill does not match its order owner or predates its trading process");
         }
         // The Timescale hypertable key includes timestamp_utc. Claim the deterministic fill_id in
@@ -2981,22 +2998,18 @@ impl Store {
             .bind(fill.fill_id)
             .bind(process_id)
             .bind(fill.filled_at)
-            .execute(&mut *transaction)
+            .execute(&mut **transaction)
             .await
             .context("failed to claim deterministic fill identity")?;
         if identity.rows_affected() == 0 {
             let (existing_process_id, existing_timestamp) =
                 sqlx::query_as::<_, (Option<Uuid>, DateTime<Utc>)>(SELECT_FILL_IDENTITY_SQL)
                     .bind(fill.fill_id)
-                    .fetch_optional(&mut *transaction)
+                    .fetch_optional(&mut **transaction)
                     .await
                     .context("failed to verify canonical fill identity")?
                     .context("canonical fill identity disappeared during verification")?;
             if existing_process_id != Some(process_id) || existing_timestamp != fill.filled_at {
-                transaction
-                    .rollback()
-                    .await
-                    .context("failed to release conflicting fill identity transaction")?;
                 bail!(
                     "fill_id {} collides with a different process or execution timestamp",
                     fill.fill_id
@@ -3005,25 +3018,17 @@ impl Store {
             let durable = sqlx::query_as::<_, FillDbRow>(SELECT_FILL_SQL)
                 .bind(fill.fill_id)
                 .bind(fill.filled_at)
-                .fetch_optional(&mut *transaction)
+                .fetch_optional(&mut **transaction)
                 .await
                 .context("failed to verify fill for canonical identity")?
                 .context("canonical fill identity has no durable fill row")?;
             let durable = fill_from_db_row(fill.fill_id, durable)?;
             if !fill_record_matches(&durable, &fill) {
-                transaction
-                    .rollback()
-                    .await
-                    .context("failed to release conflicting durable fill transaction")?;
                 bail!(
                     "fill_id {} has a canonical identity but conflicting durable fill",
                     fill.fill_id
                 );
             }
-            transaction
-                .commit()
-                .await
-                .context("failed to commit idempotent fill verification")?;
             return Ok(());
         }
         let source = serialized_name(&fill.source)?;
@@ -3039,23 +3044,15 @@ impl Store {
             .bind(fill.fee)
             .bind(source)
             .bind(raw_payload)
-            .execute(&mut *transaction)
+            .execute(&mut **transaction)
             .await
             .context("failed to insert fill")?;
         if result.rows_affected() == 0 {
-            transaction
-                .rollback()
-                .await
-                .context("failed to release noncanonical fill transaction")?;
             bail!(
                 "newly claimed fill_id {} already has a durable fill row",
                 fill.fill_id
             );
         }
-        transaction
-            .commit()
-            .await
-            .context("failed to commit canonical fill")?;
         Ok(())
     }
 
@@ -3113,6 +3110,31 @@ impl Store {
         self.recent_live_events_by_type("trade", true, limit).await
     }
 
+    /// Admit incoming venue events only when their exact venue order ID exists locally.
+    pub(crate) async fn live_event_owned_order_ids(
+        &self,
+        candidates: &[String],
+    ) -> Result<HashSet<String>> {
+        if candidates.is_empty() {
+            return Ok(HashSet::new());
+        }
+        Ok(sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT candidate FROM unnest($1::text[]) AS candidate
+            WHERE EXISTS (
+                SELECT 1 FROM polymarket.orders
+                WHERE venue_order_id = candidate
+            )
+            "#,
+        )
+        .bind(candidates)
+        .fetch_all(&self.pool)
+        .await
+        .context("failed to resolve live event replay ownership")?
+        .into_iter()
+        .collect())
+    }
+
     pub async fn recent_live_order_events(&self, limit: i64) -> Result<Vec<LiveVenueEvent>> {
         Ok(self
             .recent_live_events_by_type("order", false, limit)
@@ -3160,13 +3182,22 @@ impl Store {
 
         let rows = sqlx::query_as::<_, Row>(
             r#"
-            SELECT event_id, source, event_type, venue_event_id, venue_order_id,
-                   venue_trade_id, event_status, raw_payload
-            FROM polymarket.live_venue_events
-            WHERE source = 'user_ws'
-              AND event_type = $1
-              AND (NOT $3 OR applied = false)
-            ORDER BY created_at DESC
+            SELECT event.event_id, event.source, event.event_type, event.venue_event_id,
+                   event.venue_order_id, event.venue_trade_id, event.event_status, event.raw_payload
+            FROM polymarket.orders owned
+            JOIN LATERAL (
+                SELECT event_id, source, event_type, venue_event_id, venue_order_id,
+                       venue_trade_id, event_status, raw_payload, created_at
+                FROM polymarket.live_venue_events
+                WHERE venue_order_id = owned.venue_order_id
+                  AND source = 'user_ws'
+                  AND event_type = $1
+                  AND (NOT $3 OR applied = false)
+                ORDER BY created_at DESC
+                LIMIT $2
+            ) event ON true
+            WHERE owned.venue_order_id IS NOT NULL
+            ORDER BY event.created_at DESC
             LIMIT $2
             "#,
         )
@@ -3290,49 +3321,6 @@ impl Store {
             )
         })?;
         Ok(inserted)
-    }
-
-    pub(crate) async fn unapplied_account_live_sell_trades(
-        &self,
-        account_address: &str,
-        window_start: DateTime<Utc>,
-        window_end: DateTime<Utc>,
-        limit: i64,
-    ) -> Result<Vec<AccountTrade>> {
-        if account_address.trim().is_empty()
-            || window_start >= window_end
-            || !(1..=4_000).contains(&limit)
-        {
-            bail!("unapplied account live exit query requires bounded inputs");
-        }
-        let rows = sqlx::query_as::<_, AccountTrade>(
-            r#"
-            SELECT account_trade_id, account_address, token_id, market_id, side, price, size,
-              notional, timestamp_utc, transaction_hash, venue_order_id, venue_trade_id,
-              source, linked_order_id, raw_payload
-            FROM polymarket.account_trades
-            WHERE account_address = lower($1)
-              AND side = 'sell'
-              AND linked_order_id IS NULL
-              AND applied_exit_size = 0
-              AND timestamp_utc >= $2
-              AND timestamp_utc <= $3
-              AND raw_payload ? 'usdcSize'
-            ORDER BY timestamp_utc, account_trade_id
-            LIMIT $4
-            "#,
-        )
-        .bind(account_address.trim())
-        .bind(window_start)
-        .bind(window_end)
-        .bind(limit + 1)
-        .fetch_all(&self.pool)
-        .await
-        .context("failed to load unapplied account live exits")?;
-        if rows.len() > limit as usize {
-            bail!("unapplied account live exits exceed the bounded reconciliation window");
-        }
-        Ok(rows)
     }
 
     pub async fn insert_account_position_snapshot(
@@ -3856,7 +3844,16 @@ fn live_requested_exposure(request: &OrderRequest) -> Result<(Decimal, Decimal)>
     let fee_rate = sealed_dynamic_fee_rate(&request.metadata)
         .context("live requested exposure has invalid dynamic_fee_rate")?;
     let notional = checked_live_exposure_mul(request.price, request.size, "requested notional")?;
-    let fee = dynamic_crypto_taker_fee(request.size, fee_rate, request.price);
+    let fee = if request
+        .metadata
+        .pointer("/polymarket_execution/quantity_semantics")
+        .and_then(|v| v.as_str())
+        == Some("buy_cash_budget")
+    {
+        checked_live_exposure_mul(notional, fee_rate, "cash budget fee reservation")?
+    } else {
+        dynamic_crypto_taker_fee(request.size, fee_rate, request.price)
+    };
     Ok((notional, fee))
 }
 

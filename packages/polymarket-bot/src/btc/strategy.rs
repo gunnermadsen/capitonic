@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -1860,11 +1860,39 @@ fn validate_btc_directional_model_execution_lineage(
     Ok(())
 }
 
-fn validate_book(
+pub(crate) fn validate_book(
     config: &BtcStrategyConfig,
     snapshot: &BtcFeatureSnapshot,
     book: &BtcOutcomeBookFeatures,
     missing_reason: BtcRejectReason,
+) -> Result<(), BtcRejectReason> {
+    validate_book_with_source_clock_lead(config, snapshot, book, missing_reason, Duration::zero())
+}
+
+/// Execution uses the existing readiness bound for the remote source clock.
+/// Local receipt time remains strictly causal; frozen strategy validation above
+/// retains its original zero-lead contract.
+pub(crate) fn validate_execution_book(
+    config: &BtcStrategyConfig,
+    snapshot: &BtcFeatureSnapshot,
+    book: &BtcOutcomeBookFeatures,
+    missing_reason: BtcRejectReason,
+) -> Result<(), BtcRejectReason> {
+    validate_book_with_source_clock_lead(
+        config,
+        snapshot,
+        book,
+        missing_reason,
+        Duration::milliseconds(config.max_book_age_ms),
+    )
+}
+
+fn validate_book_with_source_clock_lead(
+    config: &BtcStrategyConfig,
+    snapshot: &BtcFeatureSnapshot,
+    book: &BtcOutcomeBookFeatures,
+    missing_reason: BtcRejectReason,
+    max_source_lead: Duration,
 ) -> Result<(), BtcRejectReason> {
     let bid = book.best_bid.ok_or(missing_reason)?;
     let ask = book.best_ask.ok_or(missing_reason)?;
@@ -1874,7 +1902,9 @@ fn validate_book(
         .source_timestamp
         .ok_or(BtcRejectReason::MissingLineage)?;
     let received_at = book.received_at.ok_or(BtcRejectReason::MissingLineage)?;
-    if source_timestamp > snapshot.observed_at || received_at > snapshot.observed_at {
+    if source_timestamp - snapshot.observed_at > max_source_lead
+        || received_at > snapshot.observed_at
+    {
         return Err(BtcRejectReason::FutureInputTimestamp);
     }
     if book.integrity_status != FeedIntegrityStatus::Ok {
@@ -1905,7 +1935,7 @@ fn validate_book(
     Ok(())
 }
 
-fn validate_fee(
+pub(crate) fn validate_fee(
     config: &BtcStrategyConfig,
     snapshot: &BtcFeatureSnapshot,
 ) -> Result<(), BtcRejectReason> {
@@ -1929,7 +1959,7 @@ fn validate_fee(
     Ok(())
 }
 
-fn quote_outcome_edge(
+pub(crate) fn quote_outcome_edge(
     config: &BtcStrategyConfig,
     book: &BtcOutcomeBookFeatures,
     conservative_probability: Decimal,
@@ -2123,7 +2153,7 @@ fn rejected_with_prediction(
     decision
 }
 
-fn edge_passes(config: &BtcStrategyConfig, edge: &OutcomeEdge) -> bool {
+pub(crate) fn edge_passes(config: &BtcStrategyConfig, edge: &OutcomeEdge) -> bool {
     edge.net_edge >= config.min_net_edge_usd
         && edge.net_edge_per_share >= config.min_net_edge_per_share
 }

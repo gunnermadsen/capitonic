@@ -1,27 +1,23 @@
 # Implementation
-- The user’s requested outcome and any agreed implementation plan are the authoritative scope. If no separate plan exists, the request itself defines the implementation boundary.
-- Execute every in-scope requirement completely and verify the requested outcome. Do not add optional improvements, cleanup, redesigns, or unrelated fixes.
-- Before implementing functionality, identify the existing module, contract, registry, persistence path, instrumentation, or execution path that owns the capability. Reuse its supported extension point instead of creating another implementation.
-- Do not delete, disable, replace, rewrite, or modify existing systems, behavior, interfaces, or data outside the defined scope, even when doing so would simplify the implementation.
-- If completing the work requires a change outside the defined scope, stop before making that change, explain why it is required, and obtain explicit user authorization to amend the scope.
-- If an existing system cannot satisfy the request, stop and explain the specific incompatibility. Do not create a parallel or replacement system without explicit user authorization.
+- The user’s requested outcome and any agreed implementation plan define the scope. Complete and verify that outcome without adding optional cleanup, redesigns, or unrelated changes.
+- A plan transferred to another task or thread is context only, not authorization to implement it; the receiving task must assimilate it, define the exact narrow file and behavior scope, and wait for explicit implementation authorization in that task.
+- Before implementing functionality, identify and reuse the existing module, contract, registry, persistence path, instrumentation, or execution path that owns the capability.
+- Make the smallest coherent change that satisfies the request. Necessary adjacent changes to compilation, tests, or directly affected contracts are permitted when they do not materially broaden the requested outcome; report them after implementation.
+- Do not extract, reorganize, rename, or rewrite existing logic solely for structure or testability; if the necessary diff materially exceeds the named behavior or owning files, stop and obtain explicit authorization for the expanded scope.
+- Obtain explicit authorization before making destructive changes, changing unrelated behavior or data, materially expanding the requested outcome, or introducing a parallel or replacement system.
+- If the existing system cannot satisfy the request without one of those changes, stop and explain the specific incompatibility.
+- Do not create, modify, rename, or delete files under `.github/workflows/` without explicit user authorization naming the workflow file and requested behavior; approval of a broader plan or adjacent release change does not authorize workflow changes.
 - Use `trading_processes.process_id` as the canonical identity for trading-process ownership and scoping.
 
-# North Star
-Think of Capitonic as a vision to generate income through systems with automation and algorithms, that require no customers. The polymarket trading bot is an extension of that vision, to systemically generate an  income stream based on a reproducable strategy that can trade with positive net expectancy through a narrow and simplified system. the key is positive net expectancy and a simplified system. Capitonic was not envisioned to live in a labatory forever. Capitonic was envisioned to prove a concept, that an automated trading bot can become a real product, a real business. Captitonic is NOT here to be reduced to a pet project or a labratory, or an experiment platform. Capitonic exists to discover an edge, exploited with a strategy, and repeated to generate net expectancy. Do not make the mistake of seeing Capitonic as a "research platform", because it is not that. Capitonic is not a school, or a university; it is a business. Businesses rely on income to survive. If Capitonic produces income, Capitonic WILL thrive.
-
 ## Golden Rules
-- All Rust features and systems are implemented and optimized for latency, memory usage efficiency, CPU performance, zero downtime, and database resource usage, ensuring a performant and resiliant system.
+- Rust changes must avoid material regressions in latency, memory use, CPU use, database load, availability, and recovery behavior. Measure or benchmark when a change plausibly affects a performance-sensitive path.
 - Do not name artifacts, branches, files or code comments based on phases or stages of an implementation. use domain specific naming for the issue or feature being addresses. I dont' want to see 'phase X' in git history, code files, branches, or file names or code comments. 
 
 ## Always-On Trading Liveness
-- Do not create blunt or pointless kill switches that stop trading processes, revoke durable trading authorization, or require manual re-enablement merely because a container, database connection, reconciliation loop, websocket, or other dependency restarted or experienced a transient failure.
-- A normal container deployment or service restart must preserve the configured intent of an enabled trading process and recover back to trading automatically once its required runtime evidence is healthy. Ephemeral in-memory gates must not silently override durable process configuration after restart.
-- Transient unavailability, stale evidence, crossed or one-sided books, temporary reconciliation errors, database reconnects, and transport reconnects may block only the specific unsafe action while the condition exists. They must not terminate the process, permanently disable entries, or poison unrelated processes.
-- Recovery must be automatic and narrowly scoped. When healthy evidence returns, the affected action must become eligible again without a manual operator ritual unless the operator explicitly disabled it in durable configuration.
-- Reserve process termination or persistent trading disablement for explicit operator intent or a proven unrecoverable integrity condition. Do not treat ordinary infrastructure lifecycle events as unrecoverable integrity failures.
-- Shared infrastructure faults must not allow one trading process to disable other independent processes. Scope runtime readiness and failure handling by `process_id` wherever process behavior is involved.
-- When changing lifecycle or readiness code, verify restart recovery and confirm that configured live processes resume eligibility without bypassing the existing per-order capital, identity, accounting, and market-safety checks.
+- Preserve the durable enabled or disabled intent of every trading process across deployments, service restarts, reconnects, and other ordinary infrastructure lifecycle events. Ephemeral runtime state must not override durable process configuration.
+- Transient failures may block only the unsafe action while the condition exists. They must not terminate the process, persistently disable trading, require manual re-enablement, or affect independent processes; scope readiness and failure handling by `process_id`.
+- Restore eligibility automatically when the required evidence becomes healthy. Reserve process termination or persistent disablement for explicit operator intent or a proven unrecoverable integrity condition.
+- When changing lifecycle or readiness behavior, verify automatic restart recovery without bypassing existing capital, identity, accounting, order, or market-safety controls.
 
 ## Code
 - Source changes do not by themselves authorize or require a local container image build. Do not build, rebuild, push, tag, deploy, or promote an image unless the user explicitly requests that image or release action.
@@ -31,10 +27,6 @@ Think of Capitonic as a vision to generate income through systems with automatio
 - Do not copy or vendor third-party Rust crates into the repository. Declare registry dependencies in the owning `Cargo.toml`; inspect downloaded crate sources only in Cargo's external registry cache.
 - When an image build is explicitly requested, build only affected components: bot changes build `polymarket-bot`; ingester changes build the single `ingester` image used by both `ingester-master` and `ingester-worker` through runtime `INGESTER_MODE` configuration; database migration runner changes build `db-migrate`. Never build separate master and worker images.
 - Build the bot with `POLYMARKET_GIT_REVISION=<GIT_COMMIT_HASH>`, the ingester with `INGESTER_GIT_REVISION=<GIT_COMMIT_HASH>`, and db-migrate with `DB_MIGRATE_GIT_REVISION=<GIT_COMMIT_HASH>`.
-- put sensitive secrets in .env files
-- Treat the main worktree's `.env` file as the source of truth for API-key secrets. Worktrees and services must reference or inherit those secrets without creating independent secret values.
-- put non-sensitive runtime configuration in docker-compose files
-- .env example files are templates, do not put plaintext env vars in the example env files.
 
 ## Rust file organization
 - Organize Rust code by domain responsibility, with one clear purpose per module.
@@ -64,67 +56,45 @@ Think of Capitonic as a vision to generate income through systems with automatio
 - Once a branch is merged into integration, do not add commits to it; commit follow-up changes on integration or a new branch from the latest integration tip.
 - `development` contains accepted releases. Do not implement features or fixes directly on it.
 - `production` receives accepted `development` releases and reviewed deployment metadata only through user-approved release PRs merged in GitHub. Never implement features or fixes directly on it, push directly to it, or append CI/CD-generated admission commits after merge.
-- Before preparing another release, reconcile outstanding production release commits, including historical admission commits, into the latest integration branch, preserving deployed image and secret pins; never reset or force-push production to erase divergence.
-- Use one active integration branch named `integration-<YYYY-MM-DD>`, created from the accepted `development` tip. An optional annotated `integration-cycle/<YYYY-MM-DD>` tag may record its starting boundary.
-- New feature, defect, and model-training branches use `feature/<name>`, `defect/<name>`, or `training/<name>`, start from the latest integration tip, and merge only into integration. Keep unrelated domains separate; follow-up work starts from its existing feature, training, or integration lineage.
-- Use `docs/<name>` for standalone documentation or repository-policy changes, including `AGENTS.md` and files under `docs/`. Create and work on documentation branches only in the main worktree from the latest integration tip; do not create a separate worktree. Documentation required by a feature or defect remains on its owning branch.
-- Keep integration and documentation branches in the main worktree. A narrowly scoped integration-policy or coordination correction may be committed directly on integration only when explicitly requested.
-- Tag a committed standalone documentation change with annotated `docs/<name>/git-<full-git-commit-id>` metadata recording its source branch, changed paths, purpose, and integration base. Documentation tags record provenance only and do not confer acceptance, image, or golden status.
+- Before preparing another release, reconcile outstanding production release commits, including historical admission commits, into `integration`, preserving deployed image and secret pins; never reset or force-push production to erase divergence.
+- Keep local and remote `development` aligned with accepted integration; after advancing `development`, continue integration only from that same accepted tip and never retain a competing local `development` lineage.
+- Maintain one permanent branch named `integration`; use it to aggregate accepted feature, defect, training, documentation, and repository-policy changes.
+- New feature, defect, and model-training branches use `feature/<name>`, `defect/<name>`, or `training/<name>`, start from the `integration` tip, and merge only into `integration`. Keep unrelated domains separate; follow-up work starts from its existing feature, training, or integration lineage.
+- Make standalone documentation and repository-policy changes directly on `integration` in the main worktree. Documentation required by a feature, defect, or training change remains on its owning branch.
 
 ## Branch Integration
 
-- Commit changes in coherent domain groups. Feature, defect, training, and documentation branches merge only into integration.
-- Outside the golden image workflow, each merge requires explicit authorization naming the branch or commit.
-- Assess only branches selected for this checkpoint. If none are named, consider active-cycle branches with an existing worktree and commits outside integration. A branch qualifies when it is clean, committed, not abandoned, and passes its required checks. Report exclusions.
+- Commit changes in coherent domain groups. Feature, defect, and training branches merge only into integration.
+- Each merge requires explicit authorization naming the branch or commit.
+- Assess only branches selected for merging. If none are named, consider active-cycle branches with an existing worktree and commits outside integration. A branch qualifies when it is clean, committed, not abandoned, and passes its required checks. Report exclusions.
 - Before merging, give one compact summary of each selected branch's lineage, worktree state, checks, commits, and diff against integration. Stop only for an ambiguous target, potential loss of uncommitted work, or unauthorized destructive history rewriting.
 - Use `--ff-only` when integration has not diverged from the branch merge base; otherwise use `--no-ff`. Do not rewrite or discard lineage to obtain a fast-forward.
-- Advance `development` only through the golden image workflow or an explicitly authorized configuration-only promotion.
+- Advance `development` from integration only with explicit authorization naming the integration branch or commit.
 
 ## Local Image Boundaries
 
-- Initiate local CI and CD as separate commands for explicitly requested bot or ingester image work. CI owns candidate image builds, local versions, and image provenance; CD owns chart image and `appVersion` pins and local deployment. The agent coordinates branch integration and golden checkpoint provenance.
+- Local CI owns `local.N` image builds and provenance. Local CD owns exact local image pins and deployment, but must not change the base-only chart `appVersion`.
 - Local application builds and deployments use only `vX.Y.Z-local.N`; never build, alias, or run RC images locally.
-- Release-preparation tooling reserves RC Git tags locally (`rc.0`, then `rc.1`, etc.) after local development acceptance and before publication, checking origin tags and registry identities. Admission validates accepted local provenance without requiring an RC deployment or changing local chart pins. Existing reservations are immutable.
 - Model training and observability provisioning retain their `model/...` and `provisioned/observability/...` provenance. They do not enter the application image version sequence unless an image input changes.
 
 ## Helm Chart Versioning
 
-- Version each chart independently through `Chart.yaml` `version`, using SemVer `X.Y.Z`. Keep `appVersion` tied to the application version.
-- Bump the affected chart's version in the same commit as changes to templates, defaults, dependencies, image pins, or shared assets packaged into that chart. Documentation-only changes do not require a bump.
-- Use PATCH for compatible fixes and pin updates, MINOR for backward-compatible additions, and MAJOR for changes requiring operator action or breaking existing values or upgrade compatibility, including while versions are `0.x`.
-- Before tagging, run Helm lint and render checks for affected charts using supported values.
-- Create an immutable annotated Git tag `helm/<chart-name>/vX.Y.Z` on the exact version-changing commit, matching `Chart.yaml`. Record the chart path and change summary. Never move or overwrite the tag; it records chart provenance and does not authorize deployment or confer golden status.
+- Version each chart independently through `Chart.yaml` `version`, using SemVer `X.Y.Z`. The chart version identifies deployable chart structure; `appVersion` identifies the component's base application version and uses base-only `vX.Y.Z`.
+- Bump the chart version only when the chart changes the rendered Kubernetes platform contract, such as resource kinds, pod configuration, environment variables, secrets, mounts, services, storage, scheduling, or RBAC; do not bump it for `appVersion`, image pins, digests, source revisions, or baked application and observability content.
+- An update limited to `appVersion` and its corresponding image tag, digest, or source-revision pins does not require a chart-version bump.
+- Keep exact environment image versions in values files: local values may pin `vX.Y.Z-local.N`, and production values may pin `vX.Y.Z-rc.N` or final `vX.Y.Z`. A newly selected image pin must share the `appVersion` base.
+- Run Helm lint and render checks when chart structure changes. Run the applicable pin-consistency check when only application image identity changes.
+- Create an immutable annotated Git tag `helm/<chart-name>/vX.Y.Z` only when `Chart.yaml` `version` changes. Record the chart path and change summary. Never move or overwrite the tag. Do not create a new Helm tag for an `appVersion`-only update.
 
-## Golden Image Workflow
+## Image Identity
 
-`Perform the golden image workflow` authorizes selected branch merges, local image build and deployment, checkpoint verification, promotion, and pushing Git refs to origin. Registry publication, CI completion, and worktree cleanup do not gate the local checkpoint.
-
-1. Inspect and merge the selected qualifying branches into integration under Branch Integration.
-2. Compare runtime and image inputs with the selected existing images. Run the affected packages' required tests once. Build only changed components with the full embedded Git revision. Reuse an immutable image when its inputs are unchanged, including after documentation-only commits.
-3. Record the running image IDs and revisions, material configuration, migration state, enabled trading processes, desired realtime profiles, active backfills, and worker capacity. Create an `image/...` provenance tag for each new image.
-4. Record local deployment and Development Checkpoint Verification results when performed. Trading-process readiness does not gate image acceptance, RC publication, or advancement of `development`; record failures as release limitations. Safe Image Deployment and production verification requirements remain in effect.
-5. After required source checks and immutable-image verification pass, fast-forward `development` with `--ff-only`. Create an annotated `checkpoint/development/git-<full-git-commit-id>` tag recording the selected images, configuration, model identity, checks, rollback images, and limitations. Create a `golden/...` tag only when an image is first accepted; do not move an existing tag when that image is reused.
-6. Push `development` and the new Git tags to origin. GitHub Actions may finish asynchronously and independently rebuilt CI images do not inherit golden status. Publish the exact locally verified images to a registry only when separately requested.
-7. Keep the current-date integration branch aligned with `development`. Handle completed worktree cleanup under Worktree Lifecycle after the checkpoint; it is not a verification gate.
-
-Migration creation and initial feature or defect validation follow Database Changes and Migrations. The golden image workflow authorizes rebuilding and deploying `db-migrate` when its pending migrations exactly match the committed, approved, and previously validated set. Stop for any new, altered, unvalidated, or unexpected migration.
-
-## Image and Golden Identity
-
-- Before allocating a component version, check origin tags, production release pins, and registry final tags; treat promoted bases as closed, choose the next SemVer base for changed image inputs, and verify candidate, RC, Helm, and release metadata agree before tagging or pushing.
-- An `image/...` tag records build provenance. A `golden/...` tag records an image's first accepted development checkpoint. A `checkpoint/development/...` tag records the complete rollback tuple for that `development` commit. An accepted image may be reused by a later checkpoint when its runtime inputs are unchanged; its embedded source revision and existing provenance tags do not move.
-- The candidate tuple records the Git revision, immutable image identities, embedded revisions, migration state, material runtime configuration, applicable model identity, checks, and limitations. The rollback tuple records the predeployment images and revisions, service set, worker capacity, active realtime and backfill allocations, migration state, and material runtime configuration.
-- Golden status and change detection are component-specific. Shared code or build-input changes affect every image that consumes them.
-- Reuse a selected immutable image when it exists. Do not replace a selected digest with a rebuild without explicit authorization.
-- Golden tags are provenance records. Do not delete or move them to hide a later failure; use a rejected or abandoned tag to exclude a failed artifact or lineage from future admission.
-- Publish an accepted RC's `development`, checkpoint, candidate, image-hash, golden, and `rc/<component>/<version>` refs in one `git push --atomic` operation. Never publish those related refs through separate pushes, and never let GitHub CI allocate a competing RC number. The committed local chart pin remains `local.N`; the RC Git tag links that accepted candidate and its source inputs to the exact RC version published by remote CI.
-- Registry repositories used by production are immutable. CI may create an absent approved SemVer RC tag or verify an existing approved CI publication on a retry, but it must never move or overwrite an RC tag and must never publish a mutable production tag.
-- Local image CI and CD qualify and deploy the Rancher Desktop k3s candidate only. They may publish the atomic Git provenance required to admit an RC, but they must not build, stage, tag, or push the production ECR image; GitHub CI owns the production ARM64 build and immutable ECR RC publication.
-
-## Configuration-Only Promotion
-
-- The user may explicitly authorize a configuration-only fast-forward from integration to `development` without building or minting images.
-- Before promotion, inspect and report the complete commit range and confirm that no changed path affects application source, image contents, database migrations, or trading behavior. Otherwise use the golden image workflow.
+- Component change detection is independent. Shared code or build-input changes affect every image that consumes them.
+- Before allocating a component version, check production release pins and registry tags. Treat promoted version bases as closed, select the next SemVer base for changed inputs, and keep RC, Helm, and release metadata consistent.
+- Reuse an existing immutable image when its component inputs are unchanged. Do not replace a selected digest with a rebuild without explicit authorization.
+- Local image CI and CD may build, tag, and deploy `local.N` images for Rancher Desktop k3s. Local image evidence does not gate advancing or pushing `development`.
+- Remote GitHub CI reads the base-only chart `appVersion`, reuses an existing matching `vX.Y.Z-rc.N` image on retry, or allocates `N + 1` after the highest immutable matching RC tag in ECR; it owns production ARM64 image builds and RC publication from `development`.
+- Production registry repositories are immutable. CI may publish an absent SemVer RC tag or verify an existing publication on retry, but it must never move or overwrite an RC tag or publish a mutable production tag.
+- Successful remote CI completion, including verification of the immutable RC digest and embedded source revision, is sufficient development image evidence. Do not require golden, candidate-admission, image-hash, or development-checkpoint Git tags.
 
 ## Rejected Candidates and Abandoned Lineages
 
@@ -139,17 +109,17 @@ Migration creation and initial feature or defect validation follow Database Chan
 - Before replacing containers, record the rollback tuple and keep it until deployment verification is complete.
 - Add any required worker capacity before replacing existing workers. Verify new workers are registered and healthy before proceeding with the remaining deployment.
 - Deploy the exact prebuilt image without rebuilding it or changing unrelated services. Preserve configured process intent and worker scale unless the verified allocation demand requires additional capacity.
-- Run Development Checkpoint Verification for a local golden checkpoint. Run Full Post-Deployment Verification for production or when explicitly requested. A failed check requires investigation, but triggers rollback only when the failure is attributable to the deployed image.
-- Record the candidate tuple, worker-capacity calculation, verification results, and unresolved alerts in the deployment result.
+- Run Local Deployment Verification after a local image deployment. Run Full Post-Deployment Verification for production or when explicitly requested. A failed check requires investigation, but triggers rollback only when the failure is attributable to the deployed image.
+- Record the selected image identity, rollback tuple, worker-capacity calculation, verification results, and unresolved alerts in the deployment result.
 
-### Development Checkpoint Verification
+### Local Deployment Verification
 
 - Use one bounded verification pass to confirm:
   1. Affected services run the exact selected image IDs and embedded revisions without restart loops; migration state matches the approved set and no unexpected migration is pending.
   2. Worker capacity covers desired realtime profiles and active backfills; every desired profile has a current healthy owner and required bot routes resolve.
   3. Every process enabled before deployment remains enabled, resumes automatically, and has a fresh heartbeat. Existing capital, identity, accounting, order, and market-safety controls remain active. Do not force a trade to prove readiness.
   4. Timestamps advance for feeds required by those processes, and there is no new sustained critical alert or affected-path error attributable to the deployment.
-- Recheck only a failed or transient condition. Record results and limitations in the checkpoint tag. A container health endpoint alone does not prove that trading can resume.
+- Recheck only a failed or transient condition. Record results and limitations in the deployment result. A container health endpoint alone does not prove that trading can resume.
 
 ### Full Post-Deployment Verification
 
@@ -167,7 +137,7 @@ Migration creation and initial feature or defect validation follow Database Chan
 ### Automatic Rollback and Recovery
 
 - Roll back only when the intended fix remains defective or evidence reasonably attributes a regression in an affected path to the deployed image. A coincident, pre-existing, or unrelated failure must be reported and handled separately; it must not trigger rollback of the image.
-- On deployment failure, stop further rollout actions and preserve logs and the failed candidate tuple. Do not mint, move, or alter golden tags to disguise the failure.
+- On deployment failure, stop further rollout actions and preserve logs and the failed image identity.
 - If adding capacity or restarting a narrowly affected disposable worker safely restores an attributable failure without changing code, images, durable intent, or data, perform that recovery before rollback and repeat the affected verification checks. For production, perform this recovery only through the documented workflow or a specifically authorized procedure under Production Deployment Coordination.
 - If the attributable failure remains, restore each affected service to the exact immutable image that was running immediately before deployment, together with its recorded material runtime configuration and required worker capacity. Do not rebuild an old commit, use mutable tags as rollback identity, reset Git branches, or change unrelated services.
 - Before rolling back across a database change, verify that the previous image is compatible with the current database state. Never reverse or mutate database state outside a separately authorized migration. If compatibility is not proven, leave the database intact, restore only compatible services, and report the rollback as blocked or partial.
@@ -177,24 +147,16 @@ Migration creation and initial feature or defect validation follow Database Chan
 
 - Whenever a deployment becomes unhealthy, automatically perform a read-only root-cause analysis after stabilizing or rolling back the stack. Correlate the deployment timestamp with image identities, container events and restart counts, recent bounded logs, profile leases, worker capacity and backfill allocations, route resolution, data freshness, migrations, trading-process recovery, and firing alerts.
 - Clearly separate the root cause from symptoms. Identify the first failed dependency or violated invariant, explain the resulting failure chain, and cite the concrete evidence used. Do not call a deployment healthy merely because containers or HTTP endpoints are alive.
-- Provide a short repair report in direct language using exactly these headings:
-  - `Problem`: one sentence describing what is broken.
-  - `Impact`: which ingestion products, trading processes, or services are affected.
-  - `Cause`: the proven root cause; say `not yet proven` when evidence is incomplete.
-  - `Immediate repair`: numbered commands or actions that restore service safely, including exact targets and required verification.
-  - `Verification`: the observable evidence that proves recovery, including advancing timestamps and cleared route/profile failures.
-  - `Rollback status`: the restored image IDs and revisions, or the precise reason rollback is blocked or partial.
-  - `Permanent hardening`: only the smallest code, configuration, alerting, or deployment change needed to prevent recurrence; do not implement it unless authorized.
+- Provide a short repair report stating the problem, impact, cause, immediate repair, recovery evidence, and rollback status. Say `not yet proven` when the cause is inconclusive. Include only the smallest permanent hardening needed to prevent recurrence, and do not implement it unless authorized.
 - Make repair instructions executable and unambiguous. Avoid vague directions such as “check the service,” “monitor it,” or “restart if needed”; name the service, condition, exact safe action, and success signal.
 
 ## Model Artifact Provenance
 
-- A `model/<model-name-with-metadata>` tag records provenance for a new immutable model artifact produced by an executed model-build or training workflow. Create it only when that exact artifact exists, its identity can be verified, and the tag can point to the commit that first records or unambiguously references it.
-- Deploying, activating, configuring, copying, exporting for runtime use, or packaging an existing model does not constitute a new model build and must not create a new `model/...` tag. Building a container that uses an existing model receives an `image/...` tag only; record the existing model tag, model key, or artifact SHA-256 in the image tag annotation.
-- Starting a paper or live trading process with an existing model must not place a `model/...` tag on the process configuration commit, deployment commit, current branch tip, or latest repository commit. Reuse the existing model identity without moving or recreating its tag.
-- Model tags must be annotated and record the model artifact SHA-256, artifact path or immutable URI, producing commit, executed model-build or training-run identity, source or input identity, qualification status, and deployment status at tagging time.
-- Never infer model-tag eligibility from a model filename, manifest, process deployment, container build, branch name, or the fact that a commit is recent. If the task did not produce a new immutable model artifact, do not create a `model/...` tag.
-- These rules govern Git tag creation and provenance only. They do not gate, delay, prohibit, prescribe, or otherwise interfere with model training, retraining, evaluation, export, or experimentation.
+- Create an annotated `model/<model-name-with-metadata>` tag only when an executed build or training workflow produces a new immutable model artifact whose identity can be verified. Point the tag to the commit that first records or unambiguously references that artifact.
+- Record the artifact SHA-256, immutable path or URI, producing commit, build or training-run identity, source or input identity, qualification status, and deployment status in the tag annotation.
+- Reusing, deploying, activating, configuring, copying, exporting, or packaging an existing model does not create a new model artifact and must not create or move a `model/...` tag. Reuse the existing model identity instead.
+- A container that uses an existing model receives only the applicable `image/...` provenance. Record the existing model tag, model key, or artifact SHA-256 in the image annotation.
+- Model provenance rules govern tagging only; they do not restrict training, evaluation, export, or experimentation.
 
 ## Worktree Creation and Ownership
 
@@ -208,42 +170,9 @@ Migration creation and initial feature or defect validation follow Database Chan
 
 ## Worktree Environment Initialization
 
-- Immediately after creating any worktree, symlink every top-level runtime `.env` file from the main worktree into the new worktree. The main worktree remains the single source of truth; never copy secret values or create independent worktree environment files.
-- Exclude `.env.example` and other `*.example` templates. Do not run Docker Compose, application commands, tests that require runtime credentials, or deployment commands from the new worktree until the links have been created and verified.
-- Run the following from the main worktree, replacing `<feature-domain>` with the worktree directory name:
-
-```bash
-set -eu
-main_worktree="$(git rev-parse --show-toplevel)"
-worktree_path="$main_worktree/worktrees/<feature-domain>"
-
-for env_file in "$main_worktree"/.env "$main_worktree"/.env.*; do
-  [ -f "$env_file" ] || continue
-  case "$env_file" in
-    *.example) continue ;;
-  esac
-  ln -s "$env_file" "$worktree_path/$(basename "$env_file")"
-done
-```
-
-- Verify every runtime environment file resolves to the main worktree before using the worktree:
-
-```bash
-set -eu
-main_worktree="$(git rev-parse --show-toplevel)"
-worktree_path="$main_worktree/worktrees/<feature-domain>"
-
-for env_file in "$main_worktree"/.env "$main_worktree"/.env.*; do
-  [ -f "$env_file" ] || continue
-  case "$env_file" in
-    *.example) continue ;;
-  esac
-  link="$worktree_path/$(basename "$env_file")"
-  [ -L "$link" ]
-  [ "$(readlink "$link")" = "$env_file" ]
-  [ -r "$link" ]
-done
-```
+- Immediately after creating a worktree, run `scripts/link-worktree-env.sh <worktree-path>` from the main worktree. The script must symlink every top-level runtime `.env` file into the worktree, excluding `.env.example` and other `*.example` templates, and verify that each link resolves to the main worktree.
+- The main worktree remains the single source of truth for runtime secrets. Never copy secret values or create independent worktree environment files.
+- Do not run commands requiring runtime credentials from the worktree until the script succeeds.
 
 ## Model Training and Artifact Storage
 
@@ -252,7 +181,6 @@ done
 - Never create or commit a repository-root `training-results/` directory. Store all new training-result outcomes in their SSD run directory; Git may contain only concise reports and provenance pointers under maintained documentation or package paths.
 - Keep only maintained source code, configuration, tests, concise results, and provenance pointers in Git. Promote reusable Python modules into `packages/btc-directional-model` before merging the training branch.
 - Give every completed, partial, or exploratory SSD run a `manifests/run-status.md` that records its lifecycle status, completion evidence, missing outputs, qualification state, and deployment authorization without inferring unknown facts.
-- When a model-training tournament completes, include chronological trade-activity charts for the top 30% of distinct evaluated model candidates, rounded up (one of three candidates, three of ten). Follow the selection and chart contract in `docs/model-training-artifact-lifecycle.md`; show quiet periods and bursts across the full evaluated range, not only the best-performing dates.
 - Admit a selected immutable model artifact into `packages/btc-directional-model` only for an explicitly authorized UMR deployment. Record its source run, SHA-256, manifest, and qualification evidence.
 - UMR adapters may translate canonical inputs and model outputs only. They must reuse existing feature, inference, persistence, admission, observability, identity, and recovery contracts without duplicating their logic.
 - Follow `docs/model-training-artifact-lifecycle.md` for directory layout, manifests, archival, source promotion, and deployment admission. Stop before training if the canonical SSD root is unavailable.
@@ -273,17 +201,22 @@ done
 - Never force-remove a dirty worktree unless the user explicitly authorizes discarding its remaining contents.
 
 # System
-- Trading process parameters that affect trades, go in the trading playbook config stored in 'trading_processes'. parameters that affect global systems go in environment variables.
-- All plaintext env vars that are non sensitive, go in docker-compose files in the 'environment' section. do not put plantext env vars in .env file. 
-- Refactoring should not render trading processes as no longer compatible. 
-- Refactoring a system, introducing a new system, or removing a system and causing a lack of compatibility is an anti pattern in the trading bot.
+
+## Runtime Configuration
+
+- The trading process configuration (TPC) stored in the `trading_processes` playbook is the sole authority for non-secret controls affecting trading decisions. Any new or modified trade gate, admission or risk control, order-execution policy, or execution-rail selection must be represented in the TPC and consumed through the existing compiled-settings contract; do not introduce parallel configuration stores, flags, or control paths.
+- Creating, updating, enabling, disabling, or deleting a trading process requires explicit user authorization naming its `process_id` and exact intended change; use only the established API and verify the persisted result.
+- Store sensitive runtime values only in the main worktree's applicable `.env` files. Materialize them into Kubernetes Secrets through the owning provisioned workflow; never place secret values in chart values, manifests, or committed configuration.
+- Store global non-sensitive runtime configuration in the owning Helm chart values or authoritative provisioned configuration. Do not store non-sensitive configuration in `.env` files.
+- Treat `.env.example` and other `*.example` files as documentation templates only. Never place real secret values in them.
+- Changes to the TPC schema, defaults, templates, validation, compilation, or interpretation are reviewed source changes under the normal branch-integration lifecycle. TPC is not CI/CD state or release metadata; CI/CD must not create, select, mutate, promote, or version TPC values. Preserve compatibility for existing processes unless an incompatibility and migration path are explicitly authorized.
 
 ## Backfills
-- Reuse the existing shared backfill infrastructure, standards, and contracts for every backfill domain; do not create domain-specific backfill workers or Docker Compose files.
+- Reuse the existing shared backfill infrastructure, standards, and contracts for every backfill domain; do not create domain-specific workers or deployment definitions.
 - Use the existing shared backfill job tables for every backfill domain; do not create domain-specific job tables or drift from the established contract.
 - `ingester.backfill_jobs` is the sole job ledger, history, and scheduling source. `ingester-master` is the sole scheduler and API; `ingester-worker` is the sole worker runtime name.
 - Every collection unit implements the documented `RealtimeWorkerStrategy`, `BackfillWorkerStrategy`, or both in `packages/market-data-ingester`. Do not create another strategy contract.
-- Add a strategy to the existing registry and schedule it through `POST /backfills`. Never add a provider-specific worker binary, image, Compose service, planner command, queue table, job schema, or scheduling pathway.
+- Add a strategy to the existing registry and schedule it through `POST /backfills`. Never add a provider-specific worker binary, image, Kubernetes workload, planner command, queue table, job schema, or scheduling pathway.
 - Sharding is deterministic strategy logic invoked by the master. Realtime strategies are not sharded. Worker and deployment selectors are execution controls, not new queues.
 - Preserve the API and persistence contracts. Change their versions only for a necessary incompatibility documented in `packages/market-data-ingester/docs/strategy-and-backfill-contract.md`.
 
@@ -300,7 +233,7 @@ done
 - After provisioning Grafana, Prometheus, Loki, or Alloy configuration, create one annotated tag on the exact source commit. For the local development environment, use `provisioned/observability/<YYYYMMDDTHHMMSSZ>`; development is implicit in that name. For other environments, use `provisioned/observability/<environment>/<YYYYMMDDTHHMMSSZ>`.
 - Record the target environment, provisioning timestamp, originating branch, deployment result, configuration hash, and every component and configuration path provisioned.
 - Create one tag per provisioning event, including when multiple observability components are deployed together. Do not create separate component tags for the same event.
-- A provisioning tag records deployment history only; it does not imply image, integration, candidate, or golden-release status.
+- A provisioning tag records deployment history only; it does not imply image, integration, candidate, or release status.
 
 ## Data artifacts
 - Store all backtesting and model-training data only in Parquet format, including weather-model predictions and Kraken futures test data.
@@ -325,15 +258,7 @@ done
 ## Migration Authorization and Execution
 
 - Before creating or first applying a migration on its feature or defect branch, present a plan identifying its exact database effects, affected objects, data scope, rollback behavior, and expected locking or operational risk.
-- Approval of that plan, including `execute the plan`, authorizes creating the migration, deploying it for branch validation, and repeating that validation as needed without renewed approval, provided the migration and stated effects have not changed.
 - Before application, confirm that the migration files are committed and that the complete pending migration list exactly matches the approved set. Stop if an approved migration was already applied or any additional migration is pending.
-- For a Compose database, apply approved migrations only by recreating the
-  `db-migrate` container from the project Compose configuration:
-
-```bash
-docker compose up -d --force-recreate --no-deps db-migrate
-```
-
 - For the isolated Kubernetes development database in namespace `capitonic`, apply approved migrations only through a separately invoked, one-shot `db-migrate` Job from `capitonic-helm-chart/charts/db-migrate`. The Job must use the committed migration image and connect only to that Kubernetes database. Do not run it as a Helm hook or database startup action.
 - Do not run TypeORM commands directly on the host or through any other container. After application, verify the migration ledger and intended schema or data state.
 - Any database correction, reversal, or rollback requires its own approved TypeORM migration. Never repair or reverse database state with an ad hoc command or script.
@@ -349,16 +274,20 @@ docker compose up -d --force-recreate --no-deps db-migrate
 
 ## Ingester Worker Scaling
 
-- In Docker Compose, create and manage ingester workers only by scaling the existing `ingester-worker` service in the repository’s Compose project.
-- In the local Rancher Desktop k3s development cluster, create and manage ingester workers in the `capitonic` namespace only through the `ingester-worker` Deployment owned by the `ingester` Helm chart. With worker scaling disabled, set its replica count through Helm values. With worker scaling enabled, Helm omits the replica field and the ingester master alone updates that Deployment's `/scale` subresource through its namespace-scoped service account. This exception does not change Compose worker ownership.
-- Never create ingester workers with `docker run`, `docker compose run`, manual container or pod creation, or a mechanism outside the owning Compose service or Helm chart.
+- In the local Rancher Desktop k3s development cluster, create and manage ingester workers in the `capitonic` namespace only through the `ingester-worker` Deployment owned by the `ingester` Helm chart.
+- With worker scaling disabled, set the replica count through Helm values. With worker scaling enabled, Helm omits the replica field and the ingester master alone updates the Deployment's `/scale` subresource through its namespace-scoped service account.
+- Never create ingester workers through manual pod creation or a mechanism outside the owning Helm chart and Deployment.
 - Never create purpose-specific worker services, container names, deployment names, or worker variants. All ingester workers must use the standard `ingester-worker` service name and existing runtime contract.
-- Operational worker scaling does not require source, Dockerfile, Compose, or environment-file edits. Changes to the Kubernetes worker scaler itself are feature work and must preserve Compose behavior.
+- Changes to the Kubernetes worker scaler are feature work and must preserve the existing worker contract.
 - Do not introduce a parallel worker standard or contract. If the owning `ingester-worker` service or Deployment cannot perform the requested work through ordinary scaling, stop and report the incompatibility instead of creating replacement infrastructure.
 
 ## Local development deployment ownership
 
-- Rancher Desktop k3s in namespace `capitonic` is the primary local development runtime after its cutover is certified. Docker Compose remains maintained as a compatible runtime for focused tests and recovery; keep service configuration, image inputs, and operational instructions in both paths aligned when changing a shared capability.
+- Rancher Desktop k3s in namespace `capitonic` is the local development runtime.
 - Maintain Kubernetes resources through their owning charts under `capitonic-helm-chart/charts/`. Keep `common/configs/` and `common/scripts/` authoritative; run `python3 scripts/helm/bake-assets.py` before Helm operations that need those assets and `--clean` afterward. Runtime `.env` files in the main worktree remain the secret source of truth.
 - Schedule realtime and backfill work through the ingester master's authenticated API. With Kubernetes worker scaling enabled, never use Helm replica values, `kubectl scale`, or direct Kubernetes API calls to satisfy operational worker demand; the master alone owns the worker Deployment `/scale` resource.
-- Use `docs/capitonic-k3s-cutover.md` for local routes, data backups, cutover acceptance, and routine Helm and Kubernetes commands. Never start both Compose and k3s trading runtimes against the same live process state.
+- Use `docs/capitonic-k3s-cutover.md` for local routes, data backups, cutover acceptance, and routine Helm and Kubernetes commands.
+
+## Polymarket execution rail contract
+
+- Follow [the Polymarket execution rail standard](docs/polymarket-execution-rail/README.md) for the additive order contract and its implementation. Keep legacy model/agent execution unchanged; use the existing process API and persistence. New execution consumes compiled settings, never raw TPC JSON. Generic order controllers must not dispatch by exchange or paper/live mode.

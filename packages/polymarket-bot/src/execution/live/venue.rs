@@ -401,7 +401,8 @@ impl LiveVenue {
     pub(super) async fn backfill_fills_from_live_events(&self) -> Result<usize> {
         let store = self.store()?;
         let mut processed = 0usize;
-        for (event_id, event) in store.unapplied_live_trade_events(500).await? {
+        let events = store.unapplied_live_trade_events(500).await?;
+        for (event_id, event) in events.into_iter().rev() {
             let persisted = LiveVenue::persist_fill_from_live_event(
                 &store,
                 &event,
@@ -409,15 +410,8 @@ impl LiveVenue {
             )
             .await?;
             if persisted > 0 {
-                // The event is marked only after every resolved fill and its order progress are durable.
-                // Events without a local fill stay eligible if ownership is established later.
                 store.mark_live_trade_event_applied(event_id).await?;
                 processed = processed.saturating_add(persisted);
-            } else if let Some(account_address) = configured_account_address(&self.config)? {
-                if let Some(account_trade) = account_trade_from_live_event(&account_address, &event)
-                {
-                    store.upsert_account_trade(&account_trade).await?;
-                }
             }
         }
         for event in store.recent_live_order_events(500).await? {

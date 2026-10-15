@@ -32,7 +32,12 @@ for component in ingester polymarket-bot db-migrate; do
     echo "Invalid release version for $component." >&2; exit 1;
   }
   [[ "$chart_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
-  [[ "$app_version" == "$version" ]]
+  if [[ ",${DEPLOY_COMPONENTS:-}," == *,$component,* ]]; then
+    [[ "$app_version" == "$final_version" ]] || {
+      echo "Chart appVersion base disagrees with selected release version for $component." >&2
+      exit 1
+    }
+  fi
   [[ "$image" == "$ECR_REGISTRY/capitonic/$component:$version" ]]
   [[ "$expected_digest" =~ ^sha256:[0-9a-f]{64}$ && "$source_revision" =~ ^[0-9a-f]{40}$ ]]
   [[ "$(yq -r '.environment' "$values")" == production ]]

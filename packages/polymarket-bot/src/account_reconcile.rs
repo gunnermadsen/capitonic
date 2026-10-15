@@ -194,10 +194,6 @@ pub async fn reconcile_account_positions(
     } else {
         Vec::new()
     };
-    let external_trade_activities = activities
-        .iter()
-        .filter(|activity| is_trade_activity(activity))
-        .count();
     let mut trades = activities
         .iter()
         .filter(|activity| is_trade_activity(activity))
@@ -212,28 +208,9 @@ pub async fn reconcile_account_positions(
                 .unwrap_or(true)
         })
         .collect::<Vec<_>>();
-    if process_id.is_some() {
-        let persisted_unapplied_sells = store
-            .unapplied_account_live_sell_trades(
-                &account_address,
-                activity_window_end - chrono::Duration::days(30),
-                activity_window_end + LIVE_EXTERNAL_EVENT_CLOCK_SKEW,
-                MAX_DATA_API_RECONCILIATION_ROWS as i64,
-            )
-            .await?;
-        let mut trade_ids = trades
-            .iter()
-            .map(|trade| trade.account_trade_id)
-            .collect::<HashSet<_>>();
-        trades.extend(
-            persisted_unapplied_sells
-                .into_iter()
-                .filter(|trade| trade_ids.insert(trade.account_trade_id)),
-        );
-    }
     trades.sort_by_key(|trade| trade.timestamp_utc);
 
-    let normalization_failures = if process_id.is_some() {
+    if process_id.is_some() {
         let mut venue_order_ids = trades
             .iter()
             .filter_map(|trade| trade.venue_order_id.clone())
@@ -271,12 +248,7 @@ pub async fn reconcile_account_positions(
         )
         .await?;
         link_process_owned_trades(&mut trades, &owned_orders, &owned_fills);
-        external_trade_activities.saturating_sub(trades.len())
-    } else {
-        // Account-wide administrative reconciliation predates process ownership. Preserve its
-        // reporting contract instead of pretending wallet activity belongs to one process.
-        0
-    };
+    }
 
     let mut positions_query = PositionsQuery::for_user(account_address.clone());
     positions_query.limit = Some(DATA_API_RECONCILIATION_PAGE_SIZE);
@@ -320,45 +292,8 @@ pub async fn reconcile_account_positions(
     let mut exits_detected = 0u64;
     let mut exits_applied = 0u64;
     let mut exit_size_applied = Decimal::ZERO;
-    if process_id.is_some() {
-        for trade in trades
-            .iter_mut()
-            .filter(|trade| trade.linked_order_id.is_none() && trade.side == "sell")
-        {
-            let recognition = store
-                .recognize_account_live_exit(
-                    account_ref
-                        .as_deref()
-                        .context("process-scoped reconciliation is missing account_ref")?,
-                    trade,
-                    !request.dry_run,
-                )
-                .await?;
-            if recognition.matched {
-                exits_detected = exits_detected
-                    .checked_add(1)
-                    .ok_or_else(|| anyhow::anyhow!("manual live exit count overflow"))?;
-                trade.linked_order_id = recognition.order_id;
-            }
-            if recognition.applied {
-                exits_applied = exits_applied
-                    .checked_add(1)
-                    .ok_or_else(|| anyhow::anyhow!("applied manual live exit count overflow"))?;
-                exit_size_applied = exit_size_applied
-                    .checked_add(recognition.exited_size)
-                    .ok_or_else(|| anyhow::anyhow!("applied manual live exit size overflow"))?;
-            }
-        }
-    }
-    let unmatched_trades = if process_id.is_some() {
-        trades
-            .iter()
-            .filter(|trade| trade.linked_order_id.is_none())
-            .count()
-            .saturating_add(normalization_failures) as u64
-    } else {
-        0
-    };
+    // Unowned wallet activity was filtered before persistence and cannot block local orders.
+    let unmatched_trades = 0;
     if let Some(process_id) = process_id {
         let account_position_tokens = snapshots
             .iter()
@@ -396,8 +331,8 @@ pub async fn reconcile_account_positions(
     }
 
     let (process_accounting_proof, mismatches, transitions) = if let Some(process_id) = process_id {
-        // Validate the bound sleeve's own immutable order/fill lineage independently, then prove
-        // custody against the aggregate of every sleeve assigned to the account.
+        // Validate local order/fill lineage and custody coverage. A shared wallet may also hold
+        // positions belonging to other environments; those are not local accounting liabilities.
         let _process_positions = store.live_process_position_sizes(process_id).await?;
         let unsettled_resolved_positions = store
             .unsettled_resolved_live_position_sizes(process_id)
@@ -476,7 +411,10 @@ fn process_accounting_proof(
 )> {
     let mut account_sizes = HashMap::with_capacity(account_positions.len());
     for position in account_positions {
-        if position.size <= Decimal::ZERO || is_settled_zero_payout_position(position) {
+        if !expected_account_positions.contains_key(&position.token_id)
+            || position.size <= Decimal::ZERO
+            || is_settled_zero_payout_position(position)
+        {
             continue;
         }
         if account_sizes
@@ -492,7 +430,6 @@ fn process_accounting_proof(
 
     let mut token_ids = expected_account_positions
         .keys()
-        .chain(account_sizes.keys())
         .cloned()
         .collect::<Vec<_>>();
     token_ids.sort_unstable();
@@ -515,7 +452,9 @@ fn process_accounting_proof(
             .checked_sub(credited_zero_payout_size)
             .unwrap_or(Decimal::ZERO)
             .max(Decimal::ZERO);
-        if decimal_difference(process_size, account_size) <= data_api_position_size_tolerance() {
+        if account_size >= process_size
+            || decimal_difference(process_size, account_size) <= data_api_position_size_tolerance()
+        {
             continue;
         }
         if account_size == Decimal::ZERO {
@@ -601,7 +540,7 @@ fn process_accounting_proof(
             reason: if expected_account_positions.is_empty() {
                 "clean_account_baseline".to_string()
             } else {
-                "account_positions_match_aggregate_sleeve_live_fills".to_string()
+                "account_positions_cover_local_live_fills".to_string()
             },
         }
     };
@@ -920,9 +859,9 @@ fn normalize_transaction_hash(value: &str) -> Option<String> {
 /// Attributes a normalized account trade through either its explicit venue order identity or one
 /// unique persisted live fill carrying the same venue transaction identity. Fill economics only
 /// disambiguate candidates inside that exact transaction; token or market similarity alone never
-/// establishes ownership.
+/// establishes ownership. Unowned activity is excluded before persistence or accounting.
 fn link_process_owned_trades(
-    trades: &mut [AccountTrade],
+    trades: &mut Vec<AccountTrade>,
     owned_orders: &HashMap<String, String>,
     owned_fills: &[AccountLiveFillEvidence],
 ) -> usize {
@@ -934,7 +873,7 @@ fn link_process_owned_trades(
             .push(evidence);
     }
     let mut unmatched = 0usize;
-    for trade in trades {
+    for trade in trades.iter_mut() {
         let order_id = if let Some(venue_order_id) = trade.venue_order_id.as_ref() {
             owned_orders.get(venue_order_id).cloned()
         } else {
@@ -972,6 +911,7 @@ fn link_process_owned_trades(
         };
         trade.linked_order_id = Some(order_id);
     }
+    trades.retain(|trade| trade.linked_order_id.is_some());
     unmatched
 }
 
@@ -1328,7 +1268,23 @@ mod tests {
             trades[0].linked_order_id.as_deref(),
             Some("persisted-order")
         );
-        assert_eq!(trades[1].linked_order_id, None);
+        assert_eq!(trades.len(), 1);
+    }
+
+    #[test]
+    fn unowned_buy_and_sell_are_excluded_even_when_token_and_size_match() {
+        for side in ["BUY", "SELL"] {
+            let activity: DataApiActivity = serde_json::from_value(serde_json::json!({
+                "type": "TRADE", "timestamp": 1710000000, "asset": "token-1",
+                "side": side, "price": "0.40", "size": "2", "orderId": "foreign-order"
+            }))
+            .unwrap();
+            let mut trades = vec![account_trade_from_activity("0xabc", &activity, "poll").unwrap()];
+            let owned =
+                HashMap::from([("local-venue-order".to_string(), "local-order".to_string())]);
+            assert_eq!(link_process_owned_trades(&mut trades, &owned, &[]), 1);
+            assert!(trades.is_empty());
+        }
     }
 
     #[test]
@@ -1387,7 +1343,7 @@ mod tests {
             ),
             1
         );
-        assert_eq!(ambiguous[0].linked_order_id, None);
+        assert!(ambiguous.is_empty());
     }
 
     #[test]
@@ -1567,10 +1523,7 @@ mod tests {
         let (proof, mismatches, _) = accounting_proof(&process_positions, &positions, 0, &[]);
 
         assert_eq!(proof.status, "proven");
-        assert_eq!(
-            proof.reason,
-            "account_positions_match_aggregate_sleeve_live_fills"
-        );
+        assert_eq!(proof.reason, "account_positions_cover_local_live_fills");
         assert!(mismatches.is_empty());
     }
 
@@ -1754,7 +1707,7 @@ mod tests {
     }
 
     #[test]
-    fn balance_above_credited_zero_payout_residual_remains_foreign() {
+    fn balance_above_local_zero_payout_residual_does_not_block() {
         let checked_at = Utc::now();
         let expected = HashMap::from([(
             "losing-token".to_string(),
@@ -1770,9 +1723,8 @@ mod tests {
         let (proof, mismatches, _) =
             process_accounting_proof(&expected, &[position], 0, &[], checked_at).unwrap();
 
-        assert_eq!(proof.status, "unproven");
-        assert_eq!(mismatches[0].mismatch_type, "foreign_account_position");
-        assert_eq!(mismatches[0].account_size, dec!(1));
+        assert_eq!(proof.status, "proven");
+        assert!(mismatches.is_empty());
     }
 
     #[test]
@@ -1791,15 +1743,29 @@ mod tests {
     }
 
     #[test]
-    fn foreign_position_or_unmatched_trade_fails_process_accounting_closed() {
+    fn foreign_positions_do_not_block_local_accounting() {
         let foreign = vec![account_position("foreign-token", dec!(1))];
         let (foreign_proof, mismatches, _) = accounting_proof(&HashMap::new(), &foreign, 0, &[]);
-        assert_eq!(foreign_proof.status, "unproven");
-        assert_eq!(mismatches[0].mismatch_type, "foreign_account_position");
+        assert_eq!(foreign_proof.status, "proven");
+        assert!(mismatches.is_empty());
 
         let (trade_proof, _, _) = accounting_proof(&HashMap::new(), &[], 1, &[]);
         assert_eq!(trade_proof.status, "unproven");
         assert_eq!(trade_proof.reason, "unmatched_account_trades");
+    }
+
+    #[test]
+    fn shared_token_surplus_covers_local_fills_without_claiming_foreign_fills() {
+        let local = HashMap::from([("token-1".to_string(), dec!(2.5))]);
+        let positions = vec![
+            account_position("token-1", dec!(12.5)),
+            account_position("foreign-token", dec!(8)),
+        ];
+        let (proof, mismatches, transitions) = accounting_proof(&local, &positions, 0, &[]);
+        assert_eq!(proof.status, "proven");
+        assert!(mismatches.is_empty());
+        assert!(transitions.is_empty());
+        assert_eq!(local["token-1"], dec!(2.5));
     }
 
     #[test]
