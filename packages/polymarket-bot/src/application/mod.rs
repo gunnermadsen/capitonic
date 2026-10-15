@@ -47,7 +47,9 @@ use polymarket_bot::{
     market_data_stream::SourceSelector,
     models::{
         EffectiveProcessExecutionConfig, ProcessExecutionConfig, TradingProcess,
-        TradingProcessConfig,
+        TradingProcessConfig, TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD,
+        TRADING_PROCESS_OPEN_POSITION_CEILING, TRADING_PROCESS_ORDER_NOTIONAL_CEILING_USD,
+        TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD,
     },
     store::Store,
 };

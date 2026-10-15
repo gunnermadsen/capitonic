@@ -4,6 +4,11 @@ use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub const TRADING_PROCESS_ORDER_NOTIONAL_CEILING_USD: Decimal = dec!(1000000);
+pub const TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD: Decimal = dec!(10000000);
+pub const TRADING_PROCESS_OPEN_POSITION_CEILING: usize = 256;
+pub const TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD: Decimal = dec!(100000000);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderRequest {
     pub client_order_id: Uuid,

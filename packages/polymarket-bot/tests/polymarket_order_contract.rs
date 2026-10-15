@@ -5,7 +5,10 @@ use polymarket_bot::{
         policies::OrderPolicies,
         OMS_CONTRACT_VERSION, RAIL_CONTRACT_VERSION,
     },
-    models::TradingProcessConfig,
+    models::{
+        TradingProcessConfig, TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD,
+        TRADING_PROCESS_OPEN_POSITION_CEILING, TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD,
+    },
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -378,8 +381,19 @@ fn time_evidence_exposure_and_simulation_bounds_preserve_existing_constraints() 
         ("evidence_policy", "max_source_skew_ms", json!(-1)),
         ("execution_cost_policy", "max_fee_rate", json!("-1")),
         ("edge_policy", "min_net_edge_usd", json!("-1")),
-        ("exposure_policy", "max_open_positions", json!(7)),
-        ("exposure_policy", "max_open_notional_usd", json!("31")),
+        (
+            "exposure_policy",
+            "max_open_positions",
+            json!(TRADING_PROCESS_OPEN_POSITION_CEILING + 1),
+        ),
+        (
+            "exposure_policy",
+            "max_open_notional_usd",
+            json!(
+                (TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD + rust_decimal_macros::dec!(0.01))
+                    .to_string()
+            ),
+        ),
         ("loss_limit_policy", "max_daily_loss_usd", json!("0")),
         ("paper_execution_policy", "arrival_latency_ms", json!(0)),
         (
@@ -401,6 +415,25 @@ fn time_evidence_exposure_and_simulation_bounds_preserve_existing_constraints() 
     policy(&mut v, "evidence_policy")["max_reference_age_ms"] = json!(3000);
     policy(&mut v, "evidence_policy")["max_book_age_ms"] = json!(3000);
     invalid(v, "2000ms");
+}
+
+#[test]
+fn configured_capacity_ceilings_are_accepted_by_the_new_contract() {
+    let mut v = fixture("paper");
+    policy(&mut v, "exposure_policy")["max_open_positions"] =
+        json!(TRADING_PROCESS_OPEN_POSITION_CEILING);
+    policy(&mut v, "exposure_policy")["max_open_notional_usd"] =
+        json!(TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD.to_string());
+    policy(&mut v, "paper_execution_policy")["starting_collateral_usd"] =
+        json!(TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD.to_string());
+    compile(&config(v)).unwrap();
+
+    let mut v = fixture("paper");
+    policy(&mut v, "paper_execution_policy")["starting_collateral_usd"] = json!(
+        (TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD + rust_decimal_macros::dec!(0.01))
+            .to_string()
+    );
+    invalid(v, "invalid paper starting collateral");
 }
 
 #[test]
