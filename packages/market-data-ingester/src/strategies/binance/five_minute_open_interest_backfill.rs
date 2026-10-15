@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::json;
 use sqlx::{Postgres, QueryBuilder};
+use tracing::warn;
 
 use crate::domain::{
     BackfillContext, BackfillExecutionError, BackfillOutcome, BackfillRequest, BackfillShard,
@@ -109,6 +110,15 @@ impl BackfillWorkerStrategy for BinanceFuturesFiveMinuteOpenInterestBackfill {
             .fetch_day(&self.client, date, &cancellation)
             .await
             .map_err(backfill_support::source_error)?;
+        if fetched.rejected_unaligned_rows > 0 {
+            warn!(
+                error_code = "binance_open_interest_unaligned_rows_skipped",
+                strategy_key = STRATEGY_KEY,
+                source_day = %date,
+                rejected_row_count = fetched.rejected_unaligned_rows,
+                "skipped noncanonical Binance open-interest rows during backfill"
+            );
+        }
         let records = fetched
             .records
             .into_iter()
