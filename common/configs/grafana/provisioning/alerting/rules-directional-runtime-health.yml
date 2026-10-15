@@ -74,7 +74,7 @@ groups:
             model:
               datasource: {type: prometheus, uid: prometheus}
               editorMode: code
-              expr: polymarket_btc_polygon_oracle_ready
+              expr: 1 - (polymarket_market_data_product_required{product="polygon_chainlink_btcusd_oracle"} * on(instance, job) (1 - polymarket_btc_polygon_oracle_ready))
               instant: true
               intervalMs: 1000
               legendFormat: __auto
@@ -113,7 +113,7 @@ groups:
         execErrState: Error
         for: 60s
         annotations:
-          description: No causally valid and sufficiently fresh Polygon Chainlink BTC/USD oracle round is available from the configured endpoints.
+          description: An active process requires Polygon Chainlink BTC/USD oracle evidence, but no causally valid and sufficiently fresh round is available.
           summary: Polygon oracle evidence is unavailable for prediction
         labels:
           condition: polygon_oracle_unavailable

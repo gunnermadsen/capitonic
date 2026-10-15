@@ -502,6 +502,13 @@ impl MarketDataStreamRuntime {
     }
 
     async fn resolve_routes(&self, selectors: &[SourceSelector]) -> Result<RouteResponse> {
+        let required = selectors
+            .iter()
+            .filter(|selector| selector.required)
+            .map(|selector| selector.key.as_str())
+            .collect::<BTreeSet<_>>();
+        self.metrics.set_required_products(&required);
+
         let products = selectors
             .iter()
             .map(|selector| RouteProduct {
@@ -521,11 +528,6 @@ impl MarketDataStreamRuntime {
             .context("ingester master rejected stream routes")?
             .json::<RouteResponse>()
             .await?;
-        let required = selectors
-            .iter()
-            .filter(|selector| selector.required)
-            .map(|selector| selector.key.as_str())
-            .collect::<BTreeSet<_>>();
         self.metrics.set_resolution_snapshot(&required, &response);
         let required_unresolved = response
             .unresolved
@@ -1286,7 +1288,7 @@ struct OpenInterestPayload {
 }
 
 impl StreamMetrics {
-    fn set_resolution_snapshot(&self, required: &BTreeSet<&str>, response: &RouteResponse) {
+    fn set_required_products(&self, required: &BTreeSet<&str>) {
         self.required_products.store(
             i64::try_from(required.len()).unwrap_or(i64::MAX),
             Ordering::Relaxed,
@@ -1296,6 +1298,10 @@ impl StreamMetrics {
             .lock()
             .expect("required products lock") =
             required.iter().map(|key| (*key).to_owned()).collect();
+    }
+
+    fn set_resolution_snapshot(&self, required: &BTreeSet<&str>, response: &RouteResponse) {
+        self.set_required_products(required);
         let resolved = response
             .routes
             .iter()
@@ -1410,6 +1416,18 @@ impl StreamMetrics {
             self.resolved_products.load(Ordering::Relaxed),
             ready_products
         ));
+
+        output.push_str(
+            "# HELP polymarket_market_data_product_required Whether an active process requires the market-data product.\n\
+             # TYPE polymarket_market_data_product_required gauge\n",
+        );
+        for product in DEFAULT_BTC_PRODUCTS {
+            output.push_str(&format!(
+                "polymarket_market_data_product_required{{product=\"{product}\"}} {}\n",
+                u8::from(required_keys.contains(product))
+            ));
+        }
+
         drop(required_keys);
         output.push_str("# HELP polymarket_market_data_unresolved_products Required products unresolved by bounded reason.\n# TYPE polymarket_market_data_unresolved_products gauge\n");
         for (reason, value) in self
@@ -2313,6 +2331,12 @@ mod tests {
         assert!(rendered.contains("polymarket_market_data_required_products 2"));
         assert!(rendered.contains("polymarket_market_data_resolved_products 1"));
         assert!(rendered.contains("polymarket_market_data_ready_products 0"));
+        assert!(rendered.contains(&format!(
+            "polymarket_market_data_product_required{{product=\"{PRODUCT_BINANCE_1S}\"}} 1"
+        )));
+        assert!(rendered.contains(&format!(
+            "polymarket_market_data_product_required{{product=\"{PRODUCT_POLYGON_ORACLE}\"}} 0"
+        )));
         assert!(rendered
             .contains("polymarket_market_data_unresolved_products{reason=\"no_current_owner\"} 1"));
         assert!(
