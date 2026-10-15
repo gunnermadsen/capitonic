@@ -472,16 +472,17 @@ struct LiveRedemptionRecognitionRow {
     owner_count: i64,
     owner_filled_size: Decimal,
     candidate_count: i64,
+    candidate_owner_count: i64,
+    candidate_filled_size: Decimal,
+    candidate_payout: Decimal,
     transaction_consistent: bool,
-    settlement_id: Option<Uuid>,
-    settlement_process_id: Option<Uuid>,
-    settlement_order_id: Option<String>,
-    settlement_token_id: Option<String>,
-    settlement_filled_size: Option<Decimal>,
-    settlement_payout: Option<Decimal>,
-    credit_status: Option<String>,
-    credit_evidence: Option<serde_json::Value>,
-    applied: bool,
+    selected_count: i64,
+    selected_filled_size: Decimal,
+    selected_payout: Decimal,
+    selected_process_count: i64,
+    selected_credited_count: i64,
+    selected_transaction_count: i64,
+    applied_count: i64,
 }
 
 #[derive(Debug, FromRow)]
@@ -2129,13 +2130,13 @@ impl Store {
         {
             bail!("live redemption recognition requires complete exact payout evidence");
         }
-        let credit_evidence = serde_json::json!({
+        let wallet_credit_evidence = serde_json::json!({
             "proof_type": "polymarket_data_api_redeem",
             "account_address": evidence.account_address,
             "condition_id": evidence.condition_id,
             "token_id": evidence.token_id,
-            "redeemed_size": evidence.redeemed_size,
-            "payout_usd": evidence.payout_usd,
+            "wallet_redeemed_size": evidence.redeemed_size,
+            "wallet_payout_usd": evidence.payout_usd,
             "redeemed_at": evidence.redeemed_at,
             "redemption_transaction_hash": evidence.transaction_hash,
             "activity": evidence.raw_payload,
@@ -2196,8 +2197,7 @@ impl Store {
                AND watch.status IN ('resolved', 'resolved_late')
                AND watch.resolution_received_at = market.official_resolution_received_at
                AND watch.resolution_source = market.official_resolution_source
-              WHERE orders.process_id = $1
-                AND process.config #>> '{execution,mode}' = 'live'
+              WHERE process.config #>> '{execution,mode}' = 'live'
                 AND lower(btrim(process.config #>> '{execution,account_ref}')) = lower($9)
                 AND orders.side = 'buy'
                 AND orders.token_id = $3
@@ -2213,17 +2213,19 @@ impl Store {
                 market.official_outcome, market.official_winning_token_id,
                 market.official_resolution_received_at, market.official_resolution_source
               HAVING MAX(fill.timestamp_utc) <= $5
-                AND round(SUM(fill.size), 10) = $4
             ), candidate_state AS (
-              SELECT COUNT(*)::bigint AS candidate_count FROM candidate
+              SELECT
+                COUNT(*)::bigint AS candidate_count,
+                COUNT(DISTINCT process_id)::bigint AS candidate_owner_count,
+                COALESCE(SUM(filled_size), 0)::numeric(30,10) AS candidate_filled_size,
+                COALESCE(SUM(
+                  CASE WHEN official_winning_token_id = token_id THEN filled_size ELSE 0 END
+                ), 0)::numeric(30,10) AS candidate_payout
+              FROM candidate
             ), transaction_state AS (
               SELECT
-                COUNT(*)::bigint AS transaction_count,
                 COALESCE(
-                  BOOL_AND(
-                    settlement.token_id = $3
-                    AND settlement.payout = $10
-                  ),
+                  BOOL_AND(settlement.token_id = $3),
                   true
                 )
                 AND COALESCE(SUM(settlement.payout), 0) <= $10 AS transaction_consistent
@@ -2236,7 +2238,16 @@ impl Store {
               SET credit_status = 'credited',
                   credited_at = now(),
                   credit_attempts = credit_attempts + 1,
-                  credit_evidence = $6,
+                  credit_evidence = $6 || jsonb_build_object(
+                    'process_id', candidate.process_id,
+                    'order_id', candidate.order_id,
+                    'redeemed_size', candidate.filled_size,
+                    'payout_usd', CASE
+                      WHEN candidate.official_winning_token_id = candidate.token_id
+                        THEN candidate.filled_size
+                      ELSE 0
+                    END
+                  ),
                   updated_at = now()
               FROM candidate
               CROSS JOIN owners
@@ -2245,7 +2256,10 @@ impl Store {
               WHERE $7
                 AND owners.owner_count >= 1
                 AND owners.owner_filled_size = $4
-                AND candidate_state.candidate_count = 1
+                AND candidate_state.candidate_count >= 1
+                AND candidate_state.candidate_owner_count = owners.owner_count
+                AND candidate_state.candidate_filled_size = $4
+                AND candidate_state.candidate_payout = $10
                 AND transaction_state.transaction_consistent
                 AND settlement.process_id = candidate.process_id
                 AND settlement.run_id = candidate.run_id
@@ -2271,9 +2285,27 @@ impl Store {
                 candidate.official_resolution_received_at,
                 candidate.official_resolution_source,
                 candidate.filled_size, candidate.entry_notional, candidate.entry_fees,
-                $10,
-                ($10 - candidate.entry_notional - candidate.entry_fees)::numeric(30,10),
-                'credited', now(), 1, $6
+                CASE
+                  WHEN candidate.official_winning_token_id = candidate.token_id
+                    THEN candidate.filled_size
+                  ELSE 0
+                END,
+                (CASE
+                  WHEN candidate.official_winning_token_id = candidate.token_id
+                    THEN candidate.filled_size
+                  ELSE 0
+                END - candidate.entry_notional - candidate.entry_fees)::numeric(30,10),
+                'credited', now(), 1,
+                $6 || jsonb_build_object(
+                  'process_id', candidate.process_id,
+                  'order_id', candidate.order_id,
+                  'redeemed_size', candidate.filled_size,
+                  'payout_usd', CASE
+                    WHEN candidate.official_winning_token_id = candidate.token_id
+                      THEN candidate.filled_size
+                    ELSE 0
+                  END
+                )
               FROM candidate
               CROSS JOIN owners
               CROSS JOIN candidate_state
@@ -2281,7 +2313,10 @@ impl Store {
               WHERE $7
                 AND owners.owner_count >= 1
                 AND owners.owner_filled_size = $4
-                AND candidate_state.candidate_count = 1
+                AND candidate_state.candidate_count >= 1
+                AND candidate_state.candidate_owner_count = owners.owner_count
+                AND candidate_state.candidate_filled_size = $4
+                AND candidate_state.candidate_payout = $10
                 AND transaction_state.transaction_consistent
                 AND NOT EXISTS (
                   SELECT 1
@@ -2315,32 +2350,53 @@ impl Store {
                 ON candidate.process_id = settlement.process_id
                AND candidate.run_id = settlement.run_id
                AND candidate.order_id = settlement.order_id
-              CROSS JOIN candidate_state
-              WHERE candidate_state.candidate_count = 1
-                AND settlement.execution_mode = 'live'
-                AND NOT EXISTS (SELECT 1 FROM updated)
-                AND NOT EXISTS (SELECT 1 FROM inserted)
-              LIMIT 1
+              WHERE settlement.execution_mode = 'live'
+                AND NOT EXISTS (
+                  SELECT 1 FROM updated
+                  WHERE updated.settlement_id = settlement.settlement_id
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM inserted
+                  WHERE inserted.settlement_id = settlement.settlement_id
+                )
+            ), selected_state AS (
+              SELECT
+                COUNT(*)::bigint AS selected_count,
+                COALESCE(SUM(filled_size), 0)::numeric(30,10) AS selected_filled_size,
+                COALESCE(SUM(payout), 0)::numeric(30,10) AS selected_payout,
+                COUNT(DISTINCT process_id) FILTER (WHERE process_id = $1)::bigint
+                  AS selected_process_count,
+                COUNT(*) FILTER (WHERE credit_status = 'credited')::bigint
+                  AS selected_credited_count,
+                COUNT(*) FILTER (
+                  WHERE credit_evidence ->> 'redemption_transaction_hash' = $8
+                    OR (
+                      $10 = 0
+                      AND credit_evidence ->> 'proof_type' = 'btc_official_zero_payout_loss'
+                    )
+                )::bigint AS selected_transaction_count,
+                COUNT(*) FILTER (WHERE applied)::bigint AS applied_count
+              FROM selected
             )
             SELECT
               owners.owner_count,
               owners.owner_filled_size,
               candidate_state.candidate_count,
-              transaction_state.transaction_count,
+              candidate_state.candidate_owner_count,
+              candidate_state.candidate_filled_size,
+              candidate_state.candidate_payout,
               transaction_state.transaction_consistent,
-              selected.settlement_id,
-              selected.process_id AS settlement_process_id,
-              selected.order_id AS settlement_order_id,
-              selected.token_id AS settlement_token_id,
-              selected.filled_size AS settlement_filled_size,
-              selected.payout AS settlement_payout,
-              selected.credit_status,
-              selected.credit_evidence,
-              COALESCE(selected.applied, false) AS applied
+              selected_state.selected_count,
+              selected_state.selected_filled_size,
+              selected_state.selected_payout,
+              selected_state.selected_process_count,
+              selected_state.selected_credited_count,
+              selected_state.selected_transaction_count,
+              selected_state.applied_count
             FROM owners
             CROSS JOIN candidate_state
             CROSS JOIN transaction_state
-            LEFT JOIN selected ON true
+            CROSS JOIN selected_state
             "#,
         )
         .bind(process_id)
@@ -2348,7 +2404,7 @@ impl Store {
         .bind(&evidence.token_id)
         .bind(evidence.redeemed_size)
         .bind(evidence.redeemed_at)
-        .bind(&credit_evidence)
+        .bind(&wallet_credit_evidence)
         .bind(apply)
         .bind(&evidence.transaction_hash)
         .bind(account_ref)
@@ -2357,22 +2413,20 @@ impl Store {
         .await
         .context("failed to reconcile process-owned live redemption")?;
 
-        if row.candidate_count > 1 {
-            bail!("live redemption matches more than one process-owned order");
-        }
         if !row.transaction_consistent {
             bail!("live redemption transaction conflicts with credited settlement evidence");
         }
         if row.owner_count > 0 && row.owner_filled_size != evidence.redeemed_size {
             bail!("live redemption size does not match aggregate sleeve ownership");
         }
-        if row.owner_count == 0 || row.candidate_count == 0 {
+        if row.owner_count == 0 || row.candidate_count == 0 || row.selected_process_count == 0 {
             return Ok(LiveRedemptionRecognition {
                 matched: false,
                 applied: false,
                 redeemed_size: Decimal::ZERO,
             });
         }
+        validate_live_redemption_allocation(&row, evidence, apply)?;
         if !apply {
             return Ok(LiveRedemptionRecognition {
                 matched: true,
@@ -2380,50 +2434,10 @@ impl Store {
                 redeemed_size: evidence.redeemed_size,
             });
         }
-        let settlement_id = row
-            .settlement_id
-            .context("matched live redemption is missing its settlement identity")?;
-        if row.settlement_process_id != Some(process_id)
-            || row.settlement_token_id.as_deref() != Some(evidence.token_id.as_str())
-            || row.settlement_filled_size != Some(evidence.redeemed_size)
-            || row.settlement_payout != Some(evidence.payout_usd)
-            || row.credit_status.as_deref() != Some("credited")
-            || row.settlement_order_id.as_deref().is_none_or(str::is_empty)
-        {
-            bail!("credited live redemption conflicts with exact settlement lineage");
-        }
-        let persisted_transaction_hash = row
-            .credit_evidence
-            .as_ref()
-            .and_then(|value| value.get("redemption_transaction_hash"))
-            .and_then(serde_json::Value::as_str);
-        let persisted_proof_type = row
-            .credit_evidence
-            .as_ref()
-            .and_then(|value| value.get("proof_type"))
-            .and_then(serde_json::Value::as_str);
-        if evidence.payout_usd == Decimal::ZERO
-            && persisted_transaction_hash.is_none()
-            && persisted_proof_type == Some("btc_official_zero_payout_loss")
-        {
-            return Ok(LiveRedemptionRecognition {
-                matched: true,
-                applied: false,
-                redeemed_size: evidence.redeemed_size,
-            });
-        }
-        if persisted_transaction_hash != Some(evidence.transaction_hash.as_str()) {
-            bail!(
-                "credited live redemption {} has conflicting transaction evidence",
-                settlement_id
-            );
-        }
         Ok(LiveRedemptionRecognition {
             matched: true,
-            applied: row.applied,
-            redeemed_size: row
-                .settlement_filled_size
-                .context("credited live redemption is missing sleeve size")?,
+            applied: row.applied_count > 0,
+            redeemed_size: evidence.redeemed_size,
         })
     }
 
@@ -4004,6 +4018,26 @@ fn parse_bounded_live_settlement_fill_ids(value: &serde_json::Value) -> Result<V
     Ok(fill_ids)
 }
 
+fn validate_live_redemption_allocation(
+    row: &LiveRedemptionRecognitionRow,
+    evidence: &LiveRedemptionEvidence,
+    require_credited: bool,
+) -> Result<()> {
+    if row.candidate_owner_count != row.owner_count
+        || row.candidate_filled_size != evidence.redeemed_size
+        || row.candidate_payout != evidence.payout_usd
+        || (require_credited
+            && (row.selected_count != row.candidate_count
+                || row.selected_filled_size != evidence.redeemed_size
+                || row.selected_payout != evidence.payout_usd
+                || row.selected_credited_count != row.selected_count
+                || row.selected_transaction_count != row.selected_count))
+    {
+        bail!("credited live redemption conflicts with aggregate process ownership");
+    }
+    Ok(())
+}
+
 fn validate_live_daily_settlement(
     settlement: &LiveDailySettlementRow,
     day_start: DateTime<Utc>,
@@ -4412,9 +4446,11 @@ mod tests {
             manual_live_exit_economics, order_request_identity_matches,
             order_request_result_matches, required_fill_process_id,
             validate_live_cumulative_fill_economics, validate_live_daily_settlement,
-            validate_live_exposure_fill, LiveDailySettlementRow, LiveExposureFillRow,
-            LiveExposureOrderRow, HEARTBEAT_ACTIVE_TRADING_PROCESS_SQL, INSERT_FILL_IDENTITY_SQL,
-            INSERT_FILL_SQL, INSERT_ORDER_SQL, RECORD_IDEMPOTENT_TRADING_PROCESS_EVENT_SQL,
+            validate_live_exposure_fill, validate_live_redemption_allocation,
+            LiveDailySettlementRow, LiveExposureFillRow, LiveExposureOrderRow,
+            LiveRedemptionEvidence, LiveRedemptionRecognitionRow,
+            HEARTBEAT_ACTIVE_TRADING_PROCESS_SQL, INSERT_FILL_IDENTITY_SQL, INSERT_FILL_SQL,
+            INSERT_ORDER_SQL, RECORD_IDEMPOTENT_TRADING_PROCESS_EVENT_SQL,
             SELECT_FILL_IDENTITY_SQL, SELECT_FILL_SQL,
             SELECT_LIVE_PROCESS_ANY_CROSS_OWNED_FILL_EXISTS_SQL,
             SELECT_LIVE_PROCESS_CROSS_OWNED_FILL_EXISTS_SQL,
@@ -4647,6 +4683,44 @@ mod tests {
             as_of,
         )
         .is_err());
+    }
+
+    #[test]
+    fn shared_wallet_redemption_requires_complete_process_allocation() {
+        let evidence = LiveRedemptionEvidence {
+            account_address: "0x1111111111111111111111111111111111111111".to_string(),
+            condition_id: format!("0x{}", "2".repeat(64)),
+            token_id: "winning-token".to_string(),
+            redeemed_size: dec!(8),
+            payout_usd: dec!(8),
+            redeemed_at: Utc::now(),
+            transaction_hash: format!("0x{}", "3".repeat(64)),
+            raw_payload: serde_json::json!({}),
+        };
+        let mut allocation = LiveRedemptionRecognitionRow {
+            owner_count: 2,
+            owner_filled_size: dec!(8),
+            candidate_count: 2,
+            candidate_owner_count: 2,
+            candidate_filled_size: dec!(8),
+            candidate_payout: dec!(8),
+            transaction_consistent: true,
+            selected_count: 2,
+            selected_filled_size: dec!(8),
+            selected_payout: dec!(8),
+            selected_process_count: 1,
+            selected_credited_count: 2,
+            selected_transaction_count: 2,
+            applied_count: 2,
+        };
+
+        validate_live_redemption_allocation(&allocation, &evidence, true).unwrap();
+
+        allocation.candidate_owner_count = 1;
+        assert!(validate_live_redemption_allocation(&allocation, &evidence, false).is_err());
+        allocation.candidate_owner_count = 2;
+        allocation.selected_transaction_count = 1;
+        assert!(validate_live_redemption_allocation(&allocation, &evidence, true).is_err());
     }
 
     #[test]
