@@ -8,7 +8,10 @@ use serde_json::Value;
 
 use crate::btc::admission::{DailyRealizedPnlHighWaterMarkConfig, LossRegimeConfidenceFloorConfig};
 use crate::btc::BtcDirectionalModelEntryPolicy;
-use crate::models::OrderType;
+use crate::models::{
+    OrderType, TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD, TRADING_PROCESS_OPEN_POSITION_CEILING,
+    TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD,
+};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -274,13 +277,13 @@ impl OrderPolicies {
         ensure!(
             self.exposure
                 .max_open_positions
-                .is_none_or(|v| (1..=6).contains(&v)),
-            "max_open_positions must be 1..=6"
+                .is_none_or(|v| (1..=TRADING_PROCESS_OPEN_POSITION_CEILING).contains(&v)),
+            "max_open_positions must be 1..={TRADING_PROCESS_OPEN_POSITION_CEILING}"
         );
         ensure!(
-            self.exposure
-                .max_open_notional_usd
-                .is_none_or(|v| v > Decimal::ZERO && v <= Decimal::from(30)),
+            self.exposure.max_open_notional_usd.is_none_or(|v| {
+                v > Decimal::ZERO && v <= TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD
+            }),
             "exposure value exceeds existing configuration bounds"
         );
         ensure!(
@@ -302,7 +305,7 @@ impl OrderPolicies {
         if let Some(p) = &self.paper_execution {
             ensure!(
                 p.starting_collateral_usd > Decimal::ZERO
-                    && p.starting_collateral_usd <= Decimal::from(1_000_000),
+                    && p.starting_collateral_usd <= TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD,
                 "invalid paper starting collateral"
             );
             let mut keys = std::collections::HashSet::new();

@@ -205,7 +205,7 @@
 ## Runtime Configuration
 
 - The trading process configuration (TPC) stored in the `trading_processes` playbook is the sole authority for non-secret controls affecting trading decisions. Any new or modified trade gate, admission or risk control, order-execution policy, or execution-rail selection must be represented in the TPC and consumed through the existing compiled-settings contract; do not introduce parallel configuration stores, flags, or control paths.
-- Creating, updating, enabling, disabling, or deleting a trading process requires explicit user authorization naming its `process_id` and exact intended change; use only the established API and verify the persisted result.
+- Creating, updating—including any TPC or configuration field—enabling, disabling, or deleting a trading process requires prior written user authorization naming its `process_id` and exact intended change. Written authorization in the active task is sufficient and does not require a second confirmation; use only the established API and verify the persisted result.
 - Store sensitive runtime values only in the main worktree's applicable `.env` files. Materialize them into Kubernetes Secrets through the owning provisioned workflow; never place secret values in chart values, manifests, or committed configuration.
 - Store global non-sensitive runtime configuration in the owning Helm chart values or authoritative provisioned configuration. Do not store non-sensitive configuration in `.env` files.
 - Treat `.env.example` and other `*.example` files as documentation templates only. Never place real secret values in them.

@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, OnceLock},
+};
 
 use async_trait::async_trait;
 use axum::{
@@ -8,6 +11,9 @@ use axum::{
 use chrono::Utc;
 use polymarket_bot::{
     execution::{
+        polymarket::configuration::{
+            compile as compile_order_contract, is_selected as selects_order_contract,
+        },
         LiveIdentityDiagnostics, LiveOrderDryRunDiagnostics, LiveOrderDryRunRequest,
         LivePoly1271FunderProbeCandidate, LivePoly1271FunderProbeRequest,
         LivePoly1271FunderProbeResponse, LiveVenueStatus, LiveWalletAddressDiagnostics,
@@ -17,15 +23,59 @@ use polymarket_bot::{
         EntryPermission, EntryStatusSelection, ProcessEntryPermission, TradingEntryStatusSnapshot,
     },
     http::{self, ControlApi, HttpError, MetricsResponse},
-    models::{ProcessExecutionConfig, TradingProcess, TradingProcessConfig},
+    models::{
+        ProcessExecutionConfig, TradingProcess, TradingProcessConfig,
+        TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD, TRADING_PROCESS_OPEN_POSITION_CEILING,
+        TRADING_PROCESS_ORDER_NOTIONAL_CEILING_USD, TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD,
+    },
 };
 use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
 use serde_json::Value;
 use tower::ServiceExt;
 use uuid::Uuid;
 
 #[derive(Debug, Default)]
 struct FakeControlApi;
+
+fn updated_process_configs() -> &'static Mutex<HashMap<Uuid, TradingProcessConfig>> {
+    static CONFIGS: OnceLock<Mutex<HashMap<Uuid, TradingProcessConfig>>> = OnceLock::new();
+    CONFIGS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn validate_capacity_contract(config: &TradingProcessConfig) -> Result<(), HttpError> {
+    if selects_order_contract(config) {
+        return compile_order_contract(config)
+            .map(|_| ())
+            .map_err(|error| HttpError::bad_request(error.to_string()));
+    }
+    if config.execution.as_ref().is_some_and(|execution| {
+        execution.max_order_notional_usd.is_some_and(|value| {
+            value <= Decimal::ZERO || value > TRADING_PROCESS_ORDER_NOTIONAL_CEILING_USD
+        }) || execution.max_open_notional_usd.is_some_and(|value| {
+            value <= Decimal::ZERO || value > TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD
+        }) || execution
+            .max_open_positions
+            .is_some_and(|value| value == 0 || value > TRADING_PROCESS_OPEN_POSITION_CEILING)
+    }) {
+        return Err(HttpError::bad_request(
+            "trading process execution capacity exceeds configured ceiling",
+        ));
+    }
+    if let Some(value) = config
+        .raw
+        .pointer("/btc_realtime_paper/paper/starting_collateral_usd")
+        .and_then(Value::as_str)
+    {
+        let value = value
+            .parse::<Decimal>()
+            .map_err(|_| HttpError::bad_request("invalid paper starting collateral"))?;
+        if value <= Decimal::ZERO || value > TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD {
+            return Err(HttpError::bad_request("invalid paper starting collateral"));
+        }
+    }
+    Ok(())
+}
 
 #[async_trait]
 impl ControlApi for FakeControlApi {
@@ -419,6 +469,12 @@ impl ControlApi for FakeControlApi {
         &self,
         process_id: Uuid,
     ) -> Result<http::TradingProcessResponse, HttpError> {
+        let config = updated_process_configs()
+            .lock()
+            .unwrap()
+            .get(&process_id)
+            .cloned()
+            .unwrap_or_default();
         Ok(http::TradingProcessResponse {
             process: test_process(
                 process_id,
@@ -428,7 +484,7 @@ impl ControlApi for FakeControlApi {
                 Some("btc-paper-canary".to_string()),
                 "running",
                 true,
-                TradingProcessConfig::default(),
+                config,
             ),
         })
     }
@@ -438,6 +494,13 @@ impl ControlApi for FakeControlApi {
         process_id: Uuid,
         request: http::UpdateTradingProcessRequest,
     ) -> Result<http::TradingProcessResponse, HttpError> {
+        if let Some(config) = &request.config {
+            validate_capacity_contract(config)?;
+            updated_process_configs()
+                .lock()
+                .unwrap()
+                .insert(process_id, config.clone());
+        }
         Ok(http::TradingProcessResponse {
             process: test_process(
                 process_id,
@@ -1393,6 +1456,159 @@ async fn authenticated_admin_can_manage_trading_processes() {
     let complete_json: Value = serde_json::from_slice(&complete_body).unwrap();
     assert_eq!(complete_json["process"]["status"], "completed");
     assert_eq!(complete_json["process"]["enabled"], false);
+}
+
+async fn patch_process_config(
+    app: &axum::Router,
+    process_id: Uuid,
+    config: &TradingProcessConfig,
+) -> StatusCode {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/admin/trading-processes/{process_id}"))
+                .header(AUTHORIZATION, "Bearer secret")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&serde_json::json!({"config": config})).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+async fn persisted_process_config(app: &axum::Router, process_id: Uuid) -> TradingProcessConfig {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/admin/trading-processes/{process_id}"))
+                .header(AUTHORIZATION, "Bearer secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_value::<TradingProcess>(
+        serde_json::from_slice::<Value>(&body).unwrap()["process"].clone(),
+    )
+    .unwrap()
+    .config
+}
+
+fn order_policy_params<'a>(config: &'a mut Value, name: &str) -> &'a mut Value {
+    &mut config["execution"]["order_policies"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|policy| policy["name"] == name)
+        .unwrap()["params"]
+}
+
+#[tokio::test]
+async fn trading_process_patch_enforces_capacity_ceilings_without_persisting_rejections() {
+    let app = http::router(Arc::new(FakeControlApi), "secret");
+    let process_id = Uuid::new_v4();
+
+    let legacy_definition: Value = serde_json::from_str(include_str!(
+        "../../../infra/processes/btc-5m-conservative-selective-paper-20260917.json"
+    ))
+    .unwrap();
+    let mut legacy: TradingProcessConfig =
+        serde_json::from_value(legacy_definition["config"].clone()).unwrap();
+    let execution = legacy.execution.as_mut().unwrap();
+    execution.max_order_notional_usd = Some(TRADING_PROCESS_ORDER_NOTIONAL_CEILING_USD);
+    execution.max_open_notional_usd = Some(TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD);
+    execution.max_open_positions = Some(TRADING_PROCESS_OPEN_POSITION_CEILING);
+    legacy.raw["btc_realtime_paper"]["paper"]["starting_collateral_usd"] =
+        serde_json::json!(TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD.to_string());
+    assert_eq!(
+        patch_process_config(&app, process_id, &legacy).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        serde_json::to_value(persisted_process_config(&app, process_id).await).unwrap(),
+        serde_json::to_value(&legacy).unwrap()
+    );
+
+    let mut legacy_overrides = Vec::new();
+    let mut above = legacy.clone();
+    above.execution.as_mut().unwrap().max_order_notional_usd =
+        Some(TRADING_PROCESS_ORDER_NOTIONAL_CEILING_USD + dec!(0.01));
+    legacy_overrides.push(above);
+    let mut above = legacy.clone();
+    above.execution.as_mut().unwrap().max_open_notional_usd =
+        Some(TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD + dec!(0.01));
+    legacy_overrides.push(above);
+    let mut above = legacy.clone();
+    above.execution.as_mut().unwrap().max_open_positions =
+        Some(TRADING_PROCESS_OPEN_POSITION_CEILING + 1);
+    legacy_overrides.push(above);
+    let mut above = legacy.clone();
+    above.raw["btc_realtime_paper"]["paper"]["starting_collateral_usd"] =
+        serde_json::json!((TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD + dec!(0.01)).to_string());
+    legacy_overrides.push(above);
+    for rejected in legacy_overrides {
+        assert_eq!(
+            patch_process_config(&app, process_id, &rejected).await,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            serde_json::to_value(persisted_process_config(&app, process_id).await).unwrap(),
+            serde_json::to_value(&legacy).unwrap()
+        );
+    }
+
+    let mut selected: Value = serde_json::from_str(include_str!(
+        "../../../docs/polymarket-execution-rail/examples/paper.json"
+    ))
+    .unwrap();
+    order_policy_params(&mut selected, "exposure_policy")["max_open_positions"] =
+        serde_json::json!(TRADING_PROCESS_OPEN_POSITION_CEILING);
+    order_policy_params(&mut selected, "exposure_policy")["max_open_notional_usd"] =
+        serde_json::json!(TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD.to_string());
+    order_policy_params(&mut selected, "paper_execution_policy")["starting_collateral_usd"] =
+        serde_json::json!(TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD.to_string());
+    let selected: TradingProcessConfig = serde_json::from_value(selected).unwrap();
+    assert_eq!(
+        patch_process_config(&app, process_id, &selected).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        serde_json::to_value(persisted_process_config(&app, process_id).await).unwrap(),
+        serde_json::to_value(&selected).unwrap()
+    );
+
+    let selected_value = serde_json::to_value(&selected).unwrap();
+    let mut selected_overrides = Vec::new();
+    let mut above = selected_value.clone();
+    order_policy_params(&mut above, "exposure_policy")["max_open_positions"] =
+        serde_json::json!(TRADING_PROCESS_OPEN_POSITION_CEILING + 1);
+    selected_overrides.push(above);
+    let mut above = selected_value.clone();
+    order_policy_params(&mut above, "exposure_policy")["max_open_notional_usd"] =
+        serde_json::json!((TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD + dec!(0.01)).to_string());
+    selected_overrides.push(above);
+    let mut above = selected_value;
+    order_policy_params(&mut above, "paper_execution_policy")["starting_collateral_usd"] =
+        serde_json::json!((TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD + dec!(0.01)).to_string());
+    selected_overrides.push(above);
+    for rejected in selected_overrides {
+        let rejected: TradingProcessConfig = serde_json::from_value(rejected).unwrap();
+        assert_eq!(
+            patch_process_config(&app, process_id, &rejected).await,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            serde_json::to_value(persisted_process_config(&app, process_id).await).unwrap(),
+            serde_json::to_value(&selected).unwrap()
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

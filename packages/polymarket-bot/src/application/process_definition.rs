@@ -784,12 +784,12 @@ pub(super) fn validate_optional_execution_controls(
         (
             "max_order_notional_usd",
             execution.max_order_notional_usd,
-            dec!(5),
+            TRADING_PROCESS_ORDER_NOTIONAL_CEILING_USD,
         ),
         (
             "max_open_notional_usd",
             execution.max_open_notional_usd,
-            dec!(30),
+            TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD,
         ),
     ] {
         if value.is_some_and(|value| value <= Decimal::ZERO || value > maximum) {
@@ -808,11 +808,11 @@ pub(super) fn validate_optional_execution_controls(
     }
     if execution
         .max_open_positions
-        .is_some_and(|value| value == 0 || value > 6)
+        .is_some_and(|value| value == 0 || value > TRADING_PROCESS_OPEN_POSITION_CEILING)
     {
-        return Err(HttpError::bad_request(
-            "BTC execution.max_open_positions must be between 1 and 6",
-        ));
+        return Err(HttpError::bad_request(format!(
+            "BTC execution.max_open_positions must be between 1 and {TRADING_PROCESS_OPEN_POSITION_CEILING}"
+        )));
     }
     Ok(())
 }

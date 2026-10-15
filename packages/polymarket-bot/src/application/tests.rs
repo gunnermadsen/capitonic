@@ -786,9 +786,9 @@ mod lifecycle_tests {
     fn optional_execution_controls_are_mode_independent_and_validated_when_present() {
         let mut process = eligible_btc_process();
         let execution = process.config.execution.as_mut().unwrap();
-        execution.max_order_notional_usd = Some(dec!(5));
-        execution.max_open_notional_usd = Some(dec!(20));
-        execution.max_open_positions = Some(6);
+        execution.max_order_notional_usd = Some(TRADING_PROCESS_ORDER_NOTIONAL_CEILING_USD);
+        execution.max_open_notional_usd = Some(TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD);
+        execution.max_open_positions = Some(TRADING_PROCESS_OPEN_POSITION_CEILING);
         execution.max_daily_loss_usd = Some(dec!(10));
         execution.require_exit_book = Some(true);
         validate_btc_process_capability(&process).unwrap();
@@ -805,8 +805,50 @@ mod lifecycle_tests {
             .execution
             .as_mut()
             .unwrap()
-            .max_order_notional_usd = Some(dec!(5.01));
+            .max_order_notional_usd = Some(TRADING_PROCESS_ORDER_NOTIONAL_CEILING_USD + dec!(0.01));
         assert!(validate_btc_process_capability(&process).is_err());
+
+        let execution = process.config.execution.as_mut().unwrap();
+        execution.max_order_notional_usd = Some(TRADING_PROCESS_ORDER_NOTIONAL_CEILING_USD);
+        execution.max_open_notional_usd =
+            Some(TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD + dec!(0.01));
+        assert!(validate_btc_process_capability(&process).is_err());
+
+        let execution = process.config.execution.as_mut().unwrap();
+        execution.max_open_notional_usd = Some(TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD);
+        execution.max_open_positions = Some(TRADING_PROCESS_OPEN_POSITION_CEILING + 1);
+        assert!(validate_btc_process_capability(&process).is_err());
+    }
+
+    #[tokio::test]
+    async fn legacy_paper_collateral_accepts_only_the_configured_capacity_ceiling() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://postgres:postgres@localhost/polymarket")
+            .unwrap();
+        let manager = BtcProcessManager::new(
+            Store::from_pool(pool.clone()),
+            pool.clone(),
+            BtcRepository::from_pool(pool),
+            BtcProcessManagerConfig {
+                live_venue: None,
+                live_reconcile_interval: Duration::from_secs(1),
+                grafana_live_enabled: false,
+            },
+        );
+        let definition: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../infra/processes/btc-5m-conservative-selective-paper-20260917.json"
+        ))
+        .unwrap();
+        let mut process = eligible_btc_process();
+        process.config = serde_json::from_value(definition["config"].clone()).unwrap();
+        process.config.raw["btc_realtime_paper"]["paper"]["starting_collateral_usd"] =
+            serde_json::json!(TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD.to_string());
+        manager.validate_definition_for_storage(&process).unwrap();
+
+        process.config.raw["btc_realtime_paper"]["paper"]["starting_collateral_usd"] = serde_json::json!(
+            (TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD + dec!(0.01)).to_string()
+        );
+        assert!(manager.validate_definition_for_storage(&process).is_err());
     }
 
     #[test]
