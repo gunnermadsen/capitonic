@@ -421,6 +421,29 @@ impl ProfileRepository {
         generation: i64,
         progress: &StrategyProgress,
     ) -> Result<bool> {
+        self.record_progress_with_gap_floor_in(
+            transaction,
+            key,
+            owner,
+            token,
+            generation,
+            progress,
+            None,
+        )
+        .await
+    }
+
+    /// Commits progress while limiting gap-derived health to a caller-owned live window.
+    pub async fn record_progress_with_gap_floor_in(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        key: IngesterStrategyKey,
+        owner: &str,
+        token: Uuid,
+        generation: i64,
+        progress: &StrategyProgress,
+        unresolved_gap_floor: Option<DateTime<Utc>>,
+    ) -> Result<bool> {
         progress.validate()?;
         let updated = sqlx::query_scalar::<_, String>(
             r#"
@@ -431,6 +454,7 @@ impl ProfileRepository {
                 FROM ingester.data_gaps
                 WHERE strategy_key = $1
                   AND status IN ('open', 'repairing')
+                  AND ($11::timestamptz IS NULL OR source_time_end >= $11)
                 ) AS has_unresolved_gap
             )
             UPDATE ingester.profiles
@@ -500,6 +524,7 @@ impl ProfileRepository {
         .bind(progress.last_provider_available_at)
         .bind(progress.source_watermark)
         .bind(progress.availability_watermark)
+        .bind(unresolved_gap_floor)
         .fetch_optional(&mut **transaction)
         .await
         .context("failed to commit ingester profile progress")?;
