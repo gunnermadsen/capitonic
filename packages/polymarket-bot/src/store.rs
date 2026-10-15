@@ -21,7 +21,7 @@ use crate::{
     },
     fees::{dynamic_crypto_taker_fee, sealed_dynamic_fee_rate},
     models::{
-        FillRecord, OrderRecord, OrderRequest, OrderSide, OrderState, TradingProcess,
+        FillRecord, OrderRecord, OrderRequest, OrderSide, OrderState, OrderType, TradingProcess,
         TradingProcessConfig,
     },
 };
@@ -968,11 +968,28 @@ impl Store {
             .find_order_by_client_order_id(order.request.client_order_id)
             .await?
             .context("conflicting order disappeared during identity verification")?;
-        if !order_request_result_matches(&existing.request, &order.request)
-            || existing.order_id != order.order_id
-            || (existing.state != order.state
-                && !durable_fill_state_supersedes_report(existing.state, order.state))
-        {
+        let partial_fak_fill_economics =
+            if order_request_result_matches(&existing.request, &order.request)
+                && existing.order_id == order.order_id
+                && existing.state == OrderState::Cancelled
+                && order.state == OrderState::Acknowledged
+                && existing.request.order_type == OrderType::Fak
+            {
+                match existing.request.process_id {
+                    Some(process_id) => Some(
+                        self.order_filled_economics(
+                            &existing.order_id,
+                            process_id,
+                            FillEconomicsSite::OrderReportDeduplication,
+                        )
+                        .await?,
+                    ),
+                    None => None,
+                }
+            } else {
+                None
+            };
+        if !durable_order_supersedes_report(&existing, order, partial_fak_fill_economics) {
             bail!(
                 "client_order_id {} collides with immutable order identity, result, or reference execution evidence",
                 order.request.client_order_id
@@ -3952,6 +3969,32 @@ fn durable_fill_state_supersedes_report(existing: OrderState, reported: OrderSta
     )
 }
 
+fn durable_order_supersedes_report(
+    existing: &OrderRecord,
+    reported: &OrderRecord,
+    partial_fak_fill_economics: Option<(Decimal, Decimal)>,
+) -> bool {
+    if !order_request_result_matches(&existing.request, &reported.request)
+        || existing.order_id != reported.order_id
+    {
+        return false;
+    }
+    if existing.state == reported.state
+        || durable_fill_state_supersedes_report(existing.state, reported.state)
+    {
+        return true;
+    }
+    let Some((filled_size, filled_notional)) = partial_fak_fill_economics else {
+        return false;
+    };
+    existing.state == OrderState::Cancelled
+        && reported.state == OrderState::Acknowledged
+        && existing.request.order_type == OrderType::Fak
+        && filled_size < existing.request.size
+        && validate_live_cumulative_fill_economics(&existing.request, filled_size, filled_notional)
+            .is_ok()
+}
+
 fn fill_record_matches(existing: &FillRecord, incoming: &FillRecord) -> bool {
     existing.fill_id == incoming.fill_id
         && existing.process_id == incoming.process_id
@@ -4442,9 +4485,9 @@ mod tests {
         },
         store::{
             build_live_process_exposure_snapshot, canonical_fill_for_storage,
-            durable_fill_state_supersedes_report, fill_record_matches, live_requested_exposure,
-            manual_live_exit_economics, order_request_identity_matches,
-            order_request_result_matches, required_fill_process_id,
+            durable_fill_state_supersedes_report, durable_order_supersedes_report,
+            fill_record_matches, live_requested_exposure, manual_live_exit_economics,
+            order_request_identity_matches, order_request_result_matches, required_fill_process_id,
             validate_live_cumulative_fill_economics, validate_live_daily_settlement,
             validate_live_exposure_fill, validate_live_redemption_allocation,
             LiveDailySettlementRow, LiveExposureFillRow, LiveExposureOrderRow,
@@ -4543,6 +4586,82 @@ mod tests {
         assert!(!durable_fill_state_supersedes_report(
             OrderState::Cancelled,
             OrderState::Acknowledged
+        ));
+
+        let now = Utc::now();
+        let request = OrderRequest {
+            client_order_id: Uuid::from_u128(1),
+            process_id: Some(Uuid::from_u128(2)),
+            market_id: "market".to_string(),
+            token_id: "token".to_string(),
+            side: OrderSide::Buy,
+            order_type: OrderType::Fak,
+            price: dec!(0.40),
+            size: dec!(8),
+            metadata: serde_json::json!({
+                "execution_intent": "entry",
+                "dynamic_fee_rate": dec!(0.25),
+            }),
+        };
+        let existing = OrderRecord {
+            order_id: "venue-order".to_string(),
+            request: request.clone(),
+            state: OrderState::Cancelled,
+            created_at: now,
+            updated_at: now,
+        };
+        let mut reported = existing.clone();
+        reported.state = OrderState::Acknowledged;
+
+        assert!(durable_order_supersedes_report(
+            &existing,
+            &reported,
+            Some((dec!(5), dec!(2))),
+        ));
+        assert!(!durable_order_supersedes_report(&existing, &reported, None,));
+        assert!(!durable_order_supersedes_report(
+            &existing,
+            &reported,
+            Some((Decimal::ZERO, Decimal::ZERO)),
+        ));
+        assert!(!durable_order_supersedes_report(
+            &existing,
+            &reported,
+            Some((dec!(8), dec!(3.2))),
+        ));
+
+        let mut wrong_type = existing.clone();
+        wrong_type.request.order_type = OrderType::Fok;
+        let mut wrong_type_report = reported.clone();
+        wrong_type_report.request.order_type = OrderType::Fok;
+        assert!(!durable_order_supersedes_report(
+            &wrong_type,
+            &wrong_type_report,
+            Some((dec!(5), dec!(2))),
+        ));
+
+        let mut conflicting_identity = reported.clone();
+        conflicting_identity.order_id = "different-order".to_string();
+        assert!(!durable_order_supersedes_report(
+            &existing,
+            &conflicting_identity,
+            Some((dec!(5), dec!(2))),
+        ));
+
+        let mut conflicting_request = reported.clone();
+        conflicting_request.request.token_id = "different-token".to_string();
+        assert!(!durable_order_supersedes_report(
+            &existing,
+            &conflicting_request,
+            Some((dec!(5), dec!(2))),
+        ));
+
+        let mut conflicting_state = reported;
+        conflicting_state.state = OrderState::Rejected;
+        assert!(!durable_order_supersedes_report(
+            &existing,
+            &conflicting_state,
+            Some((dec!(5), dec!(2))),
         ));
     }
 

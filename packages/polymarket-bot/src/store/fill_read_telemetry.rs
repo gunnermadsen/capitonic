@@ -14,6 +14,7 @@ pub enum FillEconomicsSite {
     ReconciliationReplayAfterInsert,
     ReconciliationReplayCancellation,
     RestBackfill,
+    OrderReportDeduplication,
 }
 
 impl FillEconomicsSite {
@@ -26,6 +27,7 @@ impl FillEconomicsSite {
             Self::ReconciliationReplayAfterInsert => "reconciliation_replay_after_insert",
             Self::ReconciliationReplayCancellation => "reconciliation_replay_cancellation",
             Self::RestBackfill => "rest_backfill",
+            Self::OrderReportDeduplication => "order_report_deduplication",
         }
     }
 }
