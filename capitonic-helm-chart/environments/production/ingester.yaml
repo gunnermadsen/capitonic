@@ -1,15 +1,15 @@
 environment: production
-image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/ingester:v1.3.2-rc.1
+image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/ingester:v1.3.3-rc.0
 imagePullPolicy: IfNotPresent
 imagePullSecrets:
   - name: ecr-registry
-imageDigest: sha256:a335bf29af3c7816d021293b2a60f4f2c7b87df405e0212861da3e5433b5b947
-gitRevision: 65eb331feeb5148835bba827c1d2fa923a8551d6
+imageDigest: sha256:72403f2db636cf8e36acc2c3b6a1764b1bc2108a6104ff8094a0f66d60a4cba1
+gitRevision: 42c5c1d47d45a073d40fe50380a67608a5115c4c
 deploymentId: capitonic-k3s-production
 release:
-  version: v1.3.2-rc.1
-  digest: sha256:a335bf29af3c7816d021293b2a60f4f2c7b87df405e0212861da3e5433b5b947
-  sourceRevision: 65eb331feeb5148835bba827c1d2fa923a8551d6
+  version: v1.3.3-rc.0
+  digest: sha256:72403f2db636cf8e36acc2c3b6a1764b1bc2108a6104ff8094a0f66d60a4cba1
+  sourceRevision: 42c5c1d47d45a073d40fe50380a67608a5115c4c
 workerScaling:
   enabled: true
   minReplicas: 5
