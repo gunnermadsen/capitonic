@@ -1021,7 +1021,9 @@ mod tests {
             1,
             MAX_CLOB_RECONCILIATION_ROWS as u64 + 1
         )
-        .is_err());
+        .is_ok());
+        assert!(validate_clob_page_metadata("open orders", 0, 0, 5000).is_ok());
+        assert!(validate_clob_page_metadata("open orders", 2, 2, 1).is_err());
         assert!(checked_clob_row_count(MAX_CLOB_RECONCILIATION_ROWS, 1, "trades").is_err());
         assert!(checked_clob_row_count(usize::MAX, 1, "trades").is_err());
     }

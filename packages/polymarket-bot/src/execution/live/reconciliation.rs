@@ -96,11 +96,7 @@ pub(super) fn validate_clob_page_metadata(
     limit: u64,
 ) -> Result<()> {
     let data_len = u64::try_from(data_len).context("Polymarket CLOB page length overflow")?;
-    if limit == 0
-        || limit > MAX_CLOB_RECONCILIATION_ROWS as u64
-        || count != data_len
-        || count > limit
-    {
+    if limit == 0 || count != data_len || count > limit {
         bail!("Polymarket CLOB {resource} returned inconsistent pagination metadata");
     }
     Ok(())
