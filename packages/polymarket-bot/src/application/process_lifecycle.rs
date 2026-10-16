@@ -501,9 +501,7 @@ impl BtcProcessManager {
                 ));
             }
         }
-        // The venue owns the authoritative close/drain/reconcile/generation-CAS sequence.
-        // Bound the whole operation instead of performing an earlier, non-authoritative
-        // reconciliation that could go stale before the gate is reopened.
+        // Record operator intent; submission checks determine execution eligibility.
         let status = tokio::time::timeout(
             BTC_LIVE_CONTROL_TIMEOUT,
             venue.set_live_entries_enabled(
@@ -519,18 +517,6 @@ impl BtcProcessManager {
             ))
         })?
         .map_err(|error| HttpError::conflict(error.to_string()))?;
-        if enabled && !status.entries_enabled {
-            let _ = venue
-                .set_live_entries_enabled(
-                    false,
-                    Some("entry_enable_preconditions_failed".to_string()),
-                )
-                .await;
-            return Err(HttpError::conflict(format!(
-                "live entry enable preconditions failed: {}",
-                status.reason.as_deref().unwrap_or("unknown")
-            )));
-        }
         self.record_event(
             process_id,
             "warn",
@@ -540,11 +526,12 @@ impl BtcProcessManager {
                 "btc_live_entries_disabled"
             },
             if enabled {
-                "BTC live entries manually enabled after strict reconciliation"
+                "BTC live entry enable accepted; submission remains subject to execution checks"
             } else {
                 "BTC live entries manually disabled"
             },
             serde_json::json!({
+                "requested_enabled": enabled,
                 "entries_enabled": status.entries_enabled,
                 "reason": &status.reason,
                 "source": "manual_process_control",
