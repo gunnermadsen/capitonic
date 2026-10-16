@@ -2071,55 +2071,8 @@ impl ExecutionVenue for LiveVenue {
         if self.bound_process_id.is_none() {
             bail!("wallet-wide live entry enable is forbidden; use a checked process-bound enable");
         }
-        {
-            let mut state = self.readiness_state.lock().await;
-            state.manual_entries_enabled = false;
-            state.manual_entries_reason = Some("checked_enable_revalidation".to_string());
-            state.reconciled_safety_generation = None;
-        }
-        // Revalidate this sleeve behind the shared submission barrier without revoking entry
-        // grants held by other healthy sleeves. Account failures still advance the shared safety
-        // generation and invalidate this commit.
-        let expected_safety_generation = self.global_entry_gate.lock().await.safety_generation;
-        if expected_safety_generation == u64::MAX {
-            bail!("live safety generation is exhausted; checked enable remains fail-closed");
-        }
-        let _submit_guard = self.submit_guard.lock().await;
-        let reconciliation = self.reconcile().await?;
-        if reconciliation.mismatches_found != 0 || reconciliation.unresolved_count != 0 {
-            bail!("checked process-bound live enable requires a clean reconciliation");
-        }
-
-        let now = Utc::now();
         let mut state = self.readiness_state.lock().await;
-        let mut global = self.global_entry_gate.lock().await;
-        let rest_fresh = stateful_age_seconds(state.last_rest_reconcile_at, now)
-            .is_some_and(|age| age <= self.config.stale_reconcile.as_secs() as i64);
-        let configured_identity = canonical_configured_account_identity(
-            &self.config,
-            self.bound_account_ref()
-                .context("checked live enable requires a process account_ref")?,
-        )?;
-        let identity_matches = state.credential_account_fingerprint_sha256.as_deref()
-            == Some(configured_identity.fingerprint_sha256.as_str());
-        if !self.order_submission_enabled()
-            || !self.config.submit_auth_available()
-            || !rest_fresh
-            || !state.process_accounting_entry_safe
-            || !identity_matches
-            || !state.idempotency_clean
-            || state.unresolved_live_order_count != 0
-            || global.safety_generation != expected_safety_generation
-            || state.reconciled_safety_generation != Some(expected_safety_generation)
-        {
-            bail!(
-                "checked process-bound live enable requires fresh reconciliation, proven accounting, matching identity, and clean idempotency"
-            );
-        }
-        if !commit_checked_live_enable(&mut global, &mut state, expected_safety_generation) {
-            bail!("live safety generation changed before checked enable commit");
-        }
-        drop(global);
+        record_manual_live_enable(&mut state);
         drop(state);
         self.live_status().await
     }

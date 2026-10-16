@@ -137,24 +137,9 @@ pub(super) fn record_global_entry_halt(gate: &mut GlobalLiveEntryGate, reason: &
     gate.safety_generation
 }
 
-pub(super) fn commit_checked_live_enable(
-    gate: &mut GlobalLiveEntryGate,
-    state: &mut LiveVenueState,
-    expected_safety_generation: u64,
-) -> bool {
-    if expected_safety_generation == u64::MAX
-        || gate.safety_generation != expected_safety_generation
-        || state.reconciled_safety_generation != Some(expected_safety_generation)
-    {
-        return false;
-    }
+pub(super) fn record_manual_live_enable(state: &mut LiveVenueState) {
     state.manual_entries_enabled = true;
     state.manual_entries_reason = None;
-    if gate.halted {
-        gate.halted = false;
-        gate.reason = "account_checked_enable".to_string();
-    }
-    true
 }
 
 pub(super) fn commit_live_post_attempt(

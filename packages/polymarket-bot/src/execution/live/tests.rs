@@ -1029,7 +1029,7 @@ mod tests {
     }
 
     #[test]
-    fn generation_compare_prevents_enable_and_post_races() {
+    fn manual_enable_preserves_shared_halt_and_submission_generation_checks() {
         let mut gate = GlobalLiveEntryGate {
             halted: true,
             reason: "checked_enable_revalidation".to_string(),
@@ -1038,9 +1038,17 @@ mod tests {
         let mut state = LiveVenueState::fail_closed();
         state.reconciled_safety_generation = Some(11);
         record_global_entry_halt(&mut gate, "account_reconciliation_failed");
-        assert!(!commit_checked_live_enable(&mut gate, &mut state, 11));
+        record_manual_live_enable(&mut state);
         assert!(gate.halted);
-        assert!(!state.manual_entries_enabled);
+        assert!(state.manual_entries_enabled);
+        assert_eq!(gate.reason, "account_reconciliation_failed");
+        assert_eq!(gate.safety_generation, 12);
+        assert_eq!(state.reconciled_safety_generation, Some(11));
+        let current_generation = gate.safety_generation;
+        assert_eq!(
+            commit_live_post_attempt(&mut gate, &mut state, current_generation),
+            Some(LiveExecutionGateReason::GlobalHalt)
+        );
 
         gate.halted = false;
         gate.reason = "process_checked_enable".to_string();
@@ -1279,13 +1287,8 @@ mod tests {
             .unwrap()
             .bind_process(uuid::Uuid::new_v4(), Utc::now(), &live_execution())
             .unwrap();
-        let error = venue
-            .set_live_entries_enabled(true, None)
-            .await
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("live persistence store is not configured"));
-        let status = venue.live_status().await.unwrap();
+        let status = venue.set_live_entries_enabled(true, None).await.unwrap();
+        assert!(venue.readiness_state.lock().await.manual_entries_enabled);
         assert!(!status.entries_enabled);
         assert!(!status.idempotency_clean);
         assert_eq!(status.last_rest_reconcile_age_secs, None);
