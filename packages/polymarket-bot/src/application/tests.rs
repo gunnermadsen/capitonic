@@ -335,7 +335,6 @@ mod lifecycle_tests {
 
     fn router_fixture(mut control: BtcRealtimePaperControlConfig) -> BtcRealtimePaperControlConfig {
         control.schema_version = ROUTER_PROCESS_SCHEMA_VERSION.into();
-        control.sources = polymarket_bot::market_data_stream::legacy_default_sources();
         control.playbook_version = Some("v1.2".into());
         let selection = control.strategy["decision_strategy"].clone();
         control.strategy["decision_strategy"] = serde_json::json!({
@@ -348,18 +347,18 @@ mod lifecycle_tests {
     #[test]
     fn agent_v5_preserves_sources_and_rejects_live_and_older_schema() {
         use polymarket_bot::btc::unified_model_runtime::agent;
+        let mut sources: Vec<SourceSelector> = agent::REQUIRED_PRODUCTS
+            .iter()
+            .map(|key| serde_json::from_value(serde_json::json!(key)).unwrap())
+            .collect();
         let mut control = BtcRealtimePaperControlConfig {
             schema_version: AGENT_PROCESS_SCHEMA_VERSION.into(),
-            sources: agent::REQUIRED_PRODUCTS
-                .iter()
-                .map(|key| serde_json::from_value(serde_json::json!(key)).unwrap())
-                .collect(),
             playbook_version: Some("v1.2".into()),
             strategy: serde_json::json!({"target_size":"5","decision_strategy":{"type":"unified_model_router","version":1,
                 "routing":{"mode":"first_qualified","tie_break":"array_order"},"models":[{"member_id":"agent","selection":{"type":"openai_agent","profile_key":agent::PROFILE_KEY,"profile_sha256":agent::hash(&agent::profile()).unwrap()}}]}}),
             ..BtcRealtimePaperControlConfig::default()
         };
-        let strategy = resolve_btc_strategy(&control).unwrap();
+        let strategy = resolve_btc_strategy(&control, &sources).unwrap();
         assert!(strategy.agent_selection().is_some());
         assert_eq!(
             (
@@ -380,12 +379,12 @@ mod lifecycle_tests {
             "type":"openai_agent", "profile_key":profile.key,
             "profile_sha256":agent::hash(&profile).unwrap()
         });
-        assert!(resolve_btc_strategy(&fresh)
+        assert!(resolve_btc_strategy(&fresh, &sources)
             .unwrap()
             .agent_reassessment_price_change
             .is_none());
         fresh.strategy["agent_reassessment_price_change"] = serde_json::json!("0.05");
-        let resolved = resolve_btc_strategy(&fresh).unwrap();
+        let resolved = resolve_btc_strategy(&fresh, &sources).unwrap();
         assert_eq!(
             resolved.agent_reassessment_price_change,
             Some(rust_decimal::Decimal::new(5, 2))
@@ -396,23 +395,24 @@ mod lifecycle_tests {
         );
         assert!(validate_btc_live_model_authorization(&resolved).is_err());
         fresh.strategy["agent_reassessment_price_change"] = serde_json::json!("0");
-        assert!(resolve_btc_strategy(&fresh).is_err());
+        assert!(resolve_btc_strategy(&fresh, &sources).is_err());
         assert!(strategy.agent_reassessment_price_change.is_none());
         assert!(serde_json::to_value(&strategy)
             .unwrap()
             .get("agent_reassessment_price_change")
             .is_none());
-        control.sources.pop();
-        assert!(resolve_btc_strategy(&control).is_err());
-        control.sources = agent::REQUIRED_PRODUCTS
+        sources.pop();
+        assert!(resolve_btc_strategy(&control, &sources).is_err());
+        sources = agent::REQUIRED_PRODUCTS
             .iter()
             .map(|key| serde_json::from_value(serde_json::json!(key)).unwrap())
             .collect();
         control.schema_version = ROUTER_PROCESS_SCHEMA_VERSION.into();
-        assert!(resolve_btc_strategy(&control).is_err());
+        assert!(resolve_btc_strategy(&control, &sources).is_err());
     }
     fn prepared_btc_definition_with_default_runtime() -> PreparedBtcStartDefinition {
         prepare_btc_start_definition(ResolvedBtcProcessDefinition {
+            sources: polymarket_bot::market_data_stream::legacy_default_sources(),
             control: BtcRealtimePaperControlConfig {
                 schema_version: BTC_PROCESS_SCHEMA_VERSION.to_string(),
                 next_experiment_key: "btc-5m-heartbeat-resume-test".to_string(),
@@ -489,6 +489,7 @@ mod lifecycle_tests {
                     "next_experiment_key": "btc-5m-paper-20260713-c",
                     "preregistration_sha256": "a".repeat(64),
                     "ml_shadow": {"enabled": true},
+            "playbook_version": "v1.2",
             }));
         assert!(retired_ml.is_err());
 
@@ -517,11 +518,20 @@ mod lifecycle_tests {
             "next_experiment_key": "btc-5m-paper-20260713-c",
             "preregistration_sha256": "a".repeat(64),
             "ml_shadow": {"enabled": true},
+            "playbook_version": "v1.2",
         });
-        assert!(
-            parse_btc_process_control(legacy.clone(), BtcDefinitionUse::ExplicitStart).is_err()
-        );
-        let resumed = parse_btc_process_control(legacy, BtcDefinitionUse::DurableResume).unwrap();
+        assert!(parse_btc_process_control(
+            legacy.clone(),
+            &polymarket_bot::market_data_stream::legacy_default_sources(),
+            BtcDefinitionUse::ExplicitStart
+        )
+        .is_err());
+        let resumed = parse_btc_process_control(
+            legacy,
+            &polymarket_bot::market_data_stream::legacy_default_sources(),
+            BtcDefinitionUse::DurableResume,
+        )
+        .unwrap();
         assert_eq!(resumed.schema_version, BTC_PROCESS_SCHEMA_VERSION);
     }
 
@@ -546,7 +556,11 @@ mod lifecycle_tests {
             ..BtcRealtimePaperControlConfig::default()
         };
 
-        let strategy = resolve_btc_strategy(&router_fixture(control.clone())).unwrap();
+        let strategy = resolve_btc_strategy(
+            &router_fixture(control.clone()),
+            &polymarket_bot::market_data_stream::legacy_default_sources(),
+        )
+        .unwrap();
 
         assert_eq!(
             strategy.strategy_version,
@@ -654,7 +668,11 @@ mod lifecycle_tests {
             ..BtcRealtimePaperControlConfig::default()
         };
 
-        let strategy = resolve_btc_strategy(&router_fixture(control.clone())).unwrap();
+        let strategy = resolve_btc_strategy(
+            &router_fixture(control.clone()),
+            &polymarket_bot::market_data_stream::legacy_default_sources(),
+        )
+        .unwrap();
 
         assert_eq!(
             strategy.strategy_version,
@@ -679,7 +697,11 @@ mod lifecycle_tests {
             {"feed": "polymarket_btc5m_clob_execution_v1", "maximum_age_ms": 2000},
             {"feed": "chainlink_btcusd_oracle_v1", "maximum_age_ms": 300000}
         ]);
-        let live_strategy = resolve_btc_strategy(&router_fixture(control.clone())).unwrap();
+        let live_strategy = resolve_btc_strategy(
+            &router_fixture(control.clone()),
+            &polymarket_bot::market_data_stream::legacy_default_sources(),
+        )
+        .unwrap();
         validate_btc_live_model_authorization(&live_strategy).unwrap();
     }
 
@@ -731,7 +753,11 @@ mod lifecycle_tests {
         };
         control.paper.directional_model_entry_policy =
             BtcDirectionalModelEntryPolicy::ExecuteDirectionalPrediction;
-        let strategy = resolve_btc_strategy(&router_fixture(control.clone())).unwrap();
+        let strategy = resolve_btc_strategy(
+            &router_fixture(control.clone()),
+            &polymarket_bot::market_data_stream::legacy_default_sources(),
+        )
+        .unwrap();
         validate_directional_model_entry_policy(
             &strategy,
             BtcDirectionalModelEntryPolicy::ExecuteDirectionalPrediction,
@@ -744,6 +770,7 @@ mod lifecycle_tests {
         .is_err());
 
         let resolved = |control: BtcRealtimePaperControlConfig| ResolvedBtcProcessDefinition {
+            sources: polymarket_bot::market_data_stream::legacy_default_sources(),
             control,
             strategy: strategy.clone(),
             entry_admission: None,
@@ -821,7 +848,7 @@ mod lifecycle_tests {
     }
 
     #[tokio::test]
-    async fn legacy_paper_collateral_accepts_only_the_configured_capacity_ceiling() {
+    async fn paper_collateral_accepts_only_the_configured_capacity_ceiling() {
         let pool = PgPoolOptions::new()
             .connect_lazy("postgres://postgres:postgres@localhost/polymarket")
             .unwrap();
@@ -841,11 +868,38 @@ mod lifecycle_tests {
         .unwrap();
         let mut process = eligible_btc_process();
         process.config = serde_json::from_value(definition["config"].clone()).unwrap();
-        process.config.raw["btc_realtime_paper"]["paper"]["starting_collateral_usd"] =
+        let collateral_policy = process
+            .config
+            .execution
+            .as_ref()
+            .unwrap()
+            .order_policies
+            .as_ref()
+            .unwrap()
+            .iter()
+            .position(|policy| policy.name == "paper_execution_policy")
+            .unwrap();
+        process
+            .config
+            .execution
+            .as_mut()
+            .unwrap()
+            .order_policies
+            .as_mut()
+            .unwrap()[collateral_policy]
+            .params["starting_collateral_usd"] =
             serde_json::json!(TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD.to_string());
         manager.validate_definition_for_storage(&process).unwrap();
 
-        process.config.raw["btc_realtime_paper"]["paper"]["starting_collateral_usd"] = serde_json::json!(
+        process
+            .config
+            .execution
+            .as_mut()
+            .unwrap()
+            .order_policies
+            .as_mut()
+            .unwrap()[collateral_policy]
+            .params["starting_collateral_usd"] = serde_json::json!(
             (TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD + dec!(0.01)).to_string()
         );
         assert!(manager.validate_definition_for_storage(&process).is_err());
@@ -922,6 +976,7 @@ mod lifecycle_tests {
     fn live_start_preparation_has_a_distinct_venue_identity_and_frozen_seam() {
         let run_key = "btc-5m-live-cutover-preview";
         let resolved = ResolvedBtcProcessDefinition {
+            sources: polymarket_bot::market_data_stream::legacy_default_sources(),
             control: BtcRealtimePaperControlConfig {
                 schema_version: BTC_PROCESS_SCHEMA_VERSION.to_string(),
                 next_experiment_key: run_key.to_string(),
@@ -994,6 +1049,7 @@ mod lifecycle_tests {
             ..EffectiveProcessExecutionConfig::default()
         };
         let resolved = |strategy: BtcStrategyConfig| ResolvedBtcProcessDefinition {
+            sources: polymarket_bot::market_data_stream::legacy_default_sources(),
             control: BtcRealtimePaperControlConfig {
                 schema_version: BTC_PROCESS_SCHEMA_VERSION.to_string(),
                 next_experiment_key: "btc-live-freshness-contract".to_string(),
@@ -1046,6 +1102,7 @@ mod lifecycle_tests {
         let run_key = "btc-5m-paper-20260713-preview";
         let preregistration_sha256 = "b".repeat(64);
         let resolved = ResolvedBtcProcessDefinition {
+            sources: polymarket_bot::market_data_stream::legacy_default_sources(),
             control: BtcRealtimePaperControlConfig {
                 schema_version: BTC_PROCESS_SCHEMA_VERSION.to_string(),
                 next_experiment_key: run_key.to_string(),
@@ -1295,7 +1352,13 @@ mod lifecycle_tests {
             .get("btc_realtime_paper")
             .cloned()
             .unwrap();
-        parse_btc_process_control(control, BtcDefinitionUse::ExplicitStart).unwrap();
+        parse_btc_process_control(
+            control,
+            &serde_json::from_value::<Vec<SourceSelector>>(request.config.raw["sources"].clone())
+                .unwrap(),
+            BtcDefinitionUse::ExplicitStart,
+        )
+        .unwrap();
 
         let now = Utc::now();
         let process = TradingProcess {
@@ -1339,12 +1402,15 @@ mod lifecycle_tests {
             let mut config: TradingProcessConfig =
                 serde_json::from_value(value["config"].clone()).unwrap();
             pin_router_config(&mut config).unwrap();
-            let mut control = parse_btc_process_control(
+            let mut sources: Vec<SourceSelector> =
+                serde_json::from_value(config.raw["sources"].clone()).unwrap();
+            let control = parse_btc_process_control(
                 config.raw["btc_realtime_paper"].clone(),
+                &sources,
                 BtcDefinitionUse::InactiveDefinition,
             )
             .unwrap();
-            let members = resolve_btc_members(&control).unwrap();
+            let members = resolve_btc_members(&control, &sources).unwrap();
             assert_eq!(members.len(), 5);
             for (_, strategy, _) in &members {
                 strategy.validate().unwrap();
@@ -1355,122 +1421,115 @@ mod lifecycle_tests {
                 )
                 .unwrap();
                 for binding in &strategy.unified_model.as_ref().unwrap().sources {
-                    assert!(control
-                        .sources
-                        .iter()
-                        .any(|source| source.key == binding.product));
+                    assert!(sources.iter().any(|source| source.key == binding.product));
                 }
             }
             // A shared stream owned by another process cannot satisfy this process's selector.
-            control
-                .sources
-                .retain(|s| s.key != "binance_spot_btcusdt_one_second_ohlcv");
-            assert!(resolve_btc_members(&control).is_err());
+            sources.retain(|s| s.key != "binance_spot_btcusdt_one_second_ohlcv");
+            assert!(resolve_btc_members(&control, &sources).is_err());
         }
     }
     #[test]
     fn umr_paper_templates_use_existing_process_resolution_and_start_contract() {
-        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("infra/processes");
+        let directory =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../infra/processes");
+        let mut ids = std::collections::HashSet::new();
         let mut checked = 0;
         for entry in std::fs::read_dir(directory).unwrap() {
             let path = entry.unwrap().path();
-            if !path.to_string_lossy().ends_with("-umr-20260902.json") {
+            if path.extension().and_then(|x| x.to_str()) != Some("json") {
                 continue;
             }
-            let process: serde_json::Value =
+            let value: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-            let control = parse_btc_process_control(
-                process["config"]["raw"]["btc_realtime_paper"].clone(),
-                BtcDefinitionUse::InactiveDefinition,
-            )
-            .unwrap();
-            let strategy = resolve_btc_strategy(&control).unwrap();
+            assert!(ids.insert(value["process_id"].as_str().unwrap().to_owned()));
+            let config: TradingProcessConfig =
+                serde_json::from_value(value["config"].clone()).unwrap();
+            let compiled =
+                polymarket_bot::execution::polymarket::configuration::compile(&config).unwrap();
+            let strategy = compiled.runtime_strategy().unwrap();
             strategy.validate().unwrap();
             validate_btc_entry_timing(&strategy).unwrap();
-            validate_directional_model_entry_policy(
-                &strategy,
-                control.paper.directional_model_entry_policy,
-            )
-            .unwrap();
-            assert!(validate_btc_live_model_authorization(&strategy).is_err());
-            let resolved = ResolvedBtcProcessDefinition {
-                control,
-                strategy,
-                entry_admission: None,
-                risk_strategies: Vec::new(),
-                runtime: BtcRuntimeConfig {
-                    enabled: true,
-                    ..BtcRuntimeConfig::default()
-                },
-                paper_venue: PaperVenueConfig::default(),
-                paper_stress_previews: Vec::new(),
-            };
-            let first = prepare_btc_start_definition(resolved.clone()).unwrap();
-            let resumed = prepare_btc_start_definition(resolved).unwrap();
-            assert_eq!(first.run_id, resumed.run_id);
-            assert_eq!(first.config_hash, resumed.config_hash);
+            assert_eq!(serde_json::to_value(&compiled.sources).unwrap(), {
+                let mut sources: Vec<SourceSelector> =
+                    serde_json::from_value(config.raw["sources"].clone()).unwrap();
+                sources.sort_by(|a, b| a.key.cmp(&b.key));
+                serde_json::to_value(sources).unwrap()
+            });
+            let mut process = eligible_btc_process();
+            process.process_id = value["process_id"].as_str().unwrap().parse().unwrap();
+            process.config = config;
+            let prepared = super::order_execution::prepare(&process, false).unwrap();
+            assert_eq!(prepared.sources, compiled.sources);
+            assert_eq!(
+                prepared.frozen_process_config.raw["sources"],
+                process.config.raw["sources"]
+            );
+            let resumed = super::order_execution::prepare(&process, true).unwrap();
+            assert_eq!(resumed.config_hash, prepared.config_hash);
+            assert_eq!(resumed.sources, prepared.sources);
             checked += 1;
         }
-        assert_eq!(checked, 2);
+        assert_eq!(checked, 5);
     }
     #[test]
     fn paper_and_live_definitions_resolve_only_the_saved_process_quantity() {
-        for filename in [
-            "btc-5m-conservative-selective-paper-20260917.json",
-            "btc-5m-conservative-selective-live-pilot-20260921.json",
+        for fixture in [
+            include_str!("../../../../docs/polymarket-execution-rail/examples/paper.json"),
+            include_str!("../../../../docs/polymarket-execution-rail/examples/live.json"),
         ] {
-            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../infra/processes")
-                .join(filename);
-            let definition: serde_json::Value =
-                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-            let original = definition["config"]["raw"]["btc_realtime_paper"].clone();
-            for quantity in ["1", "5", "10", "25"] {
-                let mut value = original.clone();
-                value["strategy"]["target_size"] = quantity.into();
-                let control =
-                    parse_btc_process_control(value.clone(), BtcDefinitionUse::InactiveDefinition)
-                        .unwrap();
-                let members = resolve_btc_members(&control).unwrap();
-                let expected = quantity.parse::<rust_decimal::Decimal>().unwrap();
-                assert!(members
-                    .iter()
-                    .all(|(_, strategy, _)| strategy.target_size == expected));
-                // Resume uses the same durable JSON, not a model size or a mutable shared override.
-                let resumed = parse_btc_process_control(
-                    serde_json::from_slice(&serde_json::to_vec(&value).unwrap()).unwrap(),
-                    BtcDefinitionUse::DurableResume,
-                )
-                .unwrap();
-                assert!(resolve_btc_members(&resumed)
+            let original: TradingProcessConfig = serde_json::from_str(fixture).unwrap();
+            for quantity in [1, 5, 10, 25] {
+                let mut config = original.clone();
+                let sizing = config
+                    .execution
+                    .as_mut()
                     .unwrap()
-                    .iter()
-                    .all(|(_, strategy, _)| strategy.target_size == expected));
+                    .order_policies
+                    .as_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|p| p.name == "sizing_policy")
+                    .unwrap();
+                sizing.params["lower_share_bound"] = quantity.into();
+                sizing.params["default_share"] = quantity.into();
+                sizing.params["upper_share_bound"] = quantity.into();
+                let compiled =
+                    polymarket_bot::execution::polymarket::configuration::compile(&config).unwrap();
+                assert_eq!(
+                    compiled.runtime_strategy().unwrap().target_size,
+                    rust_decimal::Decimal::from(quantity)
+                );
+                let saved: TradingProcessConfig =
+                    serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
+                assert_eq!(
+                    polymarket_bot::execution::polymarket::configuration::compile(&saved)
+                        .unwrap()
+                        .config_sha256,
+                    compiled.config_sha256
+                );
             }
             for quantity in [
                 serde_json::Value::Null,
-                serde_json::json!("0"),
-                serde_json::json!("-1"),
+                serde_json::json!(0),
+                serde_json::json!(-1),
             ] {
-                let mut value = original.clone();
-                value["strategy"]["target_size"] = quantity;
-                let control =
-                    parse_btc_process_control(value, BtcDefinitionUse::InactiveDefinition).unwrap();
-                assert!(resolve_btc_members(&control).is_err());
+                let mut config = original.clone();
+                let sizing = config
+                    .execution
+                    .as_mut()
+                    .unwrap()
+                    .order_policies
+                    .as_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|p| p.name == "sizing_policy")
+                    .unwrap();
+                sizing.params["default_share"] = quantity;
+                assert!(
+                    polymarket_bot::execution::polymarket::configuration::compile(&config).is_err()
+                );
             }
-            let mut value = original;
-            value["strategy"]
-                .as_object_mut()
-                .unwrap()
-                .remove("target_size");
-            let control =
-                parse_btc_process_control(value, BtcDefinitionUse::InactiveDefinition).unwrap();
-            assert!(resolve_btc_members(&control).is_err());
         }
     }
 }

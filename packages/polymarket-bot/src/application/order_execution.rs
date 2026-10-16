@@ -134,7 +134,7 @@ pub(super) fn prepare(
         execution: effective(&definition),
         execution_mode,
         strategy,
-        sources: definition.control.sources.clone(),
+        sources: definition.sources.clone(),
         entry_admission: None,
         risk_strategies: definition.control.risk_strategies.clone(),
         directional_model_entry_policy: p.edge.directional_model_entry_policy,

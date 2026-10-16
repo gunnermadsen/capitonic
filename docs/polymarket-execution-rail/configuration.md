@@ -1,6 +1,6 @@
 # Execution configuration contract
 
-The existing `config.execution` and `config.raw.btc_realtime_paper` envelopes are preserved. Mode, execute_signals, live_capital and account_ref remain at their existing paths because account reconciliation SQL and dashboards consume them. New order rules live exclusively in `execution.order_policies`. The explicit rail selector and `btc_realtime_paper_process_v6` must agree. Any new marker selects strict validation, never legacy fallback.
+Sources are required exclusively at `config.raw.sources` (`/raw/sources` within configuration and frozen snapshots). Source selectors are parsed separately from strategy controls. The `config.execution` and `config.raw.btc_realtime_paper` envelopes retain their other settings. Mode, execute_signals, live_capital and account_ref remain at their existing paths because account reconciliation SQL and dashboards consume them. New order rules live exclusively in `execution.order_policies`. The explicit rail selector and `btc_realtime_paper_process_v6` must agree. Any new marker selects strict validation, never legacy fallback.
 
 Examples are executable compiler fixtures: [paper](examples/paper.json), [live](examples/live.json). They describe inactive definitions, not approved process creations, deployment configuration, or real-capital authorization. Preregistration values identify fixtures; conversion retains actual process provenance and canonical process_id. Keep legacy schemas and defaults unchanged.
 
@@ -50,7 +50,7 @@ The compiler retains existing hard-coded configuration ceilings; changing them i
 ## Retained or intentionally excluded
 
 - `strategy.max_directional_feature_age_ms` remains inference configuration; null derives the artifact cadence, explicit values cannot exceed the supported cadence. `strategy.required_model_feeds` remains the existing feed-requirement contract. Neither appears in order policies.
-- `strategy.decision_strategy`, sources, risk_strategies, runtime.strategy_interval_ms (1..60000), run key and preregistration stay in their existing ownership domains. Rail-selected definitions always support UMR execution and authenticated API overrides; there is no trigger selector.
+- `strategy.decision_strategy`, risk_strategies, runtime.strategy_interval_ms (1..60000), run key and preregistration stay in their existing ownership domains. Rail-selected definitions always support UMR execution and authenticated API overrides; there is no trigger selector.
 - `strategy_version`, `feature_schema_version`, unified_model bindings and artifact policy are derived, not configurable copies. Existing UMR compilation/pinning is reused for validation, never persisted as a legacy execution configuration.
 - `execution.taker_fee_rate` is already rejected for BTC; no new override is added. Fees use observed market evidence.
 - `max_order_notional_usd` is intentionally retired for new sizing; funds, reservations and aggregate USD accounting remain mandatory. Legacy values are not removed.

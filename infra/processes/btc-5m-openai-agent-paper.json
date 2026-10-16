@@ -130,64 +130,6 @@
           "strategy_interval_ms": 250
         },
         "schema_version": "btc_realtime_paper_process_v6",
-        "sources": [
-          {
-            "contract_version": 1,
-            "required": true,
-            "maximum_age_ms": null,
-            "require_sequence_integrity": true,
-            "key": "polymarket_btc_five_minute_market_contracts"
-          },
-          {
-            "contract_version": 1,
-            "required": true,
-            "maximum_age_ms": null,
-            "require_sequence_integrity": true,
-            "key": "polymarket_btc_five_minute_orderbooks"
-          },
-          {
-            "contract_version": 1,
-            "required": true,
-            "maximum_age_ms": null,
-            "require_sequence_integrity": true,
-            "key": "polymarket_btc_five_minute_resolutions"
-          },
-          {
-            "contract_version": 1,
-            "required": true,
-            "maximum_age_ms": null,
-            "require_sequence_integrity": true,
-            "key": "polymarket_rtds_chainlink_reference_price"
-          },
-          {
-            "contract_version": 1,
-            "required": true,
-            "maximum_age_ms": null,
-            "require_sequence_integrity": true,
-            "key": "binance_spot_btcusdt_one_second_ohlcv"
-          },
-          {
-            "contract_version": 1,
-            "required": false,
-            "maximum_age_ms": 600000,
-            "require_sequence_integrity": false,
-            "key": "polygon_chainlink_btcusd_oracle"
-          },
-          {
-            "contract_version": 1,
-            "required": false,
-            "maximum_age_ms": 600000,
-            "require_sequence_integrity": false,
-            "key": "binance_futures_btcusdt_open_interest"
-          },
-          {
-            "contract_version": 1,
-            "required": false,
-            "maximum_age_ms": 120000,
-            "require_sequence_integrity": false,
-            "key": "polymarket_chainlink_btcusd_twap"
-          }
-        ],
         "strategy": {
           "decision_strategy": {
             "models": [
@@ -211,7 +153,65 @@
           "required_model_feeds": []
         },
         "risk_strategies": []
-      }
+      },
+      "sources": [
+        {
+          "contract_version": 1,
+          "required": true,
+          "maximum_age_ms": null,
+          "require_sequence_integrity": true,
+          "key": "polymarket_btc_five_minute_market_contracts"
+        },
+        {
+          "contract_version": 1,
+          "required": true,
+          "maximum_age_ms": null,
+          "require_sequence_integrity": true,
+          "key": "polymarket_btc_five_minute_orderbooks"
+        },
+        {
+          "contract_version": 1,
+          "required": true,
+          "maximum_age_ms": null,
+          "require_sequence_integrity": true,
+          "key": "polymarket_btc_five_minute_resolutions"
+        },
+        {
+          "contract_version": 1,
+          "required": true,
+          "maximum_age_ms": null,
+          "require_sequence_integrity": true,
+          "key": "polymarket_rtds_chainlink_reference_price"
+        },
+        {
+          "contract_version": 1,
+          "required": true,
+          "maximum_age_ms": null,
+          "require_sequence_integrity": true,
+          "key": "binance_spot_btcusdt_one_second_ohlcv"
+        },
+        {
+          "contract_version": 1,
+          "required": false,
+          "maximum_age_ms": 600000,
+          "require_sequence_integrity": false,
+          "key": "polygon_chainlink_btcusd_oracle"
+        },
+        {
+          "contract_version": 1,
+          "required": false,
+          "maximum_age_ms": 600000,
+          "require_sequence_integrity": false,
+          "key": "binance_futures_btcusdt_open_interest"
+        },
+        {
+          "contract_version": 1,
+          "required": false,
+          "maximum_age_ms": 120000,
+          "require_sequence_integrity": false,
+          "key": "polymarket_chainlink_btcusd_twap"
+        }
+      ]
     }
   },
   "metadata": {

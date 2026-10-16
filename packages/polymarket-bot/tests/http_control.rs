@@ -1515,12 +1515,11 @@ async fn trading_process_patch_enforces_capacity_ceilings_without_persisting_rej
     let app = http::router(Arc::new(FakeControlApi), "secret");
     let process_id = Uuid::new_v4();
 
-    let legacy_definition: Value = serde_json::from_str(include_str!(
-        "../../../infra/processes/btc-5m-conservative-selective-paper-20260917.json"
-    ))
+    let mut legacy: TradingProcessConfig = serde_json::from_value(serde_json::json!({
+        "execution": {"mode": "paper", "execute_signals": true, "live_capital": false},
+        "raw": {"btc_realtime_paper": {"paper": {}}}
+    }))
     .unwrap();
-    let mut legacy: TradingProcessConfig =
-        serde_json::from_value(legacy_definition["config"].clone()).unwrap();
     let execution = legacy.execution.as_mut().unwrap();
     execution.max_order_notional_usd = Some(TRADING_PROCESS_ORDER_NOTIONAL_CEILING_USD);
     execution.max_open_notional_usd = Some(TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD);

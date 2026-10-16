@@ -228,7 +228,6 @@ impl CompiledDefinition {
     pub fn runtime_strategy(&self) -> Result<BtcStrategyConfig> {
         let base = self.strategy();
         let keys = self
-            .control
             .sources
             .iter()
             .map(|source| source.key.as_str())
@@ -624,12 +623,7 @@ impl Oms {
                 BtcExecutionFreshnessBounds, BtcReferenceExecutionGuard,
             };
             use sha2::{Digest, Sha256};
-            let keys = definition
-                .control
-                .sources
-                .iter()
-                .map(|s| s.key.as_str())
-                .collect();
+            let keys = definition.sources.iter().map(|s| s.key.as_str()).collect();
             let mut base = config.clone();
             base.max_directional_feature_age_ms =
                 definition.control.strategy.max_directional_feature_age_ms;

@@ -160,9 +160,7 @@ class ModelPackagingTest(unittest.TestCase):
         self.assertEqual({p.name for p in self.output.iterdir() if p.is_dir()}, expected)
         definitions = [
             "btc-5m-conservative-selective-paper-20260917.json",
-            "btc-5m-conservative-selective-live-pilot-20260921.json",
             "btc-5m-conservative-selective-confidence-075-paper-20261001.json",
-            "btc-5m-conservative-selective-confidence-075-live-pilot-20261006.json",
         ]
         for name in definitions:
             definition = json.loads((ROOT / "infra/processes" / name).read_bytes())

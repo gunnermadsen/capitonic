@@ -689,7 +689,7 @@ impl BtcProcessRunner {
                         .context("missing router definition")?
                         .clone(),
                 )?;
-            let sources = control["sources"]
+            let sources = raw["sources"]
                 .as_array()
                 .context("missing process sources")?;
             let keys = sources

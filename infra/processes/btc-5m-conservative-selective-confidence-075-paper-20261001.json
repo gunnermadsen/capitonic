@@ -130,36 +130,6 @@
           "strategy_interval_ms": 1000
         },
         "schema_version": "btc_realtime_paper_process_v6",
-        "sources": [
-          {
-            "contract_version": 1,
-            "required": true,
-            "maximum_age_ms": null,
-            "require_sequence_integrity": true,
-            "key": "polymarket_btc_five_minute_market_contracts"
-          },
-          {
-            "contract_version": 1,
-            "required": true,
-            "maximum_age_ms": null,
-            "require_sequence_integrity": true,
-            "key": "polymarket_btc_five_minute_orderbooks"
-          },
-          {
-            "contract_version": 1,
-            "required": true,
-            "maximum_age_ms": null,
-            "require_sequence_integrity": true,
-            "key": "polymarket_btc_five_minute_resolutions"
-          },
-          {
-            "contract_version": 1,
-            "required": true,
-            "maximum_age_ms": null,
-            "require_sequence_integrity": true,
-            "key": "binance_spot_btcusdt_one_second_ohlcv"
-          }
-        ],
         "strategy": {
           "decision_strategy": {
             "models": [
@@ -184,7 +154,37 @@
           "required_model_feeds": []
         },
         "risk_strategies": []
-      }
+      },
+      "sources": [
+        {
+          "contract_version": 1,
+          "required": true,
+          "maximum_age_ms": null,
+          "require_sequence_integrity": true,
+          "key": "polymarket_btc_five_minute_market_contracts"
+        },
+        {
+          "contract_version": 1,
+          "required": true,
+          "maximum_age_ms": null,
+          "require_sequence_integrity": true,
+          "key": "polymarket_btc_five_minute_orderbooks"
+        },
+        {
+          "contract_version": 1,
+          "required": true,
+          "maximum_age_ms": null,
+          "require_sequence_integrity": true,
+          "key": "polymarket_btc_five_minute_resolutions"
+        },
+        {
+          "contract_version": 1,
+          "required": true,
+          "maximum_age_ms": null,
+          "require_sequence_integrity": true,
+          "key": "binance_spot_btcusdt_one_second_ohlcv"
+        }
+      ]
     }
   },
   "metadata": {

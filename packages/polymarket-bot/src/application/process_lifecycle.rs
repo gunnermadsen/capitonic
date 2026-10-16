@@ -96,11 +96,16 @@ impl BtcProcessManager {
         let raw = process.config.raw.as_object().ok_or_else(|| {
             HttpError::bad_request("BTC process config.raw must be a JSON object")
         })?;
-        if raw.len() != 1 || !raw.contains_key("btc_realtime_paper") {
+        if raw.len() != 2 || !raw.contains_key("sources") || !raw.contains_key("btc_realtime_paper")
+        {
             return Err(HttpError::bad_request(
-                "BTC process config.raw may contain only btc_realtime_paper",
+                "BTC process config.raw must contain exactly sources and btc_realtime_paper",
             ));
         }
+        let sources: Vec<SourceSelector> =
+            serde_json::from_value(raw["sources"].clone()).map_err(|error| {
+                HttpError::bad_request(format!("invalid config.raw.sources: {error}"))
+            })?;
         let control_value = process
             .config
             .raw
@@ -111,7 +116,7 @@ impl BtcProcessManager {
                     "process config.raw.btc_realtime_paper is required before start",
                 )
             })?;
-        let mut control = parse_btc_process_control(control_value, definition_use)?;
+        let mut control = parse_btc_process_control(control_value, &sources, definition_use)?;
         control.next_experiment_key = control.next_experiment_key.trim().to_string();
         control.preregistration_sha256 = control.preregistration_sha256.trim().to_ascii_lowercase();
         if control.next_experiment_key.is_empty() {
@@ -144,7 +149,7 @@ impl BtcProcessManager {
                 "preregistration_sha256 must be a 64-character hexadecimal digest",
             ));
         }
-        let members = resolve_btc_members(&control)?;
+        let members = resolve_btc_members(&control, &sources)?;
         for (_, member, _) in &members {
             validate_directional_model_entry_policy(
                 member,
@@ -245,6 +250,7 @@ impl BtcProcessManager {
             paper_stress_previews.push(resolved);
         }
         Ok(ResolvedBtcProcessDefinition {
+            sources,
             entry_admission: control.entry_admission.clone(),
             risk_strategies: control.risk_strategies.clone(),
             control,

@@ -25,7 +25,7 @@ def prepare(catalog, template, model_key, process_key, name, preregistration_sha
     required = [v for v in contract['inputs'] if v['required']]
     if any(v['product'] not in products for v in required):
         raise ValueError('Required source capability is unavailable')
-    source_keys = {s if isinstance(s, str) else s['key'] for s in control['sources']}
+    source_keys = {s if isinstance(s, str) else s['key'] for s in result['config']['raw']['sources']}
     if any(v['product'] not in source_keys for v in required):
         raise ValueError('The playbook must select all required shared streams')
     bindings = [dict(slot=v['slot'], product=v['product'], semantics=v['semantics'])
