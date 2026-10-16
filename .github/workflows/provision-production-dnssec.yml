@@ -1,0 +1,121 @@
+name: Provision Production DNSSEC
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: capitonic-production-dnssec
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-1
+  AWS_ROLE_ARN: arn:aws:iam::192200846560:role/capitonic-polymarket-bot-github-actions-prod
+  TF_DIR: infra/production-dnssec
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  dnssec:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.10.5
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: "192200846560"
+
+      - name: Load Cloudflare credentials
+        run: scripts/load-cloudflare-terraform-env.sh
+
+      - name: Confirm the Cloudflare zone
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 30 \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/zones/$TF_VAR_cloudflare_zone_id" |
+            jq -e '.success == true and
+                   .result.name == "capitonic.com" and
+                   .result.status == "active"' >/dev/null
+
+      - name: Initialize and validate
+        run: |
+          set -euo pipefail
+          terraform -chdir="$TF_DIR" init -lockfile=readonly \
+            -backend-config="bucket=capitonic-polybot-tfstate-192200846560-euw1" \
+            -backend-config="key=production/dnssec/terraform.tfstate" \
+            -backend-config="region=eu-west-1" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+          terraform -chdir="$TF_DIR" fmt -check
+          terraform -chdir="$TF_DIR" validate
+
+      - name: Plan and restrict changes to DNSSEC
+        run: |
+          set -euo pipefail
+          terraform -chdir="$TF_DIR" plan -lock-timeout=5m -out=dnssec.tfplan
+          terraform -chdir="$TF_DIR" show -json dnssec.tfplan |
+            jq -e '
+              [.resource_changes[]? |
+               select(.change.actions != ["no-op"])] |
+              all(.[];
+                (.address | IN(
+                  "cloudflare_zone_dnssec.capitonic",
+                  "aws_route53domains_delegation_signer_record.capitonic"
+                )) and
+                (.change.actions | index("delete") | not)
+              )
+            ' >/dev/null
+
+      - name: Provision DNSSEC
+        run: terraform -chdir="$TF_DIR" apply -lock-timeout=5m dnssec.tfplan
+
+      - name: Validate public DNSSEC
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$(terraform -chdir="$TF_DIR" output -raw expected_ds)"
+          deadline=$((SECONDS + 1800))
+
+          validate_resolver() {
+            local resolver="$1" records response
+            records="$(dig @"$resolver" capitonic.com DS \
+              +short +time=5 +tries=1)" || return 1
+            records="$(printf '%s\n' "$records" | awk '{$1=$1; print}')"
+            grep -Fxiq -- "$expected" <<< "$records" || return 1
+
+            response="$(dig @"$resolver" capitonic.com SOA \
+              +dnssec +time=5 +tries=1)" || return 1
+            grep -q 'status: NOERROR' <<< "$response" || return 1
+            grep -Eq '^;; flags:.*[ ;]ad[ ;]' <<< "$response" || return 1
+            grep -Eq '^capitonic\.com\.[[:space:]].*[[:space:]]SOA[[:space:]]' \
+              <<< "$response" || return 1
+          }
+
+          until validate_resolver 1.1.1.1 &&
+                validate_resolver 8.8.8.8; do
+            if (( SECONDS >= deadline )); then
+              echo "::error::DNSSEC validation has not completed within 30 minutes."
+              exit 1
+            fi
+            sleep 30
+          done
+
+      - name: Verify provisioning is repeatable
+        run: |
+          terraform -chdir="$TF_DIR" plan \
+            -lock-timeout=5m -detailed-exitcode
