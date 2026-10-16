@@ -84,6 +84,7 @@ impl ControlApi {
             .route("/backfills/:job_id/retry", post(retry_backfill))
             .route("/backfills/:job_id/events", get(get_backfill_events))
             .route("/drains", get(list_drains).post(submit_drain))
+            .route("/drains/catalog", get(drain_catalog))
             .route("/drains/:job_id", get(get_drain))
             .route("/drains/:job_id/cancel", post(cancel_drain))
             .route("/drains/:job_id/retry", post(retry_drain))
@@ -250,6 +251,16 @@ struct ApiState {
     registry: StrategyRegistry,
     admin_token: Arc<str>,
     readiness: ControlReadiness,
+}
+
+async fn drain_catalog(State(state): State<ApiState>) -> Json<Vec<crate::domain::DrainDescriptor>> {
+    Json(
+        state
+            .registry
+            .drains()
+            .map(|strategy| strategy.descriptor().clone())
+            .collect(),
+    )
 }
 
 async fn submit_drain(
@@ -1210,6 +1221,54 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    #[tokio::test]
+    async fn drain_catalog_returns_registered_descriptors_with_authentication() {
+        let registry = crate::strategies::registry().expect("strategy registry");
+        let expected = serde_json::to_value(
+            registry
+                .drains()
+                .map(|strategy| strategy.descriptor())
+                .collect::<Vec<_>>(),
+        )
+        .expect("catalog JSON");
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@localhost/unused")
+            .expect("lazy pool");
+        let (_readiness_sender, readiness) = ControlReadiness::channel(false);
+        let api = ControlApi::new(
+            ProfileRepository::new(pool),
+            registry,
+            "01234567890123456789012345678901".to_owned(),
+            readiness,
+        )
+        .expect("control API");
+
+        for authenticated in [false, true] {
+            let mut request = Request::builder().uri("/drains/catalog");
+            if authenticated {
+                request = request.header(AUTHORIZATION, "Bearer 01234567890123456789012345678901");
+            }
+            let response = api
+                .router()
+                .oneshot(request.body(Body::empty()).expect("request"))
+                .await
+                .expect("response");
+
+            if authenticated {
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                    .await
+                    .expect("response body");
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&body).expect("catalog JSON"),
+                    expected,
+                );
+            } else {
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            }
+        }
+    }
 
     #[test]
     fn bearer_authentication_requires_an_exact_token() {
