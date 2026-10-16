@@ -2272,11 +2272,12 @@ impl Store {
               CROSS JOIN transaction_state
               WHERE $7
                 AND owners.owner_count >= 1
-                AND owners.owner_filled_size = $4
+                AND owners.owner_filled_size <= $4
                 AND candidate_state.candidate_count >= 1
                 AND candidate_state.candidate_owner_count = owners.owner_count
-                AND candidate_state.candidate_filled_size = $4
-                AND candidate_state.candidate_payout = $10
+                AND candidate_state.candidate_filled_size = owners.owner_filled_size
+                AND candidate_state.candidate_payout =
+                  CASE WHEN $10 = 0 THEN 0 ELSE owners.owner_filled_size END
                 AND transaction_state.transaction_consistent
                 AND settlement.process_id = candidate.process_id
                 AND settlement.run_id = candidate.run_id
@@ -2329,11 +2330,12 @@ impl Store {
               CROSS JOIN transaction_state
               WHERE $7
                 AND owners.owner_count >= 1
-                AND owners.owner_filled_size = $4
+                AND owners.owner_filled_size <= $4
                 AND candidate_state.candidate_count >= 1
                 AND candidate_state.candidate_owner_count = owners.owner_count
-                AND candidate_state.candidate_filled_size = $4
-                AND candidate_state.candidate_payout = $10
+                AND candidate_state.candidate_filled_size = owners.owner_filled_size
+                AND candidate_state.candidate_payout =
+                  CASE WHEN $10 = 0 THEN 0 ELSE owners.owner_filled_size END
                 AND transaction_state.transaction_consistent
                 AND NOT EXISTS (
                   SELECT 1
@@ -2433,8 +2435,8 @@ impl Store {
         if !row.transaction_consistent {
             bail!("live redemption transaction conflicts with credited settlement evidence");
         }
-        if row.owner_count > 0 && row.owner_filled_size != evidence.redeemed_size {
-            bail!("live redemption size does not match aggregate sleeve ownership");
+        if row.owner_count > 0 && row.owner_filled_size > evidence.redeemed_size {
+            bail!("aggregate sleeve ownership exceeds live redemption size");
         }
         if row.owner_count == 0 || row.candidate_count == 0 || row.selected_process_count == 0 {
             return Ok(LiveRedemptionRecognition {
@@ -2448,13 +2450,13 @@ impl Store {
             return Ok(LiveRedemptionRecognition {
                 matched: true,
                 applied: false,
-                redeemed_size: evidence.redeemed_size,
+                redeemed_size: row.candidate_filled_size,
             });
         }
         Ok(LiveRedemptionRecognition {
             matched: true,
             applied: row.applied_count > 0,
-            redeemed_size: evidence.redeemed_size,
+            redeemed_size: row.candidate_filled_size,
         })
     }
 
@@ -4066,13 +4068,20 @@ fn validate_live_redemption_allocation(
     evidence: &LiveRedemptionEvidence,
     require_credited: bool,
 ) -> Result<()> {
+    let local_payout = if evidence.payout_usd == Decimal::ZERO {
+        Decimal::ZERO
+    } else {
+        row.owner_filled_size
+    };
+
     if row.candidate_owner_count != row.owner_count
-        || row.candidate_filled_size != evidence.redeemed_size
-        || row.candidate_payout != evidence.payout_usd
+        || row.owner_filled_size > evidence.redeemed_size
+        || row.candidate_filled_size != row.owner_filled_size
+        || row.candidate_payout != local_payout
         || (require_credited
             && (row.selected_count != row.candidate_count
-                || row.selected_filled_size != evidence.redeemed_size
-                || row.selected_payout != evidence.payout_usd
+                || row.selected_filled_size != row.candidate_filled_size
+                || row.selected_payout != row.candidate_payout
                 || row.selected_credited_count != row.selected_count
                 || row.selected_transaction_count != row.selected_count))
     {
@@ -4806,7 +4815,7 @@ mod tests {
 
     #[test]
     fn shared_wallet_redemption_requires_complete_process_allocation() {
-        let evidence = LiveRedemptionEvidence {
+        let mut evidence = LiveRedemptionEvidence {
             account_address: "0x1111111111111111111111111111111111111111".to_string(),
             condition_id: format!("0x{}", "2".repeat(64)),
             token_id: "winning-token".to_string(),
@@ -4834,6 +4843,19 @@ mod tests {
         };
 
         validate_live_redemption_allocation(&allocation, &evidence, true).unwrap();
+
+        // Eight locally owned shares within a thirteen-share wallet redemption.
+        evidence.redeemed_size = dec!(13);
+        evidence.payout_usd = dec!(13);
+        validate_live_redemption_allocation(&allocation, &evidence, true).unwrap();
+
+        // Local ownership cannot exceed the wallet redemption.
+        evidence.redeemed_size = dec!(7);
+        evidence.payout_usd = dec!(7);
+        assert!(validate_live_redemption_allocation(&allocation, &evidence, true).is_err());
+
+        evidence.redeemed_size = dec!(13);
+        evidence.payout_usd = dec!(13);
 
         allocation.candidate_owner_count = 1;
         assert!(validate_live_redemption_allocation(&allocation, &evidence, false).is_err());
