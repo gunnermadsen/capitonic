@@ -1678,15 +1678,11 @@ impl BtcProcessRunner {
                 elapsed as f64,
             );
         }
-        let entry_adjustment = agent::entry_evidence::adjust(&result, &snapshot);
-        let entry_probability = entry_adjustment
-            .as_ref()
-            .map_or(prediction.probability_up, |(p, _)| *p);
         let score = RuntimeModelScore {
             raw_logit: 0.0,
-            probability_up: entry_probability,
+            probability_up: prediction.probability_up,
             confidence: prediction.confidence,
-            action: if entry_probability >= 0.5 {
+            action: if prediction.direction == BtcOutcome::Up {
                 RuntimeModelAction::Up
             } else {
                 RuntimeModelAction::Down
@@ -1714,13 +1710,6 @@ impl BtcProcessRunner {
                 score,
             );
         }
-        if let Some((_, evidence)) = entry_adjustment {
-            umr_telemetry::agent_entry_evidence(
-                self.config.process_id,
-                snapshot.snapshot_id,
-                evidence,
-            );
-        }
         session.retain(result.clone());
         umr_telemetry::attribute_member(
             self.config.process_id,
@@ -1741,7 +1730,7 @@ impl BtcProcessRunner {
             super::strategy::evaluate_agent_prediction(
                 &member.strategy,
                 &snapshot,
-                entry_probability,
+                prediction.probability_up,
                 self.config.directional_model_entry_policy,
             )?
         };
