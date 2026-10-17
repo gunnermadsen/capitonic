@@ -340,6 +340,20 @@
       "url": "/d/reconciliation-health",
       "includeVars": true,
       "keepTime": true
+    },
+    {
+      "title": "Market Data Pipeline",
+      "type": "link",
+      "url": "/d/market-data-pipeline",
+      "includeVars": true,
+      "keepTime": true
+    },
+    {
+      "title": "Unified Model Runtime",
+      "type": "link",
+      "url": "/d/unified-model-runtime",
+      "includeVars": true,
+      "keepTime": true
     }
   ]
 }
