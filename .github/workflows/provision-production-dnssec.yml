@@ -64,6 +64,26 @@ jobs:
           terraform -chdir="$TF_DIR" fmt -check
           terraform -chdir="$TF_DIR" validate
 
+      - name: Recognize the existing registrar key
+        run: |
+          set -euo pipefail
+          dnssec="$(curl --fail --silent --show-error --max-time 30 \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/zones/$TF_VAR_cloudflare_zone_id/dnssec")"
+          digest="$(jq -er 'select(.success == true) | .result.digest | select(type == "string" and length > 0) | ascii_upcase' <<< "$dnssec")"
+          keys="$(aws route53domains get-domain-detail --region us-east-1 \
+            --domain-name capitonic.com --query DnssecKeys --output json)"
+          key_id="$(jq -er --arg digest "$digest" '
+            [.[] | select((.Digest | ascii_upcase) == $digest)] |
+            if length == 1 then .[0].Id else error("Expected exactly one matching registrar DNSSEC key") end
+          ' <<< "$keys")"
+          address=aws_route53domains_delegation_signer_record.capitonic
+          resources="$(terraform -chdir="$TF_DIR" state list)"
+          if ! grep -Fxq "$address" <<< "$resources"; then
+            terraform -chdir="$TF_DIR" import -lock-timeout=5m \
+              "$address" "capitonic.com,$key_id"
+          fi
+
       - name: Plan and restrict changes to DNSSEC
         run: |
           set -euo pipefail
@@ -95,7 +115,7 @@ jobs:
             local resolver="$1" records response
             records="$(dig @"$resolver" capitonic.com DS \
               +short +time=5 +tries=1)" || return 1
-            records="$(printf '%s\n' "$records" | awk '{$1=$1; print}')"
+            records="$(printf '%s\n' "$records" | awk 'NF >= 4 {printf "%s %s %s ", $1, $2, $3; for (i=4; i<=NF; i++) printf "%s", $i; printf "\n"}')"
             grep -Fxiq -- "$expected" <<< "$records" || return 1
 
             response="$(dig @"$resolver" capitonic.com SOA \

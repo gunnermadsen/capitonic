@@ -49,6 +49,8 @@ resource "aws_route53domains_delegation_signer_record" "capitonic" {
 
   lifecycle {
     prevent_destroy = true
+    # AWS omits flags/public_key on reads; the workflow verifies the live DS digest.
+    ignore_changes = [signing_attributes]
   }
 }
 
