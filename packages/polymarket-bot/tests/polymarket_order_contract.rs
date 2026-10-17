@@ -72,6 +72,7 @@ fn retired_trigger_is_inert_and_absent_from_compiled_identity() {
             "oms_contract_version": OMS_CONTRACT_VERSION,
             "execution": compiled.execution,
             "control": legacy_control,
+            "sources": compiled.sources,
         });
         let legacy_hash = format!(
             "{:x}",
@@ -90,10 +91,7 @@ fn policy_and_source_order_do_not_change_compiled_identity() {
         .as_array_mut()
         .unwrap()
         .reverse();
-    v["raw"]["btc_realtime_paper"]["sources"]
-        .as_array_mut()
-        .unwrap()
-        .reverse();
+    v["raw"]["sources"].as_array_mut().unwrap().reverse();
     policy(&mut v, "sizing_policy")["max_entry_price"] = json!("0.5500");
     let resolved = compile(&config(v)).unwrap();
     assert_eq!(original.config_sha256, resolved.config_sha256);
@@ -269,10 +267,7 @@ fn authorization_and_adapter_configuration_cannot_be_confused() {
 #[test]
 fn missing_sources_and_incompatible_frozen_requirements_are_rejected() {
     let mut v = fixture("paper");
-    v["raw"]["btc_realtime_paper"]["sources"]
-        .as_array_mut()
-        .unwrap()
-        .pop();
+    v["raw"]["sources"].as_array_mut().unwrap().pop();
     assert!(compile(&config(v)).is_err());
     let mut v = fixture("paper");
     v["raw"]["btc_realtime_paper"]["strategy"]["max_directional_feature_age_ms"] = json!(6000);
@@ -342,7 +337,7 @@ fn paper_policy_never_changes_shared_policy_compilation() {
 fn agent_configuration_reuses_existing_umr_contract_without_new_agent_machinery() {
     use polymarket_bot::btc::unified_model_runtime::agent;
     let mut v = fixture("paper");
-    v["raw"]["btc_realtime_paper"]["sources"] = json!(agent::REQUIRED_PRODUCTS);
+    v["raw"]["sources"] = json!(agent::REQUIRED_PRODUCTS);
     v["raw"]["btc_realtime_paper"]["strategy"]["max_directional_feature_age_ms"] = Value::Null;
     v["raw"]["btc_realtime_paper"]["strategy"]["decision_strategy"]["models"][0]["selection"] = json!({"type":"openai_agent","profile_key":agent::PROFILE_KEY,"profile_sha256":agent::hash(&agent::profile()).unwrap()});
     let result = compile(&config(v)).unwrap();
@@ -486,5 +481,26 @@ fn daily_loss_policy_accepts_positive_decimals_without_a_ceiling_in_both_modes()
         policy(&mut overflow, "loss_limit_policy")["max_daily_loss_usd"] =
             json!("79228162514264337593543950336");
         assert!(compile(&config(overflow)).is_err());
+    }
+}
+
+#[test]
+fn canonical_sources_are_required_and_validated() {
+    for mode in ["paper", "live"] {
+        let mut missing = fixture(mode);
+        missing["raw"].as_object_mut().unwrap().remove("sources");
+        invalid(missing, "config.raw must contain exactly");
+        for value in [Value::Null, json!({}), json!([])] {
+            let mut input = fixture(mode);
+            input["raw"]["sources"] = value;
+            assert!(compile(&config(input)).is_err());
+        }
+        let mut input = fixture(mode);
+        let duplicate = input["raw"]["sources"][0].clone();
+        input["raw"]["sources"]
+            .as_array_mut()
+            .unwrap()
+            .push(duplicate);
+        invalid(input, "duplicate source");
     }
 }

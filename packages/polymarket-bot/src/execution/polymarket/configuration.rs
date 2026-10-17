@@ -61,7 +61,6 @@ pub struct ProcessControl {
     pub playbook_version: String,
     pub next_experiment_key: String,
     pub preregistration_sha256: String,
-    pub sources: Vec<SourceSelector>,
     pub strategy: ModelControl,
     pub risk_strategies: Vec<RiskStrategySelection>,
     pub runtime: RuntimeControl,
@@ -82,13 +81,14 @@ pub struct ExecutionSettings {
 pub struct CompiledDefinition {
     pub execution: ExecutionSettings,
     pub control: ProcessControl,
+    pub sources: Vec<SourceSelector>,
     pub config_sha256: String,
     compatible_config_sha256: Vec<String>,
 }
 
 impl CompiledDefinition {
     pub(crate) fn verify_identity(&self) -> Result<()> {
-        let canonical = serde_json::json!({"rail_contract_version":super::RAIL_CONTRACT_VERSION,"oms_contract_version":super::OMS_CONTRACT_VERSION,"execution":self.execution,"control":self.control});
+        let canonical = serde_json::json!({"rail_contract_version":super::RAIL_CONTRACT_VERSION,"oms_contract_version":super::OMS_CONTRACT_VERSION,"execution":self.execution,"control":self.control,"sources":self.sources});
         ensure!(
             self.config_sha256 == format!("{:x}", Sha256::digest(serde_json::to_vec(&canonical)?)),
             "compiled execution identity mismatch"
@@ -180,9 +180,11 @@ pub fn compile(config: &TradingProcessConfig) -> Result<CompiledDefinition> {
         .as_object()
         .context("config.raw must be an object")?;
     ensure!(
-        raw.len() == 1,
-        "config.raw may contain only btc_realtime_paper"
+        raw.len() == 2 && raw.contains_key("sources") && raw.contains_key("btc_realtime_paper"),
+        "config.raw must contain exactly sources and btc_realtime_paper"
     );
+    let mut sources: Vec<SourceSelector> =
+        serde_json::from_value(raw["sources"].clone()).context("invalid config.raw.sources")?;
     let value = raw
         .get("btc_realtime_paper")
         .context("missing btc_realtime_paper")?;
@@ -236,9 +238,9 @@ pub fn compile(config: &TradingProcessConfig) -> Result<CompiledDefinition> {
         (1..=60_000).contains(&control.runtime.strategy_interval_ms),
         "invalid strategy_interval_ms"
     );
-    ensure!(!control.sources.is_empty(), "sources are required");
+    ensure!(!sources.is_empty(), "sources are required");
     let mut keys = HashSet::new();
-    for source in &control.sources {
+    for source in &sources {
         source.validate()?;
         ensure!(keys.insert(source.key.as_str()), "duplicate source");
     }
@@ -297,7 +299,7 @@ pub fn compile(config: &TradingProcessConfig) -> Result<CompiledDefinition> {
             "live execution freshness exceeds existing 2000ms bound"
         );
     }
-    control.sources.sort_by(|a, b| a.key.cmp(&b.key));
+    sources.sort_by(|a, b| a.key.cmp(&b.key));
     let execution = ExecutionSettings {
         rail: rail.clone(),
         mode,
@@ -306,13 +308,13 @@ pub fn compile(config: &TradingProcessConfig) -> Result<CompiledDefinition> {
         account_ref: e.account_ref.clone(),
         policies,
     };
-    let canonical = serde_json::json!({"rail_contract_version": super::RAIL_CONTRACT_VERSION, "oms_contract_version": super::OMS_CONTRACT_VERSION, "execution": execution, "control": control});
+    let canonical = serde_json::json!({"rail_contract_version": super::RAIL_CONTRACT_VERSION, "oms_contract_version": super::OMS_CONTRACT_VERSION, "execution": execution, "control": control, "sources": sources});
     let config_sha256 = format!("{:x}", Sha256::digest(serde_json::to_vec(&canonical)?));
     let compatible_config_sha256 = retired_trigger
         .map(|trigger| {
             let mut legacy_control = serde_json::to_value(&control)?;
             legacy_control["runtime"]["trigger"] = serde_json::json!(trigger);
-            let legacy = serde_json::json!({"rail_contract_version": super::RAIL_CONTRACT_VERSION, "oms_contract_version": super::OMS_CONTRACT_VERSION, "execution": execution, "control": legacy_control});
+            let legacy = serde_json::json!({"rail_contract_version": super::RAIL_CONTRACT_VERSION, "oms_contract_version": super::OMS_CONTRACT_VERSION, "execution": execution, "control": legacy_control, "sources": sources});
             Ok::<_, anyhow::Error>(format!(
                 "{:x}",
                 Sha256::digest(serde_json::to_vec(&legacy)?)
@@ -324,6 +326,7 @@ pub fn compile(config: &TradingProcessConfig) -> Result<CompiledDefinition> {
     Ok(CompiledDefinition {
         execution,
         control,
+        sources,
         config_sha256,
         compatible_config_sha256,
     })

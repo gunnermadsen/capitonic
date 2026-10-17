@@ -109,6 +109,7 @@ fn compatible_run_identity_is_preserved_without_restoring_trigger_semantics() {
         "oms_contract_version": super::OMS_CONTRACT_VERSION,
         "execution": &compiled.execution,
         "control": legacy_control,
+        "sources": &compiled.sources,
     });
     let legacy_hash = format!("{:x}", Sha256::digest(serde_json::to_vec(&legacy).unwrap()));
     let oms = Oms::new_for_run(

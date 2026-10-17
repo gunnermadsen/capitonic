@@ -634,10 +634,7 @@ impl ControlApi for RuntimeControl {
             .ok_or_else(|| HttpError::not_found("trading process not found"))?;
         if active_selector_update {
             let manager = self.btc_manager.as_ref().expect("BTC manager exists");
-            let sources = manager
-                .validate_resume_definition(&process)?
-                .control
-                .sources;
+            let sources = manager.validate_resume_definition(&process)?.sources;
             {
                 let mut active = manager.active_playbooks.lock().await;
                 active

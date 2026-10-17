@@ -181,8 +181,6 @@ pub(super) struct BtcRealtimePaperControlConfig {
     pub(super) schema_version: String,
     #[serde(default)]
     pub(super) playbook_version: Option<String>,
-    #[serde(default)]
-    pub(super) sources: Vec<SourceSelector>,
     pub(super) next_experiment_key: String,
     pub(super) preregistration_sha256: String,
     pub(super) strategy: serde_json::Value,
@@ -198,7 +196,6 @@ impl Default for BtcRealtimePaperControlConfig {
         Self {
             schema_version: String::new(),
             playbook_version: None,
-            sources: Vec::new(),
             next_experiment_key: String::new(),
             preregistration_sha256: String::new(),
             strategy: serde_json::json!({}),
@@ -219,6 +216,7 @@ pub(super) enum BtcDefinitionUse {
 
 pub(super) fn parse_btc_process_control(
     mut value: serde_json::Value,
+    sources: &[SourceSelector],
     definition_use: BtcDefinitionUse,
 ) -> Result<BtcRealtimePaperControlConfig, HttpError> {
     let schema_version = value
@@ -264,32 +262,28 @@ pub(super) fn parse_btc_process_control(
             "unsupported BTC process schema_version {schema_version}"
         )));
     }
-    let mut control: BtcRealtimePaperControlConfig = serde_json::from_value(value)
+    let control: BtcRealtimePaperControlConfig = serde_json::from_value(value)
         .map_err(|e| HttpError::bad_request(format!("invalid BTC process configuration: {e}")))?;
-    if control.sources.is_empty() {
-        if definition_use == BtcDefinitionUse::DurableResume {
-            control.sources = polymarket_bot::market_data_stream::legacy_default_sources();
-        } else {
-            return Err(HttpError::bad_request(
-                "BTC process sources are required; update the playbook to version v1.2",
-            ));
-        }
-    } else if control.playbook_version.as_deref() != Some("v1.2") {
+    if sources.is_empty() {
+        return Err(HttpError::bad_request(
+            "config.raw.sources must not be empty",
+        ));
+    }
+    if control.playbook_version.as_deref() != Some("v1.2") {
         return Err(HttpError::bad_request(
             "BTC process sources require playbook_version v1.2",
         ));
     }
-    for source in &control.sources {
+    for source in sources {
         source
             .validate()
             .map_err(|error| HttpError::bad_request(error.to_string()))?;
     }
-    let unique = control
-        .sources
+    let unique = sources
         .iter()
         .map(|source| source.key.as_str())
         .collect::<HashSet<_>>();
-    if unique.len() != control.sources.len() {
+    if unique.len() != sources.len() {
         return Err(HttpError::bad_request("BTC process sources must be unique"));
     }
     Ok(control)
@@ -417,6 +411,7 @@ pub(super) fn resolve_legacy_btc_strategy(
 
 pub(super) fn resolve_btc_members(
     control: &BtcRealtimePaperControlConfig,
+    sources: &[SourceSelector],
 ) -> Result<Vec<(String, BtcStrategyConfig, polymarket_bot::models::OrderType)>, HttpError> {
     if control.schema_version != ROUTER_PROCESS_SCHEMA_VERSION
         && control.schema_version != AGENT_PROCESS_SCHEMA_VERSION
@@ -486,7 +481,7 @@ pub(super) fn resolve_btc_members(
     }
     let base: BtcStrategyConfig =
         serde_json::from_value(value).map_err(|e| HttpError::bad_request(e.to_string()))?;
-    let sources = control.sources.iter().map(|s| s.key.as_str()).collect();
+    let sources = sources.iter().map(|s| s.key.as_str()).collect();
     router
         .compile_members(&base, &sources)
         .map_err(|e| HttpError::bad_request(e.to_string()))
@@ -495,8 +490,9 @@ pub(super) fn resolve_btc_members(
 #[cfg(test)]
 pub(super) fn resolve_btc_strategy(
     control: &BtcRealtimePaperControlConfig,
+    sources: &[SourceSelector],
 ) -> Result<BtcStrategyConfig, HttpError> {
-    Ok(resolve_btc_members(control)?.remove(0).1)
+    Ok(resolve_btc_members(control, sources)?.remove(0).1)
 }
 pub(super) fn pin_router_config(config: &mut TradingProcessConfig) -> Result<(), HttpError> {
     if polymarket_bot::execution::polymarket::configuration::is_selected(config) {
@@ -625,6 +621,7 @@ pub(super) struct BtcProcessPaperPreviewControl {
 
 #[derive(Clone)]
 pub(super) struct ResolvedBtcProcessDefinition {
+    pub(super) sources: Vec<SourceSelector>,
     pub(super) control: BtcRealtimePaperControlConfig,
     pub(super) strategy: BtcStrategyConfig,
     pub(super) entry_admission: Option<BtcEntryAdmissionConfig>,
@@ -916,6 +913,7 @@ pub(super) fn prepare_btc_start_definition_for_execution(
     execution: &EffectiveProcessExecutionConfig,
 ) -> Result<PreparedBtcStartDefinition, HttpError> {
     let ResolvedBtcProcessDefinition {
+        sources,
         control,
         strategy,
         entry_admission,
@@ -925,7 +923,6 @@ pub(super) fn prepare_btc_start_definition_for_execution(
         paper_stress_previews,
     } = resolved;
     let directional_model_entry_policy = control.paper.directional_model_entry_policy;
-    let sources = control.sources.clone();
     risk_runtime::validate_selections(&risk_strategies)
         .map_err(|error| HttpError::bad_request(error.to_string()))?;
     if let Some(binding) = &strategy.unified_model {
@@ -1162,13 +1159,18 @@ pub(super) fn selector_only_config_change(
     candidate: &TradingProcessConfig,
 ) -> Result<bool, HttpError> {
     fn remove_selectors(value: &mut serde_json::Value) {
+        if let Some(raw) = value
+            .get_mut("raw")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            raw.remove("sources");
+        }
         if let Some(control) = value
             .get_mut("raw")
             .and_then(|raw| raw.get_mut("btc_realtime_paper"))
             .and_then(serde_json::Value::as_object_mut)
         {
             control.remove("playbook_version");
-            control.remove("sources");
         }
     }
     let mut current =
