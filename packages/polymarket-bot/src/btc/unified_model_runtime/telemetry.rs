@@ -291,6 +291,40 @@ fn finish_agent_market(a: &mut AgentUsage) {
         a.last_tokens.clear();
     }
 }
+fn initialize_agent_usage(p: &mut Process) {
+    let usage = p.agent_usage.get_or_insert_with(AgentUsage::default);
+    for kind in ["input", "output", "total"] {
+        usage.tokens.entry(kind).or_default();
+    }
+    for status in ["reported", "missing", "invalid"] {
+        usage.reports.entry(status).or_default();
+    }
+    for status in ["complete", "incomplete"] {
+        usage.markets.entry(status).or_default();
+    }
+    for reason in [
+        "started",
+        "completed",
+        "authentication",
+        "capacity",
+        "transport",
+        "invalid_response",
+        "timeout",
+        "cancelled",
+        "superseded",
+    ] {
+        p.counters
+            .entry(("agent_requests", reason.into()))
+            .or_default();
+    }
+    p.gauges.entry("agent_pending").or_default();
+    for reason in super::agent::diagnostics::FAILURE_REASONS {
+        p.counters
+            .entry(("agent_response_failures", (*reason).into()))
+            .or_default();
+    }
+    p.gauges.entry("agent_decision_second").or_default();
+}
 pub fn register(
     id: Uuid,
     run: Uuid,
@@ -308,38 +342,7 @@ pub fn register(
         p.mode = mode.into();
         p.enabled = true;
         if selection.is_some_and(|s| super::agent::profile_for_key(&s.model_key).is_ok()) {
-            let usage = p.agent_usage.get_or_insert_with(AgentUsage::default);
-            for kind in ["input", "output", "total"] {
-                usage.tokens.entry(kind).or_default();
-            }
-            for status in ["reported", "missing", "invalid"] {
-                usage.reports.entry(status).or_default();
-            }
-            for status in ["complete", "incomplete"] {
-                usage.markets.entry(status).or_default();
-            }
-            for reason in [
-                "started",
-                "completed",
-                "authentication",
-                "capacity",
-                "transport",
-                "invalid_response",
-                "timeout",
-                "cancelled",
-                "superseded",
-            ] {
-                p.counters
-                    .entry(("agent_requests", reason.into()))
-                    .or_default();
-            }
-            p.gauges.entry("agent_pending").or_default();
-            for reason in super::agent::diagnostics::FAILURE_REASONS {
-                p.counters
-                    .entry(("agent_response_failures", (*reason).into()))
-                    .or_default();
-            }
-            p.gauges.entry("agent_decision_second").or_default();
+            initialize_agent_usage(p);
         }
         for (metric, reasons) in [
             ("opportunities", &["scheduled"][..]),
@@ -812,6 +815,9 @@ pub fn register_member(
 ) {
     update(id, |p| {
         if p.members.len() < 32 {
+            if super::agent::profile_for_key(&identity.model_key).is_ok() {
+                initialize_agent_usage(p);
+            }
             p.members.insert(
                 member.into(),
                 RouterMember {
@@ -1696,6 +1702,83 @@ pub fn prometheus_metrics() -> String {
 #[cfg(test)]
 mod router_tests {
     use super::*;
+    #[test]
+    fn agent_member_registers_usage_without_process_model_identity() {
+        use super::super::agent::{
+            self, AgentSelection, EvaluationRequest, TokenUsage, UsageReport,
+        };
+        let id = Uuid::new_v4();
+        let run = Uuid::new_v4();
+        let profile = agent::profile_for_key(agent::MARKET_REFERENCE_SOL_PROFILE_KEY).unwrap();
+        let selection = AgentSelection {
+            profile_key: profile.key.into(),
+            profile_sha256: agent::hash(&profile).unwrap(),
+        };
+        let identity = selection.identity();
+        register(id, run, "config", "paper", None);
+        register_member(id, "agent", &identity, 45, 120);
+        let at = Utc::now();
+        let request = EvaluationRequest {
+            version: agent::BRIDGE_VERSION.into(),
+            request_id: Uuid::new_v4(),
+            process_id: id,
+            run_id: run,
+            config_hash: "config".into(),
+            selection,
+            market_id: "market".into(),
+            window_start: at,
+            snapshot_id: Uuid::new_v4(),
+            observed_at: at,
+            deadline: at + chrono::Duration::seconds(120),
+            attempt: 45,
+            input_sha256: "input".into(),
+            context: serde_json::json!({}),
+        };
+        agent_usage_start(&request, false);
+        event(id, "agent_requests", "started");
+        let report = UsageReport::Reported(TokenUsage {
+            input: 100,
+            output: 20,
+            total: 120,
+            cached_input: Some(40),
+            reasoning: Some(10),
+        });
+        agent_usage_report(id, request.request_id, &report);
+        agent_usage_report(id, request.request_id, &report);
+        event(id, "agent_requests", "completed");
+        agent_usage_finish(id);
+        // Re-registering the same run/member must preserve accumulated usage.
+        register(id, run, "config", "paper", None);
+        register_member(id, "agent", &identity, 45, 120);
+        let metrics = prometheus_metrics();
+        for (kind, value) in [
+            ("input", 100),
+            ("output", 20),
+            ("total", 120),
+            ("cached_input", 40),
+            ("reasoning", 10),
+        ] {
+            assert!(metrics.contains(&format!(
+                "polymarket_umr_agent_tokens_total{{process_id=\"{id}\",kind=\"{kind}\"}} {value}\n"
+            )));
+        }
+        for reason in ["started", "completed"] {
+            assert!(metrics.contains(&format!(
+                "polymarket_umr_agent_requests_total{{process_id=\"{id}\",reason=\"{reason}\"}} 1\n"
+            )));
+        }
+        assert!(metrics.contains(&format!(
+            "polymarket_umr_agent_usage_reports_total{{process_id=\"{id}\",status=\"reported\"}} 1\n"
+        )));
+        assert!(metrics.contains(&format!(
+            "polymarket_umr_agent_market_tokens_sum{{process_id=\"{id}\"}} 120\n"
+        )));
+        register(id, Uuid::new_v4(), "config", "paper", None);
+        register_member(id, "agent", &identity, 45, 120);
+        assert!(prometheus_metrics().contains(&format!(
+            "polymarket_umr_agent_tokens_total{{process_id=\"{id}\",kind=\"total\"}} 0\n"
+        )));
+    }
     #[test]
     fn retained_agent_evidence_does_not_inflate_inference_or_calibration_counts() {
         use super::super::agent::{
