@@ -242,7 +242,7 @@ groups:
                   FROM polymarket.trading_processes
                   WHERE enabled
                     AND status IN ('starting', 'running', 'stopping')
-                    AND config #>> '{execution,mode}' = 'live'
+                    AND config #>> '{mode}' = 'live'
                 ), latest_reconciliation AS MATERIALIZED (
                   SELECT process.process_id,
                          reconciliation.status,

@@ -24,7 +24,7 @@
           "type": "postgres",
           "uid": "postgres"
         },
-        "query": "SELECT name AS __text, process_id::text AS __value FROM polymarket.trading_processes WHERE config #>> '{execution,rail,name}' = 'polymarket' ORDER BY created_at DESC",
+        "query": "SELECT name AS __text, process_id::text AS __value FROM polymarket.trading_processes WHERE config #>> '{rail,name}' = 'polymarket' ORDER BY created_at DESC",
         "refresh": 1,
         "multi": false,
         "includeAll": false

@@ -93,9 +93,9 @@ class AccountingQueries(unittest.TestCase):
             rows.append({'process_id': owner, 'state': state, 'raw_payload': payload(account, resolution)})
         fixtures = [fixture('fixture_orders', rows, 'process_id uuid,state text,raw_payload jsonb'),
                     fixture('fixture_trading_processes', [
-                        {'process_id': PID, 'enabled': False, 'execution': {'mode': 'live', 'account_ref': 'primary'}},
+                        {'process_id': PID, 'enabled': False, 'mode': 'live', 'account_ref': 'primary'},
                         {'process_id': '00000000-0000-0000-0000-000000000008', 'enabled': True,
-                         'execution': {'mode': 'paper', 'account_ref': 'primary'}}
+                         'mode': 'paper', 'account_ref': 'primary'}
                     ], 'process_id uuid,enabled boolean,config jsonb')]
         result = self.run_query(query('packages/polymarket-bot/src/store/order_execution.rs',
                                      'EXECUTION_ACCOUNT_PROCESSES_SQL'), fixtures, [literal('primary')])

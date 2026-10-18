@@ -33,7 +33,7 @@ def prepare(catalog, template, model_key, process_key, name, preregistration_sha
     result.update(name=name, process_key=process_key, process_scope='realtime_paper', enabled=False, status='created')
     for key in ('process_id', 'id', 'created_at', 'updated_at', 'active_run_id'):
         result.pop(key, None)
-    result['execution'].update(mode='paper', execute_signals=True, live_capital=False)
+    result.update(mode='paper', execute_signals=True, live_capital=False)
     control['schema_version'] = 'btc_realtime_paper_process_v4'
     strategy['decision_strategy'] = dict(type='unified_model_router', version=1, routing=dict(mode='first_qualified', tie_break='array_order'), models=[dict(member_id='primary', selection=dict(type='btc_directional_model', model_key=model_key))])
     strategy.pop('feature_schema_version', None)

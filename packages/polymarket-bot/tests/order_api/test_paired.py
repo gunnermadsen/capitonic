@@ -52,8 +52,8 @@ class PairedTest(unittest.TestCase):
             live = processes['live']
             if mutation == 'cash': ceiling = '5.5'
             if mutation == 'nan': ceiling = 'NaN'
-            if mutation == 'mode': live['execution']['mode'] = 'paper'
-            if mutation == 'account': live['execution']['account_ref'] = 'other'
+            if mutation == 'mode': live['mode'] = 'paper'
+            if mutation == 'account': live['account_ref'] = 'other'
             if mutation == 'quantity': policies(live)['sizing_policy']['params']['default_share'] = 20
             if mutation == 'policy': policies(live)['liquidity_policy']['params']['require_exit_book'] = False
             if mutation == 'trigger': live['btc_realtime_paper']['runtime']['trigger'] = 'umr'

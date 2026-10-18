@@ -79,7 +79,7 @@ def report(state, exposition):
                 [('p50_seconds_estimate', .5, 2), ('p95_seconds_estimate', .95, 20), ('p99_seconds_estimate', .99, 100)]}})
     delays = {}
     for mode, process in state['processes'].items():
-        for policy in process.get('execution', {}).get('order_policies', []):
+        for policy in process.get('order_policies', []):
             if policy['name'] == 'paper_execution_policy':
                 delays[process['process_id']] = policy['params']['arrival_latency_ms']
     return {'limits': 'Single-owner cumulative scrape; invalid across owner restart. Nested stages are not additive. Bucket percentiles are estimates; null means insufficient samples or overflow. Thresholds: p50=2, p95=20, p99=100; thresholds do not establish statistical confidence.',

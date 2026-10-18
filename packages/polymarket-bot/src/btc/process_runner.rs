@@ -644,7 +644,7 @@ impl BtcProcessRunner {
         );
         if let Some(frozen_mode) = config
             .frozen_process_config
-            .pointer("/execution/mode")
+            .pointer("/mode")
             .and_then(serde_json::Value::as_str)
         {
             ensure!(

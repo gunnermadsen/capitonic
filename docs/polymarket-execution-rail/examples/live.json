@@ -1,99 +1,4 @@
 {
-  "execution": {
-    "rail": {
-      "name": "polymarket",
-      "version": 1
-    },
-    "mode": "live",
-    "execute_signals": true,
-    "live_capital": true,
-    "account_ref": "polymarket-primary",
-    "order_policies": [
-      {
-        "name": "sizing_policy",
-        "version": 1,
-        "params": {
-          "mode": "fixed",
-          "lower_share_bound": 5,
-          "upper_share_bound": 10,
-          "default_share": 5,
-          "min_entry_price": "0.05",
-          "max_entry_price": "0.55",
-          "max_depth_participation": "0.25"
-        }
-      },
-      {
-        "name": "entry_timing_policy",
-        "version": 1,
-        "params": {
-          "min_seconds_after_open": 30,
-          "min_seconds_before_close": 90
-        }
-      },
-      {
-        "name": "evidence_policy",
-        "version": 1,
-        "params": {
-          "max_reference_age_ms": 2000,
-          "max_chainlink_open_delay_ms": 5000,
-          "max_book_age_ms": 2000,
-          "max_source_skew_ms": 1000,
-          "max_fee_age_ms": 3600000
-        }
-      },
-      {
-        "name": "liquidity_policy",
-        "version": 1,
-        "params": {
-          "require_exit_book": true
-        }
-      },
-      {
-        "name": "execution_cost_policy",
-        "version": 1,
-        "params": {
-          "spread_reserve_fraction": "0.10",
-          "slippage_reserve_bps": "25",
-          "latency_reserve_per_share": "0.005",
-          "max_fee_rate": "1"
-        }
-      },
-      {
-        "name": "edge_policy",
-        "version": 1,
-        "params": {
-          "directional_model_entry_policy": "require_positive_direct_edge",
-          "min_net_edge_per_share": "0.015",
-          "min_net_edge_usd": "0.02"
-        }
-      },
-      {
-        "name": "order_execution_policy",
-        "version": 1,
-        "params": {
-          "member_order_types": {
-            "conservative": "fak"
-          }
-        }
-      },
-      {
-        "name": "exposure_policy",
-        "version": 1,
-        "params": {
-          "max_open_positions": 1,
-          "max_open_notional_usd": "3"
-        }
-      },
-      {
-        "name": "loss_limit_policy",
-        "version": 1,
-        "params": {
-          "max_daily_loss_usd": "10",
-          "daily_realized_pnl_high_water_mark": null
-        }
-      }
-    ]
-  },
   "btc_realtime_paper": {
     "schema_version": "btc_realtime_paper_process_v6",
     "playbook_version": "v1.2",
@@ -155,6 +60,99 @@
       "required": true,
       "maximum_age_ms": null,
       "require_sequence_integrity": true
+    }
+  ],
+  "rail": {
+    "name": "polymarket",
+    "version": 1
+  },
+  "mode": "live",
+  "execute_signals": true,
+  "live_capital": true,
+  "account_ref": "polymarket-primary",
+  "order_policies": [
+    {
+      "name": "sizing_policy",
+      "version": 1,
+      "params": {
+        "mode": "fixed",
+        "lower_share_bound": 5,
+        "upper_share_bound": 10,
+        "default_share": 5,
+        "min_entry_price": "0.05",
+        "max_entry_price": "0.55",
+        "max_depth_participation": "0.25"
+      }
+    },
+    {
+      "name": "entry_timing_policy",
+      "version": 1,
+      "params": {
+        "min_seconds_after_open": 30,
+        "min_seconds_before_close": 90
+      }
+    },
+    {
+      "name": "evidence_policy",
+      "version": 1,
+      "params": {
+        "max_reference_age_ms": 2000,
+        "max_chainlink_open_delay_ms": 5000,
+        "max_book_age_ms": 2000,
+        "max_source_skew_ms": 1000,
+        "max_fee_age_ms": 3600000
+      }
+    },
+    {
+      "name": "liquidity_policy",
+      "version": 1,
+      "params": {
+        "require_exit_book": true
+      }
+    },
+    {
+      "name": "execution_cost_policy",
+      "version": 1,
+      "params": {
+        "spread_reserve_fraction": "0.10",
+        "slippage_reserve_bps": "25",
+        "latency_reserve_per_share": "0.005",
+        "max_fee_rate": "1"
+      }
+    },
+    {
+      "name": "edge_policy",
+      "version": 1,
+      "params": {
+        "directional_model_entry_policy": "require_positive_direct_edge",
+        "min_net_edge_per_share": "0.015",
+        "min_net_edge_usd": "0.02"
+      }
+    },
+    {
+      "name": "order_execution_policy",
+      "version": 1,
+      "params": {
+        "member_order_types": {
+          "conservative": "fak"
+        }
+      }
+    },
+    {
+      "name": "exposure_policy",
+      "version": 1,
+      "params": {
+        "max_open_positions": 1,
+        "max_open_notional_usd": "3"
+      }
+    },
+    {
+      "name": "loss_limit_policy",
+      "version": 1,
+      "params": {
+        "max_daily_loss_usd": "10",
+        "daily_realized_pnl_high_water_mark": null
+      }
     }
   ]
 }

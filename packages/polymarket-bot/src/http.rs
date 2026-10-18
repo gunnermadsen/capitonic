@@ -652,7 +652,29 @@ pub struct UpdateTradingProcessRequest {
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
-    pub execution: Option<crate::models::ProcessExecutionConfig>,
+    pub rail: Option<crate::execution::polymarket::configuration::RailSelection>,
+    #[serde(default)]
+    pub order_policies: Option<Vec<crate::execution::polymarket::policies::OrderPolicy>>,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub execute_signals: Option<bool>,
+    #[serde(default)]
+    pub live_capital: Option<bool>,
+    #[serde(default)]
+    pub account_ref: Option<String>,
+    #[serde(default)]
+    pub taker_fee_rate: Option<rust_decimal::Decimal>,
+    #[serde(default)]
+    pub max_order_notional_usd: Option<rust_decimal::Decimal>,
+    #[serde(default)]
+    pub max_open_notional_usd: Option<rust_decimal::Decimal>,
+    #[serde(default)]
+    pub max_open_positions: Option<usize>,
+    #[serde(default)]
+    pub max_daily_loss_usd: Option<rust_decimal::Decimal>,
+    #[serde(default)]
+    pub require_exit_book: Option<bool>,
     #[serde(default)]
     pub sources: Option<Vec<crate::market_data_stream::SourceSelector>>,
     #[serde(default)]
@@ -663,19 +685,36 @@ pub struct UpdateTradingProcessRequest {
 
 impl UpdateTradingProcessRequest {
     pub fn take_configuration(&mut self) -> Result<Option<TradingProcessConfig>, HttpError> {
-        match (
-            self.execution.take(),
-            self.sources.take(),
-            self.btc_realtime_paper.take(),
-        ) {
-            (None, None, None) => Ok(None),
-            (execution, Some(sources), Some(btc_realtime_paper)) => {
-                Ok(Some(TradingProcessConfig {
-                    execution,
-                    sources,
-                    btc_realtime_paper,
-                }))
-            }
+        let has_controls = self.rail.is_some()
+            || self.order_policies.is_some()
+            || self.mode.is_some()
+            || self.execute_signals.is_some()
+            || self.live_capital.is_some()
+            || self.account_ref.is_some()
+            || self.taker_fee_rate.is_some()
+            || self.max_order_notional_usd.is_some()
+            || self.max_open_notional_usd.is_some()
+            || self.max_open_positions.is_some()
+            || self.max_daily_loss_usd.is_some()
+            || self.require_exit_book.is_some();
+        match (self.sources.take(), self.btc_realtime_paper.take()) {
+            (None, None) if !has_controls => Ok(None),
+            (Some(sources), Some(btc_realtime_paper)) => Ok(Some(TradingProcessConfig {
+                rail: self.rail.take(),
+                order_policies: self.order_policies.take(),
+                mode: self.mode.take(),
+                execute_signals: self.execute_signals.take().unwrap_or(false),
+                live_capital: self.live_capital.take().unwrap_or(false),
+                account_ref: self.account_ref.take(),
+                taker_fee_rate: self.taker_fee_rate.take(),
+                max_order_notional_usd: self.max_order_notional_usd.take(),
+                max_open_notional_usd: self.max_open_notional_usd.take(),
+                max_open_positions: self.max_open_positions.take(),
+                max_daily_loss_usd: self.max_daily_loss_usd.take(),
+                require_exit_book: self.require_exit_book.take(),
+                sources,
+                btc_realtime_paper,
+            })),
             _ => Err(HttpError::bad_request(
                 "configuration replacement requires sources and btc_realtime_paper",
             )),
@@ -707,8 +746,30 @@ pub struct UpsertTradingProcessByKeyRequest {
     pub process_scope: String,
     pub enabled: bool,
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rail: Option<crate::execution::polymarket::configuration::RailSelection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order_policies: Option<Vec<crate::execution::polymarket::policies::OrderPolicy>>,
     #[serde(default)]
-    pub execution: Option<crate::models::ProcessExecutionConfig>,
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub execute_signals: bool,
+    #[serde(default)]
+    pub live_capital: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_ref: Option<String>,
+    #[serde(default)]
+    pub taker_fee_rate: Option<rust_decimal::Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_order_notional_usd: Option<rust_decimal::Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_open_notional_usd: Option<rust_decimal::Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_open_positions: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_daily_loss_usd: Option<rust_decimal::Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub require_exit_book: Option<bool>,
     pub sources: Vec<crate::market_data_stream::SourceSelector>,
     pub btc_realtime_paper: serde_json::Value,
     #[serde(default)]

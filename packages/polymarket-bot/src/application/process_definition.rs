@@ -1043,20 +1043,18 @@ pub(super) fn prepare_btc_start_definition_for_execution(
             );
     }
     let frozen_process_config = TradingProcessConfig {
-        execution: Some(ProcessExecutionConfig {
-            rail: None,
-            order_policies: None,
-            mode: Some(execution_mode.as_str().to_string()),
-            execute_signals: execution.execute_signals,
-            live_capital: execution.live_capital,
-            account_ref: execution.account_ref.clone(),
-            taker_fee_rate: None,
-            max_order_notional_usd: execution.max_order_notional_usd,
-            max_open_notional_usd: execution.max_open_notional_usd,
-            max_open_positions: execution.max_open_positions,
-            max_daily_loss_usd: execution.max_daily_loss_usd,
-            require_exit_book: execution.require_exit_book,
-        }),
+        rail: None,
+        order_policies: None,
+        mode: Some(execution_mode.as_str().to_string()),
+        execute_signals: execution.execute_signals,
+        live_capital: execution.live_capital,
+        account_ref: execution.account_ref.clone(),
+        taker_fee_rate: None,
+        max_order_notional_usd: execution.max_order_notional_usd,
+        max_open_notional_usd: execution.max_open_notional_usd,
+        max_open_positions: execution.max_open_positions,
+        max_daily_loss_usd: execution.max_daily_loss_usd,
+        require_exit_book: execution.require_exit_book,
         sources: sources.clone(),
         btc_realtime_paper: frozen_control,
     };

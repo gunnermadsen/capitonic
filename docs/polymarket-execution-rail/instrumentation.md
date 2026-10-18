@@ -11,7 +11,7 @@ The execution core extends the existing `ExecutionFreshnessMetrics` owner and st
 | execution/live metrics and Store fill-read metrics | Transport/reconciliation and fill evidence | Reuse event points; do not count a live POST as the equivalent of a paper fill. |
 | Existing structured bot logs → Alloy → Loki | Lifecycle transitions and errors | Correlate existing identifiers; bounded logging outside socket intake. |
 | common/configs/grafana/dashboards/unified-model-runtime.json | UMR funnel and session outcomes | Preserve existing model measurements; add appropriate execution-origin visibility later. |
-| common/configs/grafana/dashboards/live-trading-health.json | Live process/account/reconciliation health | Retain existing config.execution.mode reader; extend shared-path visibility without hiding live-only diagnostics. |
+| common/configs/grafana/dashboards/live-trading-health.json | Live process/account/reconciliation health | Retain existing config.mode reader; extend shared-path visibility without hiding live-only diagnostics. |
 | common/configs/grafana/dashboards/trading-pnl-market-metrics.json | Durable trading economics | Verify provisioned queries before changes; include all real economic effects, allow origin filtering. |
 
 The previous investigation identified global aggregation masking individual reconciliation failure and a possible Loki error-code extraction/query mismatch. Those are evidence to verify during observability implementation, not permission for unrelated repairs in the configuration foundation. Recheck deployed provisioning when that work begins.

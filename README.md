@@ -124,8 +124,8 @@ distinct process-owned run, identified by `run_id`. Immutable run evidence
 lives in the existing process lifecycle records. Lifecycle and record ownership
 remain canonical to the selected `process_id`; the stable process key can be
 reused. Trading mode is selected by
-`trading_processes.config.execution.mode`; live definitions also require a
-bounded `execution.account_ref`. Optional execution limits and the exit-book
+`trading_processes.config.mode`; live definitions also require a
+bounded `account_ref`. Optional execution limits and the exit-book
 requirement are flat process-owned properties accepted identically by paper and
 live venues. When omitted, their checks are not configured. Host configuration
 is limited to credentials, venue URLs, and transport timing.
@@ -240,11 +240,6 @@ run key; lifecycle and record ownership still belong to `process_id`.
   "enabled": false,
   "status": "created",
   "metadata": {},
-  "execution": {
-    "mode": "paper",
-    "execute_signals": true,
-    "live_capital": false
-  },
   "btc_realtime_paper": {
     "schema_version": "btc_realtime_paper_process_v4",
     "playbook_version": "v1.2",
@@ -296,7 +291,10 @@ run key; lifecycle and record ownership still belong to `process_id`.
     "polymarket_btc_five_minute_resolutions",
     "binance_spot_btcusdt_one_second_ohlcv",
     "polygon_chainlink_btcusd_oracle"
-  ]
+  ],
+  "mode": "paper",
+  "execute_signals": true,
+  "live_capital": false
 }
 ```
 <!-- btc-5m-process-v4:end -->

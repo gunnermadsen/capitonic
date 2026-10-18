@@ -5,7 +5,7 @@
 Paper and live BTC processes are first-class modes of the same managed
 `btc_5m/realtime_paper` process runtime. They use the same strategy parser,
 market-data inputs, model inference, entry admission, order identity, persistence,
-settlement, and process lifecycle. `config.execution.mode` selects the venue;
+settlement, and process lifecycle. `config.mode` selects the venue;
 it does not select a separate strategy implementation.
 
 Live trading requires all of the following:
@@ -16,7 +16,7 @@ Live trading requires all of the following:
   `production_qualified=true`;
 - matching model, artifact SHA-256, and feature-schema SHA-256 identities in the
   process selection;
-- `execution.mode=live`, a bounded `account_ref`, and equal
+- `mode=live`, a bounded `account_ref`, and equal
   `execute_signals`/`live_capital` flags;
 - configured signer, API credentials, signature type, funder identity, CLOB and
   user-stream endpoints;

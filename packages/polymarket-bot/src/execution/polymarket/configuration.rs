@@ -107,10 +107,8 @@ impl CompiledDefinition {
 
 /// Any marker selects strict new-contract validation, never a fallback to legacy.
 pub fn is_selected(config: &TradingProcessConfig) -> bool {
-    config
-        .execution
-        .as_ref()
-        .is_some_and(|e| e.rail.is_some() || e.order_policies.is_some())
+    config.rail.is_some()
+        || config.order_policies.is_some()
         || config
             .btc_realtime_paper
             .get("schema_version")
@@ -119,14 +117,8 @@ pub fn is_selected(config: &TradingProcessConfig) -> bool {
 }
 
 pub fn compile(config: &TradingProcessConfig) -> Result<CompiledDefinition> {
-    let e = config
-        .execution
-        .as_ref()
-        .context("execution configuration is required")?;
-    let rail = e
-        .rail
-        .as_ref()
-        .context("explicit execution.rail is required")?;
+    let e = config;
+    let rail = e.rail.as_ref().context("explicit rail is required")?;
     ensure!(
         rail.name == "polymarket" && rail.version == 1,
         "unsupported execution rail or contract version"

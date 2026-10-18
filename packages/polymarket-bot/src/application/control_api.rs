@@ -358,7 +358,18 @@ impl ControlApi for RuntimeControl {
         request: control_http::UpsertTradingProcessByKeyRequest,
     ) -> Result<TradingProcessResponse, HttpError> {
         let mut config = TradingProcessConfig {
-            execution: request.execution,
+            rail: request.rail,
+            order_policies: request.order_policies,
+            mode: request.mode,
+            execute_signals: request.execute_signals,
+            live_capital: request.live_capital,
+            account_ref: request.account_ref,
+            taker_fee_rate: request.taker_fee_rate,
+            max_order_notional_usd: request.max_order_notional_usd,
+            max_open_notional_usd: request.max_open_notional_usd,
+            max_open_positions: request.max_open_positions,
+            max_daily_loss_usd: request.max_daily_loss_usd,
+            require_exit_book: request.require_exit_book,
             sources: request.sources,
             btc_realtime_paper: request.btc_realtime_paper,
         };
@@ -494,24 +505,15 @@ impl ControlApi for RuntimeControl {
                     "aggregate_scope".to_string(),
                     serde_json::Value::String("process_lifetime".to_string()),
                 );
-                let execution = process
+                let execution_mode = process
                     .config
-                    .get("execution")
-                    .filter(|value| !value.is_null())
-                    .cloned()
-                    .map(serde_json::from_value)
-                    .transpose()
-                    .map_err(|error| HttpError::internal(error.to_string()))?;
-                let execution_mode = TradingProcessConfig {
-                    execution,
-                    ..Default::default()
-                }
-                .effective_execution()
-                .mode;
+                    .get("mode")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unspecified");
                 let runtime = match &self.btc_manager {
                     Some(manager) => {
                         manager
-                            .runtime_status_for_process(process_id, Some(&execution_mode))
+                            .runtime_status_for_process(process_id, Some(execution_mode))
                             .await
                     }
                     None => serde_json::json!({

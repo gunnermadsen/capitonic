@@ -50,7 +50,7 @@ def require_preflight_admission(code, receipt):
 
 
 def policies(process):
-    items = process['execution']['order_policies']
+    items = process['order_policies']
     result = {p['name']: p for p in items}
     if len(result) != len(items):
         raise RuntimeError('Duplicate policy names')
@@ -64,7 +64,7 @@ def validate_pair(processes, account, ceiling, active):
         raise RuntimeError('Cash ceiling must be positive and finite')
     for mode, pid in REUSABLE_PROCESS_IDS.items():
         p = processes[mode]
-        e = p['execution']
+        e = p
         if (p['process_id'] != pid or e['mode'] != mode
                 or e.get('rail') != {'name': 'polymarket', 'version': 1}
                 or p['btc_realtime_paper']['runtime']['trigger'] != 'api'
@@ -204,7 +204,7 @@ class PairedQualification(Qualification):
                 self.check(mode + ' expected order', Decimal(str(order['size'])) == 5
                     and order['order_type'] == pair['order_type'] and order['side'] == 'buy')
                 self.check(mode + ' prepared cash reserve within test ceiling',
-                    Decimal(str(receipt['evidence']['execution']['policy_evidence']['max_entry_debit_usd']))
+                    Decimal(str(receipt['evidence']['policy_evidence']['max_entry_debit_usd']))
                     <= Decimal(pair['max_cash_usd']))
                 if route == 'dry-run':
                     prep = receipt.get('preparation') or {}

@@ -82,13 +82,7 @@ impl BtcProcessManager {
             }
             BtcDefinitionUse::InactiveDefinition => validate_btc_process_capability(process)?,
         }
-        if process
-            .config
-            .execution
-            .as_ref()
-            .and_then(|execution| execution.taker_fee_rate)
-            .is_some()
-        {
+        if process.config.taker_fee_rate.is_some() {
             return Err(HttpError::bad_request(
                 "BTC realtime execution config accepts only execution safety fields and btc_realtime_paper settings",
             ));
