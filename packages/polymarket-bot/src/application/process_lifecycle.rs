@@ -82,11 +82,6 @@ impl BtcProcessManager {
             }
             BtcDefinitionUse::InactiveDefinition => validate_btc_process_capability(process)?,
         }
-        if process.config.taker_fee_rate.is_some() {
-            return Err(HttpError::bad_request(
-                "BTC realtime execution config accepts only execution safety fields and btc_realtime_paper settings",
-            ));
-        }
         let sources = process.config.sources.clone();
         let control_value = process.config.btc_realtime_paper.clone();
         let mut control = parse_btc_process_control(control_value, &sources, definition_use)?;

@@ -25,8 +25,7 @@ use polymarket_bot::{
     http::{self, ControlApi, HttpError, MetricsResponse},
     models::{
         TradingProcess, TradingProcessConfig, TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD,
-        TRADING_PROCESS_OPEN_POSITION_CEILING, TRADING_PROCESS_ORDER_NOTIONAL_CEILING_USD,
-        TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD,
+        TRADING_PROCESS_OPEN_POSITION_CEILING, TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD,
     },
 };
 use rust_decimal::Decimal;
@@ -48,18 +47,6 @@ fn validate_capacity_contract(config: &TradingProcessConfig) -> Result<(), HttpE
         return compile_order_contract(config)
             .map(|_| ())
             .map_err(|error| HttpError::bad_request(error.to_string()));
-    }
-    if config.max_order_notional_usd.is_some_and(|value| {
-        value <= Decimal::ZERO || value > TRADING_PROCESS_ORDER_NOTIONAL_CEILING_USD
-    }) || config.max_open_notional_usd.is_some_and(|value| {
-        value <= Decimal::ZERO || value > TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD
-    }) || config
-        .max_open_positions
-        .is_some_and(|value| value == 0 || value > TRADING_PROCESS_OPEN_POSITION_CEILING)
-    {
-        return Err(HttpError::bad_request(
-            "trading process execution capacity exceeds configured ceiling",
-        ));
     }
     if let Some(value) = config
         .btc_realtime_paper
@@ -594,12 +581,6 @@ impl ControlApi for FakeControlApi {
                     execute_signals: request.execute_signals,
                     live_capital: request.live_capital,
                     account_ref: request.account_ref,
-                    taker_fee_rate: request.taker_fee_rate,
-                    max_order_notional_usd: request.max_order_notional_usd,
-                    max_open_notional_usd: request.max_open_notional_usd,
-                    max_open_positions: request.max_open_positions,
-                    max_daily_loss_usd: request.max_daily_loss_usd,
-                    require_exit_book: request.require_exit_book,
                     sources: request.sources,
                     btc_realtime_paper: request.btc_realtime_paper,
                 },
@@ -687,12 +668,6 @@ impl ControlApi for FakeControlApi {
                 execute_signals: true,
                 live_capital: false,
                 account_ref: None,
-                taker_fee_rate: None,
-                max_order_notional_usd: None,
-                max_open_notional_usd: None,
-                max_open_positions: None,
-                max_daily_loss_usd: None,
-                require_exit_book: None,
                 sources: Vec::new(),
                 btc_realtime_paper: serde_json::json!({
                     "pipeline_version": "btc_realtime_paper_pipeline_v11",
@@ -1507,7 +1482,7 @@ async fn persisted_process_config(app: &axum::Router, process_id: Uuid) -> Tradi
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let process = &serde_json::from_slice::<Value>(&body).unwrap()["process"];
     assert!(process.get("config").is_none());
-    serde_json::from_value(serde_json::json!({"rail": process["rail"], "order_policies": process["order_policies"], "mode": process["mode"], "execute_signals": process["execute_signals"], "live_capital": process["live_capital"], "account_ref": process["account_ref"], "taker_fee_rate": process["taker_fee_rate"], "max_order_notional_usd": process["max_order_notional_usd"], "max_open_notional_usd": process["max_open_notional_usd"], "max_open_positions": process["max_open_positions"], "max_daily_loss_usd": process["max_daily_loss_usd"], "require_exit_book": process["require_exit_book"], "sources": process["sources"], "btc_realtime_paper": process["btc_realtime_paper"]}))
+    serde_json::from_value(serde_json::json!({"rail": process["rail"], "order_policies": process["order_policies"], "mode": process["mode"], "execute_signals": process["execute_signals"], "live_capital": process["live_capital"], "account_ref": process["account_ref"], "sources": process["sources"], "btc_realtime_paper": process["btc_realtime_paper"]}))
     .unwrap()
 }
 
@@ -1530,10 +1505,6 @@ async fn trading_process_patch_enforces_capacity_ceilings_without_persisting_rej
         "sources": [], "btc_realtime_paper": {"paper": {}}
     }))
     .unwrap();
-    let execution = &mut legacy;
-    execution.max_order_notional_usd = Some(TRADING_PROCESS_ORDER_NOTIONAL_CEILING_USD);
-    execution.max_open_notional_usd = Some(TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD);
-    execution.max_open_positions = Some(TRADING_PROCESS_OPEN_POSITION_CEILING);
     legacy.btc_realtime_paper["paper"]["starting_collateral_usd"] =
         serde_json::json!(TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD.to_string());
     assert_eq!(
@@ -1546,15 +1517,6 @@ async fn trading_process_patch_enforces_capacity_ceilings_without_persisting_rej
     );
 
     let mut legacy_overrides = Vec::new();
-    let mut above = legacy.clone();
-    above.max_order_notional_usd = Some(TRADING_PROCESS_ORDER_NOTIONAL_CEILING_USD + dec!(0.01));
-    legacy_overrides.push(above);
-    let mut above = legacy.clone();
-    above.max_open_notional_usd = Some(TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD + dec!(0.01));
-    legacy_overrides.push(above);
-    let mut above = legacy.clone();
-    above.max_open_positions = Some(TRADING_PROCESS_OPEN_POSITION_CEILING + 1);
-    legacy_overrides.push(above);
     let mut above = legacy.clone();
     above.btc_realtime_paper["paper"]["starting_collateral_usd"] =
         serde_json::json!((TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD + dec!(0.01)).to_string());
@@ -1969,7 +1931,7 @@ fn process_requests_require_root_configuration_fields() {
         serde_json::from_value(serde_json::json!({"name": "renamed", "metadata": {}})).unwrap();
     assert!(metadata_only.take_configuration().unwrap().is_none());
 
-    let configuration = serde_json::json!({"mode": null, "execute_signals": false, "live_capital": false, "taker_fee_rate": null, "sources": [], "btc_realtime_paper": {}});
+    let configuration = serde_json::json!({"mode": null, "execute_signals": false, "live_capital": false, "sources": [], "btc_realtime_paper": {}});
     let mut request: http::UpdateTradingProcessRequest =
         serde_json::from_value(configuration.clone()).unwrap();
     let compiled_input = request.take_configuration().unwrap().unwrap();

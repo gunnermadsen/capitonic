@@ -139,9 +139,9 @@ mod lifecycle_tests {
     #[test]
     fn legacy_daily_loss_has_no_ceiling_in_either_mode() {
         for mode in ["paper", "live"] {
-            let mut process = eligible_btc_process();
-            let execution = &mut process.config;
-            execution.mode = Some(mode.into());
+            let process = eligible_btc_process();
+            let mut execution = process.effective_execution();
+            execution.mode = mode.into();
             execution.live_capital = mode == "live";
             execution.account_ref = (mode == "live").then(|| "polymarket-primary".into());
             for limit in [
@@ -151,12 +151,12 @@ mod lifecycle_tests {
                 Some(dec!(1000000)),
                 Some(Decimal::MAX),
             ] {
-                process.config.max_daily_loss_usd = limit;
-                validate_btc_process_capability(&process).unwrap();
+                execution.max_daily_loss_usd = limit;
+                validate_optional_execution_controls(&execution).unwrap();
             }
             for limit in [Decimal::ZERO, dec!(-1)] {
-                process.config.max_daily_loss_usd = Some(limit);
-                assert!(validate_btc_process_capability(&process).is_err());
+                execution.max_daily_loss_usd = Some(limit);
+                assert!(validate_optional_execution_controls(&execution).is_err());
             }
         }
         assert!(serde_json::from_value::<TradingProcessConfig>(
@@ -180,7 +180,6 @@ mod lifecycle_tests {
                 execute_signals: true,
                 live_capital: false,
                 account_ref: None,
-                taker_fee_rate: None,
                 ..TradingProcessConfig::default()
             },
             metadata: serde_json::json!({}),
@@ -274,7 +273,11 @@ mod lifecycle_tests {
                 serde_json::to_value(&prepared.frozen_process_config).unwrap(),
                 serde_json::to_value(&process.config).unwrap()
             );
-            assert!(process.config.max_open_notional_usd.is_none());
+            assert!(process
+                .config
+                .effective_execution()
+                .max_open_notional_usd
+                .is_none());
             process.enabled = true;
             process.status = "running".into();
             let resumed = super::super::order_execution::prepare(&process, true).unwrap();
@@ -786,36 +789,34 @@ mod lifecycle_tests {
 
     #[test]
     fn optional_execution_controls_are_mode_independent_and_validated_when_present() {
-        let mut process = eligible_btc_process();
-        let execution = &mut process.config;
+        let process = eligible_btc_process();
+        let mut execution = process.effective_execution();
+
         execution.max_order_notional_usd = Some(TRADING_PROCESS_ORDER_NOTIONAL_CEILING_USD);
         execution.max_open_notional_usd = Some(TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD);
         execution.max_open_positions = Some(TRADING_PROCESS_OPEN_POSITION_CEILING);
         execution.max_daily_loss_usd = Some(dec!(10));
         execution.require_exit_book = Some(true);
-        validate_btc_process_capability(&process).unwrap();
+        validate_optional_execution_controls(&execution).unwrap();
 
-        let execution = &mut process.config;
-        execution.mode = Some("live".to_string());
+        execution.mode = "live".to_string();
         execution.execute_signals = true;
         execution.live_capital = true;
         execution.account_ref = Some("polymarket-primary".to_string());
-        validate_btc_process_capability(&process).unwrap();
+        validate_optional_execution_controls(&execution).unwrap();
 
-        process.config.max_order_notional_usd =
+        execution.max_order_notional_usd =
             Some(TRADING_PROCESS_ORDER_NOTIONAL_CEILING_USD + dec!(0.01));
-        assert!(validate_btc_process_capability(&process).is_err());
+        assert!(validate_optional_execution_controls(&execution).is_err());
 
-        let execution = &mut process.config;
         execution.max_order_notional_usd = Some(TRADING_PROCESS_ORDER_NOTIONAL_CEILING_USD);
         execution.max_open_notional_usd =
             Some(TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD + dec!(0.01));
-        assert!(validate_btc_process_capability(&process).is_err());
+        assert!(validate_optional_execution_controls(&execution).is_err());
 
-        let execution = &mut process.config;
         execution.max_open_notional_usd = Some(TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD);
         execution.max_open_positions = Some(TRADING_PROCESS_OPEN_POSITION_CEILING + 1);
-        assert!(validate_btc_process_capability(&process).is_err());
+        assert!(validate_optional_execution_controls(&execution).is_err());
     }
 
     #[tokio::test]
@@ -838,7 +839,7 @@ mod lifecycle_tests {
         ))
         .unwrap();
         let mut process = eligible_btc_process();
-        process.config = serde_json::from_value(serde_json::json!({"rail": definition["rail"], "order_policies": definition["order_policies"], "mode": definition["mode"], "execute_signals": definition["execute_signals"], "live_capital": definition["live_capital"], "account_ref": definition["account_ref"], "taker_fee_rate": definition["taker_fee_rate"], "max_order_notional_usd": definition["max_order_notional_usd"], "max_open_notional_usd": definition["max_open_notional_usd"], "max_open_positions": definition["max_open_positions"], "max_daily_loss_usd": definition["max_daily_loss_usd"], "require_exit_book": definition["require_exit_book"], "sources": definition["sources"], "btc_realtime_paper": definition["btc_realtime_paper"]})).unwrap();
+        process.config = serde_json::from_value(serde_json::json!({"rail": definition["rail"], "order_policies": definition["order_policies"], "mode": definition["mode"], "execute_signals": definition["execute_signals"], "live_capital": definition["live_capital"], "account_ref": definition["account_ref"], "sources": definition["sources"], "btc_realtime_paper": definition["btc_realtime_paper"]})).unwrap();
         let collateral_policy = process
             .config
             .order_policies
@@ -913,7 +914,6 @@ mod lifecycle_tests {
             execute_signals: false,
             live_capital: false,
             account_ref: Some("polymarket-primary".to_string()),
-            taker_fee_rate: None,
             ..process.config
         };
 
@@ -1310,12 +1310,6 @@ mod lifecycle_tests {
                 execute_signals: request.execute_signals,
                 live_capital: request.live_capital,
                 account_ref: request.account_ref,
-                taker_fee_rate: request.taker_fee_rate,
-                max_order_notional_usd: request.max_order_notional_usd,
-                max_open_notional_usd: request.max_open_notional_usd,
-                max_open_positions: request.max_open_positions,
-                max_daily_loss_usd: request.max_daily_loss_usd,
-                require_exit_book: request.require_exit_book,
                 sources: request.sources,
                 btc_realtime_paper: request.btc_realtime_paper,
             },
@@ -1349,7 +1343,7 @@ mod lifecycle_tests {
             )
             .unwrap();
             let mut config: TradingProcessConfig =
-                serde_json::from_value(serde_json::json!({"rail": value["rail"], "order_policies": value["order_policies"], "mode": value["mode"], "execute_signals": value["execute_signals"], "live_capital": value["live_capital"], "account_ref": value["account_ref"], "taker_fee_rate": value["taker_fee_rate"], "max_order_notional_usd": value["max_order_notional_usd"], "max_open_notional_usd": value["max_open_notional_usd"], "max_open_positions": value["max_open_positions"], "max_daily_loss_usd": value["max_daily_loss_usd"], "require_exit_book": value["require_exit_book"], "sources": value["sources"], "btc_realtime_paper": value["btc_realtime_paper"]})).unwrap();
+                serde_json::from_value(serde_json::json!({"rail": value["rail"], "order_policies": value["order_policies"], "mode": value["mode"], "execute_signals": value["execute_signals"], "live_capital": value["live_capital"], "account_ref": value["account_ref"], "sources": value["sources"], "btc_realtime_paper": value["btc_realtime_paper"]})).unwrap();
             pin_router_config(&mut config).unwrap();
             let mut sources: Vec<SourceSelector> = config.sources.clone();
             let control = parse_btc_process_control(
@@ -1392,7 +1386,7 @@ mod lifecycle_tests {
                 serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
             assert!(ids.insert(value["process_id"].as_str().unwrap().to_owned()));
             let config: TradingProcessConfig =
-                serde_json::from_value(serde_json::json!({"rail": value["rail"], "order_policies": value["order_policies"], "mode": value["mode"], "execute_signals": value["execute_signals"], "live_capital": value["live_capital"], "account_ref": value["account_ref"], "taker_fee_rate": value["taker_fee_rate"], "max_order_notional_usd": value["max_order_notional_usd"], "max_open_notional_usd": value["max_open_notional_usd"], "max_open_positions": value["max_open_positions"], "max_daily_loss_usd": value["max_daily_loss_usd"], "require_exit_book": value["require_exit_book"], "sources": value["sources"], "btc_realtime_paper": value["btc_realtime_paper"]})).unwrap();
+                serde_json::from_value(serde_json::json!({"rail": value["rail"], "order_policies": value["order_policies"], "mode": value["mode"], "execute_signals": value["execute_signals"], "live_capital": value["live_capital"], "account_ref": value["account_ref"], "sources": value["sources"], "btc_realtime_paper": value["btc_realtime_paper"]})).unwrap();
             let compiled =
                 polymarket_bot::execution::polymarket::configuration::compile(&config).unwrap();
             let strategy = compiled.runtime_strategy().unwrap();

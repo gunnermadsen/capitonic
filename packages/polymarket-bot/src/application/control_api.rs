@@ -364,12 +364,6 @@ impl ControlApi for RuntimeControl {
             execute_signals: request.execute_signals,
             live_capital: request.live_capital,
             account_ref: request.account_ref,
-            taker_fee_rate: request.taker_fee_rate,
-            max_order_notional_usd: request.max_order_notional_usd,
-            max_open_notional_usd: request.max_open_notional_usd,
-            max_open_positions: request.max_open_positions,
-            max_daily_loss_usd: request.max_daily_loss_usd,
-            require_exit_book: request.require_exit_book,
             sources: request.sources,
             btc_realtime_paper: request.btc_realtime_paper,
         };

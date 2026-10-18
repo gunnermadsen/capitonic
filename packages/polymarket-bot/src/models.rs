@@ -338,18 +338,6 @@ pub struct TradingProcessConfig {
     pub live_capital: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_ref: Option<String>,
-    #[serde(default)]
-    pub taker_fee_rate: Option<Decimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_order_notional_usd: Option<Decimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_open_notional_usd: Option<Decimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_open_positions: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_daily_loss_usd: Option<Decimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub require_exit_book: Option<bool>,
     pub sources: Vec<crate::market_data_stream::SourceSelector>,
     pub btc_realtime_paper: serde_json::Value,
 }
@@ -363,14 +351,6 @@ impl TradingProcessConfig {
         effective.execute_signals = self.execute_signals;
         effective.live_capital = self.live_capital;
         effective.account_ref = self.account_ref.clone();
-        if let Some(taker_fee_rate) = self.taker_fee_rate {
-            effective.taker_fee_rate = taker_fee_rate;
-        }
-        effective.max_order_notional_usd = self.max_order_notional_usd;
-        effective.max_open_notional_usd = self.max_open_notional_usd;
-        effective.max_open_positions = self.max_open_positions;
-        effective.max_daily_loss_usd = self.max_daily_loss_usd;
-        effective.require_exit_book = self.require_exit_book;
         effective
     }
 }
@@ -408,7 +388,6 @@ impl Default for EffectiveProcessExecutionConfig {
 #[cfg(test)]
 mod tests {
     use super::{FillSource, TradingProcessConfig};
-    use rust_decimal_macros::dec;
 
     #[test]
     fn retired_sim_fill_source_is_not_part_of_the_application_contract() {
@@ -424,59 +403,25 @@ mod tests {
     }
 
     #[test]
-    fn execution_contract_accepts_only_flat_optional_controls() {
-        let execution = serde_json::from_value::<TradingProcessConfig>(serde_json::json!({
-            "sources": [], "btc_realtime_paper": {},
-            "mode": "paper",
-            "execute_signals": true,
-            "live_capital": false,
-            "max_order_notional_usd": "2",
-            "max_open_notional_usd": "20",
-            "max_open_positions": 6,
-            "max_daily_loss_usd": "10",
-            "require_exit_book": true
-        }))
-        .unwrap();
-        assert_eq!(execution.max_order_notional_usd, Some(dec!(2)));
-        assert_eq!(execution.max_open_notional_usd, Some(dec!(20)));
-        assert_eq!(execution.max_open_positions, Some(6));
-        assert_eq!(execution.max_daily_loss_usd, Some(dec!(10)));
-        assert_eq!(execution.require_exit_book, Some(true));
-
-        let omitted = serde_json::from_value::<TradingProcessConfig>(serde_json::json!({
-            "sources": [], "btc_realtime_paper": {},
-            "mode": "live",
-            "execute_signals": true,
-            "live_capital": true,
-            "account_ref": "polymarket-primary"
-        }))
-        .unwrap();
-        assert_eq!(omitted.max_order_notional_usd, None);
-        assert_eq!(omitted.require_exit_book, None);
-
-        assert!(
-            serde_json::from_value::<TradingProcessConfig>(serde_json::json!({
-            "sources": [], "btc_realtime_paper": {},
-                "mode": "paper",
-                "risk": {"max_order_notional_usd": "2"}
-            }))
-            .is_err()
-        );
-        assert!(
-            serde_json::from_value::<TradingProcessConfig>(serde_json::json!({
-            "sources": [], "btc_realtime_paper": {},
-                "mode": "paper",
-                "entry_policy": {"require_exit_book": true}
-            }))
-            .is_err()
-        );
-        assert!(
-            serde_json::from_value::<TradingProcessConfig>(serde_json::json!({
-            "sources": [], "btc_realtime_paper": {},
-                "mode": "paper",
-                "max_open_positions": [6]
-            }))
-            .is_err()
-        );
+    fn removed_root_controls_are_unknown_even_when_null() {
+        let base = serde_json::json!({"sources": [], "btc_realtime_paper": {}});
+        let config: TradingProcessConfig = serde_json::from_value(base.clone()).unwrap();
+        let serialized = serde_json::to_value(config).unwrap();
+        for field in [
+            "taker_fee_rate",
+            "max_order_notional_usd",
+            "max_open_notional_usd",
+            "max_open_positions",
+            "max_daily_loss_usd",
+            "require_exit_book",
+        ] {
+            assert!(serialized.get(field).is_none());
+            for value in [serde_json::Value::Null, serde_json::json!(1)] {
+                let mut invalid = base.clone();
+                invalid[field] = value;
+                let error = serde_json::from_value::<TradingProcessConfig>(invalid).unwrap_err();
+                assert!(error.to_string().contains("unknown field"));
+            }
+        }
     }
 }

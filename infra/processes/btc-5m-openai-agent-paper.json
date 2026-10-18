@@ -103,7 +103,6 @@
   "mode": "paper",
   "execute_signals": true,
   "live_capital": false,
-  "taker_fee_rate": null,
   "rail": {
     "name": "polymarket",
     "version": 1

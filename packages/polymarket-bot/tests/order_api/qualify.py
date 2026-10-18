@@ -33,7 +33,7 @@ def ledger_amount(value):
 
 
 def process_configuration(process):
-    return {key: process[key] for key in ('rail', 'order_policies', 'mode', 'execute_signals', 'live_capital', 'account_ref', 'taker_fee_rate', 'max_order_notional_usd', 'max_open_notional_usd', 'max_open_positions', 'max_daily_loss_usd', 'require_exit_book', 'sources', 'btc_realtime_paper') if key in process}
+    return {key: process[key] for key in ('rail', 'order_policies', 'mode', 'execute_signals', 'live_capital', 'account_ref', 'sources', 'btc_realtime_paper') if key in process}
 
 
 class Qualification:

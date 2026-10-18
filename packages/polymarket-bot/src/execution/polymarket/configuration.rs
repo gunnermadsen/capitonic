@@ -123,15 +123,6 @@ pub fn compile(config: &TradingProcessConfig) -> Result<CompiledDefinition> {
         rail.name == "polymarket" && rail.version == 1,
         "unsupported execution rail or contract version"
     );
-    ensure!(
-        e.taker_fee_rate.is_none()
-            && e.max_order_notional_usd.is_none()
-            && e.max_open_notional_usd.is_none()
-            && e.max_open_positions.is_none()
-            && e.max_daily_loss_usd.is_none()
-            && e.require_exit_book.is_none(),
-        "legacy flat order parameters are not allowed with order_policies"
-    );
     let mode = match e.mode.as_deref() {
         Some("paper") => {
             ensure!(

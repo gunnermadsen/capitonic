@@ -664,18 +664,6 @@ pub struct UpdateTradingProcessRequest {
     #[serde(default)]
     pub account_ref: Option<String>,
     #[serde(default)]
-    pub taker_fee_rate: Option<rust_decimal::Decimal>,
-    #[serde(default)]
-    pub max_order_notional_usd: Option<rust_decimal::Decimal>,
-    #[serde(default)]
-    pub max_open_notional_usd: Option<rust_decimal::Decimal>,
-    #[serde(default)]
-    pub max_open_positions: Option<usize>,
-    #[serde(default)]
-    pub max_daily_loss_usd: Option<rust_decimal::Decimal>,
-    #[serde(default)]
-    pub require_exit_book: Option<bool>,
-    #[serde(default)]
     pub sources: Option<Vec<crate::market_data_stream::SourceSelector>>,
     #[serde(default)]
     pub btc_realtime_paper: Option<serde_json::Value>,
@@ -690,13 +678,7 @@ impl UpdateTradingProcessRequest {
             || self.mode.is_some()
             || self.execute_signals.is_some()
             || self.live_capital.is_some()
-            || self.account_ref.is_some()
-            || self.taker_fee_rate.is_some()
-            || self.max_order_notional_usd.is_some()
-            || self.max_open_notional_usd.is_some()
-            || self.max_open_positions.is_some()
-            || self.max_daily_loss_usd.is_some()
-            || self.require_exit_book.is_some();
+            || self.account_ref.is_some();
         match (self.sources.take(), self.btc_realtime_paper.take()) {
             (None, None) if !has_controls => Ok(None),
             (Some(sources), Some(btc_realtime_paper)) => Ok(Some(TradingProcessConfig {
@@ -706,12 +688,6 @@ impl UpdateTradingProcessRequest {
                 execute_signals: self.execute_signals.take().unwrap_or(false),
                 live_capital: self.live_capital.take().unwrap_or(false),
                 account_ref: self.account_ref.take(),
-                taker_fee_rate: self.taker_fee_rate.take(),
-                max_order_notional_usd: self.max_order_notional_usd.take(),
-                max_open_notional_usd: self.max_open_notional_usd.take(),
-                max_open_positions: self.max_open_positions.take(),
-                max_daily_loss_usd: self.max_daily_loss_usd.take(),
-                require_exit_book: self.require_exit_book.take(),
                 sources,
                 btc_realtime_paper,
             })),
@@ -758,18 +734,6 @@ pub struct UpsertTradingProcessByKeyRequest {
     pub live_capital: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_ref: Option<String>,
-    #[serde(default)]
-    pub taker_fee_rate: Option<rust_decimal::Decimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_order_notional_usd: Option<rust_decimal::Decimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_open_notional_usd: Option<rust_decimal::Decimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_open_positions: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_daily_loss_usd: Option<rust_decimal::Decimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub require_exit_book: Option<bool>,
     pub sources: Vec<crate::market_data_stream::SourceSelector>,
     pub btc_realtime_paper: serde_json::Value,
     #[serde(default)]

@@ -33,7 +33,10 @@ fn policy<'a>(v: &'a mut Value, name: &str) -> &'a mut Value {
         .unwrap()["params"]
 }
 fn invalid(v: Value, reason: &str) {
-    let error = compile(&config(v)).unwrap_err();
+    let error = serde_json::from_value::<TradingProcessConfig>(v)
+        .map_err(anyhow::Error::from)
+        .and_then(|config| compile(&config))
+        .unwrap_err();
     assert!(
         format!("{error:#}").contains(reason),
         "unexpected rejection: {error:#}"
@@ -163,10 +166,29 @@ fn legacy_fields_and_mixed_contract_markers_never_fall_back() {
         "max_open_notional_usd",
         "max_daily_loss_usd",
         "taker_fee_rate",
+        "max_open_positions",
+        "require_exit_book",
     ] {
-        let mut v = fixture("paper");
-        v[name] = json!("1");
-        invalid(v, "legacy flat order parameters");
+        for value in [Value::Null, json!(1)] {
+            let mut v = fixture("paper");
+            v[name] = value;
+            invalid(v.clone(), "unknown field");
+            assert!(
+                serde_json::from_value::<polymarket_bot::http::UpdateTradingProcessRequest>(
+                    v.clone()
+                )
+                .is_err()
+            );
+            v["name"] = json!("test");
+            v["process_type"] = json!("btc_5m");
+            v["process_scope"] = json!("realtime_paper");
+            assert!(
+                serde_json::from_value::<polymarket_bot::http::UpsertTradingProcessByKeyRequest>(v)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("unknown field")
+            );
+        }
     }
     for field in ["rail", "order_policies"] {
         let mut v = fixture("paper");
@@ -290,15 +312,15 @@ fn optional_loss_controls_reuse_existing_admission_contracts() {
 }
 
 #[test]
-fn legacy_execution_serialization_and_effective_controls_are_unchanged() {
-    let legacy = json!({"mode":"live","execute_signals":true,"live_capital":true,"account_ref":"polymarket-primary","taker_fee_rate":null,"max_order_notional_usd":"3","max_open_notional_usd":"3","max_open_positions":1,"max_daily_loss_usd":"10","require_exit_book":true,"sources":[],"btc_realtime_paper":{"schema_version":"btc_realtime_paper_process_v4"}});
+fn remaining_execution_controls_round_trip() {
+    let legacy = json!({"mode":"live","execute_signals":true,"live_capital":true,"account_ref":"polymarket-primary","sources":[],"btc_realtime_paper":{"schema_version":"btc_realtime_paper_process_v4"}});
     let c = config(legacy.clone());
     assert!(!is_selected(&c));
     assert_eq!(serde_json::to_value(&c).unwrap(), legacy);
     let e = c.effective_execution();
     assert_eq!(e.mode, "live");
-    assert_eq!(e.max_order_notional_usd.unwrap().to_string(), "3");
-    assert_eq!(e.max_open_positions, Some(1));
+    assert_eq!(e.max_order_notional_usd, None);
+    assert_eq!(e.max_open_positions, None);
     assert!(c.rail.is_none());
 }
 
