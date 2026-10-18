@@ -63,8 +63,8 @@ fn validate_capacity_contract(config: &TradingProcessConfig) -> Result<(), HttpE
         ));
     }
     if let Some(value) = config
-        .raw
-        .pointer("/btc_realtime_paper/paper/starting_collateral_usd")
+        .btc_realtime_paper
+        .pointer("/paper/starting_collateral_usd")
         .and_then(Value::as_str)
     {
         let value = value
@@ -461,14 +461,15 @@ impl ControlApi for FakeControlApi {
                 "running",
                 true,
                 TradingProcessConfig::default(),
-            )],
+            )
+            .with_config(serde_json::to_value(TradingProcessConfig::default()).unwrap())],
         })
     }
 
     async fn get_trading_process(
         &self,
         process_id: Uuid,
-    ) -> Result<http::TradingProcessResponse, HttpError> {
+    ) -> Result<http::TradingProcessResponse<Value>, HttpError> {
         let config = updated_process_configs()
             .lock()
             .unwrap()
@@ -484,8 +485,9 @@ impl ControlApi for FakeControlApi {
                 Some("btc-paper-canary".to_string()),
                 "running",
                 true,
-                config,
-            ),
+                config.clone(),
+            )
+            .with_config(serde_json::to_value(config).unwrap()),
         })
     }
 
@@ -678,7 +680,8 @@ impl ControlApi for FakeControlApi {
                     max_daily_loss_usd: None,
                     require_exit_book: None,
                 }),
-                raw: serde_json::json!({
+                sources: Vec::new(),
+                btc_realtime_paper: serde_json::json!({
                     "pipeline_version": "btc_realtime_paper_pipeline_v11",
                     "process_schema_version": "btc_realtime_paper_process_v2",
                     "preregistration_sha256": "b".repeat(64),
@@ -1290,7 +1293,7 @@ async fn authenticated_admin_can_manage_trading_processes() {
                 .header(AUTHORIZATION, "Bearer secret")
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"name":"btc-paper-canary","process_type":"btc_5m","process_scope":"realtime_paper","enabled":false,"status":"created","config":{}}"#,
+                    r#"{"name":"btc-paper-canary","process_type":"btc_5m","process_scope":"realtime_paper","enabled":false,"status":"created","config":{"sources":[],"btc_realtime_paper":{}}}"#,
                 ))
                 .unwrap(),
         )
@@ -1517,14 +1520,14 @@ async fn trading_process_patch_enforces_capacity_ceilings_without_persisting_rej
 
     let mut legacy: TradingProcessConfig = serde_json::from_value(serde_json::json!({
         "execution": {"mode": "paper", "execute_signals": true, "live_capital": false},
-        "raw": {"btc_realtime_paper": {"paper": {}}}
+        "sources": [], "btc_realtime_paper": {"paper": {}}
     }))
     .unwrap();
     let execution = legacy.execution.as_mut().unwrap();
     execution.max_order_notional_usd = Some(TRADING_PROCESS_ORDER_NOTIONAL_CEILING_USD);
     execution.max_open_notional_usd = Some(TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD);
     execution.max_open_positions = Some(TRADING_PROCESS_OPEN_POSITION_CEILING);
-    legacy.raw["btc_realtime_paper"]["paper"]["starting_collateral_usd"] =
+    legacy.btc_realtime_paper["paper"]["starting_collateral_usd"] =
         serde_json::json!(TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD.to_string());
     assert_eq!(
         patch_process_config(&app, process_id, &legacy).await,
@@ -1549,7 +1552,7 @@ async fn trading_process_patch_enforces_capacity_ceilings_without_persisting_rej
         Some(TRADING_PROCESS_OPEN_POSITION_CEILING + 1);
     legacy_overrides.push(above);
     let mut above = legacy.clone();
-    above.raw["btc_realtime_paper"]["paper"]["starting_collateral_usd"] =
+    above.btc_realtime_paper["paper"]["starting_collateral_usd"] =
         serde_json::json!((TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD + dec!(0.01)).to_string());
     legacy_overrides.push(above);
     for rejected in legacy_overrides {

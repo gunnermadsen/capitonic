@@ -156,7 +156,7 @@ pub trait ControlApi: Send + Sync + 'static {
     async fn get_trading_process(
         &self,
         _process_id: Uuid,
-    ) -> Result<TradingProcessResponse, HttpError> {
+    ) -> Result<TradingProcessResponse<serde_json::Value>, HttpError> {
         Err(HttpError::not_implemented(
             "trading processes are not wired",
         ))
@@ -476,7 +476,7 @@ async fn list_trading_processes(
 async fn get_trading_process(
     State(state): State<HttpState>,
     Path(process_id): Path<Uuid>,
-) -> Result<Json<TradingProcessResponse>, HttpError> {
+) -> Result<Json<TradingProcessResponse<serde_json::Value>>, HttpError> {
     state
         .control
         .get_trading_process(process_id)
@@ -687,13 +687,13 @@ pub struct UpsertTradingProcessByKeyRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TradingProcessResponse {
-    pub process: TradingProcess,
+pub struct TradingProcessResponse<C = TradingProcessConfig> {
+    pub process: TradingProcess<C>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradingProcessesResponse {
-    pub processes: Vec<TradingProcess>,
+    pub processes: Vec<TradingProcess<serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

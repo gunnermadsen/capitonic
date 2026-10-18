@@ -481,7 +481,7 @@ def _load_execution_scenarios(
     process = json.loads(path.read_text())
     try:
         process_config = process["config"]
-        paper_config = process_config["raw"]["btc_realtime_paper"]
+        paper_config = process_config["btc_realtime_paper"]
         strategy = paper_config["strategy"]
         paper = paper_config["paper"]
     except (KeyError, TypeError) as error:

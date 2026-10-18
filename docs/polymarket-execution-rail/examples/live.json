@@ -94,69 +94,67 @@
       }
     ]
   },
-  "raw": {
-    "btc_realtime_paper": {
-      "schema_version": "btc_realtime_paper_process_v6",
-      "playbook_version": "v1.2",
-      "next_experiment_key": "polymarket-contract-live",
-      "preregistration_sha256": "84a4c29be4d90ae5cbdc65aa2adb6ed0720b1db05f0bd93b6ed806889c264b25",
-      "strategy": {
-        "decision_strategy": {
-          "type": "unified_model_router",
-          "version": 1,
-          "routing": {
-            "mode": "first_qualified",
-            "tie_break": "array_order"
-          },
-          "models": [
-            {
-              "member_id": "conservative",
-              "selection": {
-                "type": "btc_directional_model",
-                "model_key": "btc-5m-conservative-selective-confidence-075-live-pilot-20261006",
-                "artifact_sha256": "d18f13dd58f3b32ace158f9bf46b05ae897aaf65776f8a7ee553bddf0131761e",
-                "feature_schema_sha256": "5dceedc374621f50e844ddf43cea5f58068c4dc70c36169c037dbb2691c7f39a"
-              }
-            }
-          ]
+  "btc_realtime_paper": {
+    "schema_version": "btc_realtime_paper_process_v6",
+    "playbook_version": "v1.2",
+    "next_experiment_key": "polymarket-contract-live",
+    "preregistration_sha256": "84a4c29be4d90ae5cbdc65aa2adb6ed0720b1db05f0bd93b6ed806889c264b25",
+    "strategy": {
+      "decision_strategy": {
+        "type": "unified_model_router",
+        "version": 1,
+        "routing": {
+          "mode": "first_qualified",
+          "tie_break": "array_order"
         },
-        "max_directional_feature_age_ms": 5000,
-        "required_model_feeds": []
+        "models": [
+          {
+            "member_id": "conservative",
+            "selection": {
+              "type": "btc_directional_model",
+              "model_key": "btc-5m-conservative-selective-confidence-075-live-pilot-20261006",
+              "artifact_sha256": "d18f13dd58f3b32ace158f9bf46b05ae897aaf65776f8a7ee553bddf0131761e",
+              "feature_schema_sha256": "5dceedc374621f50e844ddf43cea5f58068c4dc70c36169c037dbb2691c7f39a"
+            }
+          }
+        ]
       },
-      "risk_strategies": [],
-      "runtime": {
-        "strategy_interval_ms": 1000
-      }
+      "max_directional_feature_age_ms": 5000,
+      "required_model_feeds": []
     },
-    "sources": [
-      {
-        "key": "polymarket_btc_five_minute_market_contracts",
-        "contract_version": 1,
-        "required": true,
-        "maximum_age_ms": null,
-        "require_sequence_integrity": true
-      },
-      {
-        "key": "polymarket_btc_five_minute_orderbooks",
-        "contract_version": 1,
-        "required": true,
-        "maximum_age_ms": null,
-        "require_sequence_integrity": true
-      },
-      {
-        "key": "polymarket_btc_five_minute_resolutions",
-        "contract_version": 1,
-        "required": true,
-        "maximum_age_ms": null,
-        "require_sequence_integrity": true
-      },
-      {
-        "key": "binance_spot_btcusdt_one_second_ohlcv",
-        "contract_version": 1,
-        "required": true,
-        "maximum_age_ms": null,
-        "require_sequence_integrity": true
-      }
-    ]
-  }
+    "risk_strategies": [],
+    "runtime": {
+      "strategy_interval_ms": 1000
+    }
+  },
+  "sources": [
+    {
+      "key": "polymarket_btc_five_minute_market_contracts",
+      "contract_version": 1,
+      "required": true,
+      "maximum_age_ms": null,
+      "require_sequence_integrity": true
+    },
+    {
+      "key": "polymarket_btc_five_minute_orderbooks",
+      "contract_version": 1,
+      "required": true,
+      "maximum_age_ms": null,
+      "require_sequence_integrity": true
+    },
+    {
+      "key": "polymarket_btc_five_minute_resolutions",
+      "contract_version": 1,
+      "required": true,
+      "maximum_age_ms": null,
+      "require_sequence_integrity": true
+    },
+    {
+      "key": "binance_spot_btcusdt_one_second_ohlcv",
+      "contract_version": 1,
+      "required": true,
+      "maximum_age_ms": null,
+      "require_sequence_integrity": true
+    }
+  ]
 }

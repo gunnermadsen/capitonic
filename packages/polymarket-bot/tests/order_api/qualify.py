@@ -151,7 +151,7 @@ class Qualification:
                 raise RuntimeError('Reusable ' + mode + ' process is unavailable; no replacement created')
             process = response['process']
             execution = process['config']['execution']
-            control = process['config']['raw']['btc_realtime_paper']
+            control = process['config']['btc_realtime_paper']
             if (process['process_id'] != pid or process['enabled'] or process['status'] != 'stopped'
                     or execution['mode'] != mode or execution.get('rail') != {'name': 'polymarket', 'version': 1}):
                 raise RuntimeError('Reusable ' + mode + ' process must be stopped with its expected rail contract')
@@ -161,7 +161,7 @@ class Qualification:
             for policy in config['execution']['order_policies']:
                 if policy['name'] == 'order_execution_policy':
                     policy['params']['member_order_types']['conservative'] = self.state['order_type']
-            control = config['raw']['btc_realtime_paper']
+            control = config['btc_realtime_paper']
             control.get('runtime', {}).pop('trigger', None)
             run_key = 'order-api-' + mode + '-' + self.state['run']
             control['next_experiment_key'] = run_key

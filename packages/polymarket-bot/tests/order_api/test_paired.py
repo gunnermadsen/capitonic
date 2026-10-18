@@ -56,7 +56,7 @@ class PairedTest(unittest.TestCase):
             if mutation == 'account': live['config']['execution']['account_ref'] = 'other'
             if mutation == 'quantity': policies(live)['sizing_policy']['params']['default_share'] = 20
             if mutation == 'policy': policies(live)['liquidity_policy']['params']['require_exit_book'] = False
-            if mutation == 'trigger': live['config']['raw']['btc_realtime_paper']['runtime']['trigger'] = 'umr'
+            if mutation == 'trigger': live['config']['btc_realtime_paper']['runtime']['trigger'] = 'umr'
             if mutation == 'status': live['status'] = 'stopped'
             with self.subTest(mutation=mutation), self.assertRaises(RuntimeError):
                 validate_pair(processes, 'polymarket-primary', ceiling, True)

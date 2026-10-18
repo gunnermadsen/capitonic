@@ -100,7 +100,7 @@ fn compatible_run_identity_is_preserved_without_restoring_trigger_semantics() {
         "../../../../../docs/polymarket-execution-rail/examples/paper.json"
     ))
     .unwrap();
-    config.raw["btc_realtime_paper"]["runtime"]["trigger"] = serde_json::json!("api");
+    config.btc_realtime_paper["runtime"]["trigger"] = serde_json::json!("api");
     let compiled = compile(&config).unwrap();
     let mut legacy_control = serde_json::to_value(&compiled.control).unwrap();
     legacy_control["runtime"]["trigger"] = serde_json::json!("api");

@@ -112,8 +112,8 @@ pub fn is_selected(config: &TradingProcessConfig) -> bool {
         .as_ref()
         .is_some_and(|e| e.rail.is_some() || e.order_policies.is_some())
         || config
-            .raw
-            .pointer("/btc_realtime_paper/schema_version")
+            .btc_realtime_paper
+            .get("schema_version")
             .and_then(serde_json::Value::as_str)
             == Some(PROCESS_SCHEMA_VERSION)
 }
@@ -175,19 +175,8 @@ pub fn compile(config: &TradingProcessConfig) -> Result<CompiledDefinition> {
             .context("order_policies are required")?,
         mode == ExecutionMode::Paper,
     )?;
-    let raw = config
-        .raw
-        .as_object()
-        .context("config.raw must be an object")?;
-    ensure!(
-        raw.len() == 2 && raw.contains_key("sources") && raw.contains_key("btc_realtime_paper"),
-        "config.raw must contain exactly sources and btc_realtime_paper"
-    );
-    let mut sources: Vec<SourceSelector> =
-        serde_json::from_value(raw["sources"].clone()).context("invalid config.raw.sources")?;
-    let value = raw
-        .get("btc_realtime_paper")
-        .context("missing btc_realtime_paper")?;
+    let mut sources = config.sources.clone();
+    let value = &config.btc_realtime_paper;
     if let Some(members) = value
         .pointer("/strategy/decision_strategy/models")
         .and_then(serde_json::Value::as_array)
@@ -337,8 +326,8 @@ pub fn compile(config: &TradingProcessConfig) -> Result<CompiledDefinition> {
 pub fn pin_definition(config: &mut TradingProcessConfig) -> Result<()> {
     let mut candidate = config.clone();
     let selected = candidate
-        .raw
-        .pointer_mut("/btc_realtime_paper/strategy/decision_strategy")
+        .btc_realtime_paper
+        .pointer_mut("/strategy/decision_strategy")
         .context("missing model router")?;
     ensure!(
         selected

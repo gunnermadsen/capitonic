@@ -278,7 +278,7 @@ where
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TradingProcess {
+pub struct TradingProcess<C = TradingProcessConfig> {
     pub process_id: Uuid,
     pub name: String,
     pub process_type: String,
@@ -286,13 +286,34 @@ pub struct TradingProcess {
     pub process_key: Option<String>,
     pub status: String,
     pub enabled: bool,
-    pub config: TradingProcessConfig,
+    pub config: C,
     pub metadata: serde_json::Value,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub stopped_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
+}
+
+impl<C> TradingProcess<C> {
+    pub fn with_config<D>(self, config: D) -> TradingProcess<D> {
+        TradingProcess {
+            config,
+            process_id: self.process_id,
+            name: self.name,
+            process_type: self.process_type,
+            process_scope: self.process_scope,
+            process_key: self.process_key,
+            status: self.status,
+            enabled: self.enabled,
+            metadata: self.metadata,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            started_at: self.started_at,
+            stopped_at: self.stopped_at,
+            last_error: self.last_error,
+        }
+    }
 }
 
 impl TradingProcess {
@@ -302,11 +323,12 @@ impl TradingProcess {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct TradingProcessConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<ProcessExecutionConfig>,
-    #[serde(default)]
-    pub raw: serde_json::Value,
+    pub sources: Vec<crate::market_data_stream::SourceSelector>,
+    pub btc_realtime_paper: serde_json::Value,
 }
 
 impl TradingProcessConfig {

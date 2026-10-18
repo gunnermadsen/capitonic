@@ -90,32 +90,11 @@ impl BtcProcessManager {
             .is_some()
         {
             return Err(HttpError::bad_request(
-                "BTC realtime execution config accepts only execution safety fields and raw.btc_realtime_paper settings",
+                "BTC realtime execution config accepts only execution safety fields and btc_realtime_paper settings",
             ));
         }
-        let raw = process.config.raw.as_object().ok_or_else(|| {
-            HttpError::bad_request("BTC process config.raw must be a JSON object")
-        })?;
-        if raw.len() != 2 || !raw.contains_key("sources") || !raw.contains_key("btc_realtime_paper")
-        {
-            return Err(HttpError::bad_request(
-                "BTC process config.raw must contain exactly sources and btc_realtime_paper",
-            ));
-        }
-        let sources: Vec<SourceSelector> =
-            serde_json::from_value(raw["sources"].clone()).map_err(|error| {
-                HttpError::bad_request(format!("invalid config.raw.sources: {error}"))
-            })?;
-        let control_value = process
-            .config
-            .raw
-            .get("btc_realtime_paper")
-            .cloned()
-            .ok_or_else(|| {
-                HttpError::bad_request(
-                    "process config.raw.btc_realtime_paper is required before start",
-                )
-            })?;
+        let sources = process.config.sources.clone();
+        let control_value = process.config.btc_realtime_paper.clone();
         let mut control = parse_btc_process_control(control_value, &sources, definition_use)?;
         control.next_experiment_key = control.next_experiment_key.trim().to_string();
         control.preregistration_sha256 = control.preregistration_sha256.trim().to_ascii_lowercase();
@@ -751,14 +730,14 @@ impl BtcProcessManager {
               WHERE event.process_id = p.process_id
                 AND event.event_type = 'btc_run_manifest'
                 AND event.metadata #>> '{run_key}' =
-                    p.config #>> '{raw,btc_realtime_paper,next_experiment_key}'
+                    p.config #>> '{btc_realtime_paper,next_experiment_key}'
               ORDER BY event.timestamp_utc DESC, event.created_at DESC
               LIMIT 1
             ) run ON true
             WHERE p.process_type = 'btc_5m'
               AND p.process_scope = 'realtime_paper'
-              AND p.config #>> '{raw,btc_realtime_paper,schema_version}' IN ($1, $2, $3, $4, $5, $6)
-              AND (run.timestamp_utc IS NOT NULL OR p.config #>> '{raw,btc_realtime_paper,schema_version}'=$6)
+              AND p.config #>> '{btc_realtime_paper,schema_version}' IN ($1, $2, $3, $4, $5, $6)
+              AND (run.timestamp_utc IS NOT NULL OR p.config #>> '{btc_realtime_paper,schema_version}'=$6)
               AND p.enabled
               AND p.status IN ('starting','running','stopping')
               AND p.stopped_at IS NULL

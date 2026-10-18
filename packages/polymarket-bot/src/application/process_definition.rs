@@ -265,9 +265,7 @@ pub(super) fn parse_btc_process_control(
     let control: BtcRealtimePaperControlConfig = serde_json::from_value(value)
         .map_err(|e| HttpError::bad_request(format!("invalid BTC process configuration: {e}")))?;
     if sources.is_empty() {
-        return Err(HttpError::bad_request(
-            "config.raw.sources must not be empty",
-        ));
+        return Err(HttpError::bad_request("config.sources must not be empty"));
     }
     if control.playbook_version.as_deref() != Some("v1.2") {
         return Err(HttpError::bad_request(
@@ -499,9 +497,7 @@ pub(super) fn pin_router_config(config: &mut TradingProcessConfig) -> Result<(),
         return polymarket_bot::execution::polymarket::configuration::pin_definition(config)
             .map_err(|error| HttpError::bad_request(format!("{error:#}")));
     }
-    let Some(control) = config.raw.get_mut("btc_realtime_paper") else {
-        return Ok(());
-    };
+    let control = &mut config.btc_realtime_paper;
     if !matches!(
         control["schema_version"].as_str(),
         Some(ROUTER_PROCESS_SCHEMA_VERSION | AGENT_PROCESS_SCHEMA_VERSION)
@@ -986,7 +982,7 @@ pub(super) fn prepare_btc_start_definition_for_execution(
     } else {
         serde_json::to_value(&strategy).map_err(|error| HttpError::internal(error.to_string()))?
     };
-    let mut frozen_raw = serde_json::json!({
+    let mut frozen_control = serde_json::json!({
         "pipeline_version": pipeline_version,
         "process_schema_version": process_schema_version,
         "preregistration_sha256": &preregistration_sha256,
@@ -996,7 +992,6 @@ pub(super) fn prepare_btc_start_definition_for_execution(
         },
         "strategy": frozen_strategy,
         "playbook_version": "v1.2",
-        "sources": &sources,
         "runtime": &runtime,
         "paper": {
             "execution_enabled": true,
@@ -1005,7 +1000,7 @@ pub(super) fn prepare_btc_start_definition_for_execution(
         }
     });
     if directional_model_entry_policy != BtcDirectionalModelEntryPolicy::RequirePositiveDirectEdge {
-        frozen_raw["paper"]
+        frozen_control["paper"]
             .as_object_mut()
             .expect("BTC frozen paper config is an object")
             .insert(
@@ -1015,7 +1010,7 @@ pub(super) fn prepare_btc_start_definition_for_execution(
             );
     }
     if let Some(entry_admission) = entry_admission.as_ref() {
-        frozen_raw
+        frozen_control
             .as_object_mut()
             .expect("BTC frozen process config is an object")
             .insert(
@@ -1025,7 +1020,7 @@ pub(super) fn prepare_btc_start_definition_for_execution(
             );
     }
     if !risk_strategies.is_empty() {
-        frozen_raw
+        frozen_control
             .as_object_mut()
             .expect("BTC frozen process config is an object")
             .insert(
@@ -1035,8 +1030,8 @@ pub(super) fn prepare_btc_start_definition_for_execution(
             );
     }
     if execution_mode == BtcExecutionMode::Live {
-        frozen_raw["paper"]["execution_enabled"] = serde_json::Value::Bool(false);
-        frozen_raw
+        frozen_control["paper"]["execution_enabled"] = serde_json::Value::Bool(false);
+        frozen_control
             .as_object_mut()
             .expect("BTC frozen process config is an object")
             .insert(
@@ -1062,7 +1057,8 @@ pub(super) fn prepare_btc_start_definition_for_execution(
             max_daily_loss_usd: execution.max_daily_loss_usd,
             require_exit_book: execution.require_exit_book,
         }),
-        raw: frozen_raw,
+        sources: sources.clone(),
+        btc_realtime_paper: frozen_control,
     };
     let config_hash = hash_btc_frozen_process_config(&frozen_process_config)?;
     Ok(PreparedBtcStartDefinition {
@@ -1099,17 +1095,20 @@ pub(super) fn hash_btc_frozen_process_config(
 pub(super) fn resume_process_contract_projection(
     mut config: serde_json::Value,
 ) -> serde_json::Value {
-    if let Some(raw) = config
-        .get_mut("raw")
+    if let Some(object) = config.as_object_mut() {
+        object.remove("sources");
+    }
+    if let Some(control) = config
+        .get_mut("btc_realtime_paper")
         .and_then(serde_json::Value::as_object_mut)
     {
-        if let Some(build) = raw
+        if let Some(build) = control
             .get_mut("build")
             .and_then(serde_json::Value::as_object_mut)
         {
             build.remove("compiled_source_identity");
         }
-        if let Some(runtime) = raw
+        if let Some(runtime) = control
             .get_mut("runtime")
             .and_then(serde_json::Value::as_object_mut)
         {
@@ -1137,18 +1136,17 @@ pub(super) fn resume_process_contract_projection(
                 runtime.remove(retired_system_field);
             }
         }
-        raw.remove("playbook_version");
-        raw.remove("sources");
-        if raw
+        control.remove("playbook_version");
+        if control
             .get("process_schema_version")
             .and_then(serde_json::Value::as_str)
             == Some(LEGACY_BTC_PROCESS_SCHEMA_VERSION)
         {
-            raw.insert(
+            control.insert(
                 "process_schema_version".into(),
                 serde_json::Value::String(BTC_PROCESS_SCHEMA_VERSION.into()),
             );
-            raw.remove("ml_shadow");
+            control.remove("ml_shadow");
         }
     }
     config
@@ -1159,15 +1157,11 @@ pub(super) fn selector_only_config_change(
     candidate: &TradingProcessConfig,
 ) -> Result<bool, HttpError> {
     fn remove_selectors(value: &mut serde_json::Value) {
-        if let Some(raw) = value
-            .get_mut("raw")
-            .and_then(serde_json::Value::as_object_mut)
-        {
-            raw.remove("sources");
+        if let Some(object) = value.as_object_mut() {
+            object.remove("sources");
         }
         if let Some(control) = value
-            .get_mut("raw")
-            .and_then(|raw| raw.get_mut("btc_realtime_paper"))
+            .get_mut("btc_realtime_paper")
             .and_then(serde_json::Value::as_object_mut)
         {
             control.remove("playbook_version");

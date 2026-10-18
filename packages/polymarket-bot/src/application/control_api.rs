@@ -342,10 +342,10 @@ impl ControlApi for RuntimeControl {
     async fn get_trading_process(
         &self,
         process_id: uuid::Uuid,
-    ) -> Result<TradingProcessResponse, HttpError> {
+    ) -> Result<TradingProcessResponse<serde_json::Value>, HttpError> {
         let process = self
             .store
-            .get_trading_process(process_id)
+            .get_trading_process_record(process_id)
             .await
             .map_err(|error| HttpError::internal(error.to_string()))?
             .ok_or_else(|| HttpError::not_found("trading process not found"))?;
@@ -479,7 +479,7 @@ impl ControlApi for RuntimeControl {
     ) -> Result<TradingProcessStatusResponse, HttpError> {
         let process = self
             .store
-            .get_trading_process(process_id)
+            .get_trading_process_record(process_id)
             .await
             .map_err(|error| HttpError::internal(error.to_string()))?
             .ok_or_else(|| HttpError::not_found("trading process not found"))?;
@@ -489,13 +489,26 @@ impl ControlApi for RuntimeControl {
             .await
             .map_err(|error| HttpError::internal(error.to_string()))?
             .ok_or_else(|| HttpError::not_found("trading process not found"))?;
-        if BtcProcessManager::is_managed_process(&process) {
+        if BtcProcessManager::is_managed_identity(&process.process_type, &process.process_scope) {
             if let Some(object) = status.as_object_mut() {
                 object.insert(
                     "aggregate_scope".to_string(),
                     serde_json::Value::String("process_lifetime".to_string()),
                 );
-                let execution_mode = process.effective_execution().mode;
+                let execution = process
+                    .config
+                    .get("execution")
+                    .filter(|value| !value.is_null())
+                    .cloned()
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .map_err(|error| HttpError::internal(error.to_string()))?;
+                let execution_mode = TradingProcessConfig {
+                    execution,
+                    ..Default::default()
+                }
+                .effective_execution()
+                .mode;
                 let runtime = match &self.btc_manager {
                     Some(manager) => {
                         manager
@@ -570,11 +583,11 @@ impl ControlApi for RuntimeControl {
         };
         let current = self
             .store
-            .get_trading_process(process_id)
+            .get_trading_process_record(process_id)
             .await
             .map_err(|error| HttpError::internal(error.to_string()))?
             .ok_or_else(|| HttpError::not_found("trading process not found"))?;
-        if !BtcProcessManager::is_managed_process(&current) {
+        if !BtcProcessManager::is_managed_identity(&current.process_type, &current.process_scope) {
             return Err(HttpError::bad_request(
                 "only managed BTC realtime execution process definitions can be updated",
             ));
@@ -599,7 +612,11 @@ impl ControlApi for RuntimeControl {
             && request.name.is_none()
             && request.metadata.is_none()
             && request.config.as_ref().is_some_and(|config| {
-                selector_only_config_change(&current.config, config).unwrap_or(false)
+                serde_json::from_value::<TradingProcessConfig>(current.config.clone()).is_ok_and(
+                    |current_config| {
+                        selector_only_config_change(&current_config, config).unwrap_or(false)
+                    },
+                )
             });
         if terminal_pending
             || current.enabled && !active_selector_update
@@ -613,13 +630,16 @@ impl ControlApi for RuntimeControl {
             let manager = self.btc_manager.as_ref().ok_or_else(|| {
                 HttpError::bad_request("BTC realtime capability is disabled for this deployment")
             })?;
-            let mut candidate = current.clone();
-            candidate.config = config.clone();
+            let candidate = current.clone().with_config(config.clone());
             if active_selector_update {
                 manager.validate_resume_definition(&candidate)?;
             } else {
                 manager.validate_definition_for_storage(&candidate)?;
             }
+        }
+        if request.config.is_none() {
+            serde_json::from_value::<TradingProcessConfig>(current.config.clone())
+                .map_err(|_| HttpError::bad_request("replace the process configuration with the current TPC layout before updating it"))?;
         }
         let process = self
             .store

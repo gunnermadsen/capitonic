@@ -58,7 +58,7 @@ fn retired_trigger_is_inert_and_absent_from_compiled_identity() {
     let clean_hash = compile(&config(clean.clone())).unwrap().config_sha256;
     for trigger in ["api", "umr"] {
         let mut compatible = clean.clone();
-        compatible["raw"]["btc_realtime_paper"]["runtime"]["trigger"] = json!(trigger);
+        compatible["btc_realtime_paper"]["runtime"]["trigger"] = json!(trigger);
         let compiled = compile(&config(compatible)).unwrap();
         assert_eq!(compiled.config_sha256, clean_hash);
         assert_eq!(
@@ -91,7 +91,7 @@ fn policy_and_source_order_do_not_change_compiled_identity() {
         .as_array_mut()
         .unwrap()
         .reverse();
-    v["raw"]["sources"].as_array_mut().unwrap().reverse();
+    v["sources"].as_array_mut().unwrap().reverse();
     policy(&mut v, "sizing_policy")["max_entry_price"] = json!("0.5500");
     let resolved = compile(&config(v)).unwrap();
     assert_eq!(original.config_sha256, resolved.config_sha256);
@@ -186,11 +186,11 @@ fn legacy_fields_and_mixed_contract_markers_never_fall_back() {
     }
     for field in ["target_size", "max_book_age_ms", "unified_model"] {
         let mut v = fixture("paper");
-        v["raw"]["btc_realtime_paper"]["strategy"][field] = json!(5);
+        v["btc_realtime_paper"]["strategy"][field] = json!(5);
         invalid(v, "unknown field");
     }
     let mut v = fixture("paper");
-    v["raw"]["btc_realtime_paper"]["schema_version"] = json!("btc_realtime_paper_process_v4");
+    v["btc_realtime_paper"]["schema_version"] = json!("btc_realtime_paper_process_v4");
     invalid(v, "unsupported process schema");
     let mut v = fixture("paper");
     v["execution"]["rail"]["name"] = json!("unknown");
@@ -217,10 +217,9 @@ fn quantity_bounds_and_dynamic_availability_are_explicit() {
 #[test]
 fn order_types_preserve_member_specific_configuration() {
     let mut v = fixture("paper");
-    let mut member =
-        v["raw"]["btc_realtime_paper"]["strategy"]["decision_strategy"]["models"][0].clone();
+    let mut member = v["btc_realtime_paper"]["strategy"]["decision_strategy"]["models"][0].clone();
     member["member_id"] = json!("second");
-    v["raw"]["btc_realtime_paper"]["strategy"]["decision_strategy"]["models"]
+    v["btc_realtime_paper"]["strategy"]["decision_strategy"]["models"]
         .as_array_mut()
         .unwrap()
         .push(member);
@@ -239,8 +238,8 @@ fn order_types_preserve_member_specific_configuration() {
             .order_execution
             .member_order_types["second"]
     );
-    v["raw"]["btc_realtime_paper"]["strategy"]["decision_strategy"]["models"][0]
-        ["entry_order_type"] = json!("fok");
+    v["btc_realtime_paper"]["strategy"]["decision_strategy"]["models"][0]["entry_order_type"] =
+        json!("fok");
     invalid(v, "belongs only");
 }
 
@@ -253,8 +252,8 @@ fn authorization_and_adapter_configuration_cannot_be_confused() {
     v["execution"]["account_ref"] = Value::Null;
     invalid(v, "account_ref");
     let mut v = fixture("live");
-    v["raw"]["btc_realtime_paper"]["strategy"] =
-        fixture("paper")["raw"]["btc_realtime_paper"]["strategy"].clone();
+    v["btc_realtime_paper"]["strategy"] =
+        fixture("paper")["btc_realtime_paper"]["strategy"].clone();
     invalid(v, "does not authorize live capital");
     let mut v = fixture("live");
     v["execution"]["order_policies"]
@@ -267,10 +266,10 @@ fn authorization_and_adapter_configuration_cannot_be_confused() {
 #[test]
 fn missing_sources_and_incompatible_frozen_requirements_are_rejected() {
     let mut v = fixture("paper");
-    v["raw"]["sources"].as_array_mut().unwrap().pop();
+    v["sources"].as_array_mut().unwrap().pop();
     assert!(compile(&config(v)).is_err());
     let mut v = fixture("paper");
-    v["raw"]["btc_realtime_paper"]["strategy"]["max_directional_feature_age_ms"] = json!(6000);
+    v["btc_realtime_paper"]["strategy"]["max_directional_feature_age_ms"] = json!(6000);
     assert!(compile(&config(v)).is_err());
 }
 
@@ -301,7 +300,7 @@ fn optional_loss_controls_reuse_existing_admission_contracts() {
 
 #[test]
 fn legacy_execution_serialization_and_effective_controls_are_unchanged() {
-    let legacy = json!({"execution":{"mode":"live","execute_signals":true,"live_capital":true,"account_ref":"polymarket-primary","taker_fee_rate":null,"max_order_notional_usd":"3","max_open_notional_usd":"3","max_open_positions":1,"max_daily_loss_usd":"10","require_exit_book":true},"raw":{"btc_realtime_paper":{"schema_version":"btc_realtime_paper_process_v4"}}});
+    let legacy = json!({"execution":{"mode":"live","execute_signals":true,"live_capital":true,"account_ref":"polymarket-primary","taker_fee_rate":null,"max_order_notional_usd":"3","max_open_notional_usd":"3","max_open_positions":1,"max_daily_loss_usd":"10","require_exit_book":true},"sources":[],"btc_realtime_paper":{"schema_version":"btc_realtime_paper_process_v4"}});
     let c = config(legacy.clone());
     assert!(!is_selected(&c));
     assert_eq!(serde_json::to_value(&c).unwrap(), legacy);
@@ -337,9 +336,9 @@ fn paper_policy_never_changes_shared_policy_compilation() {
 fn agent_configuration_reuses_existing_umr_contract_without_new_agent_machinery() {
     use polymarket_bot::btc::unified_model_runtime::agent;
     let mut v = fixture("paper");
-    v["raw"]["sources"] = json!(agent::REQUIRED_PRODUCTS);
-    v["raw"]["btc_realtime_paper"]["strategy"]["max_directional_feature_age_ms"] = Value::Null;
-    v["raw"]["btc_realtime_paper"]["strategy"]["decision_strategy"]["models"][0]["selection"] = json!({"type":"openai_agent","profile_key":agent::PROFILE_KEY,"profile_sha256":agent::hash(&agent::profile()).unwrap()});
+    v["sources"] = json!(agent::REQUIRED_PRODUCTS);
+    v["btc_realtime_paper"]["strategy"]["max_directional_feature_age_ms"] = Value::Null;
+    v["btc_realtime_paper"]["strategy"]["decision_strategy"]["models"][0]["selection"] = json!({"type":"openai_agent","profile_key":agent::PROFILE_KEY,"profile_sha256":agent::hash(&agent::profile()).unwrap()});
     let result = compile(&config(v)).unwrap();
     assert!(matches!(
         result.control.strategy.decision_strategy.models[0].selection,
@@ -350,7 +349,7 @@ fn agent_configuration_reuses_existing_umr_contract_without_new_agent_machinery(
 #[test]
 fn definition_pinning_uses_the_existing_catalog_and_keeps_order_types_in_policies() {
     let mut v = fixture("paper");
-    let member = &mut v["raw"]["btc_realtime_paper"]["strategy"]["decision_strategy"]["models"][0];
+    let member = &mut v["btc_realtime_paper"]["strategy"]["decision_strategy"]["models"][0];
     member["selection"]
         .as_object_mut()
         .unwrap()
@@ -362,8 +361,8 @@ fn definition_pinning_uses_the_existing_catalog_and_keeps_order_types_in_policie
     let mut c = config(v);
     pin_definition(&mut c).unwrap();
     assert_eq!(
-        c.raw["btc_realtime_paper"]["strategy"]["decision_strategy"]["models"][0],
-        fixture("paper")["raw"]["btc_realtime_paper"]["strategy"]["decision_strategy"]["models"][0]
+        c.btc_realtime_paper["strategy"]["decision_strategy"]["models"][0],
+        fixture("paper")["btc_realtime_paper"]["strategy"]["decision_strategy"]["models"][0]
     );
     compile(&c).unwrap();
 }
@@ -488,19 +487,50 @@ fn daily_loss_policy_accepts_positive_decimals_without_a_ceiling_in_both_modes()
 fn canonical_sources_are_required_and_validated() {
     for mode in ["paper", "live"] {
         let mut missing = fixture(mode);
-        missing["raw"].as_object_mut().unwrap().remove("sources");
-        invalid(missing, "config.raw must contain exactly");
-        for value in [Value::Null, json!({}), json!([])] {
+        missing.as_object_mut().unwrap().remove("sources");
+        assert!(serde_json::from_value::<TradingProcessConfig>(missing).is_err());
+        for value in [Value::Null, json!({})] {
             let mut input = fixture(mode);
-            input["raw"]["sources"] = value;
-            assert!(compile(&config(input)).is_err());
+            input["sources"] = value;
+            assert!(serde_json::from_value::<TradingProcessConfig>(input).is_err());
         }
+        let mut empty = fixture(mode);
+        empty["sources"] = json!([]);
+        assert!(compile(&config(empty)).is_err());
         let mut input = fixture(mode);
-        let duplicate = input["raw"]["sources"][0].clone();
-        input["raw"]["sources"]
-            .as_array_mut()
-            .unwrap()
-            .push(duplicate);
+        let duplicate = input["sources"][0].clone();
+        input["sources"].as_array_mut().unwrap().push(duplicate);
         invalid(input, "duplicate source");
+    }
+}
+
+#[test]
+fn tpc_requires_direct_fields_and_rejects_wrappers() {
+    for mode in ["paper", "live"] {
+        let direct = fixture(mode);
+        let parsed = config(direct.clone());
+        let stored = serde_json::to_value(parsed).unwrap();
+        assert_eq!(stored["sources"], direct["sources"]);
+        assert_eq!(stored["btc_realtime_paper"], direct["btc_realtime_paper"]);
+        assert_eq!(stored.as_object().unwrap().len(), 3);
+        assert_eq!(
+            serde_json::to_value(config(stored.clone())).unwrap(),
+            stored
+        );
+        let wrapped = json!({
+            "execution": direct["execution"],
+            "raw": {
+                "sources": direct["sources"],
+                "btc_realtime_paper": direct["btc_realtime_paper"]
+            }
+        });
+        assert!(serde_json::from_value::<TradingProcessConfig>(wrapped).is_err());
+        let mut mixed = direct.clone();
+        mixed["raw"] = json!({});
+        assert!(serde_json::from_value::<TradingProcessConfig>(mixed).is_err());
+        let mut nested = direct;
+        let sources = nested.as_object_mut().unwrap().remove("sources").unwrap();
+        nested["btc_realtime_paper"]["sources"] = sources;
+        assert!(serde_json::from_value::<TradingProcessConfig>(nested).is_err());
     }
 }

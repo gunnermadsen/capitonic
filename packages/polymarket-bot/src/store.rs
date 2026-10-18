@@ -792,7 +792,10 @@ impl Store {
         trading_process_from_row(row)
     }
 
-    pub async fn list_trading_processes(&self, limit: i64) -> Result<Vec<TradingProcess>> {
+    pub async fn list_trading_processes(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<TradingProcess<serde_json::Value>>> {
         let rows = sqlx::query_as::<_, TradingProcessRow>(
             r#"
             SELECT process_id, name, process_type, process_scope, process_key, status, enabled, config, metadata,
@@ -828,6 +831,20 @@ impl Store {
     }
 
     pub async fn get_trading_process(&self, process_id: Uuid) -> Result<Option<TradingProcess>> {
+        self.get_trading_process_record(process_id)
+            .await?
+            .map(|record| {
+                let config = serde_json::from_value(record.config.clone())
+                    .context("failed to deserialize trading process config")?;
+                Ok(record.with_config(config))
+            })
+            .transpose()
+    }
+
+    pub async fn get_trading_process_record(
+        &self,
+        process_id: Uuid,
+    ) -> Result<Option<TradingProcess<serde_json::Value>>> {
         let row = sqlx::query_as::<_, TradingProcessRow>(
             r#"
             SELECT process_id, name, process_type, process_scope, process_key, status, enabled, config, metadata,
@@ -3475,8 +3492,10 @@ impl Store {
     }
 }
 
-fn trading_process_from_row(row: TradingProcessRow) -> Result<TradingProcess> {
-    let config = serde_json::from_value(row.config.clone())
+fn trading_process_from_row<C: serde::de::DeserializeOwned>(
+    row: TradingProcessRow,
+) -> Result<TradingProcess<C>> {
+    let config = serde_json::from_value(row.config)
         .context("failed to deserialize trading process config")?;
     Ok(TradingProcess {
         process_id: row.process_id,
@@ -4513,6 +4532,49 @@ mod tests {
             SELECT_RESOLVED_LIVE_PROCESS_SETTLEMENTS_SQL,
         },
     };
+
+    #[test]
+    fn historical_process_json_is_readable_but_not_executable() {
+        let config = serde_json::json!({"raw": {"sources": [], "btc_realtime_paper": {}}});
+        let row = super::TradingProcessRow {
+            process_id: Uuid::new_v4(),
+            name: "Historical process".into(),
+            process_type: "btc_5m".into(),
+            process_scope: "realtime_paper".into(),
+            process_key: None,
+            status: "completed".into(),
+            enabled: false,
+            config: config.clone(),
+            metadata: serde_json::json!({}),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            started_at: None,
+            stopped_at: None,
+            last_error: None,
+        };
+        let record = super::trading_process_from_row::<serde_json::Value>(row).unwrap();
+        assert_eq!(serde_json::to_value(&record).unwrap()["config"], config);
+        assert!(
+            serde_json::from_value::<crate::models::TradingProcessConfig>(record.config.clone())
+                .is_err()
+        );
+        let id = record.process_id;
+        let replacement = crate::models::TradingProcessConfig {
+            execution: None,
+            sources: Vec::new(),
+            btc_realtime_paper: serde_json::json!({}),
+        };
+        let updated = record.with_config(replacement);
+        assert_eq!(updated.process_id, id);
+        assert_eq!(updated.status, "completed");
+        assert!(!updated.enabled);
+        assert_eq!(
+            serde_json::to_value(updated).unwrap()["config"],
+            serde_json::json!({
+                "sources": [], "btc_realtime_paper": {}
+            })
+        );
+    }
 
     #[test]
     fn manager_heartbeat_cannot_revive_inactive_processes() {

@@ -667,11 +667,10 @@ impl BtcProcessRunner {
                 );
             }
         }
-        let raw = config
+        let control = config
             .frozen_process_config
-            .pointer("/raw")
+            .get("btc_realtime_paper")
             .context("router requires frozen process configuration")?;
-        let control = raw.get("btc_realtime_paper").unwrap_or(raw);
         let member_strategies = if matches!(
             control["process_schema_version"]
                 .as_str()
@@ -689,7 +688,7 @@ impl BtcProcessRunner {
                         .context("missing router definition")?
                         .clone(),
                 )?;
-            let sources = raw["sources"]
+            let sources = config.frozen_process_config["sources"]
                 .as_array()
                 .context("missing process sources")?;
             let keys = sources
@@ -1512,7 +1511,7 @@ impl BtcProcessRunner {
             let sources: Vec<crate::market_data_stream::SourceSelector> = serde_json::from_value(
                 self.config
                     .frozen_process_config
-                    .pointer("/raw/sources")
+                    .get("sources")
                     .context("agent sources missing from frozen configuration")?
                     .clone(),
             )?;

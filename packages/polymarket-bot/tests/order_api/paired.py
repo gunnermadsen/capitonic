@@ -67,7 +67,7 @@ def validate_pair(processes, account, ceiling, active):
         e = p['config']['execution']
         if (p['process_id'] != pid or e['mode'] != mode
                 or e.get('rail') != {'name': 'polymarket', 'version': 1}
-                or p['config']['raw']['btc_realtime_paper']['runtime']['trigger'] != 'api'
+                or p['config']['btc_realtime_paper']['runtime']['trigger'] != 'api'
                 or not e.get('execute_signals')
                 or (mode == 'live' and (not e.get('live_capital') or e.get('account_ref') != account))):
             raise RuntimeError('Retained process identity/contract/account mismatch')
@@ -162,7 +162,7 @@ class PairedQualification(Qualification):
             ps['order_execution_policy']['params']['member_order_types']['conservative'] = order_type
             ps['entry_timing_policy']['params']['min_seconds_after_open'] = 0
             run_key = 'order-api-' + mode + '-' + self.state['run']
-            control = p['config']['raw']['btc_realtime_paper']
+            control = p['config']['btc_realtime_paper']
             control['next_experiment_key'] = run_key
             control['preregistration_sha256'] = hashlib.sha256(run_key.encode()).hexdigest()
         differences = validate_pair(proposed, account, ceiling, False)

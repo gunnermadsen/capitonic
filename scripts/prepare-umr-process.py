@@ -19,13 +19,13 @@ def prepare(catalog, template, model_key, process_key, name, preregistration_sha
     if not model.get('policy') or not contract.get('qualified_trade_size'):
         raise ValueError('This helper requires a package with qualified size and policy')
     result = copy.deepcopy(template)
-    control = result['config']['raw']['btc_realtime_paper']
+    control = result['config']['btc_realtime_paper']
     strategy = control['strategy']
     products = set(model['supported_products'])
     required = [v for v in contract['inputs'] if v['required']]
     if any(v['product'] not in products for v in required):
         raise ValueError('Required source capability is unavailable')
-    source_keys = {s if isinstance(s, str) else s['key'] for s in result['config']['raw']['sources']}
+    source_keys = {s if isinstance(s, str) else s['key'] for s in result['config']['sources']}
     if any(v['product'] not in source_keys for v in required):
         raise ValueError('The playbook must select all required shared streams')
     bindings = [dict(slot=v['slot'], product=v['product'], semantics=v['semantics'])

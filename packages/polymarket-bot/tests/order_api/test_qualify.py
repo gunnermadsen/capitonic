@@ -90,7 +90,7 @@ class ProcessReuseTest(unittest.TestCase):
                 self.assertEqual([m for m, _ in calls], ['GET', 'GET', 'PATCH', 'PATCH'])
                 self.assertEqual({m: p['process_id'] for m, p in driver.state['processes'].items()}, REUSABLE_PROCESS_IDS)
                 config = driver.state['processes']['paper']['config']
-                run_keys.append(config['raw']['btc_realtime_paper']['next_experiment_key'])
+                run_keys.append(config['btc_realtime_paper']['next_experiment_key'])
                 policy = next(p for p in config['execution']['order_policies'] if p['name'] == 'order_execution_policy')
                 self.assertEqual(policy['params']['member_order_types']['conservative'], order_type)
         self.assertNotEqual(*run_keys)

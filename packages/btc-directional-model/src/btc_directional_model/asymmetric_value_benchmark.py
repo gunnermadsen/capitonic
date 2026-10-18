@@ -3360,11 +3360,11 @@ def _dependency_versions() -> dict[str, str]:
 def _current_process_contract(config: AsymmetricValueConfig) -> dict[str, Any]:
     process = json.loads(config.champion_process.read_text())
     model = json.loads(config.champion_model.read_text())
-    raw = process["config"]["raw"]["btc_realtime_paper"]
-    strategy = raw["strategy"]
+    control = process["config"]["btc_realtime_paper"]
+    strategy = control["strategy"]
     decision = strategy["decision_strategy"]
-    paper = raw["paper"]
-    runtime = raw["runtime"]
+    paper = control["paper"]
+    runtime = control["runtime"]
     prediction_policy = model["prediction_policy"]
     thresholds = {
         float(band["confidence_threshold"]) for band in model["time_bands"]
