@@ -277,7 +277,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TradingProcess<C = TradingProcessConfig> {
     pub process_id: Uuid,
     pub name: String,
@@ -286,6 +286,7 @@ pub struct TradingProcess<C = TradingProcessConfig> {
     pub process_key: Option<String>,
     pub status: String,
     pub enabled: bool,
+    #[serde(flatten)]
     pub config: C,
     pub metadata: serde_json::Value,
     pub created_at: DateTime<Utc>,

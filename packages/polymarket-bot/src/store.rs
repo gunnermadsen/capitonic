@@ -4553,7 +4553,11 @@ mod tests {
             last_error: None,
         };
         let record = super::trading_process_from_row::<serde_json::Value>(row).unwrap();
-        assert_eq!(serde_json::to_value(&record).unwrap()["config"], config);
+        let serialized = serde_json::to_value(&record).unwrap();
+        assert!(serialized.get("config").is_none());
+        for (key, value) in config.as_object().unwrap() {
+            assert_eq!(&serialized[key], value);
+        }
         assert!(
             serde_json::from_value::<crate::models::TradingProcessConfig>(record.config.clone())
                 .is_err()
@@ -4568,12 +4572,10 @@ mod tests {
         assert_eq!(updated.process_id, id);
         assert_eq!(updated.status, "completed");
         assert!(!updated.enabled);
-        assert_eq!(
-            serde_json::to_value(updated).unwrap()["config"],
-            serde_json::json!({
-                "sources": [], "btc_realtime_paper": {}
-            })
-        );
+        let serialized = serde_json::to_value(updated).unwrap();
+        assert!(serialized.get("config").is_none());
+        assert_eq!(serialized["sources"], serde_json::json!([]));
+        assert_eq!(serialized["btc_realtime_paper"], serde_json::json!({}));
     }
 
     #[test]

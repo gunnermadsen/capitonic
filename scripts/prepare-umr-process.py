@@ -19,13 +19,13 @@ def prepare(catalog, template, model_key, process_key, name, preregistration_sha
     if not model.get('policy') or not contract.get('qualified_trade_size'):
         raise ValueError('This helper requires a package with qualified size and policy')
     result = copy.deepcopy(template)
-    control = result['config']['btc_realtime_paper']
+    control = result['btc_realtime_paper']
     strategy = control['strategy']
     products = set(model['supported_products'])
     required = [v for v in contract['inputs'] if v['required']]
     if any(v['product'] not in products for v in required):
         raise ValueError('Required source capability is unavailable')
-    source_keys = {s if isinstance(s, str) else s['key'] for s in result['config']['sources']}
+    source_keys = {s if isinstance(s, str) else s['key'] for s in result['sources']}
     if any(v['product'] not in source_keys for v in required):
         raise ValueError('The playbook must select all required shared streams')
     bindings = [dict(slot=v['slot'], product=v['product'], semantics=v['semantics'])
@@ -33,7 +33,7 @@ def prepare(catalog, template, model_key, process_key, name, preregistration_sha
     result.update(name=name, process_key=process_key, process_scope='realtime_paper', enabled=False, status='created')
     for key in ('process_id', 'id', 'created_at', 'updated_at', 'active_run_id'):
         result.pop(key, None)
-    result['config']['execution'].update(mode='paper', execute_signals=True, live_capital=False)
+    result['execution'].update(mode='paper', execute_signals=True, live_capital=False)
     control['schema_version'] = 'btc_realtime_paper_process_v4'
     strategy['decision_strategy'] = dict(type='unified_model_router', version=1, routing=dict(mode='first_qualified', tie_break='array_order'), models=[dict(member_id='primary', selection=dict(type='btc_directional_model', model_key=model_key))])
     strategy.pop('feature_schema_version', None)

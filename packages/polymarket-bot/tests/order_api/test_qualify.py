@@ -27,7 +27,7 @@ class ExecutionBoundaryTest(unittest.TestCase):
             transport.assert_not_called()
 
     def test_changed_process_mode_cannot_turn_paper_test_into_live_order(self):
-        response = io.BytesIO(json.dumps({'process': {'config': {'execution': {'mode': 'live'}}}}).encode())
+        response = io.BytesIO(json.dumps({'process': {'execution': {'mode': 'live'}}}).encode())
         response.status = 200
         with patch('urllib.request.urlopen', return_value=response) as transport:
             with self.assertRaises(RuntimeError):
@@ -39,7 +39,7 @@ class ExecutionBoundaryTest(unittest.TestCase):
 class ProcessReuseTest(unittest.TestCase):
     def processes(self):
         return {pid: {'process_id': pid, 'enabled': False, 'status': 'stopped',
-                      'config': json.loads((ROOT / f'docs/polymarket-execution-rail/examples/{mode}.json').read_text())}
+                      **json.loads((ROOT / f'docs/polymarket-execution-rail/examples/{mode}.json').read_text())}
                 for mode, pid in REUSABLE_PROCESS_IDS.items()}
 
     def test_policy_comparison_reports_differences_without_mutation_or_certification(self):
@@ -48,7 +48,7 @@ class ProcessReuseTest(unittest.TestCase):
             with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'POLYMARKET_HTTP_ADMIN_TOKEN': 'unused'}):
                 driver = Qualification(directory)
                 if difference:
-                    policies = processes[REUSABLE_PROCESS_IDS['live']]['config']['execution']['order_policies']
+                    policies = processes[REUSABLE_PROCESS_IDS['live']]['execution']['order_policies']
                     next(p for p in policies if p['name'] == 'sizing_policy')['params']['default_share'] = 1
                 def request(method, path):
                     self.assertEqual(method, 'GET')
@@ -83,13 +83,13 @@ class ProcessReuseTest(unittest.TestCase):
                     self.assertIn(pid, processes)
                     self.assertIn(method, ('GET', 'PATCH'))
                     if method == 'PATCH':
-                        processes[pid]['config'] = body['config']
+                        processes[pid].update(body)
                     return 200, {'process': processes[pid]}
                 with patch.object(driver, 'request', side_effect=request):
                     driver.reuse_processes()
                 self.assertEqual([m for m, _ in calls], ['GET', 'GET', 'PATCH', 'PATCH'])
                 self.assertEqual({m: p['process_id'] for m, p in driver.state['processes'].items()}, REUSABLE_PROCESS_IDS)
-                config = driver.state['processes']['paper']['config']
+                config = driver.state['processes']['paper']
                 run_keys.append(config['btc_realtime_paper']['next_experiment_key'])
                 policy = next(p for p in config['execution']['order_policies'] if p['name'] == 'order_execution_policy')
                 self.assertEqual(policy['params']['member_order_types']['conservative'], order_type)
@@ -101,7 +101,7 @@ class ProcessReuseTest(unittest.TestCase):
             process = self.processes()[REUSABLE_PROCESS_IDS['paper']]
             def request(method, path, body=None):
                 self.assertTrue(path.endswith(REUSABLE_PROCESS_IDS['paper']))
-                if method == 'PATCH': process['config'] = body['config']
+                if method == 'PATCH': process.update(body)
                 return 200, {'process': process}
             with patch.object(driver, 'request', side_effect=request) as api:
                 driver.reuse_processes()
@@ -115,7 +115,7 @@ class ProcessReuseTest(unittest.TestCase):
                 processes = self.processes()
                 live = processes[REUSABLE_PROCESS_IDS['live']]
                 if unavailable == 'active': live['enabled'] = True
-                if unavailable == 'wrong_mode': live['config']['execution']['mode'] = 'paper'
+                if unavailable == 'wrong_mode': live['execution']['mode'] = 'paper'
                 def request(method, path):
                     pid = path.rsplit('/', 1)[1]
                     if unavailable == 'missing' and pid == live['process_id']:
@@ -177,13 +177,13 @@ class ContinuedQualificationTest(unittest.TestCase):
         for invalid in ('missing', 'changed_economics', 'changed_config', 'stopped', None):
             with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'POLYMARKET_HTTP_ADMIN_TOKEN': 'unused'}):
                 driver = Qualification(directory, mode='paper')
-                driver.state.update(processes={'paper': {'process_id': 'paper', 'config': {'policy': 1}}},
+                driver.state.update(processes={'paper': {'process_id': 'paper', 'execution': {}, 'sources': [], 'btc_realtime_paper': {'policy': 1}}},
                     executed={'order_id': 'one'}, pending_execute={'idempotency_key': 'key'}, paper_after={},
                     verified_settlement={'credit_status': 'credited'}, settlement_snapshot={'credit': 5})
                 if invalid == 'missing': driver.state.pop('verified_settlement')
                 snapshot = {'credit': 6 if invalid == 'changed_economics' else 5}
                 current = {'process': {'enabled': invalid != 'stopped', 'status': 'running',
-                    'config': {'policy': 2 if invalid == 'changed_config' else 1}}}
+                    'execution': {}, 'sources': [], 'btc_realtime_paper': {'policy': 2 if invalid == 'changed_config' else 1}}}
                 with patch.object(driver, 'snapshot', return_value=snapshot), patch.object(driver, 'request', return_value=(200, current)) as api:
                     if invalid:
                         with self.assertRaises((RuntimeError, AssertionError)): driver.next_order()

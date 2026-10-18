@@ -16,7 +16,7 @@ def pair():
     result = {}
     for mode, pid in REUSABLE_PROCESS_IDS.items():
         config = json.loads((ROOT / f'docs/polymarket-execution-rail/examples/{mode}.json').read_text())
-        result[mode] = {'process_id': pid, 'config': config, 'enabled': True, 'status': 'running'}
+        result[mode] = {'process_id': pid, **config, 'enabled': True, 'status': 'running'}
         policies(result[mode])['sizing_policy']['params'].update(default_share=5, lower_share_bound=5, upper_share_bound=5)
     return result
 
@@ -52,11 +52,11 @@ class PairedTest(unittest.TestCase):
             live = processes['live']
             if mutation == 'cash': ceiling = '5.5'
             if mutation == 'nan': ceiling = 'NaN'
-            if mutation == 'mode': live['config']['execution']['mode'] = 'paper'
-            if mutation == 'account': live['config']['execution']['account_ref'] = 'other'
+            if mutation == 'mode': live['execution']['mode'] = 'paper'
+            if mutation == 'account': live['execution']['account_ref'] = 'other'
             if mutation == 'quantity': policies(live)['sizing_policy']['params']['default_share'] = 20
             if mutation == 'policy': policies(live)['liquidity_policy']['params']['require_exit_book'] = False
-            if mutation == 'trigger': live['config']['btc_realtime_paper']['runtime']['trigger'] = 'umr'
+            if mutation == 'trigger': live['btc_realtime_paper']['runtime']['trigger'] = 'umr'
             if mutation == 'status': live['status'] = 'stopped'
             with self.subTest(mutation=mutation), self.assertRaises(RuntimeError):
                 validate_pair(processes, 'polymarket-primary', ceiling, True)
@@ -205,7 +205,7 @@ class PairedTest(unittest.TestCase):
             self.assertEqual(method, 'PATCH')
             mode = next(m for m, pid in REUSABLE_PROCESS_IDS.items() if path.endswith(pid))
             result = copy.deepcopy(current[mode])
-            result['config'] = body['config']
+            result.update(body)
             updated.append(result)
             return 200, {'process': result}
         with patch.object(self.q, 'current', return_value=current), patch.object(self.q, 'request', side_effect=api), patch('paired.subprocess.check_output', return_value=b'{"items": []}'), patch.object(self.q, 'start'):

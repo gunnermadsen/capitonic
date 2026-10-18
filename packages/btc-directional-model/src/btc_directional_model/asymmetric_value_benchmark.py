@@ -3360,7 +3360,7 @@ def _dependency_versions() -> dict[str, str]:
 def _current_process_contract(config: AsymmetricValueConfig) -> dict[str, Any]:
     process = json.loads(config.champion_process.read_text())
     model = json.loads(config.champion_model.read_text())
-    control = process["config"]["btc_realtime_paper"]
+    control = process["btc_realtime_paper"]
     strategy = control["strategy"]
     decision = strategy["decision_strategy"]
     paper = control["paper"]

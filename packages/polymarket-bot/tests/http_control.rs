@@ -494,9 +494,10 @@ impl ControlApi for FakeControlApi {
     async fn update_trading_process(
         &self,
         process_id: Uuid,
-        request: http::UpdateTradingProcessRequest,
+        mut request: http::UpdateTradingProcessRequest,
     ) -> Result<http::TradingProcessResponse, HttpError> {
-        if let Some(config) = &request.config {
+        let configuration = request.take_configuration()?;
+        if let Some(config) = &configuration {
             validate_capacity_contract(config)?;
             updated_process_configs()
                 .lock()
@@ -514,7 +515,7 @@ impl ControlApi for FakeControlApi {
                 Some("btc-paper-canary".to_string()),
                 "created",
                 false,
-                request.config.unwrap_or_default(),
+                configuration.unwrap_or_default(),
             ),
         })
     }
@@ -587,7 +588,11 @@ impl ControlApi for FakeControlApi {
                 Some(process_key),
                 request.status.as_str(),
                 request.enabled,
-                request.config,
+                TradingProcessConfig {
+                    execution: request.execution,
+                    sources: request.sources,
+                    btc_realtime_paper: request.btc_realtime_paper,
+                },
             ),
         })
     }
@@ -1293,7 +1298,7 @@ async fn authenticated_admin_can_manage_trading_processes() {
                 .header(AUTHORIZATION, "Bearer secret")
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"name":"btc-paper-canary","process_type":"btc_5m","process_scope":"realtime_paper","enabled":false,"status":"created","config":{"sources":[],"btc_realtime_paper":{}}}"#,
+                    r#"{"name":"btc-paper-canary","process_type":"btc_5m","process_scope":"realtime_paper","enabled":false,"status":"created","sources":[],"btc_realtime_paper":{}}"#,
                 ))
                 .unwrap(),
         )
@@ -1473,9 +1478,7 @@ async fn patch_process_config(
                 .uri(format!("/admin/trading-processes/{process_id}"))
                 .header(AUTHORIZATION, "Bearer secret")
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    serde_json::to_vec(&serde_json::json!({"config": config})).unwrap(),
-                ))
+                .body(Body::from(serde_json::to_vec(config).unwrap()))
                 .unwrap(),
         )
         .await
@@ -1497,11 +1500,14 @@ async fn persisted_process_config(app: &axum::Router, process_id: Uuid) -> Tradi
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    serde_json::from_value::<TradingProcess>(
-        serde_json::from_slice::<Value>(&body).unwrap()["process"].clone(),
-    )
+    let process = &serde_json::from_slice::<Value>(&body).unwrap()["process"];
+    assert!(process.get("config").is_none());
+    serde_json::from_value(serde_json::json!({
+        "execution": process["execution"],
+        "sources": process["sources"],
+        "btc_realtime_paper": process["btc_realtime_paper"],
+    }))
     .unwrap()
-    .config
 }
 
 fn order_policy_params<'a>(config: &'a mut Value, name: &str) -> &'a mut Value {
@@ -1912,4 +1918,47 @@ async fn process_status_patch_is_authenticated_typed_and_process_scoped() {
         assert_eq!(body["process"]["status"], actual);
         assert_eq!(body["process"]["enabled"], actual == "running");
     }
+}
+
+#[test]
+fn process_requests_require_root_configuration_fields() {
+    let definition = serde_json::json!({
+        "name": "root-layout", "process_type": "btc_5m",
+        "process_scope": "realtime_paper", "enabled": false, "status": "created",
+        "sources": [], "btc_realtime_paper": {}
+    });
+    assert!(
+        serde_json::from_value::<http::UpsertTradingProcessByKeyRequest>(definition.clone())
+            .is_ok()
+    );
+    let mut wrapped = definition;
+    wrapped.as_object_mut().unwrap().remove("sources");
+    wrapped
+        .as_object_mut()
+        .unwrap()
+        .remove("btc_realtime_paper");
+    wrapped["config"] = serde_json::json!({"sources": [], "btc_realtime_paper": {}});
+    assert!(serde_json::from_value::<http::UpsertTradingProcessByKeyRequest>(wrapped).is_err());
+    assert!(serde_json::from_value::<http::UpdateTradingProcessRequest>(
+        serde_json::json!({"config": {"sources": [], "btc_realtime_paper": {}}})
+    )
+    .is_err());
+
+    for value in [
+        serde_json::json!({"sources": []}),
+        serde_json::json!({"btc_realtime_paper": {}}),
+        serde_json::json!({"execution": {}}),
+    ] {
+        let mut request: http::UpdateTradingProcessRequest = serde_json::from_value(value).unwrap();
+        assert!(request.take_configuration().is_err());
+    }
+    let mut metadata_only: http::UpdateTradingProcessRequest =
+        serde_json::from_value(serde_json::json!({"name": "renamed", "metadata": {}})).unwrap();
+    assert!(metadata_only.take_configuration().unwrap().is_none());
+
+    let configuration = serde_json::json!({"sources": [], "btc_realtime_paper": {}});
+    let mut request: http::UpdateTradingProcessRequest =
+        serde_json::from_value(configuration.clone()).unwrap();
+    let compiled_input = request.take_configuration().unwrap().unwrap();
+    assert_eq!(serde_json::to_value(compiled_input).unwrap(), configuration);
 }

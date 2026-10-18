@@ -652,9 +652,35 @@ pub struct UpdateTradingProcessRequest {
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
-    pub config: Option<TradingProcessConfig>,
+    pub execution: Option<crate::models::ProcessExecutionConfig>,
+    #[serde(default)]
+    pub sources: Option<Vec<crate::market_data_stream::SourceSelector>>,
+    #[serde(default)]
+    pub btc_realtime_paper: Option<serde_json::Value>,
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
+}
+
+impl UpdateTradingProcessRequest {
+    pub fn take_configuration(&mut self) -> Result<Option<TradingProcessConfig>, HttpError> {
+        match (
+            self.execution.take(),
+            self.sources.take(),
+            self.btc_realtime_paper.take(),
+        ) {
+            (None, None, None) => Ok(None),
+            (execution, Some(sources), Some(btc_realtime_paper)) => {
+                Ok(Some(TradingProcessConfig {
+                    execution,
+                    sources,
+                    btc_realtime_paper,
+                }))
+            }
+            _ => Err(HttpError::bad_request(
+                "configuration replacement requires sources and btc_realtime_paper",
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -674,6 +700,7 @@ fn default_entry_status_scope() -> String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpsertTradingProcessByKeyRequest {
     pub name: String,
     pub process_type: String,
@@ -681,17 +708,19 @@ pub struct UpsertTradingProcessByKeyRequest {
     pub enabled: bool,
     pub status: String,
     #[serde(default)]
-    pub config: TradingProcessConfig,
+    pub execution: Option<crate::models::ProcessExecutionConfig>,
+    pub sources: Vec<crate::market_data_stream::SourceSelector>,
+    pub btc_realtime_paper: serde_json::Value,
     #[serde(default)]
     pub metadata: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TradingProcessResponse<C = TradingProcessConfig> {
     pub process: TradingProcess<C>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TradingProcessesResponse {
     pub processes: Vec<TradingProcess<serde_json::Value>>,
 }

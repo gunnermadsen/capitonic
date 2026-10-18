@@ -1,6 +1,6 @@
 # Execution configuration contract
 
-Sources are required exclusively at `config.sources` (`/sources` within configuration and frozen snapshots). Source selectors are parsed separately from strategy controls. The configuration object accepts only `execution`, `sources`, and `btc_realtime_paper`; unknown fields are rejected. Historical process list/detail reads return the original stored JSON without making it executable. A stopped process can replace its entire configuration through the existing update API. The layout change requires a fresh run key when migrating an existing frozen run. The `config.execution` and `config.btc_realtime_paper` envelopes retain their other settings. Mode, execute_signals, live_capital and account_ref remain at their existing paths because account reconciliation SQL and dashboards consume them. New order rules live exclusively in `execution.order_policies`. The explicit rail selector and `btc_realtime_paper_process_v6` must agree. Any new marker selects strict validation, never legacy fallback.
+Sources are required exclusively at process-root `/sources`. Process JSON exposes `execution`, `sources`, and `btc_realtime_paper` directly, without a `config` wrapper. Definition requests reject unknown fields. PATCH replaces the complete configuration and requires both `sources` and `btc_realtime_paper`; name/metadata-only updates remain supported. The internal configuration object, database `config` column, and frozen snapshots retain their existing three-field representation, so this API layout change does not change hashes or require fresh run keys. Historical list/detail reads expose stored configuration fields at the process root without making them executable. New order rules live exclusively in `execution.order_policies`. The explicit rail selector and `btc_realtime_paper_process_v6` must agree. Any new marker selects strict validation, never legacy fallback.
 
 Examples are executable compiler fixtures: [paper](examples/paper.json), [live](examples/live.json). They describe inactive definitions, not approved process creations, deployment configuration, or real-capital authorization. Preregistration values identify fixtures; conversion retains actual process provenance and canonical process_id. Keep legacy schemas and defaults unchanged.
 
@@ -14,7 +14,7 @@ The new compiler is pure apart from read-only model/profile loading and caching.
 
 ## Complete parameter migration inventory
 
-Paths below are relative to `config.btc_realtime_paper`, except `execution.*` which is relative to `config`.
+Paths below are relative to `btc_realtime_paper`, except `execution.*` which is relative to the process root.
 
 | Existing parameter / default | New owner | Meaning and compatibility |
 | --- | --- | --- |

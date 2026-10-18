@@ -222,7 +222,7 @@ execution path, and legacy v1 definitions remain resume-only. The stable identit
 `process_key`. Paper definitions execute approved signals and never permit live
 capital; live definitions use the same strategy/runtime contract and change
 only the process-owned execution venue. Unknown fields inside
-`config.btc_realtime_paper` are rejected. In particular, the retired
+`btc_realtime_paper` are rejected. In particular, the retired
 `ml_shadow` setting is not part of this contract.
 
 Save the following request body as `btc-process-v4.json`. Replace the process
@@ -239,66 +239,64 @@ run key; lifecycle and record ownership still belong to `process_id`.
   "process_scope": "realtime_paper",
   "enabled": false,
   "status": "created",
-  "config": {
-    "execution": {
-      "mode": "paper",
-      "execute_signals": true,
-      "live_capital": false
-    },
-    "btc_realtime_paper": {
-      "schema_version": "btc_realtime_paper_process_v4",
-      "playbook_version": "v1.2",
-      "next_experiment_key": "btc-5m-router-paper-example-v1",
-      "preregistration_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "strategy": {
-        "decision_strategy": {
-          "type": "unified_model_router",
-          "version": 1,
-          "routing": {
-            "mode": "first_qualified",
-            "tie_break": "array_order"
-          },
-          "models": [
-            {
-              "member_id": "primary",
-              "selection": {
-                "type": "btc_directional_model",
-                "model_key": "btc-5m-t2-bridge-aware-60-64--without-rtds-candles-q5"
-              }
+  "metadata": {},
+  "execution": {
+    "mode": "paper",
+    "execute_signals": true,
+    "live_capital": false
+  },
+  "btc_realtime_paper": {
+    "schema_version": "btc_realtime_paper_process_v4",
+    "playbook_version": "v1.2",
+    "next_experiment_key": "btc-5m-router-paper-example-v1",
+    "preregistration_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "strategy": {
+      "decision_strategy": {
+        "type": "unified_model_router",
+        "version": 1,
+        "routing": {
+          "mode": "first_qualified",
+          "tie_break": "array_order"
+        },
+        "models": [
+          {
+            "member_id": "primary",
+            "selection": {
+              "type": "btc_directional_model",
+              "model_key": "btc-5m-t2-bridge-aware-60-64--without-rtds-candles-q5"
             }
-          ]
-        }
-      },
-      "runtime": {
-        "strategy_interval_ms": 1000
-      },
-      "paper": {
-        "arrival_latency_ms": 150,
-        "visible_depth_haircut": "0.80",
-        "starting_collateral_usd": "1000",
-        "stress_previews": [
-          {
-            "scenario_key": "latency_300ms_depth_65pct",
-            "arrival_latency_ms": 300,
-            "visible_depth_haircut": "0.65"
-          },
-          {
-            "scenario_key": "latency_600ms_depth_50pct",
-            "arrival_latency_ms": 600,
-            "visible_depth_haircut": "0.50"
           }
         ]
       }
     },
-    "sources": [
-      "polymarket_btc_five_minute_market_contracts",
-      "polymarket_btc_five_minute_orderbooks",
-      "polymarket_btc_five_minute_resolutions",
-      "binance_spot_btcusdt_one_second_ohlcv",
-      "polygon_chainlink_btcusd_oracle"
-    ]
+    "runtime": {
+      "strategy_interval_ms": 1000
+    },
+    "paper": {
+      "arrival_latency_ms": 150,
+      "visible_depth_haircut": "0.80",
+      "starting_collateral_usd": "1000",
+      "stress_previews": [
+        {
+          "scenario_key": "latency_300ms_depth_65pct",
+          "arrival_latency_ms": 300,
+          "visible_depth_haircut": "0.65"
+        },
+        {
+          "scenario_key": "latency_600ms_depth_50pct",
+          "arrival_latency_ms": 600,
+          "visible_depth_haircut": "0.50"
+        }
+      ]
+    }
   },
-  "metadata": {}
+  "sources": [
+    "polymarket_btc_five_minute_market_contracts",
+    "polymarket_btc_five_minute_orderbooks",
+    "polymarket_btc_five_minute_resolutions",
+    "binance_spot_btcusdt_one_second_ohlcv",
+    "polygon_chainlink_btcusd_oracle"
+  ]
 }
 ```
 <!-- btc-5m-process-v4:end -->

@@ -869,7 +869,7 @@ mod lifecycle_tests {
         ))
         .unwrap();
         let mut process = eligible_btc_process();
-        process.config = serde_json::from_value(definition["config"].clone()).unwrap();
+        process.config = serde_json::from_value(serde_json::json!({"execution": definition["execution"], "sources": definition["sources"], "btc_realtime_paper": definition["btc_realtime_paper"]})).unwrap();
         let collateral_policy = process
             .config
             .execution
@@ -1354,13 +1354,9 @@ mod lifecycle_tests {
             .expect("README BTC process contract must be a JSON code block");
         let request: control_http::UpsertTradingProcessByKeyRequest =
             serde_json::from_str(contract).unwrap();
-        let control = request.config.btc_realtime_paper.clone();
-        parse_btc_process_control(
-            control,
-            &request.config.sources,
-            BtcDefinitionUse::ExplicitStart,
-        )
-        .unwrap();
+        let control = request.btc_realtime_paper.clone();
+        parse_btc_process_control(control, &request.sources, BtcDefinitionUse::ExplicitStart)
+            .unwrap();
 
         let now = Utc::now();
         let process = TradingProcess {
@@ -1371,7 +1367,11 @@ mod lifecycle_tests {
             process_key: Some("btc-5m-chainlink-paper".to_string()),
             status: request.status,
             enabled: request.enabled,
-            config: request.config,
+            config: TradingProcessConfig {
+                execution: request.execution,
+                sources: request.sources,
+                btc_realtime_paper: request.btc_realtime_paper,
+            },
             metadata: request.metadata,
             created_at: now,
             updated_at: now,
@@ -1402,7 +1402,7 @@ mod lifecycle_tests {
             )
             .unwrap();
             let mut config: TradingProcessConfig =
-                serde_json::from_value(value["config"].clone()).unwrap();
+                serde_json::from_value(serde_json::json!({"execution": value["execution"], "sources": value["sources"], "btc_realtime_paper": value["btc_realtime_paper"]})).unwrap();
             pin_router_config(&mut config).unwrap();
             let mut sources: Vec<SourceSelector> = config.sources.clone();
             let control = parse_btc_process_control(
@@ -1445,7 +1445,7 @@ mod lifecycle_tests {
                 serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
             assert!(ids.insert(value["process_id"].as_str().unwrap().to_owned()));
             let config: TradingProcessConfig =
-                serde_json::from_value(value["config"].clone()).unwrap();
+                serde_json::from_value(serde_json::json!({"execution": value["execution"], "sources": value["sources"], "btc_realtime_paper": value["btc_realtime_paper"]})).unwrap();
             let compiled =
                 polymarket_bot::execution::polymarket::configuration::compile(&config).unwrap();
             let strategy = compiled.runtime_strategy().unwrap();

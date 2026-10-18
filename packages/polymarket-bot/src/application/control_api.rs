@@ -355,9 +355,14 @@ impl ControlApi for RuntimeControl {
     async fn upsert_trading_process_by_key(
         &self,
         process_key: String,
-        mut request: control_http::UpsertTradingProcessByKeyRequest,
+        request: control_http::UpsertTradingProcessByKeyRequest,
     ) -> Result<TradingProcessResponse, HttpError> {
-        pin_router_config(&mut request.config)?;
+        let mut config = TradingProcessConfig {
+            execution: request.execution,
+            sources: request.sources,
+            btc_realtime_paper: request.btc_realtime_paper,
+        };
+        pin_router_config(&mut config)?;
         let key = process_key.trim();
         if key.is_empty() {
             return Err(HttpError::bad_request("trading process key is required"));
@@ -406,7 +411,7 @@ impl ControlApi for RuntimeControl {
             process_key: Some(key.to_string()),
             status: status.to_string(),
             enabled: false,
-            config: request.config.clone(),
+            config: config.clone(),
             metadata: request.metadata.clone(),
             created_at: now,
             updated_at: now,
@@ -460,13 +465,7 @@ impl ControlApi for RuntimeControl {
         }
         let process = self
             .store
-            .upsert_btc_realtime_paper_process_by_key(
-                name,
-                key,
-                status,
-                request.config,
-                request.metadata,
-            )
+            .upsert_btc_realtime_paper_process_by_key(name, key, status, config, request.metadata)
             .await
             .map_err(|error| HttpError::internal(error.to_string()))?;
         drop(lifecycle_guard);
@@ -568,7 +567,8 @@ impl ControlApi for RuntimeControl {
         process_id: uuid::Uuid,
         mut request: control_http::UpdateTradingProcessRequest,
     ) -> Result<TradingProcessResponse, HttpError> {
-        if let Some(config) = request.config.as_mut() {
+        let mut configuration = request.take_configuration()?;
+        if let Some(config) = configuration.as_mut() {
             pin_router_config(config)?;
         }
         let name = request.name.as_deref().map(str::trim);
@@ -611,7 +611,7 @@ impl ControlApi for RuntimeControl {
         let active_selector_update = runtime_active
             && request.name.is_none()
             && request.metadata.is_none()
-            && request.config.as_ref().is_some_and(|config| {
+            && configuration.as_ref().is_some_and(|config| {
                 serde_json::from_value::<TradingProcessConfig>(current.config.clone()).is_ok_and(
                     |current_config| {
                         selector_only_config_change(&current_config, config).unwrap_or(false)
@@ -626,7 +626,7 @@ impl ControlApi for RuntimeControl {
                 "stop the BTC trading process through its /stop endpoint before reconfiguring it",
             ));
         }
-        if let Some(config) = &request.config {
+        if let Some(config) = &configuration {
             let manager = self.btc_manager.as_ref().ok_or_else(|| {
                 HttpError::bad_request("BTC realtime capability is disabled for this deployment")
             })?;
@@ -637,7 +637,7 @@ impl ControlApi for RuntimeControl {
                 manager.validate_definition_for_storage(&candidate)?;
             }
         }
-        if request.config.is_none() {
+        if configuration.is_none() {
             serde_json::from_value::<TradingProcessConfig>(current.config.clone())
                 .map_err(|_| HttpError::bad_request("replace the process configuration with the current TPC layout before updating it"))?;
         }
@@ -646,7 +646,7 @@ impl ControlApi for RuntimeControl {
             .update_btc_realtime_paper_process_definition(
                 process_id,
                 name,
-                request.config,
+                configuration,
                 request.metadata,
             )
             .await

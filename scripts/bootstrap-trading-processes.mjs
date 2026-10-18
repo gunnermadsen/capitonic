@@ -97,13 +97,14 @@ function apiUrl(baseUrl, endpoint, processKey) {
 
 async function upsertTemplate(baseUrl, endpoint, token, template) {
   const url = apiUrl(baseUrl, endpoint, template.process_key);
+  const { process_id, process_key, ...definition } = template;
   const response = await fetch(url, {
     method: "PUT",
     headers: {
       "authorization": `Bearer ${token}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify(template),
+    body: JSON.stringify(definition),
   });
 
   const text = await response.text();
