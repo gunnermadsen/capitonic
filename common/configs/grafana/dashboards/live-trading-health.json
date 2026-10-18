@@ -2,7 +2,36 @@
   "annotations": {"list": []},
   "editable": false,
   "graphTooltip": 1,
-  "links": [{"title": "Order execution (API / UMR)", "type": "link", "url": "/d/order-execution", "includeVars": true, "keepTime": true}],
+  "links": [
+    {
+      "title": "Order execution (API / UMR)",
+      "type": "link",
+      "url": "/d/order-execution",
+      "includeVars": true,
+      "keepTime": true
+    },
+    {
+      "title": "Trading PnL",
+      "type": "link",
+      "url": "/d/polymarket-bot",
+      "includeVars": true,
+      "keepTime": true
+    },
+    {
+      "title": "Market Data Pipeline",
+      "type": "link",
+      "url": "/d/market-data-pipeline",
+      "includeVars": true,
+      "keepTime": true
+    },
+    {
+      "title": "Unified Model Runtime",
+      "type": "link",
+      "url": "/d/unified-model-runtime",
+      "includeVars": true,
+      "keepTime": true
+    }
+  ],
   "panels": [
     {"id": 46, "type": "row", "title": "Blocked Opportunity Summary", "description": "One opportunity per process and market. Dollar values assume the first blocked quote filled in full; actual live fillability is unknown.", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0}, "collapsed": false, "panels": []},
     {"id": 58, "type": "stat", "title": "Correct: Profit Missed", "description": "Potential USD profit from correctly predicted, resolved blocked opportunities, grouped by first gate. Assumes the first blocked quote filled in full at its quoted size, price and fee; live fillability is unknown. N/A means no priced resolved opportunity for that gate.", "gridPos": {"h": 5, "w": 6, "x": 0, "y": 1}, "datasource": {"type": "grafana-postgresql-datasource", "uid": "postgres"}, "targets": [{"refId": "A", "datasource": {"type": "grafana-postgresql-datasource", "uid": "postgres"}, "format": "table", "rawQuery": true, "rawSql": "WITH selected AS MATERIALIZED (\n  SELECT d.process_id, d.market_id, d.decision_id, d.decision_at, d.outcome,\n         d.executable_price, d.fee_per_share, d.size, d.status,\n         COALESCE(\n           d.metadata #>> '{order_plan,orders,0,request,metadata,live_execution_gate,gate_reason}',\n           CASE WHEN d.status = 'admission_blocked'\n                THEN d.metadata #>> '{entry_admission,blocking_policies,0}' END,\n           CASE WHEN d.status = 'risk_blocked' THEN 'risk_blocked_unclassified' END,\n           CASE WHEN d.status = 'shadow_only' THEN 'execution_disabled' END\n         ) AS gate_reason\n  FROM polymarket.btc_strategy_decisions d\n  WHERE d.execution_mode = 'live' AND d.action = 'buy'\n    AND d.decision_at BETWEEN $__timeFrom()::timestamptz AND $__timeTo()::timestamptz\n    AND d.process_id::text ~ '^(${process_id:regex})$'\n), blocked AS (\n  SELECT s.*, row_number() OVER (\n           PARTITION BY s.process_id, s.market_id ORDER BY s.decision_at, s.decision_id\n         ) AS blocked_rank,\n         count(*) OVER (PARTITION BY s.process_id, s.market_id) AS blocked_attempts\n  FROM selected s\n  WHERE s.gate_reason IS NOT NULL\n), opportunities AS (\n  SELECT b.process_id, b.market_id, b.decision_at, b.outcome AS prediction,\n         b.gate_reason, b.blocked_attempts, b.executable_price, b.fee_per_share, b.size,\n         m.official_outcome,\n         CASE WHEN m.official_outcome IS NOT NULL AND b.executable_price IS NOT NULL\n                    AND b.size > 0 AND b.fee_per_share IS NOT NULL\n              THEN b.size * ((CASE WHEN b.outcome = m.official_outcome THEN 1 ELSE 0 END)\n                    - b.executable_price - b.fee_per_share)\n         END AS quoted_fill_pnl\n  FROM blocked b\n  LEFT JOIN polymarket.btc_interval_markets m ON m.market_id = b.market_id\n  WHERE b.blocked_rank = 1\n    AND NOT EXISTS (\n      SELECT 1 FROM selected s\n      WHERE s.process_id = b.process_id AND s.market_id = b.market_id\n        AND s.status IN ('submitted', 'filled')\n    )\n)\nSELECT gate_reason AS \"Gate\",\n       CASE WHEN count(quoted_fill_pnl) FILTER (WHERE prediction IS NOT NULL) = 0 THEN NULL\n            ELSE round(coalesce(sum(quoted_fill_pnl) FILTER (\n              WHERE prediction = official_outcome AND quoted_fill_pnl > 0), 0), 2)\n       END AS \"Value\"\nFROM opportunities\nGROUP BY gate_reason\nORDER BY gate_reason"}], "fieldConfig": {"defaults": {"unit": "currencyUSD", "noValue": "N/A", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.01}]}}, "overrides": []}, "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "textMode": "value_and_name", "wideLayout": false}, "transformations": [{"id": "rowsToFields", "options": {"mappings": [{"fieldName": "Gate", "handlerKey": "field.name"}, {"fieldName": "Value", "handlerKey": "field.value"}]}}]},
