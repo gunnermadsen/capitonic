@@ -652,47 +652,35 @@ pub struct UpdateTradingProcessRequest {
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
-    pub rail: Option<crate::execution::polymarket::configuration::RailSelection>,
+    pub playbook_version: Option<String>,
+    #[serde(default)]
+    pub actions: Option<Vec<crate::models::TradingProcessAction>>,
     #[serde(default)]
     pub order_policies: Option<Vec<crate::execution::polymarket::policies::OrderPolicy>>,
     #[serde(default)]
-    pub mode: Option<String>,
-    #[serde(default)]
-    pub execute_signals: Option<bool>,
-    #[serde(default)]
-    pub live_capital: Option<bool>,
-    #[serde(default)]
-    pub account_ref: Option<String>,
-    #[serde(default)]
     pub sources: Option<Vec<crate::market_data_stream::SourceSelector>>,
-    #[serde(default)]
-    pub btc_realtime_paper: Option<serde_json::Value>,
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
 }
 
 impl UpdateTradingProcessRequest {
     pub fn take_configuration(&mut self) -> Result<Option<TradingProcessConfig>, HttpError> {
-        let has_controls = self.rail.is_some()
-            || self.order_policies.is_some()
-            || self.mode.is_some()
-            || self.execute_signals.is_some()
-            || self.live_capital.is_some()
-            || self.account_ref.is_some();
-        match (self.sources.take(), self.btc_realtime_paper.take()) {
-            (None, None) if !has_controls => Ok(None),
-            (Some(sources), Some(btc_realtime_paper)) => Ok(Some(TradingProcessConfig {
-                rail: self.rail.take(),
-                order_policies: self.order_policies.take(),
-                mode: self.mode.take(),
-                execute_signals: self.execute_signals.take().unwrap_or(false),
-                live_capital: self.live_capital.take().unwrap_or(false),
-                account_ref: self.account_ref.take(),
-                sources,
-                btc_realtime_paper,
-            })),
+        match (
+            self.sources.take(),
+            self.actions.take(),
+            self.playbook_version.take(),
+        ) {
+            (None, None, None) if self.order_policies.is_none() => Ok(None),
+            (Some(sources), Some(actions), Some(playbook_version)) => {
+                Ok(Some(TradingProcessConfig {
+                    playbook_version,
+                    actions,
+                    order_policies: self.order_policies.take(),
+                    sources,
+                }))
+            }
             _ => Err(HttpError::bad_request(
-                "configuration replacement requires sources and btc_realtime_paper",
+                "configuration replacement requires sources, actions and playbook_version",
             )),
         }
     }
@@ -722,20 +710,11 @@ pub struct UpsertTradingProcessByKeyRequest {
     pub process_scope: String,
     pub enabled: bool,
     pub status: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rail: Option<crate::execution::polymarket::configuration::RailSelection>,
+    pub playbook_version: String,
+    pub actions: Vec<crate::models::TradingProcessAction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order_policies: Option<Vec<crate::execution::polymarket::policies::OrderPolicy>>,
-    #[serde(default)]
-    pub mode: Option<String>,
-    #[serde(default)]
-    pub execute_signals: bool,
-    #[serde(default)]
-    pub live_capital: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub account_ref: Option<String>,
     pub sources: Vec<crate::market_data_stream::SourceSelector>,
-    pub btc_realtime_paper: serde_json::Value,
     #[serde(default)]
     pub metadata: serde_json::Value,
 }

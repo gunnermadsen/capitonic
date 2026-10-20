@@ -358,14 +358,10 @@ impl ControlApi for RuntimeControl {
         request: control_http::UpsertTradingProcessByKeyRequest,
     ) -> Result<TradingProcessResponse, HttpError> {
         let mut config = TradingProcessConfig {
-            rail: request.rail,
+            playbook_version: request.playbook_version,
+            actions: request.actions,
             order_policies: request.order_policies,
-            mode: request.mode,
-            execute_signals: request.execute_signals,
-            live_capital: request.live_capital,
-            account_ref: request.account_ref,
             sources: request.sources,
-            btc_realtime_paper: request.btc_realtime_paper,
         };
         pin_router_config(&mut config)?;
         let key = process_key.trim();
@@ -501,7 +497,7 @@ impl ControlApi for RuntimeControl {
                 );
                 let execution_mode = process
                     .config
-                    .get("mode")
+                    .pointer("/actions/0/mode")
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("unspecified");
                 let runtime = match &self.btc_manager {

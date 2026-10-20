@@ -21,39 +21,6 @@
   },
   "enabled": false,
   "status": "stopped",
-  "btc_realtime_paper": {
-    "next_experiment_key": "btc-5m-extended-specialist-official-umr-confidence-070-run-cleanup-20260921",
-    "playbook_version": "v1.2",
-    "preregistration_sha256": "5da1d6f819eae517817c8a647626d3d59315914f3d480ea6d9dc6657f15397af",
-    "runtime": {
-      "strategy_interval_ms": 1000
-    },
-    "schema_version": "btc_realtime_paper_process_v6",
-    "strategy": {
-      "decision_strategy": {
-        "type": "unified_model_router",
-        "version": 1,
-        "routing": {
-          "mode": "first_qualified",
-          "tie_break": "array_order"
-        },
-        "models": [
-          {
-            "member_id": "primary",
-            "selection": {
-              "artifact_sha256": "457156bdcb08f6f2016781ac50292c32b7a2058bea77ba47542216a8afc3704a",
-              "feature_schema_sha256": "38b56e7a5e9819ef91f954224fbc90002cda3c20801fd66cfec63ec0830c0523",
-              "model_key": "btc-5m-extended-specialist-official-umr-20260902-confidence-070",
-              "type": "btc_directional_model"
-            }
-          }
-        ]
-      },
-      "max_directional_feature_age_ms": 5000,
-      "required_model_feeds": []
-    },
-    "risk_strategies": []
-  },
   "sources": [
     {
       "contract_version": 1,
@@ -91,13 +58,6 @@
       "key": "polygon_chainlink_btcusd_oracle"
     }
   ],
-  "mode": "paper",
-  "execute_signals": true,
-  "live_capital": false,
-  "rail": {
-    "name": "polymarket",
-    "version": 1
-  },
   "order_policies": [
     {
       "name": "sizing_policy",
@@ -201,6 +161,43 @@
           }
         ],
         "visible_depth_haircut": "0.80"
+      }
+    }
+  ],
+  "playbook_version": "v1.2",
+  "actions": [
+    {
+      "type": "buy",
+      "enabled": true,
+      "mode": "paper",
+      "rail": "polymarket",
+      "execute_signals": true,
+      "live_capital": false,
+      "params": {
+        "next_experiment_key": "btc-5m-extended-specialist-official-umr-confidence-070-run-cleanup-20260921",
+        "preregistration_sha256": "5da1d6f819eae517817c8a647626d3d59315914f3d480ea6d9dc6657f15397af",
+        "schema_version": "btc_realtime_paper_process_v6",
+        "risk_strategies": [],
+        "strategy_interval_ms": 1000,
+        "max_directional_feature_age_ms": 5000,
+        "required_model_feeds": [],
+        "type": "unified_model_router",
+        "version": 1,
+        "routing": {
+          "mode": "first_qualified",
+          "tie_break": "array_order"
+        },
+        "models": [
+          {
+            "member_id": "primary",
+            "selection": {
+              "artifact_sha256": "457156bdcb08f6f2016781ac50292c32b7a2058bea77ba47542216a8afc3704a",
+              "feature_schema_sha256": "38b56e7a5e9819ef91f954224fbc90002cda3c20801fd66cfec63ec0830c0523",
+              "model_key": "btc-5m-extended-specialist-official-umr-20260902-confidence-070",
+              "type": "btc_directional_model"
+            }
+          }
+        ]
       }
     }
   ]

@@ -33,7 +33,7 @@ def ledger_amount(value):
 
 
 def process_configuration(process):
-    return {key: process[key] for key in ('rail', 'order_policies', 'mode', 'execute_signals', 'live_capital', 'account_ref', 'sources', 'btc_realtime_paper') if key in process}
+    return {key: process[key] for key in ('playbook_version', 'actions', 'order_policies', 'sources') if key in process}
 
 
 class Qualification:
@@ -61,7 +61,7 @@ class Qualification:
         if pid != self.state['processes']['paper']['process_id']:
             raise RuntimeError('Only the owned paper process may execute')
         code, actual = self.request('GET', '/admin/trading-processes/' + pid)
-        if code != 200 or actual['process']['mode'] != 'paper':
+        if code != 200 or actual['process']['actions'][0]['mode'] != 'paper':
             raise RuntimeError('Current process must be paper before execution')
 
     def check(self, name, condition, detail=None):
@@ -154,10 +154,10 @@ class Qualification:
             if code != 200:
                 raise RuntimeError('Reusable ' + mode + ' process is unavailable; no replacement created')
             process = response['process']
-            execution = process
-            control = process['btc_realtime_paper']
+            execution = process['actions'][0]
+            control = process['actions'][0]['params']
             if (process['process_id'] != pid or process['enabled'] or process['status'] != 'stopped'
-                    or execution['mode'] != mode or execution.get('rail') != {'name': 'polymarket', 'version': 1}):
+                    or execution['mode'] != mode or execution.get('rail') != 'polymarket'):
                 raise RuntimeError('Reusable ' + mode + ' process must be stopped with its expected rail contract')
             existing[mode] = process
         for mode, process in existing.items():
@@ -165,8 +165,7 @@ class Qualification:
             for policy in config['order_policies']:
                 if policy['name'] == 'order_execution_policy':
                     policy['params']['member_order_types']['conservative'] = self.state['order_type']
-            control = config['btc_realtime_paper']
-            control.get('runtime', {}).pop('trigger', None)
+            control = config['actions'][0]['params']
             run_key = 'order-api-' + mode + '-' + self.state['run']
             control['next_experiment_key'] = run_key
             control['preregistration_sha256'] = hashlib.sha256(run_key.encode()).hexdigest()
@@ -183,10 +182,10 @@ class Qualification:
             code, response = self.request('GET', '/admin/trading-processes/' + pid)
             if code != 200 or response['process']['process_id'] != pid:
                 raise RuntimeError('Retained ' + mode + ' definition unavailable')
-            execution = response['process']
-            if execution['mode'] != mode or execution['rail'] != {'name': 'polymarket', 'version': 1}:
+            execution = response['process']['actions'][0]
+            if execution['mode'] != mode or execution['rail'] != 'polymarket':
                 raise RuntimeError('Retained process contract changed')
-            policies = execution['order_policies']
+            policies = response['process']['order_policies']
             if len({p['name'] for p in policies}) != len(policies):
                 raise RuntimeError('Duplicate policy identity')
             definitions[mode] = {p['name']: p for p in policies}
@@ -238,7 +237,7 @@ class Qualification:
             if name == 'duplicate': policies.append(copy.deepcopy(policies[0]))
             elif name == 'unknown': policies[0]['name'] = 'unsupported_policy'
             elif name == 'mixed': config['max_open_positions'] = 2
-            else: config['rail']['version'] = 999
+            else: config['actions'][0]['rail'] = 'unsupported'
             variants[name] = config
         for name, config in variants.items():
             code, response = self.request('PATCH', '/admin/trading-processes/' + paper['process_id'], config)

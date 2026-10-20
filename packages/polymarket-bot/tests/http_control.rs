@@ -48,8 +48,8 @@ fn validate_capacity_contract(config: &TradingProcessConfig) -> Result<(), HttpE
             .map(|_| ())
             .map_err(|error| HttpError::bad_request(error.to_string()));
     }
-    if let Some(value) = config
-        .btc_realtime_paper
+    if let Some(value) = config.actions[0]
+        .params
         .pointer("/paper/starting_collateral_usd")
         .and_then(Value::as_str)
     {
@@ -575,14 +575,10 @@ impl ControlApi for FakeControlApi {
                 request.status.as_str(),
                 request.enabled,
                 TradingProcessConfig {
-                    rail: request.rail,
+                    playbook_version: request.playbook_version,
+                    actions: request.actions,
                     order_policies: request.order_policies,
-                    mode: request.mode,
-                    execute_signals: request.execute_signals,
-                    live_capital: request.live_capital,
-                    account_ref: request.account_ref,
                     sources: request.sources,
-                    btc_realtime_paper: request.btc_realtime_paper,
                 },
             ),
         })
@@ -662,18 +658,23 @@ impl ControlApi for FakeControlApi {
             preregistration_sha256: "b".repeat(64),
             config_hash: "c".repeat(64),
             frozen_process_config: TradingProcessConfig {
-                rail: None,
                 order_policies: None,
-                mode: Some("paper".to_string()),
-                execute_signals: true,
-                live_capital: false,
-                account_ref: None,
                 sources: Vec::new(),
-                btc_realtime_paper: serde_json::json!({
-                    "pipeline_version": "btc_realtime_paper_pipeline_v11",
-                    "process_schema_version": "btc_realtime_paper_process_v2",
-                    "preregistration_sha256": "b".repeat(64),
-                }),
+                playbook_version: "v1.2".into(),
+                actions: vec![polymarket_bot::models::TradingProcessAction {
+                    mode: Some("paper".to_string()),
+                    rail: None,
+                    execute_signals: true,
+                    live_capital: false,
+                    account_ref: None,
+                    params: serde_json::json!({
+                        "pipeline_version": "btc_realtime_paper_pipeline_v11",
+                        "process_schema_version": "btc_realtime_paper_process_v2",
+                        "preregistration_sha256": "b".repeat(64),
+                    }),
+                    kind: "buy".into(),
+                    enabled: true,
+                }],
             },
         })
     }
@@ -1281,7 +1282,7 @@ async fn authenticated_admin_can_manage_trading_processes() {
                 .header(AUTHORIZATION, "Bearer secret")
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"name":"btc-paper-canary","process_type":"btc_5m","process_scope":"realtime_paper","enabled":false,"status":"created","sources":[],"btc_realtime_paper":{}}"#,
+                    r#"{"name":"btc-paper-canary","process_type":"btc_5m","process_scope":"realtime_paper","enabled":false,"status":"created","sources":[],"playbook_version":"v1.2","actions":[{"type":"buy","enabled":true,"params":{}}]}"#,
                 ))
                 .unwrap(),
         )
@@ -1396,7 +1397,10 @@ async fn authenticated_admin_can_manage_trading_processes() {
         64
     );
     assert_eq!(preview_json["config_hash"].as_str().unwrap().len(), 64);
-    assert_eq!(preview_json["frozen_process_config"]["mode"], "paper");
+    assert_eq!(
+        preview_json["frozen_process_config"]["actions"][0]["mode"],
+        "paper"
+    );
 
     let start_response = app
         .clone()
@@ -1482,7 +1486,7 @@ async fn persisted_process_config(app: &axum::Router, process_id: Uuid) -> Tradi
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let process = &serde_json::from_slice::<Value>(&body).unwrap()["process"];
     assert!(process.get("config").is_none());
-    serde_json::from_value(serde_json::json!({"rail": process["rail"], "order_policies": process["order_policies"], "mode": process["mode"], "execute_signals": process["execute_signals"], "live_capital": process["live_capital"], "account_ref": process["account_ref"], "sources": process["sources"], "btc_realtime_paper": process["btc_realtime_paper"]}))
+    serde_json::from_value(serde_json::json!({"order_policies": process["order_policies"],"sources": process["sources"],"playbook_version": "v1.2","actions": process["actions"]}))
     .unwrap()
 }
 
@@ -1500,12 +1504,9 @@ async fn trading_process_patch_enforces_capacity_ceilings_without_persisting_rej
     let app = http::router(Arc::new(FakeControlApi), "secret");
     let process_id = Uuid::new_v4();
 
-    let mut legacy: TradingProcessConfig = serde_json::from_value(serde_json::json!({
-        "mode": "paper", "execute_signals": true, "live_capital": false,
-        "sources": [], "btc_realtime_paper": {"paper": {}}
-    }))
+    let mut legacy: TradingProcessConfig = serde_json::from_value(serde_json::json!({"sources": [],"playbook_version": "v1.2","actions": [{"mode": "paper","execute_signals": true,"live_capital": false,"rail": null,"type": "buy","enabled": true,"params": {"paper": {}}}]}))
     .unwrap();
-    legacy.btc_realtime_paper["paper"]["starting_collateral_usd"] =
+    legacy.actions[0].params["paper"]["starting_collateral_usd"] =
         serde_json::json!(TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD.to_string());
     assert_eq!(
         patch_process_config(&app, process_id, &legacy).await,
@@ -1518,7 +1519,7 @@ async fn trading_process_patch_enforces_capacity_ceilings_without_persisting_rej
 
     let mut legacy_overrides = Vec::new();
     let mut above = legacy.clone();
-    above.btc_realtime_paper["paper"]["starting_collateral_usd"] =
+    above.actions[0].params["paper"]["starting_collateral_usd"] =
         serde_json::json!((TRADING_PROCESS_PAPER_COLLATERAL_CEILING_USD + dec!(0.01)).to_string());
     legacy_overrides.push(above);
     for rejected in legacy_overrides {
@@ -1882,47 +1883,35 @@ async fn process_status_patch_is_authenticated_typed_and_process_scoped() {
 
 #[test]
 fn process_requests_require_root_configuration_fields() {
-    let definition = serde_json::json!({
-        "name": "root-layout", "process_type": "btc_5m",
-        "process_scope": "realtime_paper", "enabled": false, "status": "created",
-        "sources": [], "btc_realtime_paper": {}
-    });
+    let definition = serde_json::json!({"name": "root-layout","process_type": "btc_5m","process_scope": "realtime_paper","enabled": false,"status": "created","sources": [],"playbook_version": "v1.2","actions": [{"mode": null,"execute_signals": false,"live_capital": false,"rail": null,"type": "buy","enabled": true,"params": {}}]});
     assert!(
         serde_json::from_value::<http::UpsertTradingProcessByKeyRequest>(definition.clone())
             .is_ok()
     );
     let mut wrapped = definition;
     wrapped.as_object_mut().unwrap().remove("sources");
-    wrapped
-        .as_object_mut()
-        .unwrap()
-        .remove("btc_realtime_paper");
-    wrapped["config"] = serde_json::json!({"sources": [], "btc_realtime_paper": {}});
+    wrapped.as_object_mut().unwrap().remove("actions");
+    wrapped["config"] = serde_json::json!({"sources": [],"playbook_version": "v1.2","actions": [{"mode": null,"execute_signals": false,"live_capital": false,"rail": null,"type": "buy","enabled": true,"params": {}}]});
     assert!(serde_json::from_value::<http::UpsertTradingProcessByKeyRequest>(wrapped).is_err());
     assert!(serde_json::from_value::<http::UpdateTradingProcessRequest>(
         serde_json::json!({"config": {"sources": [], "btc_realtime_paper": {}}})
     )
     .is_err());
 
-    let wrapped_execution = serde_json::json!({
-        "name": "wrapped", "process_type": "btc_5m",
-        "process_scope": "realtime_paper", "enabled": false, "status": "created",
-        "execution": {"mode": "paper"},
-        "sources": [], "btc_realtime_paper": {}
-    });
+    let wrapped_execution = serde_json::json!({"name": "wrapped","process_type": "btc_5m","process_scope": "realtime_paper","enabled": false,"status": "created","execution": {"mode": "paper"},"sources": [],"playbook_version": "v1.2","actions": [{"mode": null,"execute_signals": false,"live_capital": false,"rail": null,"type": "buy","enabled": true,"params": {}}]});
     assert!(
         serde_json::from_value::<http::UpsertTradingProcessByKeyRequest>(wrapped_execution)
             .is_err()
     );
     assert!(serde_json::from_value::<http::UpdateTradingProcessRequest>(
-        serde_json::json!({"execution": {"mode": "paper"}, "sources": [], "btc_realtime_paper": {}})
+        serde_json::json!({"execution": {"mode": "paper"},"sources": [],"playbook_version": "v1.2","actions": [{"mode": null,"execute_signals": false,"live_capital": false,"rail": null,"type": "buy","enabled": true,"params": {}}]})
     )
     .is_err());
 
     for value in [
         serde_json::json!({"sources": []}),
-        serde_json::json!({"btc_realtime_paper": {}}),
-        serde_json::json!({"mode": "paper"}),
+        serde_json::json!({"actions": []}),
+        serde_json::json!({"playbook_version": "v1.2"}),
     ] {
         let mut request: http::UpdateTradingProcessRequest = serde_json::from_value(value).unwrap();
         assert!(request.take_configuration().is_err());
@@ -1931,7 +1920,7 @@ fn process_requests_require_root_configuration_fields() {
         serde_json::from_value(serde_json::json!({"name": "renamed", "metadata": {}})).unwrap();
     assert!(metadata_only.take_configuration().unwrap().is_none());
 
-    let configuration = serde_json::json!({"mode": null, "execute_signals": false, "live_capital": false, "sources": [], "btc_realtime_paper": {}});
+    let configuration = serde_json::json!({"sources": [],"playbook_version": "v1.2","actions": [{"mode": null,"execute_signals": false,"live_capital": false,"rail": null,"type": "buy","enabled": true,"params": {}}]});
     let mut request: http::UpdateTradingProcessRequest =
         serde_json::from_value(configuration.clone()).unwrap();
     let compiled_input = request.take_configuration().unwrap().unwrap();

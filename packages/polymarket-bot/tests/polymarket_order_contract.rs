@@ -3,7 +3,6 @@ use polymarket_bot::{
     execution::polymarket::{
         configuration::{compile, is_selected, pin_definition, ExecutionMode},
         policies::OrderPolicies,
-        OMS_CONTRACT_VERSION, RAIL_CONTRACT_VERSION,
     },
     models::{
         TradingProcessConfig, TRADING_PROCESS_OPEN_NOTIONAL_CEILING_USD,
@@ -11,7 +10,6 @@ use polymarket_bot::{
     },
 };
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 
 fn fixture(mode: &str) -> Value {
     serde_json::from_str(match mode {
@@ -56,34 +54,31 @@ fn paper_and_live_compile_with_identical_shared_policies() {
 }
 
 #[test]
-fn retired_trigger_is_inert_and_absent_from_compiled_identity() {
-    let clean = fixture("paper");
-    let clean_hash = compile(&config(clean.clone())).unwrap().config_sha256;
-    for trigger in ["api", "umr"] {
-        let mut compatible = clean.clone();
-        compatible["btc_realtime_paper"]["runtime"]["trigger"] = json!(trigger);
-        let compiled = compile(&config(compatible)).unwrap();
-        assert_eq!(compiled.config_sha256, clean_hash);
-        assert_eq!(
-            serde_json::to_value(&compiled.control.runtime).unwrap(),
-            json!({"strategy_interval_ms": 1000})
-        );
-        let mut legacy_control = serde_json::to_value(&compiled.control).unwrap();
-        legacy_control["runtime"]["trigger"] = json!(trigger);
-        let legacy_canonical = json!({
-            "rail_contract_version": RAIL_CONTRACT_VERSION,
-            "oms_contract_version": OMS_CONTRACT_VERSION,
-            "execution": compiled.execution,
-            "control": legacy_control,
-            "sources": compiled.sources,
-        });
-        let legacy_hash = format!(
-            "{:x}",
-            Sha256::digest(serde_json::to_vec(&legacy_canonical).unwrap())
-        );
-        assert_ne!(legacy_hash, clean_hash);
-        assert!(compiled.matches_config_sha256(&legacy_hash));
-    }
+fn action_properties_compile_into_the_existing_rail_and_router() {
+    let input = config(fixture("paper"));
+    let compiled = compile(&input).unwrap();
+    assert_eq!(
+        compiled.execution.rail.name,
+        input.actions[0].rail.as_deref().unwrap()
+    );
+    assert_eq!(compiled.control.playbook_version, input.playbook_version);
+    assert_eq!(
+        serde_json::to_value(&compiled.control.strategy.decision_strategy.models).unwrap(),
+        input.actions[0].params["models"]
+    );
+    assert_eq!(
+        compiled.control.runtime.strategy_interval_ms,
+        input.actions[0].params["strategy_interval_ms"]
+            .as_u64()
+            .unwrap()
+    );
+    let stored = serde_json::to_value(&input).unwrap();
+    assert_eq!(stored["actions"][0]["type"], "buy");
+    assert_eq!(stored["actions"][0]["rail"], "polymarket");
+    assert_eq!(
+        serde_json::to_value(config(stored.clone())).unwrap(),
+        stored
+    );
 }
 
 #[test]
@@ -192,21 +187,25 @@ fn legacy_fields_and_mixed_contract_markers_never_fall_back() {
     }
     for field in ["rail", "order_policies"] {
         let mut v = fixture("paper");
-        v.as_object_mut().unwrap().remove(field);
+        if field == "rail" {
+            v["actions"][0].as_object_mut().unwrap().remove(field);
+        } else {
+            v.as_object_mut().unwrap().remove(field);
+        }
         let cfg = config(v);
         assert!(is_selected(&cfg));
         assert!(compile(&cfg).is_err());
     }
     for field in ["target_size", "max_book_age_ms", "unified_model"] {
         let mut v = fixture("paper");
-        v["btc_realtime_paper"]["strategy"][field] = json!(5);
+        v["actions"][0]["params"][field] = json!(5);
         invalid(v, "unknown field");
     }
     let mut v = fixture("paper");
-    v["btc_realtime_paper"]["schema_version"] = json!("btc_realtime_paper_process_v4");
+    v["actions"][0]["params"]["schema_version"] = json!("btc_realtime_paper_process_v4");
     invalid(v, "unsupported process schema");
     let mut v = fixture("paper");
-    v["rail"]["name"] = json!("unknown");
+    v["actions"][0]["rail"] = json!("unknown");
     invalid(v, "unsupported execution rail");
 }
 
@@ -230,9 +229,9 @@ fn quantity_bounds_and_dynamic_availability_are_explicit() {
 #[test]
 fn order_types_preserve_member_specific_configuration() {
     let mut v = fixture("paper");
-    let mut member = v["btc_realtime_paper"]["strategy"]["decision_strategy"]["models"][0].clone();
+    let mut member = v["actions"][0]["params"]["models"][0].clone();
     member["member_id"] = json!("second");
-    v["btc_realtime_paper"]["strategy"]["decision_strategy"]["models"]
+    v["actions"][0]["params"]["models"]
         .as_array_mut()
         .unwrap()
         .push(member);
@@ -251,22 +250,20 @@ fn order_types_preserve_member_specific_configuration() {
             .order_execution
             .member_order_types["second"]
     );
-    v["btc_realtime_paper"]["strategy"]["decision_strategy"]["models"][0]["entry_order_type"] =
-        json!("fok");
+    v["actions"][0]["params"]["models"][0]["entry_order_type"] = json!("fok");
     invalid(v, "belongs only");
 }
 
 #[test]
 fn authorization_and_adapter_configuration_cannot_be_confused() {
     let mut v = fixture("paper");
-    v["live_capital"] = json!(true);
+    v["actions"][0]["live_capital"] = json!(true);
     invalid(v, "paper execution authorization");
     let mut v = fixture("live");
-    v["account_ref"] = Value::Null;
+    v["actions"][0]["account_ref"] = Value::Null;
     invalid(v, "account_ref");
     let mut v = fixture("live");
-    v["btc_realtime_paper"]["strategy"] =
-        fixture("paper")["btc_realtime_paper"]["strategy"].clone();
+    v["actions"][0]["params"] = fixture("paper")["actions"][0]["params"].clone();
     invalid(v, "does not authorize live capital");
     let mut v = fixture("live");
     v["order_policies"]
@@ -282,7 +279,7 @@ fn missing_sources_and_incompatible_frozen_requirements_are_rejected() {
     v["sources"].as_array_mut().unwrap().pop();
     assert!(compile(&config(v)).is_err());
     let mut v = fixture("paper");
-    v["btc_realtime_paper"]["strategy"]["max_directional_feature_age_ms"] = json!(6000);
+    v["actions"][0]["params"]["max_directional_feature_age_ms"] = json!(6000);
     assert!(compile(&config(v)).is_err());
 }
 
@@ -313,7 +310,7 @@ fn optional_loss_controls_reuse_existing_admission_contracts() {
 
 #[test]
 fn remaining_execution_controls_round_trip() {
-    let legacy = json!({"mode":"live","execute_signals":true,"live_capital":true,"account_ref":"polymarket-primary","sources":[],"btc_realtime_paper":{"schema_version":"btc_realtime_paper_process_v4"}});
+    let legacy = json!({"sources": [],"playbook_version": "v1.2","actions": [{"mode": "live","execute_signals": true,"live_capital": true,"rail": null,"type": "buy","enabled": true,"account_ref": "polymarket-primary","params": {"schema_version": "btc_realtime_paper_process_v4"}}]});
     let c = config(legacy.clone());
     assert!(!is_selected(&c));
     assert_eq!(serde_json::to_value(&c).unwrap(), legacy);
@@ -321,7 +318,7 @@ fn remaining_execution_controls_round_trip() {
     assert_eq!(e.mode, "live");
     assert_eq!(e.max_order_notional_usd, None);
     assert_eq!(e.max_open_positions, None);
-    assert!(c.rail.is_none());
+    assert!(c.actions[0].rail.is_none());
 }
 
 #[test]
@@ -341,8 +338,8 @@ fn agent_configuration_reuses_existing_umr_contract_without_new_agent_machinery(
     use polymarket_bot::btc::unified_model_runtime::agent;
     let mut v = fixture("paper");
     v["sources"] = json!(agent::REQUIRED_PRODUCTS);
-    v["btc_realtime_paper"]["strategy"]["max_directional_feature_age_ms"] = Value::Null;
-    v["btc_realtime_paper"]["strategy"]["decision_strategy"]["models"][0]["selection"] = json!({"type":"openai_agent","profile_key":agent::PROFILE_KEY,"profile_sha256":agent::hash(&agent::profile()).unwrap()});
+    v["actions"][0]["params"]["max_directional_feature_age_ms"] = Value::Null;
+    v["actions"][0]["params"]["models"][0]["selection"] = json!({"type":"openai_agent","profile_key":agent::PROFILE_KEY,"profile_sha256":agent::hash(&agent::profile()).unwrap()});
     let result = compile(&config(v)).unwrap();
     assert!(matches!(
         result.control.strategy.decision_strategy.models[0].selection,
@@ -353,7 +350,7 @@ fn agent_configuration_reuses_existing_umr_contract_without_new_agent_machinery(
 #[test]
 fn definition_pinning_uses_the_existing_catalog_and_keeps_order_types_in_policies() {
     let mut v = fixture("paper");
-    let member = &mut v["btc_realtime_paper"]["strategy"]["decision_strategy"]["models"][0];
+    let member = &mut v["actions"][0]["params"]["models"][0];
     member["selection"]
         .as_object_mut()
         .unwrap()
@@ -365,8 +362,8 @@ fn definition_pinning_uses_the_existing_catalog_and_keeps_order_types_in_policie
     let mut c = config(v);
     pin_definition(&mut c).unwrap();
     assert_eq!(
-        c.btc_realtime_paper["strategy"]["decision_strategy"]["models"][0],
-        fixture("paper")["btc_realtime_paper"]["strategy"]["decision_strategy"]["models"][0]
+        c.actions[0].params["models"][0],
+        fixture("paper")["actions"][0]["params"]["models"][0]
     );
     compile(&c).unwrap();
 }
@@ -515,7 +512,10 @@ fn tpc_requires_direct_fields_and_rejects_wrappers() {
         let parsed = config(direct.clone());
         let stored = serde_json::to_value(parsed).unwrap();
         assert_eq!(stored["sources"], direct["sources"]);
-        assert_eq!(stored["btc_realtime_paper"], direct["btc_realtime_paper"]);
+        assert_eq!(
+            stored["actions"][0]["params"],
+            direct["actions"][0]["params"]
+        );
         assert!(stored.get("execution").is_none());
         assert_eq!(
             serde_json::to_value(config(stored.clone())).unwrap(),
@@ -525,7 +525,7 @@ fn tpc_requires_direct_fields_and_rejects_wrappers() {
             "execution": direct,
             "raw": {
                 "sources": direct["sources"],
-                "btc_realtime_paper": direct["btc_realtime_paper"]
+                "btc_realtime_paper": direct["actions"][0]["params"]
             }
         });
         assert!(serde_json::from_value::<TradingProcessConfig>(wrapped).is_err());
@@ -534,7 +534,7 @@ fn tpc_requires_direct_fields_and_rejects_wrappers() {
         assert!(serde_json::from_value::<TradingProcessConfig>(mixed).is_err());
         let mut nested = direct;
         let sources = nested.as_object_mut().unwrap().remove("sources").unwrap();
-        nested["btc_realtime_paper"]["sources"] = sources;
+        nested["actions"][0]["params"]["sources"] = sources;
         assert!(serde_json::from_value::<TradingProcessConfig>(nested).is_err());
     }
 }

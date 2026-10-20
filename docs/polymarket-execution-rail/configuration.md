@@ -1,6 +1,6 @@
 # Execution configuration contract
 
-Sources and all process execution controls live directly at the process root. The TPC accepts `rail`, `order_policies`, `mode`, authorization/account fields, existing optional execution limits, `sources`, and `btc_realtime_paper`; it has no `config`, `raw`, or `execution` wrapper. Requests reject unknown fields. PATCH replaces the complete configuration and requires `sources` and `btc_realtime_paper`; name/metadata-only updates remain supported. The database column is still named `config`. Frozen snapshots use the same direct-field representation; migrate stopped processes through the API with fresh run keys and preserve historical runs. New order rules live exclusively in `order_policies`. The explicit rail selector and `btc_realtime_paper_process_v6` must agree. Existing order metadata and compiled policy contracts are unchanged.
+The TPC root contains `playbook_version`, `sources`, `order_policies`, and `actions`. Each action owns `type`, `enabled`, `rail`, `mode`, execution authorization, optional `account_ref`, and `params`. Model selection and routing, strategy cadence, feed requirements, risk selections, and run provenance are flattened into `actions[].params`. PATCH replaces the complete configuration and requires `sources`, `actions`, and `playbook_version`; name/metadata-only updates remain supported. The database column remains named `config`. Frozen snapshots use the same representation. Cutover requires stopped processes, API configuration replacement with fresh run keys, and preservation of process IDs and historical runs. Order rules remain in root `order_policies`; compiled policy and order metadata contracts are unchanged.
 
 Examples are executable compiler fixtures: [paper](examples/paper.json), [live](examples/live.json). They describe inactive definitions, not approved process creations, deployment configuration, or real-capital authorization. Preregistration values identify fixtures; conversion retains actual process provenance and canonical process_id. Keep legacy schemas and defaults unchanged.
 
@@ -14,7 +14,7 @@ The new compiler is pure apart from read-only model/profile loading and caching.
 
 ## Complete parameter migration inventory
 
-Paths below are relative to `btc_realtime_paper`, except execution controls, which are relative to the process root.
+The existing-parameter column below describes the former nested BTC configuration. Current model inputs are flattened into `actions[].params`; execution authority belongs to the action, and policies remain at the root.
 
 | Existing parameter / default | New owner | Meaning and compatibility |
 | --- | --- | --- |
@@ -50,7 +50,7 @@ The compiler retains existing hard-coded configuration ceilings; changing them i
 ## Retained or intentionally excluded
 
 - `strategy.max_directional_feature_age_ms` remains inference configuration; null derives the artifact cadence, explicit values cannot exceed the supported cadence. `strategy.required_model_feeds` remains the existing feed-requirement contract. Neither appears in order policies.
-- `strategy.decision_strategy`, risk_strategies, runtime.strategy_interval_ms (1..60000), run key and preregistration stay in their existing ownership domains. Rail-selected definitions always support UMR execution and authenticated API overrides; there is no trigger selector.
+- `actions[].params`, risk_strategies, runtime.strategy_interval_ms (1..60000), run key and preregistration stay in their existing ownership domains. Rail-selected definitions always support UMR execution and authenticated API overrides; there is no trigger selector.
 - `strategy_version`, `feature_schema_version`, unified_model bindings and artifact policy are derived, not configurable copies. Existing UMR compilation/pinning is reused for validation, never persisted as a legacy execution configuration.
 - `taker_fee_rate` is already rejected for BTC; no new override is added. Fees use observed market evidence.
 - `max_order_notional_usd` is intentionally retired for new sizing; funds, reservations and aggregate USD accounting remain mandatory. Legacy values are not removed.
@@ -65,3 +65,5 @@ Current conservative-selective original paper/live artifacts require conservativ
 ## Compatibility and cutover
 
 No automatic conversion. Existing process identity, enabled intent, sources and effective applicable values must be preserved through an authorized API update. Current old binaries do not accept the new fields: rollback needs compatible code AND configuration. In-flight orders retain originating implementation and configuration identity. Older 3.3.x changes are integrated only with authorization and must pass both legacy and new contract suites. No Helm/build/CI changes are part of this foundation.
+
+The TPC root contains `playbook_version`, `actions`, `sources`, and `order_policies`. Execution controls (`rail`, `mode`, `execute_signals`, `live_capital`, and optional live `account_ref`) belong to the action. Router selection (`type`, `version`, `models`, and `routing`), strategy cadence, feature/feed requirements, risk selections, and run provenance belong to `actions[].params`. Action `type` and `enabled` are stored properties in this alignment; they do not add dispatch or eligibility gates. The existing runtime consumes the first action.

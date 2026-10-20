@@ -1166,8 +1166,8 @@ impl Store {
             FROM polymarket.orders orders
             JOIN polymarket.trading_processes process
               ON process.process_id = orders.process_id
-            WHERE process.config #>> '{mode}' = 'live'
-              AND lower(btrim(process.config #>> '{account_ref}')) = lower($1)
+            WHERE process.config #>> '{actions,0,mode}' = 'live'
+              AND lower(btrim(process.config #>> '{actions,0,account_ref}')) = lower($1)
               AND orders.state IN (
                 'created', 'submitted', 'acknowledged', 'partially_filled',
                 'cancel_requested', 'unknown'
@@ -1706,8 +1706,8 @@ impl Store {
             FROM polymarket.orders orders
             JOIN polymarket.trading_processes process
               ON process.process_id = orders.process_id
-            WHERE process.config #>> '{mode}' = 'live'
-              AND lower(btrim(process.config #>> '{account_ref}')) = lower($1)
+            WHERE process.config #>> '{actions,0,mode}' = 'live'
+              AND lower(btrim(process.config #>> '{actions,0,account_ref}')) = lower($1)
               AND orders.venue_order_id = ANY($2::text[])
             LIMIT 500
             "#,
@@ -1771,8 +1771,8 @@ impl Store {
             WHERE fills.source = 'live'
               AND fills.timestamp_utc >= $3
               AND fills.timestamp_utc <= $4
-              AND process.config #>> '{mode}' = 'live'
-              AND lower(btrim(process.config #>> '{account_ref}')) = lower($1)
+              AND process.config #>> '{actions,0,mode}' = 'live'
+              AND lower(btrim(process.config #>> '{actions,0,account_ref}')) = lower($1)
               AND lower(btrim(orders.raw_payload #>> '{venue,raw_payload,transaction_hash}')) = ANY($2::text[])
             ORDER BY fills.timestamp_utc, fills.fill_id
             LIMIT 4001
@@ -1991,8 +1991,8 @@ impl Store {
             WITH account_processes AS (
               SELECT process_id
               FROM polymarket.trading_processes
-              WHERE config #>> '{mode}' = 'live'
-                AND lower(btrim(config #>> '{account_ref}')) = lower($1)
+              WHERE config #>> '{actions,0,mode}' = 'live'
+                AND lower(btrim(config #>> '{actions,0,account_ref}')) = lower($1)
             ), entries AS (
               SELECT
                 orders.process_id,
@@ -2196,8 +2196,8 @@ impl Store {
                 AND orders.side = 'buy'
                 AND fill.token_id = $3
                 AND market.condition_id = $2
-                AND process.config #>> '{mode}' = 'live'
-                AND lower(btrim(process.config #>> '{account_ref}')) = lower($9)
+                AND process.config #>> '{actions,0,mode}' = 'live'
+                AND lower(btrim(process.config #>> '{actions,0,account_ref}')) = lower($9)
             ), candidate AS (
               SELECT
                 orders.process_id,
@@ -2231,8 +2231,8 @@ impl Store {
                AND watch.status IN ('resolved', 'resolved_late')
                AND watch.resolution_received_at = market.official_resolution_received_at
                AND watch.resolution_source = market.official_resolution_source
-              WHERE process.config #>> '{mode}' = 'live'
-                AND lower(btrim(process.config #>> '{account_ref}')) = lower($9)
+              WHERE process.config #>> '{actions,0,mode}' = 'live'
+                AND lower(btrim(process.config #>> '{actions,0,account_ref}')) = lower($9)
                 AND orders.side = 'buy'
                 AND orders.token_id = $3
                 AND market.condition_id = $2
@@ -2622,8 +2622,8 @@ impl Store {
             WITH account_processes AS (
               SELECT process_id
               FROM polymarket.trading_processes
-              WHERE config #>> '{mode}' = 'live'
-                AND lower(btrim(config #>> '{account_ref}')) = lower($1)
+              WHERE config #>> '{actions,0,mode}' = 'live'
+                AND lower(btrim(config #>> '{actions,0,account_ref}')) = lower($1)
             ), filled AS (
               SELECT fill.token_id,
                 SUM(
@@ -4565,7 +4565,13 @@ mod tests {
         let id = record.process_id;
         let replacement = crate::models::TradingProcessConfig {
             sources: Vec::new(),
-            btc_realtime_paper: serde_json::json!({}),
+            playbook_version: "v1.2".into(),
+            actions: vec![crate::models::TradingProcessAction {
+                params: serde_json::json!({}),
+                kind: "buy".into(),
+                enabled: true,
+                ..Default::default()
+            }],
             ..Default::default()
         };
         let updated = record.with_config(replacement);
@@ -4575,7 +4581,7 @@ mod tests {
         let serialized = serde_json::to_value(updated).unwrap();
         assert!(serialized.get("config").is_none());
         assert_eq!(serialized["sources"], serde_json::json!([]));
-        assert_eq!(serialized["btc_realtime_paper"], serde_json::json!({}));
+        assert_eq!(serialized["actions"][0]["params"], serde_json::json!({}));
     }
 
     #[test]
