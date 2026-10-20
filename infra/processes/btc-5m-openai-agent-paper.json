@@ -3,6 +3,7 @@
   "name": "BTC 5m OpenAI \u00b7 Market reference \u00b7 Clean history",
   "process_type": "btc_5m",
   "process_scope": "realtime_paper",
+  "playbook_version": "v1.2",
   "process_key": "btc-5m-openai-market-reference-20261011t235026z",
   "metadata": {
     "previous_process_id": "057d0d78-d355-4e64-8894-b74a8ef36eb3",
@@ -10,16 +11,19 @@
   },
   "enabled": false,
   "status": "stopped",
-  "btc_realtime_paper": {
-    "next_experiment_key": "btc-5m-agent-sol-20261012t151832z",
-    "playbook_version": "v1.2",
-    "preregistration_sha256": "e3d2460f943f69a0a6d40b2beb8660daddbd6f511cc6a9549b0768a35a329edf",
-    "runtime": {
-      "strategy_interval_ms": 250
-    },
-    "schema_version": "btc_realtime_paper_process_v6",
-    "strategy": {
-      "decision_strategy": {
+  "actions": [
+    {
+      "mode": "paper",
+      "type": "buy",
+      "rail": "polymarket",
+      "enabled": false,
+      "execute_signals": true,
+      "live_capital": false,
+      "params": {
+        "next_experiment_key": "btc-5m-agent-sol-20261012t151832z",
+        "preregistration_sha256": "e3d2460f943f69a0a6d40b2beb8660daddbd6f511cc6a9549b0768a35a329edf",
+        "strategy_interval_ms": 250,
+        "schema_version": "btc_realtime_paper_process_v6",
         "models": [
           {
             "member_id": "agent",
@@ -35,13 +39,13 @@
           "tie_break": "array_order"
         },
         "type": "unified_model_router",
-        "version": 1
-      },
-      "max_directional_feature_age_ms": 5000,
-      "required_model_feeds": []
-    },
-    "risk_strategies": []
-  },
+        "version": 1,
+        "max_directional_feature_age_ms": 5000,
+        "required_model_feeds": [],
+        "risk_strategies": []
+      }
+    }
+  ],
   "sources": [
     {
       "contract_version": 1,
@@ -100,13 +104,6 @@
       "key": "polymarket_chainlink_btcusd_twap"
     }
   ],
-  "mode": "paper",
-  "execute_signals": true,
-  "live_capital": false,
-  "rail": {
-    "name": "polymarket",
-    "version": 1
-  },
   "order_policies": [
     {
       "name": "sizing_policy",
