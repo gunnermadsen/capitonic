@@ -326,11 +326,19 @@ impl TradingProcess {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct TradingProcessConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rail: Option<crate::execution::polymarket::configuration::RailSelection>,
+    pub playbook_version: String,
+    pub actions: Vec<TradingProcessAction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order_policies: Option<Vec<crate::execution::polymarket::policies::OrderPolicy>>,
-    #[serde(default)]
+    pub sources: Vec<crate::market_data_stream::SourceSelector>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TradingProcessAction {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub enabled: bool,
+    pub rail: Option<String>,
     pub mode: Option<String>,
     #[serde(default)]
     pub execute_signals: bool,
@@ -338,19 +346,20 @@ pub struct TradingProcessConfig {
     pub live_capital: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_ref: Option<String>,
-    pub sources: Vec<crate::market_data_stream::SourceSelector>,
-    pub btc_realtime_paper: serde_json::Value,
+    pub params: serde_json::Value,
 }
 
 impl TradingProcessConfig {
     pub fn effective_execution(&self) -> EffectiveProcessExecutionConfig {
         let mut effective = EffectiveProcessExecutionConfig::default();
-        if let Some(mode) = &self.mode {
-            effective.mode = mode.clone();
+        if let Some(action) = self.actions.first() {
+            if let Some(mode) = &action.mode {
+                effective.mode = mode.clone();
+            }
+            effective.execute_signals = action.execute_signals;
+            effective.live_capital = action.live_capital;
+            effective.account_ref = action.account_ref.clone();
         }
-        effective.execute_signals = self.execute_signals;
-        effective.live_capital = self.live_capital;
-        effective.account_ref = self.account_ref.clone();
         effective
     }
 }
@@ -404,7 +413,7 @@ mod tests {
 
     #[test]
     fn removed_root_controls_are_unknown_even_when_null() {
-        let base = serde_json::json!({"sources": [], "btc_realtime_paper": {}});
+        let base = serde_json::json!({"sources": [],"playbook_version": "v1.2","actions": [{"mode": null,"execute_signals": false,"live_capital": false,"rail": null,"type": "buy","enabled": true,"params": {}}]});
         let config: TradingProcessConfig = serde_json::from_value(base.clone()).unwrap();
         let serialized = serde_json::to_value(config).unwrap();
         for field in [

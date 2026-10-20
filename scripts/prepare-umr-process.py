@@ -19,8 +19,8 @@ def prepare(catalog, template, model_key, process_key, name, preregistration_sha
     if not model.get('policy') or not contract.get('qualified_trade_size'):
         raise ValueError('This helper requires a package with qualified size and policy')
     result = copy.deepcopy(template)
-    control = result['btc_realtime_paper']
-    strategy = control['strategy']
+    action = result['actions'][0]
+    control = action['params']
     products = set(model['supported_products'])
     required = [v for v in contract['inputs'] if v['required']]
     if any(v['product'] not in products for v in required):
@@ -33,15 +33,15 @@ def prepare(catalog, template, model_key, process_key, name, preregistration_sha
     result.update(name=name, process_key=process_key, process_scope='realtime_paper', enabled=False, status='created')
     for key in ('process_id', 'id', 'created_at', 'updated_at', 'active_run_id'):
         result.pop(key, None)
-    result.update(mode='paper', execute_signals=True, live_capital=False)
-    control['schema_version'] = 'btc_realtime_paper_process_v4'
-    strategy['decision_strategy'] = dict(type='unified_model_router', version=1, routing=dict(mode='first_qualified', tie_break='array_order'), models=[dict(member_id='primary', selection=dict(type='btc_directional_model', model_key=model_key))])
-    strategy.pop('feature_schema_version', None)
-    strategy.pop('strategy_version', None)
-    strategy['target_size'] = str(contract['qualified_trade_size'])
-    strategy['min_seconds_after_open'] = model['schedule']['minimum_seconds_after_open']
-    strategy['min_seconds_before_close'] = 300 - model['schedule']['maximum_seconds_after_open']
-    strategy.pop('unified_model', None)
+    action.update(type='buy', enabled=True, rail='polymarket', mode='paper', execute_signals=True, live_capital=False)
+    control['schema_version'] = 'btc_realtime_paper_process_v6'
+    result['playbook_version'] = 'v1.2'
+    control.update(type='unified_model_router', version=1, routing=dict(mode='first_qualified', tie_break='array_order'), models=[dict(member_id='primary', selection=dict(type='btc_directional_model', **model['selection']))])
+    policies = {policy['name']: policy['params'] for policy in result['order_policies']}
+    policies['sizing_policy']['default_share'] = str(contract['qualified_trade_size'])
+    policies['entry_timing_policy']['min_seconds_after_open'] = model['schedule']['minimum_seconds_after_open']
+    policies['entry_timing_policy']['min_seconds_before_close'] = 300 - model['schedule']['maximum_seconds_after_open']
+    policies['order_execution_policy']['member_order_types'] = {'primary': 'fok'}
     control['preregistration_sha256'] = preregistration_sha256
     control['next_experiment_key'] = process_key + '-run'  # Existing run-key alias, not experiment ownership.
     metadata = result.setdefault('metadata', {})

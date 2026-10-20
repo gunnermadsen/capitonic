@@ -12,8 +12,8 @@ WITH unresolved_orders AS MATERIALIZED (
              NOT IN ('definitive_nonexecution', 'executed'))
 )
 SELECT process_id FROM polymarket.trading_processes
-WHERE lower(config #>> '{account_ref}') = lower($1)
-  AND config #>> '{mode}' = 'live'
+WHERE lower(config #>> '{actions,0,account_ref}') = lower($1)
+  AND config #>> '{actions,0,mode}' = 'live'
 UNION
 SELECT process_id FROM unresolved_orders
 WHERE lower(raw_payload #>> '{request,metadata,polymarket_execution,account_ref}') = lower($1)

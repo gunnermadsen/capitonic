@@ -644,7 +644,7 @@ impl BtcProcessRunner {
         );
         if let Some(frozen_mode) = config
             .frozen_process_config
-            .pointer("/mode")
+            .pointer("/actions/0/mode")
             .and_then(serde_json::Value::as_str)
         {
             ensure!(
@@ -669,7 +669,7 @@ impl BtcProcessRunner {
         }
         let control = config
             .frozen_process_config
-            .get("btc_realtime_paper")
+            .pointer("/actions/0/params")
             .context("router requires frozen process configuration")?;
         let member_strategies = if matches!(
             control["process_schema_version"]
@@ -682,12 +682,12 @@ impl BtcProcessRunner {
             )
         ) {
             let definition: super::unified_model_runtime::router::RouterDefinition =
-                serde_json::from_value(
-                    control
-                        .pointer("/strategy/decision_strategy")
-                        .context("missing router definition")?
-                        .clone(),
-                )?;
+                serde_json::from_value(serde_json::json!({
+                    "type": control["type"],
+                    "version": control["version"],
+                    "models": control["models"],
+                    "routing": control["routing"],
+                }))?;
             let sources = config.frozen_process_config["sources"]
                 .as_array()
                 .context("missing process sources")?;
@@ -697,11 +697,11 @@ impl BtcProcessRunner {
                 .collect();
             let mut base = config.strategy.clone();
             base.min_seconds_after_open = control
-                .pointer("/strategy/min_seconds_after_open")
+                .get("min_seconds_after_open")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(15);
             base.min_seconds_before_close = control
-                .pointer("/strategy/min_seconds_before_close")
+                .get("min_seconds_before_close")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(20);
             definition.compile_members(&base, &keys)?

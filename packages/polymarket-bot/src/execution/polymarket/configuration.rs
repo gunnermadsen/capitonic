@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use crate::btc::feed_contract::BtcModelFeedRequirement;
 use crate::btc::unified_model_runtime::{
     risk::RiskStrategySelection,
-    router::{RouterDefinition, Selection},
+    router::{Member, RouterDefinition, RouterKind, Routing, Selection},
 };
 use crate::btc::BtcStrategyConfig;
 use crate::market_data_stream::SourceSelector;
@@ -66,6 +66,53 @@ pub struct ProcessControl {
     pub runtime: RuntimeControl,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActionParams {
+    pub schema_version: String,
+    pub next_experiment_key: String,
+    pub preregistration_sha256: String,
+    pub strategy_interval_ms: u64,
+    #[serde(rename = "type")]
+    pub kind: RouterKind,
+    pub version: u32,
+    pub models: Vec<Member>,
+    pub routing: Routing,
+    pub max_directional_feature_age_ms: Option<i64>,
+    pub required_model_feeds: Vec<BtcModelFeedRequirement>,
+    pub risk_strategies: Vec<RiskStrategySelection>,
+}
+
+impl ActionParams {
+    pub fn router(&self) -> RouterDefinition {
+        RouterDefinition {
+            kind: self.kind.clone(),
+            version: self.version,
+            models: self.models.clone(),
+            routing: self.routing.clone(),
+        }
+    }
+
+    fn into_control(self, playbook_version: String) -> ProcessControl {
+        let decision_strategy = self.router();
+        ProcessControl {
+            schema_version: self.schema_version,
+            playbook_version,
+            next_experiment_key: self.next_experiment_key,
+            preregistration_sha256: self.preregistration_sha256,
+            strategy: ModelControl {
+                decision_strategy,
+                max_directional_feature_age_ms: self.max_directional_feature_age_ms,
+                required_model_feeds: self.required_model_feeds,
+            },
+            risk_strategies: self.risk_strategies,
+            runtime: RuntimeControl {
+                strategy_interval_ms: self.strategy_interval_ms,
+            },
+        }
+    }
+}
+
 /// No process object or database handle crosses this boundary into execution.
 #[derive(Debug, Clone, Serialize)]
 pub struct ExecutionSettings {
@@ -83,7 +130,6 @@ pub struct CompiledDefinition {
     pub control: ProcessControl,
     pub sources: Vec<SourceSelector>,
     pub config_sha256: String,
-    compatible_config_sha256: Vec<String>,
 }
 
 impl CompiledDefinition {
@@ -98,31 +144,29 @@ impl CompiledDefinition {
 
     pub fn matches_config_sha256(&self, value: &str) -> bool {
         self.config_sha256 == value
-            || self
-                .compatible_config_sha256
-                .iter()
-                .any(|compatible| compatible == value)
     }
 }
 
 /// Any marker selects strict new-contract validation, never a fallback to legacy.
 pub fn is_selected(config: &TradingProcessConfig) -> bool {
-    config.rail.is_some()
-        || config.order_policies.is_some()
-        || config
-            .btc_realtime_paper
-            .get("schema_version")
-            .and_then(serde_json::Value::as_str)
-            == Some(PROCESS_SCHEMA_VERSION)
+    config.order_policies.is_some()
+        || config.actions.first().is_some_and(|action| {
+            action.rail.is_some()
+                || action
+                    .params
+                    .get("schema_version")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(PROCESS_SCHEMA_VERSION)
+        })
 }
 
 pub fn compile(config: &TradingProcessConfig) -> Result<CompiledDefinition> {
-    let e = config;
-    let rail = e.rail.as_ref().context("explicit rail is required")?;
-    ensure!(
-        rail.name == "polymarket" && rail.version == 1,
-        "unsupported execution rail or contract version"
-    );
+    let e = config
+        .actions
+        .first()
+        .context("explicit rail is required")?;
+    let rail_name = e.rail.as_deref().context("explicit rail is required")?;
+    ensure!(rail_name == "polymarket", "unsupported execution rail");
     let mode = match e.mode.as_deref() {
         Some("paper") => {
             ensure!(
@@ -153,37 +197,23 @@ pub fn compile(config: &TradingProcessConfig) -> Result<CompiledDefinition> {
         _ => anyhow::bail!("execution.mode must be paper or live"),
     };
     let policies = OrderPolicies::compile(
-        e.order_policies
+        config
+            .order_policies
             .as_deref()
             .context("order_policies are required")?,
         mode == ExecutionMode::Paper,
     )?;
     let mut sources = config.sources.clone();
-    let value = &config.btc_realtime_paper;
-    if let Some(members) = value
-        .pointer("/strategy/decision_strategy/models")
-        .and_then(serde_json::Value::as_array)
-    {
+    let value = &e.params;
+    if let Some(members) = value.get("models").and_then(serde_json::Value::as_array) {
         ensure!(
             members.iter().all(|m| m.get("entry_order_type").is_none()),
             "entry_order_type belongs only in order_execution_policy"
         );
     }
-    // The v6 contract was not certified with `runtime.trigger`. Ignore that retired draft
-    // member when reattaching already-persisted test definitions; it has no compiled meaning.
-    let retired_trigger = value
-        .pointer("/runtime/trigger")
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| matches!(*value, "api" | "umr"));
-    let mut compatible_value = value.clone();
-    if let Some(runtime) = compatible_value
-        .get_mut("runtime")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        runtime.remove("trigger");
-    }
-    let mut control: ProcessControl = serde_json::from_value(compatible_value)
-        .context("invalid execution process configuration")?;
+    let params: ActionParams =
+        serde_json::from_value(value.clone()).context("invalid execution process configuration")?;
+    let mut control = params.into_control(config.playbook_version.clone());
     ensure!(
         control.schema_version == PROCESS_SCHEMA_VERSION && control.playbook_version == "v1.2",
         "unsupported process schema or playbook version"
@@ -273,7 +303,10 @@ pub fn compile(config: &TradingProcessConfig) -> Result<CompiledDefinition> {
     }
     sources.sort_by(|a, b| a.key.cmp(&b.key));
     let execution = ExecutionSettings {
-        rail: rail.clone(),
+        rail: RailSelection {
+            name: rail_name.to_string(),
+            version: 1,
+        },
         mode,
         execute_signals: e.execute_signals,
         live_capital: e.live_capital,
@@ -282,25 +315,11 @@ pub fn compile(config: &TradingProcessConfig) -> Result<CompiledDefinition> {
     };
     let canonical = serde_json::json!({"rail_contract_version": super::RAIL_CONTRACT_VERSION, "oms_contract_version": super::OMS_CONTRACT_VERSION, "execution": execution, "control": control, "sources": sources});
     let config_sha256 = format!("{:x}", Sha256::digest(serde_json::to_vec(&canonical)?));
-    let compatible_config_sha256 = retired_trigger
-        .map(|trigger| {
-            let mut legacy_control = serde_json::to_value(&control)?;
-            legacy_control["runtime"]["trigger"] = serde_json::json!(trigger);
-            let legacy = serde_json::json!({"rail_contract_version": super::RAIL_CONTRACT_VERSION, "oms_contract_version": super::OMS_CONTRACT_VERSION, "execution": execution, "control": legacy_control, "sources": sources});
-            Ok::<_, anyhow::Error>(format!(
-                "{:x}",
-                Sha256::digest(serde_json::to_vec(&legacy)?)
-            ))
-        })
-        .transpose()?
-        .into_iter()
-        .collect();
     Ok(CompiledDefinition {
         execution,
         control,
         sources,
         config_sha256,
-        compatible_config_sha256,
     })
 }
 
@@ -308,20 +327,22 @@ pub fn compile(config: &TradingProcessConfig) -> Result<CompiledDefinition> {
 /// The caller persists only after this succeeds. No live credentials are accessed.
 pub fn pin_definition(config: &mut TradingProcessConfig) -> Result<()> {
     let mut candidate = config.clone();
-    let selected = candidate
-        .btc_realtime_paper
-        .pointer_mut("/strategy/decision_strategy")
+    let action = candidate
+        .actions
+        .first_mut()
         .context("missing model router")?;
     ensure!(
-        selected
+        action
+            .params
             .get("models")
             .and_then(serde_json::Value::as_array)
             .is_none_or(|members| members.iter().all(|m| m.get("entry_order_type").is_none())),
         "entry_order_type belongs only in order_execution_policy"
     );
-    let mut router: RouterDefinition = serde_json::from_value(selected.clone())?;
+    let params: ActionParams = serde_json::from_value(action.params.clone())?;
+    let mut router = params.router();
     router.resolve_pins()?;
-    *selected = serde_json::to_value(router)?;
+    action.params["models"] = serde_json::to_value(router.models)?;
     compile(&candidate)?;
     *config = candidate;
     Ok(())

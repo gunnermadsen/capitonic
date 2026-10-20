@@ -64,10 +64,9 @@ def validate_pair(processes, account, ceiling, active):
         raise RuntimeError('Cash ceiling must be positive and finite')
     for mode, pid in REUSABLE_PROCESS_IDS.items():
         p = processes[mode]
-        e = p
+        e = p['actions'][0]
         if (p['process_id'] != pid or e['mode'] != mode
-                or e.get('rail') != {'name': 'polymarket', 'version': 1}
-                or p['btc_realtime_paper']['runtime']['trigger'] != 'api'
+                or e.get('rail') != 'polymarket'
                 or not e.get('execute_signals')
                 or (mode == 'live' and (not e.get('live_capital') or e.get('account_ref') != account))):
             raise RuntimeError('Retained process identity/contract/account mismatch')
@@ -162,7 +161,7 @@ class PairedQualification(Qualification):
             ps['order_execution_policy']['params']['member_order_types']['conservative'] = order_type
             ps['entry_timing_policy']['params']['min_seconds_after_open'] = 0
             run_key = 'order-api-' + mode + '-' + self.state['run']
-            control = p['btc_realtime_paper']
+            control = p['actions'][0]['params']
             control['next_experiment_key'] = run_key
             control['preregistration_sha256'] = hashlib.sha256(run_key.encode()).hexdigest()
         differences = validate_pair(proposed, account, ceiling, False)

@@ -46,17 +46,16 @@ class PairedTest(unittest.TestCase):
             network.assert_not_called()
 
     def test_cash_bound_fixed_quantity_and_pair_contract(self):
-        for mutation in ('cash', 'mode', 'account', 'quantity', 'policy', 'trigger', 'status', 'nan'):
+        for mutation in ('cash', 'mode', 'account', 'quantity', 'policy', 'status', 'nan'):
             processes = pair()
             ceiling = '5.500001'
             live = processes['live']
             if mutation == 'cash': ceiling = '5.5'
             if mutation == 'nan': ceiling = 'NaN'
-            if mutation == 'mode': live['mode'] = 'paper'
-            if mutation == 'account': live['account_ref'] = 'other'
+            if mutation == 'mode': live['actions'][0]['mode'] = 'paper'
+            if mutation == 'account': live['actions'][0]['account_ref'] = 'other'
             if mutation == 'quantity': policies(live)['sizing_policy']['params']['default_share'] = 20
             if mutation == 'policy': policies(live)['liquidity_policy']['params']['require_exit_book'] = False
-            if mutation == 'trigger': live['btc_realtime_paper']['runtime']['trigger'] = 'umr'
             if mutation == 'status': live['status'] = 'stopped'
             with self.subTest(mutation=mutation), self.assertRaises(RuntimeError):
                 validate_pair(processes, 'polymarket-primary', ceiling, True)

@@ -83,7 +83,54 @@ impl BtcProcessManager {
             BtcDefinitionUse::InactiveDefinition => validate_btc_process_capability(process)?,
         }
         let sources = process.config.sources.clone();
-        let control_value = process.config.btc_realtime_paper.clone();
+        let params = &process.config.actions[0].params;
+        let mut control_value = params.clone();
+        control_value["playbook_version"] = serde_json::json!(process.config.playbook_version);
+        control_value["runtime"] = serde_json::json!({
+            "strategy_interval_ms": params["strategy_interval_ms"],
+        });
+        let mut strategy = params.clone();
+        for key in [
+            "schema_version",
+            "next_experiment_key",
+            "preregistration_sha256",
+            "strategy_interval_ms",
+            "risk_strategies",
+            "paper",
+            "entry_admission",
+        ] {
+            strategy
+                .as_object_mut()
+                .expect("process parameters")
+                .remove(key);
+            control_value
+                .as_object_mut()
+                .expect("process parameters")
+                .remove(key);
+        }
+        if params.get("models").is_some() {
+            strategy["decision_strategy"] = serde_json::json!({
+                "type": params["type"], "version": params["version"],
+                "models": params["models"], "routing": params["routing"],
+            });
+            for key in ["type", "version", "models", "routing"] {
+                strategy
+                    .as_object_mut()
+                    .expect("process parameters")
+                    .remove(key);
+            }
+        }
+        control_value = serde_json::json!({
+            "schema_version": params["schema_version"],
+            "playbook_version": process.config.playbook_version,
+            "next_experiment_key": params["next_experiment_key"],
+            "preregistration_sha256": params["preregistration_sha256"],
+            "runtime": control_value["runtime"],
+            "strategy": strategy,
+            "risk_strategies": params.get("risk_strategies").cloned().unwrap_or_else(|| serde_json::json!([])),
+            "paper": params["paper"],
+            "entry_admission": params["entry_admission"],
+        });
         let mut control = parse_btc_process_control(control_value, &sources, definition_use)?;
         control.next_experiment_key = control.next_experiment_key.trim().to_string();
         control.preregistration_sha256 = control.preregistration_sha256.trim().to_ascii_lowercase();
@@ -719,14 +766,14 @@ impl BtcProcessManager {
               WHERE event.process_id = p.process_id
                 AND event.event_type = 'btc_run_manifest'
                 AND event.metadata #>> '{run_key}' =
-                    p.config #>> '{btc_realtime_paper,next_experiment_key}'
+                    p.config #>> '{actions,0,params,next_experiment_key}'
               ORDER BY event.timestamp_utc DESC, event.created_at DESC
               LIMIT 1
             ) run ON true
             WHERE p.process_type = 'btc_5m'
               AND p.process_scope = 'realtime_paper'
-              AND p.config #>> '{btc_realtime_paper,schema_version}' IN ($1, $2, $3, $4, $5, $6)
-              AND (run.timestamp_utc IS NOT NULL OR p.config #>> '{btc_realtime_paper,schema_version}'=$6)
+              AND p.config #>> '{actions,0,params,schema_version}' IN ($1, $2, $3, $4, $5, $6)
+              AND (run.timestamp_utc IS NOT NULL OR p.config #>> '{actions,0,params,schema_version}'=$6)
               AND p.enabled
               AND p.status IN ('starting','running','stopping')
               AND p.stopped_at IS NULL

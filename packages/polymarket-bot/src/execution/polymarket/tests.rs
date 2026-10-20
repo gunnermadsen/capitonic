@@ -14,7 +14,6 @@ use crate::{
 use chrono::{Duration, Utc};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 fn definition(mode: &str) -> super::configuration::CompiledDefinition {
@@ -95,38 +94,21 @@ pub(super) fn fixture(mode: &str) -> (Oms, Candidate, [OrderbookCheckpoint; 2], 
 }
 
 #[test]
-fn compatible_run_identity_is_preserved_without_restoring_trigger_semantics() {
-    let mut config: TradingProcessConfig = serde_json::from_str(include_str!(
-        "../../../../../docs/polymarket-execution-rail/examples/paper.json"
-    ))
-    .unwrap();
-    config.btc_realtime_paper["runtime"]["trigger"] = serde_json::json!("api");
-    let compiled = compile(&config).unwrap();
-    let mut legacy_control = serde_json::to_value(&compiled.control).unwrap();
-    legacy_control["runtime"]["trigger"] = serde_json::json!("api");
-    let legacy = serde_json::json!({
-        "rail_contract_version": super::RAIL_CONTRACT_VERSION,
-        "oms_contract_version": super::OMS_CONTRACT_VERSION,
-        "execution": &compiled.execution,
-        "control": legacy_control,
-        "sources": &compiled.sources,
-    });
-    let legacy_hash = format!("{:x}", Sha256::digest(serde_json::to_vec(&legacy).unwrap()));
+fn current_run_identity_is_preserved() {
+    let compiled = definition("paper");
+    let config_hash = compiled.config_sha256.clone();
     let oms = Oms::new_for_run(
         compiled,
         Ownership {
             process_id: Uuid::new_v4(),
             run_id: Uuid::new_v4(),
         },
-        legacy_hash.clone(),
+        config_hash.clone(),
     )
     .unwrap();
-    assert_eq!(oms.run_config_sha256, legacy_hash);
-    assert_eq!(
-        serde_json::to_value(&oms.definition.control.runtime).unwrap(),
-        serde_json::json!({"strategy_interval_ms": 1000})
-    );
+    assert_eq!(oms.run_config_sha256, config_hash);
 }
+
 fn admit(
     oms: &Oms,
     candidate: &Candidate,

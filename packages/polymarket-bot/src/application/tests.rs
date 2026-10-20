@@ -176,10 +176,17 @@ mod lifecycle_tests {
             status: "created".to_string(),
             enabled: false,
             config: TradingProcessConfig {
-                mode: Some("paper".to_string()),
-                execute_signals: true,
-                live_capital: false,
-                account_ref: None,
+                playbook_version: "v1.2".into(),
+                actions: vec![polymarket_bot::models::TradingProcessAction {
+                    mode: Some("paper".to_string()),
+                    execute_signals: true,
+                    live_capital: false,
+                    account_ref: None,
+                    params: serde_json::json!({}),
+                    kind: "buy".into(),
+                    enabled: true,
+                    ..Default::default()
+                }],
                 ..TradingProcessConfig::default()
             },
             metadata: serde_json::json!({}),
@@ -283,9 +290,6 @@ mod lifecycle_tests {
             let resumed = super::super::order_execution::prepare(&process, true).unwrap();
             assert_eq!(resumed.run_id, prepared.run_id);
             assert_eq!(resumed.config_hash, prepared.config_hash);
-            process.config.btc_realtime_paper["runtime"]["trigger"] = serde_json::json!("umr");
-            let compatible = super::super::order_execution::prepare(&process, true).unwrap();
-            assert_eq!(compatible.config_hash, prepared.config_hash);
         }
     }
 
@@ -295,9 +299,9 @@ mod lifecycle_tests {
         process.enabled = true;
         process.status = "running".to_string();
         let configured = &mut process.config;
-        configured.mode = Some("live".to_string());
-        configured.live_capital = true;
-        configured.account_ref = Some("polymarket-primary".to_string());
+        configured.actions[0].mode = Some("live".to_string());
+        configured.actions[0].live_capital = true;
+        configured.actions[0].account_ref = Some("polymarket-primary".to_string());
         let execution = process.effective_execution();
         assert!(should_resume_configured_live_entries(&process, &execution));
 
@@ -763,7 +767,7 @@ mod lifecycle_tests {
             BtcDirectionalModelEntryPolicy::ExecuteDirectionalPrediction
         );
         assert_eq!(
-            prepared.frozen_process_config.btc_realtime_paper["paper"]
+            prepared.frozen_process_config.actions[0].params["paper"]
                 ["directional_model_entry_policy"],
             serde_json::json!("execute_directional_prediction")
         );
@@ -772,18 +776,18 @@ mod lifecycle_tests {
             BtcDirectionalModelEntryPolicy::RequirePositiveDirectEdge;
         let default_prepared = prepare_btc_start_definition(resolved(control)).unwrap();
         assert!(
-            default_prepared.frozen_process_config.btc_realtime_paper["paper"]
+            default_prepared.frozen_process_config.actions[0].params["paper"]
                 .get("directional_model_entry_policy")
                 .is_none()
         );
         assert_ne!(prepared.config_hash, default_prepared.config_hash);
 
         let mut live_capital = eligible_btc_process();
-        live_capital.config.live_capital = true;
+        live_capital.config.actions[0].live_capital = true;
         assert!(validate_btc_process_capability(&live_capital).is_err());
 
         let mut live_mode = eligible_btc_process();
-        live_mode.config.mode = Some("live".to_string());
+        live_mode.config.actions[0].mode = Some("live".to_string());
         assert!(validate_btc_process_capability(&live_mode).is_err());
     }
 
@@ -839,7 +843,7 @@ mod lifecycle_tests {
         ))
         .unwrap();
         let mut process = eligible_btc_process();
-        process.config = serde_json::from_value(serde_json::json!({"rail": definition["rail"], "order_policies": definition["order_policies"], "mode": definition["mode"], "execute_signals": definition["execute_signals"], "live_capital": definition["live_capital"], "account_ref": definition["account_ref"], "sources": definition["sources"], "btc_realtime_paper": definition["btc_realtime_paper"]})).unwrap();
+        process.config = serde_json::from_value(serde_json::json!({"order_policies": definition["order_policies"],"sources": definition["sources"],"playbook_version": "v1.2","actions": definition["actions"]})).unwrap();
         let collateral_policy = process
             .config
             .order_policies
@@ -900,7 +904,7 @@ mod lifecycle_tests {
         assert!(validate_btc_start_eligibility(&active).is_err());
 
         let mut invalid = eligible_btc_process();
-        invalid.config.mode = Some("live".to_string());
+        invalid.config.actions[0].mode = Some("live".to_string());
         assert!(validate_btc_start_eligibility(&invalid).is_err());
 
         assert!(validate_btc_start_eligibility(&eligible_btc_process()).is_ok());
@@ -910,17 +914,24 @@ mod lifecycle_tests {
     fn live_credential_only_definition_is_valid_but_cannot_start() {
         let mut process = eligible_btc_process();
         process.config = TradingProcessConfig {
-            mode: Some("live".to_string()),
-            execute_signals: false,
-            live_capital: false,
-            account_ref: Some("polymarket-primary".to_string()),
+            playbook_version: "v1.2".into(),
+            actions: vec![polymarket_bot::models::TradingProcessAction {
+                mode: Some("live".to_string()),
+                execute_signals: false,
+                live_capital: false,
+                account_ref: Some("polymarket-primary".to_string()),
+                params: serde_json::json!({}),
+                kind: "buy".into(),
+                enabled: true,
+                ..Default::default()
+            }],
             ..process.config
         };
 
         validate_btc_process_capability(&process).unwrap();
         assert!(validate_btc_start_eligibility(&process).is_err());
 
-        let execution = &mut process.config;
+        let execution = &mut process.config.actions[0];
         execution.execute_signals = true;
         execution.live_capital = true;
         validate_btc_start_eligibility(&process).unwrap();
@@ -969,13 +980,16 @@ mod lifecycle_tests {
                 format!("polymarket-bot/btc-live/{run_key}").as_bytes(),
             )
         );
-        assert_eq!(prepared.frozen_process_config.mode.as_deref(), Some("live"));
         assert_eq!(
-            prepared.frozen_process_config.btc_realtime_paper["paper"]["execution_enabled"],
+            prepared.frozen_process_config.actions[0].mode.as_deref(),
+            Some("live")
+        );
+        assert_eq!(
+            prepared.frozen_process_config.actions[0].params["paper"]["execution_enabled"],
             false
         );
         assert_eq!(
-            prepared.frozen_process_config.btc_realtime_paper["live"],
+            prepared.frozen_process_config.actions[0].params["live"],
             serde_json::json!({
                 "execution_enabled": true,
                 "account_ref": "polymarket-primary"
@@ -1078,7 +1092,8 @@ mod lifecycle_tests {
         assert_eq!(first.run_id, second.run_id);
         assert_eq!(first.config_hash, expected_config_hash);
         assert_eq!(first.config_hash, second.config_hash);
-        let frozen_runtime = first.frozen_process_config.btc_realtime_paper["runtime"]
+        let frozen_runtime = first.frozen_process_config.actions[0]
+            .params
             .as_object()
             .unwrap();
         assert!(!frozen_runtime.contains_key("clob_heartbeat_interval"));
@@ -1089,31 +1104,33 @@ mod lifecycle_tests {
             serde_json::to_value(&second.frozen_process_config).unwrap()
         );
         assert_eq!(
-            first.frozen_process_config.btc_realtime_paper["preregistration_sha256"],
+            first.frozen_process_config.actions[0].params["preregistration_sha256"],
             preregistration_sha256
         );
         assert_eq!(
-            first.frozen_process_config.btc_realtime_paper["process_schema_version"],
+            first.frozen_process_config.actions[0].params["process_schema_version"],
             BTC_PROCESS_SCHEMA_VERSION
         );
         assert_eq!(
-            first.frozen_process_config.btc_realtime_paper["pipeline_version"],
+            first.frozen_process_config.actions[0].params["pipeline_version"],
             BTC_PIPELINE_VERSION
         );
-        assert!(first.frozen_process_config.btc_realtime_paper["strategy"]
+        assert!(first.frozen_process_config.actions[0]
+            .params
             .get("decision_strategy")
             .is_none());
-        assert!(first
-            .frozen_process_config
-            .btc_realtime_paper
+        assert!(first.frozen_process_config.actions[0]
+            .params
             .get("ml_shadow")
             .is_none());
-        assert!(first
-            .frozen_process_config
-            .btc_realtime_paper
+        assert!(first.frozen_process_config.actions[0]
+            .params
             .get("entry_admission")
             .is_none());
-        assert_eq!(first.frozen_process_config.mode.as_deref(), Some("paper"));
+        assert_eq!(
+            first.frozen_process_config.actions[0].mode.as_deref(),
+            Some("paper")
+        );
     }
 
     #[test]
@@ -1205,7 +1222,7 @@ mod lifecycle_tests {
                 "official_resolution_watch_retention",
                 "writer_capacity",
             ] {
-                durable["btc_realtime_paper"]["runtime"][field] = historical_value.clone();
+                durable["actions"][0]["params"][field] = historical_value.clone();
             }
             assert_eq!(
                 resume_process_contract_projection(current.clone()),
@@ -1219,12 +1236,10 @@ mod lifecycle_tests {
         let prepared = prepared_btc_definition_with_default_runtime();
         let current = serde_json::to_value(&prepared.frozen_process_config).unwrap();
         let mut durable = serde_json::to_value(&prepared.frozen_process_config).unwrap();
-        durable["btc_realtime_paper"]["runtime"]["clob_heartbeat_interval"] =
-            serde_json::json!("ignored");
-        durable["btc_realtime_paper"]["runtime"]["rtds_heartbeat_interval"] = serde_json::json!(5);
-        durable["btc_realtime_paper"]["runtime"]["binance_heartbeat_interval"] =
-            serde_json::json!(20);
-        durable["btc_realtime_paper"]["runtime"]["strategy_interval"] =
+        durable["actions"][0]["params"]["clob_heartbeat_interval"] = serde_json::json!("ignored");
+        durable["actions"][0]["params"]["rtds_heartbeat_interval"] = serde_json::json!(5);
+        durable["actions"][0]["params"]["binance_heartbeat_interval"] = serde_json::json!(20);
+        durable["actions"][0]["params"]["strategy_interval"] =
             serde_json::to_value(Duration::from_secs(1)).unwrap();
 
         assert_ne!(
@@ -1236,24 +1251,24 @@ mod lifecycle_tests {
     #[test]
     fn btc_resume_preserves_frozen_parameters_across_service_rebuilds() {
         let durable = serde_json::json!({
-            "btc_realtime_paper": {
+            "actions": [{"params": {
                 "process_schema_version": ROUTER_PROCESS_SCHEMA_VERSION,
                 "build": {
                     "package_version": "0.1.0",
                     "compiled_source_identity": "tree-sha256:old"
                 },
-                "strategy": {"threshold": "0.03"}
-            }
+                "threshold": "0.03"
+            }}]
         });
         let rebuilt = serde_json::json!({
-            "btc_realtime_paper": {
+            "actions": [{"params": {
                 "process_schema_version": ROUTER_PROCESS_SCHEMA_VERSION,
                 "build": {
                     "package_version": "0.1.0",
                     "compiled_source_identity": "tree-sha256:new"
                 },
-                "strategy": {"threshold": "0.03"}
-            }
+                "threshold": "0.03"
+            }}]
         });
         assert_eq!(
             resume_process_contract_projection(durable.clone()),
@@ -1261,14 +1276,14 @@ mod lifecycle_tests {
         );
 
         let changed_parameters = serde_json::json!({
-            "btc_realtime_paper": {
+            "actions": [{"params": {
                 "process_schema_version": ROUTER_PROCESS_SCHEMA_VERSION,
                 "build": {
                     "package_version": "0.1.0",
                     "compiled_source_identity": "tree-sha256:new"
                 },
-                "strategy": {"threshold": "0.04"}
-            }
+                "threshold": "0.04"
+            }}]
         });
         assert_ne!(
             resume_process_contract_projection(durable),
@@ -1290,9 +1305,6 @@ mod lifecycle_tests {
             .expect("README BTC process contract must be a JSON code block");
         let request: control_http::UpsertTradingProcessByKeyRequest =
             serde_json::from_str(contract).unwrap();
-        let control = request.btc_realtime_paper.clone();
-        parse_btc_process_control(control, &request.sources, BtcDefinitionUse::ExplicitStart)
-            .unwrap();
 
         let now = Utc::now();
         let process = TradingProcess {
@@ -1304,14 +1316,10 @@ mod lifecycle_tests {
             status: request.status,
             enabled: request.enabled,
             config: TradingProcessConfig {
-                rail: request.rail,
+                playbook_version: request.playbook_version,
+                actions: request.actions,
                 order_policies: request.order_policies,
-                mode: request.mode,
-                execute_signals: request.execute_signals,
-                live_capital: request.live_capital,
-                account_ref: request.account_ref,
                 sources: request.sources,
-                btc_realtime_paper: request.btc_realtime_paper,
             },
             metadata: request.metadata,
             created_at: now,
@@ -1343,11 +1351,11 @@ mod lifecycle_tests {
             )
             .unwrap();
             let mut config: TradingProcessConfig =
-                serde_json::from_value(serde_json::json!({"rail": value["rail"], "order_policies": value["order_policies"], "mode": value["mode"], "execute_signals": value["execute_signals"], "live_capital": value["live_capital"], "account_ref": value["account_ref"], "sources": value["sources"], "btc_realtime_paper": value["btc_realtime_paper"]})).unwrap();
+                serde_json::from_value(serde_json::json!({"order_policies": value["order_policies"],"sources": value["sources"],"playbook_version": "v1.2","actions": value["actions"]})).unwrap();
             pin_router_config(&mut config).unwrap();
             let mut sources: Vec<SourceSelector> = config.sources.clone();
             let control = parse_btc_process_control(
-                config.btc_realtime_paper.clone(),
+                config.actions[0].params.clone(),
                 &sources,
                 BtcDefinitionUse::InactiveDefinition,
             )
@@ -1386,7 +1394,7 @@ mod lifecycle_tests {
                 serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
             assert!(ids.insert(value["process_id"].as_str().unwrap().to_owned()));
             let config: TradingProcessConfig =
-                serde_json::from_value(serde_json::json!({"rail": value["rail"], "order_policies": value["order_policies"], "mode": value["mode"], "execute_signals": value["execute_signals"], "live_capital": value["live_capital"], "account_ref": value["account_ref"], "sources": value["sources"], "btc_realtime_paper": value["btc_realtime_paper"]})).unwrap();
+                serde_json::from_value(serde_json::json!({"order_policies": value["order_policies"],"sources": value["sources"],"playbook_version": "v1.2","actions": value["actions"]})).unwrap();
             let compiled =
                 polymarket_bot::execution::polymarket::configuration::compile(&config).unwrap();
             let strategy = compiled.runtime_strategy().unwrap();

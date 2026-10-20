@@ -497,22 +497,23 @@ pub(super) fn pin_router_config(config: &mut TradingProcessConfig) -> Result<(),
         return polymarket_bot::execution::polymarket::configuration::pin_definition(config)
             .map_err(|error| HttpError::bad_request(format!("{error:#}")));
     }
-    let control = &mut config.btc_realtime_paper;
+    let control = &mut config.actions[0].params;
     if !matches!(
         control["schema_version"].as_str(),
         Some(ROUTER_PROCESS_SCHEMA_VERSION | AGENT_PROCESS_SCHEMA_VERSION)
     ) {
         return Ok(());
     }
-    let selected = control
-        .pointer_mut("/strategy/decision_strategy")
-        .ok_or_else(|| HttpError::bad_request("missing router"))?;
-    let mut router: RouterDefinition = serde_json::from_value(selected.clone())
-        .map_err(|e| HttpError::bad_request(e.to_string()))?;
+    let mut router: RouterDefinition = serde_json::from_value(serde_json::json!({
+        "type": control["type"], "version": control["version"],
+        "models": control["models"], "routing": control["routing"],
+    }))
+    .map_err(|e| HttpError::bad_request(e.to_string()))?;
     router
         .resolve_pins()
         .map_err(|e| HttpError::bad_request(e.to_string()))?;
-    *selected = serde_json::to_value(router).map_err(|e| HttpError::internal(e.to_string()))?;
+    control["models"] =
+        serde_json::to_value(router.models).map_err(|e| HttpError::internal(e.to_string()))?;
     Ok(())
 }
 
@@ -1042,15 +1043,31 @@ pub(super) fn prepare_btc_start_definition_for_execution(
                 }),
             );
     }
+    let mut params = frozen_control.as_object().expect("frozen control").clone();
+    params.remove("playbook_version");
+    if let Some(serde_json::Value::Object(runtime)) = params.remove("runtime") {
+        params.extend(runtime);
+    }
+    if let Some(serde_json::Value::Object(mut strategy)) = params.remove("strategy") {
+        if let Some(serde_json::Value::Object(router)) = strategy.remove("decision_strategy") {
+            params.extend(router);
+        }
+        params.extend(strategy);
+    }
     let frozen_process_config = TradingProcessConfig {
-        rail: None,
+        playbook_version: "v1.2".to_string(),
+        actions: vec![polymarket_bot::models::TradingProcessAction {
+            kind: "buy".to_string(),
+            enabled: true,
+            rail: None,
+            mode: Some(execution_mode.as_str().to_string()),
+            execute_signals: execution.execute_signals,
+            live_capital: execution.live_capital,
+            account_ref: execution.account_ref.clone(),
+            params: serde_json::Value::Object(params),
+        }],
         order_policies: None,
-        mode: Some(execution_mode.as_str().to_string()),
-        execute_signals: execution.execute_signals,
-        live_capital: execution.live_capital,
-        account_ref: execution.account_ref.clone(),
         sources: sources.clone(),
-        btc_realtime_paper: frozen_control,
     };
     let config_hash = hash_btc_frozen_process_config(&frozen_process_config)?;
     Ok(PreparedBtcStartDefinition {
@@ -1089,9 +1106,10 @@ pub(super) fn resume_process_contract_projection(
 ) -> serde_json::Value {
     if let Some(object) = config.as_object_mut() {
         object.remove("sources");
+        object.remove("playbook_version");
     }
     if let Some(control) = config
-        .get_mut("btc_realtime_paper")
+        .pointer_mut("/actions/0/params")
         .and_then(serde_json::Value::as_object_mut)
     {
         if let Some(build) = control
@@ -1100,9 +1118,6 @@ pub(super) fn resume_process_contract_projection(
         {
             build.remove("compiled_source_identity");
         }
-        if let Some(runtime) = control
-            .get_mut("runtime")
-            .and_then(serde_json::Value::as_object_mut)
         {
             for retired_system_field in [
                 "gamma_base_url",
@@ -1125,10 +1140,9 @@ pub(super) fn resume_process_contract_projection(
                 "binance_spot_l2_enabled",
                 "binance_spot_l2_ws_url",
             ] {
-                runtime.remove(retired_system_field);
+                control.remove(retired_system_field);
             }
         }
-        control.remove("playbook_version");
         if control
             .get("process_schema_version")
             .and_then(serde_json::Value::as_str)
@@ -1151,12 +1165,7 @@ pub(super) fn selector_only_config_change(
     fn remove_selectors(value: &mut serde_json::Value) {
         if let Some(object) = value.as_object_mut() {
             object.remove("sources");
-        }
-        if let Some(control) = value
-            .get_mut("btc_realtime_paper")
-            .and_then(serde_json::Value::as_object_mut)
-        {
-            control.remove("playbook_version");
+            object.remove("playbook_version");
         }
     }
     let mut current =
