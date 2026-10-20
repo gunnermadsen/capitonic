@@ -2624,7 +2624,7 @@ CREATE TABLE polymarket.trading_processes (
     metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT chk_poly_trading_processes_live_account_ref CHECK ((((config #>> '{actions,0,mode}'::text[]) <> 'live'::text) OR (((config #>> '{actions,0,account_ref}'::text[]) IS NOT NULL) AND ((config #>> '{actions,0,account_ref}'::text[]) = btrim((config #>> '{actions,0,account_ref}'::text[]))) AND ((config #>> '{actions,0,account_ref}'::text[]) ~ '^[A-Za-z0-9._:-]{1,128}$'::text)))),
+    CONSTRAINT chk_poly_trading_processes_live_account_ref CHECK ((((config #>> '{execution,mode}'::text[]) <> 'live'::text) OR (((config #>> '{execution,account_ref}'::text[]) IS NOT NULL) AND ((config #>> '{execution,account_ref}'::text[]) = btrim((config #>> '{execution,account_ref}'::text[]))) AND ((config #>> '{execution,account_ref}'::text[]) ~ '^[A-Za-z0-9._:-]{1,128}$'::text)))),
     CONSTRAINT chk_poly_trading_processes_name CHECK ((length(btrim(name)) > 0)),
     CONSTRAINT chk_poly_trading_processes_pid CHECK (((pid IS NULL) OR (pid > 0))),
     CONSTRAINT chk_poly_trading_processes_scope CHECK ((length(btrim(process_scope)) > 0)),
@@ -3842,7 +3842,7 @@ CREATE INDEX idx_poly_trading_process_events_type_ts ON polymarket.trading_proce
 -- Name: idx_poly_trading_processes_active_live_account_ref; Type: INDEX; Schema: polymarket; Owner: -
 --
 
-CREATE INDEX idx_poly_trading_processes_active_live_account_ref ON polymarket.trading_processes USING btree (lower(btrim((config #>> '{actions,0,account_ref}'::text[]))), process_id) WHERE (enabled AND (status = ANY (ARRAY['starting'::text, 'running'::text, 'stopping'::text])) AND ((config #>> '{actions,0,mode}'::text[]) = 'live'::text));
+CREATE INDEX idx_poly_trading_processes_active_live_account_ref ON polymarket.trading_processes USING btree (lower(btrim((config #>> '{execution,account_ref}'::text[]))), process_id) WHERE (enabled AND (status = ANY (ARRAY['starting'::text, 'running'::text, 'stopping'::text])) AND ((config #>> '{execution,mode}'::text[]) = 'live'::text));
 
 
 --
