@@ -19,8 +19,8 @@
     "strategy_family": "btc_5m_directional_model",
     "umr_contract": "capitonic-unified-model-runtime-v1"
   },
-  "enabled": false,
-  "status": "stopped",
+  "enabled": true,
+  "status": "running",
   "sources": [
     {
       "contract_version": 1,
@@ -174,7 +174,7 @@
       "execute_signals": true,
       "live_capital": false,
       "params": {
-        "next_experiment_key": "btc-5m-extended-specialist-official-umr-confidence-070-run-cleanup-20260921",
+        "next_experiment_key": "tpc-action-4669169b-20261020t185640z",
         "preregistration_sha256": "5da1d6f819eae517817c8a647626d3d59315914f3d480ea6d9dc6657f15397af",
         "schema_version": "btc_realtime_paper_process_v6",
         "risk_strategies": [],

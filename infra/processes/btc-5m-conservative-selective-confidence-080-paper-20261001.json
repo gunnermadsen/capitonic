@@ -18,8 +18,8 @@
     "strategy_family": "btc_5m_directional_model",
     "umr_contract": "capitonic-unified-model-runtime-v1"
   },
-  "enabled": false,
-  "status": "stopped",
+  "enabled": true,
+  "status": "running",
   "sources": [
     {
       "contract_version": 1,
@@ -166,7 +166,7 @@
       "execute_signals": true,
       "live_capital": false,
       "params": {
-        "next_experiment_key": "btc-5m-conservative-selective-confidence-080-paper-20261001-run",
+        "next_experiment_key": "tpc-action-eb73d85f-20261020t185640z",
         "preregistration_sha256": "1b5ebf81d857aa811f5b0207bd73924e013bfbdac6ebe10390e7a2566912fa72",
         "schema_version": "btc_realtime_paper_process_v6",
         "risk_strategies": [],

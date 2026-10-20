@@ -10,7 +10,7 @@
     "purpose": "Fresh history for market-referenced OpenAI agent in UMR"
   },
   "enabled": false,
-  "status": "stopped",
+  "status": "completed",
   "actions": [
     {
       "mode": "paper",
@@ -20,7 +20,7 @@
       "execute_signals": true,
       "live_capital": false,
       "params": {
-        "next_experiment_key": "btc-5m-agent-sol-20261012t151832z",
+        "next_experiment_key": "tpc-action-ccf099cc-20261020t185640z",
         "preregistration_sha256": "e3d2460f943f69a0a6d40b2beb8660daddbd6f511cc6a9549b0768a35a329edf",
         "strategy_interval_ms": 250,
         "schema_version": "btc_realtime_paper_process_v6",
