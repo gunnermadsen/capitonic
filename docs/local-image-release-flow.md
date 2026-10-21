@@ -1,12 +1,12 @@
 # Local image release flow
 
-This is the operator runbook for the bot and ingester image path in local k3s. Each boundary is started deliberately. CI and CD are separate commands; neither command starts the next boundary. `AGENTS.md` owns branch, provenance, deployment-safety, and migration rules, while the scripts own their repeatable build, pin, and rollout actions.
+This is the operator runbook for the bot and ingester image path in local k3s. Each boundary is started deliberately. CI and CD are separate commands; neither command starts the next boundary. `AGENTS.md` owns branch, provenance, deployment-safety, and migration rules, while local CI owns image builds and the operator applies reviewed pins through Helm.
 
 | Responsibility | Owner |
 | --- | --- |
 | Select work, commit code, choose branch merges, and initiate each command | Operator or agent |
 | Check image inputs, select `local.N`, build the image, and create `image/...` provenance tags | `scripts/local-image-ci.sh` |
-| Validate the candidate, pin the exact local chart image without changing base-only `appVersion`, and deploy the committed pin | `scripts/local-image-cd.sh` |
+| Validate the candidate, pin the exact local chart image without changing base-only `appVersion`, and deploy the committed pin | Operator using the owning Helm chart |
 | Allocate and publish immutable RC images after changes reach `development` | GitHub CI |
 | Verify the selected RC, promote its digest to the final tag, and deploy the final tag | Production CD |
 
@@ -22,16 +22,9 @@ scripts/local-image-ci.sh ingester --build
 
 Local CI selects the highest SemVer base among annotated `ci/<component>/v*-test.*`, `rc/<component>/v*-rc.*`, and `image/<component>/v*-local.*` tags reachable from the current commit. It allocates the next `local.N` on that base. Fetch origin tags before selecting a version. The committed production chart pin on `origin/production` closes a deployed base for changed inputs; select a newer base with a component Git tag.
 
-Use the `Candidate image` and image ID reported by CI. Invoke CD separately to generate the Helm pin, review and commit its changes, then invoke deployment as another command:
+Use the `Candidate image` and image ID reported by CI. Set the owning chart's `values.yaml` image to that exact prebuilt candidate; for ingester also set `imageDigest` and `gitRevision` from the verified image. Review and commit these pins before deployment. The candidate's `vX.Y.Z` base must match the base-only chart `appVersion`; pinning does not change the chart's own `version`.
 
-```sh
-scripts/local-image-cd.sh pin <component> <vMAJOR.MINOR.PATCH-local.N>
-git add capitonic-helm-chart/charts/<component>/Chart.yaml capitonic-helm-chart/charts/<component>/values.yaml
-git commit -m "Pin local <component> candidate in Helm chart"
-scripts/local-image-cd.sh deploy <component>
-```
-
-Local CD updates only the exact local chart image pin; for ingester it also pins the immutable image ID and embedded Git revision. The candidate's `vX.Y.Z` base must match the base-only chart `appVersion`. Local CD changes neither `appVersion` nor the Helm chart's own `version`. Confirm the running pods use the selected image ID and that CD's recovery checks pass. When validating another branch in the same cycle, preserve earlier deployed chart pins and their source lineage so the next chart does not regress an image. Branch integration between validations remains a deliberate source-control action.
+Deploy through the ordinary Helm procedure in [the local k3s runbook](capitonic-k3s-cutover.md#local-routes-and-commands). Follow `AGENTS.md` for capacity checks, rollback identity, and Local Deployment Verification. Preserve earlier deployed chart pins and their source lineage when validating another branch in the same cycle.
 
 ## Integration branch: development publication
 
