@@ -1713,6 +1713,8 @@ mod router_tests {
         let selection = AgentSelection {
             profile_key: profile.key.into(),
             profile_sha256: agent::hash(&profile).unwrap(),
+            prompt: "Forecast from the supplied observations.".into(),
+            model: "test-model".into(),
         };
         let identity = selection.identity();
         register(id, run, "config", "paper", None);
@@ -1797,6 +1799,8 @@ mod router_tests {
                 selection: AgentSelection {
                     profile_key: "agent".into(),
                     profile_sha256: "b".repeat(64),
+                    prompt: "Forecast from the supplied observations.".into(),
+                    model: "test-model".into(),
                 },
                 market_id: "market".into(),
                 window_start: at,

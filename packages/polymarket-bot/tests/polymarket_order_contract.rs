@@ -339,7 +339,7 @@ fn agent_configuration_reuses_existing_umr_contract_without_new_agent_machinery(
     let mut v = fixture("paper");
     v["sources"] = json!(agent::REQUIRED_PRODUCTS);
     v["actions"][0]["params"]["max_directional_feature_age_ms"] = Value::Null;
-    v["actions"][0]["params"]["models"][0]["selection"] = json!({"type":"openai_agent","profile_key":agent::PROFILE_KEY,"profile_sha256":agent::hash(&agent::profile()).unwrap()});
+    v["actions"][0]["params"]["models"][0]["selection"] = json!({"type":"openai_agent", "prompt":"Forecast from the supplied observations.", "model":"test-model","profile_key":agent::PROFILE_KEY,"profile_sha256":agent::hash(&agent::profile()).unwrap()});
     let result = compile(&config(v)).unwrap();
     assert!(matches!(
         result.control.strategy.decision_strategy.models[0].selection,

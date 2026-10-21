@@ -244,6 +244,8 @@ mod tests {
                 selection: AgentSelection {
                     profile_key: PROFILE_KEY.into(),
                     profile_sha256: super::super::hash(&profile()).unwrap(),
+                    prompt: "Forecast from the supplied observations.".into(),
+                    model: "test-model".into(),
                 },
                 market_id: "a".into(),
                 window_start: Utc::now(),

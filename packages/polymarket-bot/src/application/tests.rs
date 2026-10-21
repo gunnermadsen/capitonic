@@ -334,7 +334,7 @@ mod lifecycle_tests {
             schema_version: AGENT_PROCESS_SCHEMA_VERSION.into(),
             playbook_version: Some("v1.2".into()),
             strategy: serde_json::json!({"target_size":"5","decision_strategy":{"type":"unified_model_router","version":1,
-                "routing":{"mode":"first_qualified","tie_break":"array_order"},"models":[{"member_id":"agent","selection":{"type":"openai_agent","profile_key":agent::PROFILE_KEY,"profile_sha256":agent::hash(&agent::profile()).unwrap()}}]}}),
+                "routing":{"mode":"first_qualified","tie_break":"array_order"},"models":[{"member_id":"agent","selection":{"type":"openai_agent", "prompt":"Forecast from the supplied observations.", "model":"test-model","profile_key":agent::PROFILE_KEY,"profile_sha256":agent::hash(&agent::profile()).unwrap()}}]}}),
             ..BtcRealtimePaperControlConfig::default()
         };
         let strategy = resolve_btc_strategy(&control, &sources).unwrap();
@@ -355,7 +355,7 @@ mod lifecycle_tests {
         let mut fresh = control.clone();
         let profile = agent::profile_for_key(agent::FRESH_EVIDENCE_PROFILE_KEY).unwrap();
         fresh.strategy["decision_strategy"]["models"][0]["selection"] = serde_json::json!({
-            "type":"openai_agent", "profile_key":profile.key,
+            "type":"openai_agent", "prompt":"Forecast from the supplied observations.", "model":"test-model", "profile_key":profile.key,
             "profile_sha256":agent::hash(&profile).unwrap()
         });
         assert!(resolve_btc_strategy(&fresh, &sources)

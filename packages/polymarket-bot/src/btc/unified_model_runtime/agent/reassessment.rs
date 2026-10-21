@@ -144,6 +144,8 @@ mod tests {
             selection: AgentSelection {
                 profile_key: profile.key.into(),
                 profile_sha256: hash(&profile).unwrap(),
+                prompt: "Forecast from the supplied observations.".into(),
+                model: "test-model".into(),
             },
             market_id: "market".into(),
             window_start: start,
@@ -295,6 +297,8 @@ mod tests {
         current.selection = AgentSelection {
             profile_key: profile.key.into(),
             profile_sha256: hash(&profile).unwrap(),
+            prompt: "Forecast from the supplied observations.".into(),
+            model: "test-model".into(),
         };
         previous.request.selection = current.selection.clone();
         for context in [&mut current.context, &mut previous.request.context] {

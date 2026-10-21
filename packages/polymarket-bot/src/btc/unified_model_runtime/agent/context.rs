@@ -154,6 +154,8 @@ pub fn build_context(
         .max_by_key(|p| p.source_timestamp)
         .map(|p| json!({"source_timestamp":p.source_timestamp,"available_at":p.available_at,"sum_open_interest":p.sum_open_interest,"sum_open_interest_value":p.sum_open_interest_value}));
     json!({"version":super::CONTEXT_VERSION,"execution_snapshot":snapshot,
+        "source_keys":sources.iter().map(|source| source.key.as_str()).collect::<Vec<_>>(),
+        "resolved_outcome":state.resolved_outcome,
         "resolution_rule":"UP when closing Chainlink BTC/USD >= opening Chainlink BTC/USD; otherwise DOWN",
         "rtds_last_60_seconds":rtds,"binance_closed_one_second_candles":candles,
         "polygon_oracle":oracle,"binance_futures_open_interest":open_interest,

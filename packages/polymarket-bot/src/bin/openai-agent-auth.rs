@@ -2,23 +2,36 @@
 use anyhow::{ensure, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::Utc;
-use polymarket_bot::btc::unified_model_runtime::agent::{
-    auth::{self, Credentials},
-    profile,
-};
+use polymarket_bot::btc::unified_model_runtime::agent::auth::{self, Credentials};
+use polymarket_bot::btc::unified_model_runtime::router::Selection;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    let tpc_path = args
+        .windows(2)
+        .find(|pair| pair[0] == "--tpc")
+        .map(|pair| pair[1].as_str())
+        .context("supply --tpc <process.json> to select the model from the TPC")?;
+    let tpc: Value = serde_json::from_slice(&std::fs::read(tpc_path)?)?;
+    let selection: Selection = serde_json::from_value(
+        tpc.pointer("/actions/0/params/models/0/selection")
+            .context("TPC is missing the agent selection")?
+            .clone(),
+    )?;
+    let Selection::OpenaiAgent { model, .. } = selection else {
+        anyhow::bail!("TPC must select an OpenAI agent");
+    };
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
     if std::env::args().any(|arg| arg == "--check") {
         // The running bot is the sole rotating-token writer; diagnostics are read-only.
         let access = auth::load()?.access_token;
-        verify_model(&client, &access).await?;
+        verify_model(&client, &access, &model).await?;
         println!("OpenAI subscription credentials and selected model are healthy");
         return Ok(());
     }
@@ -173,14 +186,14 @@ async fn main() -> Result<()> {
             + chrono::Duration::seconds(token["expires_in"].as_i64().context("expiry missing")?),
     };
     credentials.validate()?;
-    verify_model(&client, &credentials.access_token).await?;
+    verify_model(&client, &credentials.access_token, &model).await?;
     auth::save(&credentials)?;
     socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nCapitonic authorization saved. You can close this tab.").await?;
     println!("Validated subscription credentials saved encrypted; selected model is available");
     Ok(())
 }
 
-async fn verify_model(client: &reqwest::Client, access: &str) -> Result<()> {
+async fn verify_model(client: &reqwest::Client, access: &str, model: &str) -> Result<()> {
     let response = client
         .get("https://api.openai.com/v1/models")
         .bearer_auth(access)
@@ -193,13 +206,13 @@ async fn verify_model(client: &reqwest::Client, access: &str) -> Result<()> {
     );
     let models: Value = response.json().await?;
     ensure!(
-        models["models"].as_array().is_some_and(|models| models
-            .iter()
-            .any(|m| m["slug"].as_str() == Some(profile().model)))
-            || models["data"].as_array().is_some_and(|models| models
-                .iter()
-                .any(|m| m["id"].as_str() == Some(profile().model))),
-        "pinned agent model is not available to this subscription"
+        models["models"]
+            .as_array()
+            .is_some_and(|models| models.iter().any(|m| m["slug"].as_str() == Some(model)))
+            || models["data"]
+                .as_array()
+                .is_some_and(|models| models.iter().any(|m| m["id"].as_str() == Some(model))),
+        "TPC agent model is not available to this subscription"
     );
     Ok(())
 }

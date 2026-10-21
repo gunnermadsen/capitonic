@@ -44,6 +44,8 @@ pub enum BtcDecisionStrategyConfig {
     OpenaiAgent {
         profile_key: String,
         profile_sha256: String,
+        prompt: String,
+        model: String,
     },
     BtcDirectionalModel {
         model_key: String,
@@ -137,9 +139,13 @@ impl BtcStrategyConfig {
             BtcDecisionStrategyConfig::OpenaiAgent {
                 profile_key,
                 profile_sha256,
+                prompt,
+                model,
             } => Some(super::unified_model_runtime::agent::AgentSelection {
                 profile_key: profile_key.clone(),
                 profile_sha256: profile_sha256.clone(),
+                prompt: prompt.clone(),
+                model: model.clone(),
             }),
             _ => None,
         }
@@ -189,6 +195,7 @@ impl BtcStrategyConfig {
         if let Some(BtcDecisionStrategyConfig::OpenaiAgent {
             profile_key,
             profile_sha256,
+            ..
         }) = self.decision_strategy.as_ref()
         {
             return Some(BtcStrategyAttribution {
@@ -2317,6 +2324,8 @@ mod tests {
             decision_strategy: Some(BtcDecisionStrategyConfig::OpenaiAgent {
                 profile_key: agent::PROFILE_KEY.into(),
                 profile_sha256: agent::hash(&agent::profile()).unwrap(),
+                prompt: "Forecast from the supplied observations.".into(),
+                model: "test-model".into(),
             }),
             min_seconds_after_open: 45,
             min_seconds_before_close: 180,
@@ -2353,6 +2362,8 @@ mod tests {
         settlement_config.feature_schema_version = agent::SETTLEMENT_CONTEXT_VERSION.into();
         settlement_config.decision_strategy = Some(BtcDecisionStrategyConfig::OpenaiAgent {
             profile_key: agent::SETTLEMENT_PROFILE_KEY.into(),
+            prompt: "Forecast from the supplied observations.".into(),
+            model: "test-model".into(),
             profile_sha256: agent::hash(
                 &agent::profile_for_key(agent::SETTLEMENT_PROFILE_KEY).unwrap(),
             )
@@ -2386,6 +2397,8 @@ mod tests {
             entry_config.decision_strategy = Some(BtcDecisionStrategyConfig::OpenaiAgent {
                 profile_key: profile_key.into(),
                 profile_sha256: agent::hash(&agent::profile_for_key(profile_key).unwrap()).unwrap(),
+                prompt: "Forecast from the supplied observations.".into(),
+                model: "test-model".into(),
             });
             if profile_key == agent::FRESH_EVIDENCE_PROFILE_KEY {
                 entry_config.validate().unwrap();

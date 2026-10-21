@@ -191,6 +191,8 @@ mod tests {
             selection: AgentSelection {
                 profile_key: profile.key.into(),
                 profile_sha256: agent::hash(&profile).unwrap(),
+                prompt: "Forecast from the supplied observations.".into(),
+                model: "test-model".into(),
             },
             market_id: "market".into(),
             window_start: at - Duration::seconds(60),
