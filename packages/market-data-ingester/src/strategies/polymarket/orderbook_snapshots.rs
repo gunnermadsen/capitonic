@@ -75,7 +75,6 @@ const MAX_CHANGES_PER_MESSAGE: usize = 20_000;
 const MAX_IDENTIFIER_BYTES: usize = 512;
 const MAX_SOURCE_HASH_BYTES: usize = 256;
 const MAX_NUMERIC_BYTES: usize = 64;
-const MAX_PROVIDER_CLOCK_LEAD_MILLISECONDS: i64 = 5_000;
 const WEBSOCKET_READ_BUFFER_BYTES: usize = 256 * 1024;
 const CLOB_SOCKET_PROBE_INTERVAL: Duration = Duration::from_millis(250);
 const WEBSOCKET_EVENT_BUFFER: usize = 4_096;
@@ -122,7 +121,8 @@ struct OrderbookCheckpoint {
 struct OrderbookCheckpointBook {
     market_id: String,
     token_id: String,
-    source_timestamp: DateTime<Utc>,
+    #[serde(rename = "source_timestamp")]
+    _source_timestamp: DateTime<Utc>,
     ingest_sequence: i64,
     payload_sha256: String,
 }
@@ -166,6 +166,8 @@ impl OrderbookCheckpoint {
                     .to_owned(),
             ));
         }
+        // Historical provider clock skew cannot block a fresh book bootstrap.
+        // These cursors are not restored into the live book registry.
         if checkpoint.books.len() > 6
             || checkpoint.books.iter().any(|book| {
                 book.market_id.is_empty()
@@ -178,11 +180,6 @@ impl OrderbookCheckpoint {
                         .payload_sha256
                         .bytes()
                         .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-                    || checkpoint.sampled_at.is_some_and(|sampled_at| {
-                        book.source_timestamp
-                            > sampled_at
-                                + TimeDelta::milliseconds(MAX_PROVIDER_CLOCK_LEAD_MILLISECONDS)
-                    })
             })
         {
             return Err(StrategyFactoryError::Construction(
@@ -5630,7 +5627,7 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_accepts_bounded_provider_clock_lead() {
+    fn checkpoint_clock_skew_does_not_block_fresh_bootstrap() {
         let checkpoint = json!({
             "schema_version": 1,
             "sampled_at": "2026-08-14T18:56:47.001653Z",
@@ -5648,7 +5645,10 @@ mod tests {
         assert!(OrderbookCheckpoint::from_value(&checkpoint).is_ok());
 
         let mut excessive_lead = checkpoint;
-        excessive_lead["books"][0]["source_timestamp"] = json!("2026-08-14T18:56:52.002Z");
+        excessive_lead["books"][0]["source_timestamp"] = json!("2026-08-14T18:57:00.931333Z");
+        assert!(OrderbookCheckpoint::from_value(&excessive_lead).is_ok());
+
+        excessive_lead["books"][0]["payload_sha256"] = json!("invalid");
         assert!(OrderbookCheckpoint::from_value(&excessive_lead).is_err());
     }
 
