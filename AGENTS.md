@@ -36,6 +36,10 @@
 
 # Source Control and Releases
 
+## Pull Request Creation
+
+- Never create a draft pull request or convert an existing pull request to draft. Create every PR ready for review: omit `--draft` in `gh pr create` and use `draft: false` in API calls. Verify `isDraft: false` after creation. This applies to every PR, including production release PRs.
+
 ## Production Deployment Coordination
 
 - These rules govern agent actions for production releases; local development retains its existing workflow. The executing production workflow may continue its approved steps and documented rollback.
