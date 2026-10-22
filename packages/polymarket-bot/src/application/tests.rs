@@ -911,7 +911,7 @@ mod lifecycle_tests {
     }
 
     #[test]
-    fn live_credential_only_definition_is_valid_but_cannot_start() {
+    fn live_definition_can_start_with_trading_disabled() {
         let mut process = eligible_btc_process();
         process.config = TradingProcessConfig {
             playbook_version: "v1.2".into(),
@@ -929,12 +929,51 @@ mod lifecycle_tests {
         };
 
         validate_btc_process_capability(&process).unwrap();
+        validate_btc_start_eligibility(&process).unwrap();
+
+        process.config.actions[0].execute_signals = true;
+        assert!(validate_btc_start_eligibility(&process).is_err());
+        process.config.actions[0].execute_signals = false;
+        process.config.actions[0].live_capital = true;
         assert!(validate_btc_start_eligibility(&process).is_err());
 
         let execution = &mut process.config.actions[0];
         execution.execute_signals = true;
         execution.live_capital = true;
         validate_btc_start_eligibility(&process).unwrap();
+    }
+
+    #[test]
+    fn live_rail_prepares_start_and_resume_with_trading_disabled() {
+        let mut process = eligible_btc_process();
+        process.config = serde_json::from_str(include_str!(
+            "../../../../docs/polymarket-execution-rail/examples/live.json"
+        ))
+        .unwrap();
+        process.config.actions[0].execute_signals = false;
+        process.config.actions[0].live_capital = false;
+        let prepared = super::super::order_execution::prepare(&process, false).unwrap();
+        assert!(prepared.runtime.enabled);
+        assert!(!prepared.execution.execute_signals);
+        assert!(!prepared.execution.live_capital);
+        prepared.strategy.validate().unwrap();
+        assert!(!should_resume_configured_live_entries(
+            &process,
+            &prepared.execution
+        ));
+
+        process.enabled = true;
+        process.status = "running".into();
+        let resumed = super::super::order_execution::prepare(&process, true).unwrap();
+        assert!(resumed.runtime.enabled);
+        assert!(!resumed.execution.execute_signals);
+        assert!(!resumed.execution.live_capital);
+        assert_eq!(resumed.run_id, prepared.run_id);
+        assert_eq!(resumed.config_hash, prepared.config_hash);
+        assert!(!should_resume_configured_live_entries(
+            &process,
+            &resumed.execution
+        ));
     }
 
     #[test]

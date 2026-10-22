@@ -815,12 +815,12 @@ pub(super) fn validate_btc_execution_activation(process: &TradingProcess) -> Res
     let execution = process.effective_execution();
     match execution.mode.as_str() {
         "paper" if execution.execute_signals && !execution.live_capital => Ok(()),
-        "live" if execution.execute_signals && execution.live_capital => Ok(()),
+        "live" if execution.execute_signals == execution.live_capital => Ok(()),
         "paper" => Err(HttpError::bad_request(
             "BTC paper start requires execution.execute_signals=true",
         )),
         "live" => Err(HttpError::bad_request(
-            "BTC live start requires execution.execute_signals=true and execution.live_capital=true; credential-only definitions cannot start",
+            "BTC live execution must enable execute_signals and live_capital together",
         )),
         _ => Err(HttpError::bad_request(
             "BTC execution.mode must be paper or live",

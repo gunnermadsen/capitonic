@@ -123,6 +123,20 @@ fn admit(
     )
 }
 #[test]
+fn live_trading_disabled_rejects_otherwise_admissible_orders() {
+    let (mut oms, candidate, books, account) = fixture("live");
+    admit(&oms, &candidate, &books, &account).unwrap();
+    oms.definition.execution.execute_signals = false;
+    oms.definition.execution.live_capital = false;
+    assert_eq!(
+        admit(&oms, &candidate, &books, &account)
+            .unwrap_err()
+            .to_string(),
+        "order_submission_disabled"
+    );
+}
+
+#[test]
 fn identical_shared_evidence_produces_identical_paper_live_orders() {
     let (paper, candidate, books, account) = fixture("paper");
     let live = Oms::new(definition("live"), paper.owner.clone()).unwrap();

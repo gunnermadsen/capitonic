@@ -83,9 +83,6 @@ pub(super) fn prepare(
     }
     let definition = configuration::compile(&process.config)
         .map_err(|_| HttpError::bad_request("invalid order configuration"))?;
-    if !definition.execution.execute_signals {
-        return Err(HttpError::conflict("order execution is not authorized"));
-    }
     let p = &definition.execution.policies;
     let strategy = definition
         .runtime_strategy()
