@@ -328,7 +328,7 @@ def _load_execution_scenarios(
     champion_model_sha256: str,
 ) -> tuple[ExecutionScenario, ...]:
     process = json.loads(path.read_text())
-    paper_root = process.get("config", {}).get("raw", {}).get("btc_realtime_paper", {})
+    paper_root = process.get("btc_realtime_paper", {})
     strategy = paper_root.get("strategy", {})
     decision = strategy.get("decision_strategy", {})
     if (

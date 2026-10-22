@@ -644,7 +644,7 @@ impl BtcProcessRunner {
         );
         if let Some(frozen_mode) = config
             .frozen_process_config
-            .pointer("/execution/mode")
+            .pointer("/actions/0/mode")
             .and_then(serde_json::Value::as_str)
         {
             ensure!(
@@ -667,11 +667,10 @@ impl BtcProcessRunner {
                 );
             }
         }
-        let raw = config
+        let control = config
             .frozen_process_config
-            .pointer("/raw")
+            .pointer("/actions/0/params")
             .context("router requires frozen process configuration")?;
-        let control = raw.get("btc_realtime_paper").unwrap_or(raw);
         let member_strategies = if matches!(
             control["process_schema_version"]
                 .as_str()
@@ -683,13 +682,13 @@ impl BtcProcessRunner {
             )
         ) {
             let definition: super::unified_model_runtime::router::RouterDefinition =
-                serde_json::from_value(
-                    control
-                        .pointer("/strategy/decision_strategy")
-                        .context("missing router definition")?
-                        .clone(),
-                )?;
-            let sources = control["sources"]
+                serde_json::from_value(serde_json::json!({
+                    "type": control["type"],
+                    "version": control["version"],
+                    "models": control["models"],
+                    "routing": control["routing"],
+                }))?;
+            let sources = config.frozen_process_config["sources"]
                 .as_array()
                 .context("missing process sources")?;
             let keys = sources
@@ -698,11 +697,11 @@ impl BtcProcessRunner {
                 .collect();
             let mut base = config.strategy.clone();
             base.min_seconds_after_open = control
-                .pointer("/strategy/min_seconds_after_open")
+                .get("min_seconds_after_open")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(15);
             base.min_seconds_before_close = control
-                .pointer("/strategy/min_seconds_before_close")
+                .get("min_seconds_before_close")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(20);
             definition.compile_members(&base, &keys)?
@@ -1512,7 +1511,7 @@ impl BtcProcessRunner {
             let sources: Vec<crate::market_data_stream::SourceSelector> = serde_json::from_value(
                 self.config
                     .frozen_process_config
-                    .pointer("/raw/sources")
+                    .get("sources")
                     .context("agent sources missing from frozen configuration")?
                     .clone(),
             )?;
@@ -1678,15 +1677,11 @@ impl BtcProcessRunner {
                 elapsed as f64,
             );
         }
-        let entry_adjustment = agent::entry_evidence::adjust(&result, &snapshot);
-        let entry_probability = entry_adjustment
-            .as_ref()
-            .map_or(prediction.probability_up, |(p, _)| *p);
         let score = RuntimeModelScore {
             raw_logit: 0.0,
-            probability_up: entry_probability,
+            probability_up: prediction.probability_up,
             confidence: prediction.confidence,
-            action: if entry_probability >= 0.5 {
+            action: if prediction.direction == BtcOutcome::Up {
                 RuntimeModelAction::Up
             } else {
                 RuntimeModelAction::Down
@@ -1714,13 +1709,6 @@ impl BtcProcessRunner {
                 score,
             );
         }
-        if let Some((_, evidence)) = entry_adjustment {
-            umr_telemetry::agent_entry_evidence(
-                self.config.process_id,
-                snapshot.snapshot_id,
-                evidence,
-            );
-        }
         session.retain(result.clone());
         umr_telemetry::attribute_member(
             self.config.process_id,
@@ -1741,7 +1729,7 @@ impl BtcProcessRunner {
             super::strategy::evaluate_agent_prediction(
                 &member.strategy,
                 &snapshot,
-                entry_probability,
+                prediction.probability_up,
                 self.config.directional_model_entry_policy,
             )?
         };

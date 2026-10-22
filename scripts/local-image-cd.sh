@@ -117,13 +117,6 @@ pod_image_id() {
     unique | if length == 1 and .[0] != null then .[0] else error("pods do not share one image ID") end'
 }
 
-route_failure_count() {
-  local window="${1:-30s}"
-  kubectl -n "$namespace" logs deployment/polymarket-bot --since="$window" --tail=300 |
-    jq -Rr 'fromjson? | select(.fields.message? == "market-data worker route unavailable; preserving other worker streams") | .timestamp' |
-    wc -l | tr -d ' '
-}
-
 ingester_snapshot() {
   local destination="$1"
   mkdir -p "$destination"
@@ -177,9 +170,6 @@ save_rollback_snapshot() {
   # Preserve it as rollout evidence; post-deployment recovery remains mandatory below.
   check_ingester_capacity "$snapshot/pre"
   wait_for_process_recovery "$(($(date -u +%s) - 90))"
-  [[ "$(route_failure_count)" -lt 2 ]] || {
-    echo "Bot routes were already failing before deployment." >&2; exit 70;
-  }
   if [[ "$component" == ingester ]]; then
     kubectl -n "$namespace" get deployment ingester-master ingester-worker -o json > "$snapshot/ingester-deployments.json"
     rollback_image="$(live_image ingester-master)"
@@ -241,7 +231,9 @@ verify_bot_routes() {
   # Require a quiet route window, with a bounded deadline for sustained failures.
   sleep 10
   for ((attempt = 0; attempt < 12; attempt++)); do
-    failures="$(route_failure_count 10s)" || return 1
+    failures="$(kubectl -n "$namespace" logs deployment/polymarket-bot --since=10s --tail=300 |
+      jq -Rr 'fromjson? | select(.fields.message? == "market-data worker route unavailable; preserving other worker streams") | .timestamp' |
+      wc -l | tr -d ' ')" || return 1
     if (( failures == 0 )); then
       quiet=$((quiet + 1))
       if (( quiet >= 2 )); then return 0; fi

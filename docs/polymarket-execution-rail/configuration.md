@@ -1,6 +1,6 @@
 # Execution configuration contract
 
-The existing `config.execution` and `config.raw.btc_realtime_paper` envelopes are preserved. Mode, execute_signals, live_capital and account_ref remain at their existing paths because account reconciliation SQL and dashboards consume them. New order rules live exclusively in `execution.order_policies`. The explicit rail selector and `btc_realtime_paper_process_v6` must agree. Any new marker selects strict validation, never legacy fallback.
+The TPC root contains `playbook_version`, `sources`, `order_policies`, and `actions`. Each action owns `type`, `enabled`, `rail`, `mode`, execution authorization, optional `account_ref`, and `params`. Model selection and routing, strategy cadence, feed requirements, risk selections, and run provenance are flattened into `actions[].params`. PATCH replaces the complete configuration and requires `sources`, `actions`, and `playbook_version`; name/metadata-only updates remain supported. The database column remains named `config`. Frozen snapshots use the same representation. Cutover requires stopped processes, API configuration replacement with fresh run keys, and preservation of process IDs and historical runs. Order rules remain in root `order_policies`; compiled policy and order metadata contracts are unchanged.
 
 Examples are executable compiler fixtures: [paper](examples/paper.json), [live](examples/live.json). They describe inactive definitions, not approved process creations, deployment configuration, or real-capital authorization. Preregistration values identify fixtures; conversion retains actual process provenance and canonical process_id. Keep legacy schemas and defaults unchanged.
 
@@ -14,7 +14,7 @@ The new compiler is pure apart from read-only model/profile loading and caching.
 
 ## Complete parameter migration inventory
 
-Paths below are relative to `config.raw.btc_realtime_paper`, except `execution.*` which is relative to `config`.
+The existing-parameter column below describes the former nested BTC configuration. Current model inputs are flattened into `actions[].params`; execution authority belongs to the action, and policies remain at the root.
 
 | Existing parameter / default | New owner | Meaning and compatibility |
 | --- | --- | --- |
@@ -27,7 +27,7 @@ Paths below are relative to `config.raw.btc_realtime_paper`, except `execution.*
 | strategy.max_book_age_ms / 2000 | evidence_policy | Current execution-book freshness, distinct from frozen causal feature-book freshness. |
 | strategy.max_source_skew_ms / 1000 | evidence_policy | Existing applicable reference skew, not an extra gate for exempt model paths. |
 | strategy.max_fee_age_ms / 3600000 | evidence_policy | Fee evidence age, using existing fee source. |
-| execution.require_exit_book / optional | liquidity_policy.require_exit_book | Explicit boolean for the new contract, with equivalent paper/live book validation to be implemented. |
+| require_exit_book / optional | liquidity_policy.require_exit_book | Explicit boolean for the new contract, with equivalent paper/live book validation to be implemented. |
 | strategy.spread_reserve_fraction / 0.10 | execution_cost_policy | Existing nonnegative spread reserve calculation. |
 | strategy.slippage_reserve_bps / 25 | execution_cost_policy | Nonnegative basis points. |
 | strategy.latency_reserve_per_share / 0.005 | execution_cost_policy | Nonnegative reserve per share. |
@@ -35,9 +35,9 @@ Paths below are relative to `config.raw.btc_realtime_paper`, except `execution.*
 | strategy.min_net_edge_per_share / 0.015; min_net_edge_usd / 0.02 | edge_policy | Preserve asymmetric-value applicability. Do not newly activate these in directional admission. |
 | paper.directional_model_entry_policy / require_positive_direct_edge | edge_policy | Shared directional/agent behavior despite its old paper namespace. Execute-directional mode does not waive other gates or frozen qualification. |
 | strategy.decision_strategy.models[].entry_order_type / fok | order_execution_policy.member_order_types | Exact member_id map; only fok/fak. No duplicate value inside router members. |
-| execution.max_open_positions / null | exposure_policy | Null or existing 1..6 configuration range. Existing execution/accounting semantics preserved. |
-| execution.max_open_notional_usd / null | exposure_policy | Null or existing (0,30] USD configuration range. |
-| execution.max_daily_loss_usd / null | loss_limit_policy | Null or any positive representable Decimal, with no hardcoded maximum. Shared paper/live OMS enforces the configured UTC daily realized-loss threshold. Legacy flat configuration has the same accepted range. |
+| max_open_positions / null | exposure_policy | Null or existing 1..6 configuration range. Existing execution/accounting semantics preserved. |
+| max_open_notional_usd / null | exposure_policy | Null or existing (0,30] USD configuration range. |
+| max_daily_loss_usd / null | loss_limit_policy | Null or any positive representable Decimal, with no hardcoded maximum. Shared paper/live OMS enforces the configured UTC daily realized-loss threshold. Legacy flat configuration has the same accepted range. |
 | entry_admission.daily_realized_pnl_high_water_mark / absent | loss_limit_policy.daily_realized_pnl_high_water_mark | Reuse existing schema, activation_realized_pnl_usd and max_drawdown_from_high_water_mark_usd. Preserve UTC-period/evidence semantics; validate against paper starting collateral only for paper. |
 | entry_admission.loss_regime_confidence_floor / absent | loss_regime_policy | Reuse schema_version, activation_consecutive_candidate_losses (1..100), min_conservative_probability ([0,1]), release_consecutive_candidate_wins (1..100). Candidate regime, not a newly invented executed-loss counter. |
 | paper.arrival_latency_ms / 150 | paper_execution_policy | Existing 1..60000ms supported range. |
@@ -50,9 +50,9 @@ The compiler retains existing hard-coded configuration ceilings; changing them i
 ## Retained or intentionally excluded
 
 - `strategy.max_directional_feature_age_ms` remains inference configuration; null derives the artifact cadence, explicit values cannot exceed the supported cadence. `strategy.required_model_feeds` remains the existing feed-requirement contract. Neither appears in order policies.
-- `strategy.decision_strategy`, sources, risk_strategies, runtime.strategy_interval_ms (1..60000), run key and preregistration stay in their existing ownership domains. Rail-selected definitions always support UMR execution and authenticated API overrides; there is no trigger selector.
+- `actions[].params`, risk_strategies, runtime.strategy_interval_ms (1..60000), run key and preregistration stay in their existing ownership domains. Rail-selected definitions always support UMR execution and authenticated API overrides; there is no trigger selector.
 - `strategy_version`, `feature_schema_version`, unified_model bindings and artifact policy are derived, not configurable copies. Existing UMR compilation/pinning is reused for validation, never persisted as a legacy execution configuration.
-- `execution.taker_fee_rate` is already rejected for BTC; no new override is added. Fees use observed market evidence.
+- `taker_fee_rate` is already rejected for BTC; no new override is added. Fees use observed market evidence.
 - `max_order_notional_usd` is intentionally retired for new sizing; funds, reservations and aggregate USD accounting remain mandatory. Legacy values are not removed.
 - `max_probability_uncertainty` currently has config validation but no runtime uncertainty comparison; no new policy activates it. Historical readers remain unchanged.
 - New definitions reject old strategy order fields, entry_admission, paper controls and member entry_order_type. Non-null flat execution limits are rejected; null legacy Option fields carry no policy authority.
@@ -65,3 +65,5 @@ Current conservative-selective original paper/live artifacts require conservativ
 ## Compatibility and cutover
 
 No automatic conversion. Existing process identity, enabled intent, sources and effective applicable values must be preserved through an authorized API update. Current old binaries do not accept the new fields: rollback needs compatible code AND configuration. In-flight orders retain originating implementation and configuration identity. Older 3.3.x changes are integrated only with authorization and must pass both legacy and new contract suites. No Helm/build/CI changes are part of this foundation.
+
+The TPC root contains `playbook_version`, `actions`, `sources`, and `order_policies`. Execution controls (`rail`, `mode`, `execute_signals`, `live_capital`, and optional live `account_ref`) belong to the action. Router selection (`type`, `version`, `models`, and `routing`), strategy cadence, feature/feed requirements, risk selections, and run provenance belong to `actions[].params`. Action `type` and `enabled` are stored properties in this alignment; they do not add dispatch or eligibility gates. The existing runtime consumes the first action.

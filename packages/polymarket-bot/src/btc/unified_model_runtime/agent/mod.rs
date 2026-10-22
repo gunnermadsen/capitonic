@@ -6,6 +6,7 @@ mod context;
 pub(super) mod diagnostics;
 pub(crate) mod entry_evidence;
 mod market_context;
+mod prompt;
 mod provider;
 mod reassessment;
 mod session;
@@ -88,7 +89,6 @@ pub fn uses_market_context(key: &str) -> bool {
 }
 
 pub const MARKET_CONTEXT_VERSION: &str = "capitonic-btc-agent-market-context-v1";
-const MARKET_CONTEXT_INSTRUCTION: &str = "Use market_horizons to compare the 15-second, 5-minute and 15-minute RTDS midpoint paths: returns, sample volatility, path efficiency and reversals. Respect each window's source end, sampling interval and availability; closed-minute summaries lag the current observation. Use settlement_uncertainty to relate the observed official TWAP distance to remaining time, the supporting RTDS variability scale and changes in the reference/TWAP gap. The square-root-time scale assumes stationary independent returns, ignores drift and TWAP averaging, and is not a calibrated settlement distribution or probability. A zero or unavailable scale gives no certainty. Reference/TWAP gap changes can reflect different observation timestamps; they do not guarantee convergence. Missing optional summaries are unknown and do not alone require abstention. Preserve the exact settlement rule and distinguish directional evidence from entry price.";
 
 pub fn uses_calibration(key: &str) -> bool {
     matches!(
@@ -101,8 +101,6 @@ pub fn uses_calibration(key: &str) -> bool {
             | MARKET_REFERENCE_SOL_PROFILE_KEY
     )
 }
-
-const CALIBRATION_INSTRUCTION: &str = "Use historical_calibration as historical reliability evidence when estimating probability_up. Its bands describe selected-side probabilities, not probability_up; respect direction when interpreting them. Source profiles are separate cohorts, not measured performance of this profile. Initial and latest reassessment populations can overlap markets and are not independent. Filled versus unfilled describes historical selection, not a known property of the current forecast. Small samples, wide intervals, unavailable outcomes and truncated coverage imply uncertainty; do not mechanically substitute a historical win rate, invent certainty, or abstain solely because history is unavailable. Forecast from the current causal observations with the existing settlement rule.";
 
 pub fn uses_entry_reassessment(key: &str) -> bool {
     matches!(
@@ -117,8 +115,6 @@ pub fn uses_entry_reassessment(key: &str) -> bool {
     )
 }
 
-const ENTRY_REASSESSMENT_INSTRUCTION: &str = "When entry_reassessment.trigger is forecast_became_affordable, the earlier forecast could not enter at its observed price and its selected side has since become affordable. Reassess whether the changed reference, TWAP and Binance evidence supports a bargain or a deteriorating forecast. Reaffirm or revise the settlement direction using current evidence; a cheaper entry alone is not evidence for the earlier direction.";
-const REASSESSMENT_INSTRUCTION: &str = "When previous_prediction_comparison is available, reassess your earlier forecast using the changed evidence. Reaffirm or revise it; your previous prediction is context, not a commitment. Distinguish the likely settlement outcome from the attractiveness of the current entry price. Missing comparisons are unknown, not zero, and do not require abstention. With no previous prediction, forecast from the current observations as usual.";
 pub const SETTLEMENT_RULE: &str = "UP when the official Chainlink BTC/USD 60-second TWAP at window_end is greater than or equal to its value at window_start; otherwise DOWN. RTDS midpoint, Binance spot and Polygon oracle are supporting indicators, not settlement prices. Missing TWAP observations are unknown, not zero; do not substitute midpoint prices for them.";
 pub const REQUIRED_PRODUCTS: [&str; 5] = [
     "polymarket_btc_five_minute_market_contracts",
@@ -137,14 +133,14 @@ pub const OPTIONAL_PRODUCTS: [&str; 2] = [
 pub struct AgentSelection {
     pub profile_key: String,
     pub profile_sha256: String,
+    pub prompt: String,
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentProfile {
     pub version: &'static str,
     pub key: &'static str,
-    pub model: &'static str,
-    pub instructions: String,
     pub attempts_seconds: [i64; 3],
     pub decision_ceiling_seconds: i64,
     pub timeout_seconds: u64,
@@ -155,8 +151,6 @@ pub fn profile() -> AgentProfile {
     AgentProfile {
         version: BRIDGE_VERSION,
         key: PROFILE_KEY,
-        model: "gpt-6-astra",
-        instructions: "Forecast the UP or DOWN settlement of this BTC five-minute market using only the supplied causal observations. Use the exact market resolution rule. Attempt a direction even when uncertain; mistakes in this paper process are acceptable. Return JSON only: direction (up/down), probability_up (0..1), confidence (0..1, self-assessed evidence strength, not a calibrated probability), reason_codes (1..8 short snake_case identifiers). UP requires probability_up >= 0.5; DOWN requires probability_up < 0.5. Distinguish your forecast from the market price. Missing optional context is not evidence of zero. Do not invent observations, browse, or submit orders.".into(),
         attempts_seconds: [45, 75, 105],
         decision_ceiling_seconds: 120,
         timeout_seconds: 25,
@@ -175,8 +169,6 @@ pub fn profile_for_key(key: &str) -> Result<AgentProfile> {
         SETTLEMENT_PROFILE_KEY => {
             selected.key = SETTLEMENT_PROFILE_KEY;
             selected.context_version = SETTLEMENT_CONTEXT_VERSION;
-            selected.instructions.push(' ');
-            selected.instructions.push_str(SETTLEMENT_RULE);
         }
         VOLATILITY_PROFILE_KEY => {
             selected = profile_for_key(SETTLEMENT_PROFILE_KEY)?;
@@ -187,56 +179,40 @@ pub fn profile_for_key(key: &str) -> Result<AgentProfile> {
             selected = profile_for_key(VOLATILITY_PROFILE_KEY)?;
             selected.key = REASSESSMENT_PROFILE_KEY;
             selected.context_version = REASSESSMENT_CONTEXT_VERSION;
-            selected.instructions.push(' ');
-            selected.instructions.push_str(REASSESSMENT_INSTRUCTION);
         }
         ENTRY_REASSESSMENT_PROFILE_KEY => {
             selected = profile_for_key(REASSESSMENT_PROFILE_KEY)?;
             selected.key = ENTRY_REASSESSMENT_PROFILE_KEY;
             selected.context_version = ENTRY_REASSESSMENT_CONTEXT_VERSION;
-            selected.instructions.push(' ');
-            selected
-                .instructions
-                .push_str(ENTRY_REASSESSMENT_INSTRUCTION);
         }
         CALIBRATION_PROFILE_KEY => {
             selected = profile_for_key(ENTRY_REASSESSMENT_PROFILE_KEY)?;
             selected.key = CALIBRATION_PROFILE_KEY;
             selected.context_version = CALIBRATION_CONTEXT_VERSION;
-            selected.instructions.push(' ');
-            selected.instructions.push_str(CALIBRATION_INSTRUCTION);
         }
         MARKET_CONTEXT_PROFILE_KEY => {
             selected = profile_for_key(CALIBRATION_PROFILE_KEY)?;
             selected.key = MARKET_CONTEXT_PROFILE_KEY;
             selected.context_version = MARKET_CONTEXT_VERSION;
-            selected.instructions.push(' ');
-            selected.instructions.push_str(MARKET_CONTEXT_INSTRUCTION);
         }
         FRESH_EVIDENCE_PROFILE_KEY => {
             selected = profile_for_key(MARKET_CONTEXT_PROFILE_KEY)?;
             selected.key = FRESH_EVIDENCE_PROFILE_KEY;
             selected.context_version = FRESH_EVIDENCE_CONTEXT_VERSION;
-            selected.instructions = selected.instructions
-                .replace(REASSESSMENT_INSTRUCTION, "Use previous_prediction_comparison only as a comparison of market observations. Make an independent settlement forecast from current evidence. Prior answers are deliberately omitted. Both UP and DOWN executable-price changes are supplied without selecting a prior side. Missing comparisons are unknown, not zero.")
-                .replace(ENTRY_REASSESSMENT_INSTRUCTION, "When entry_reassessment.trigger is forecast_evidence_changed, market prices changed since the prior observation. Reassess settlement using current reference, TWAP, Binance and book evidence. A cheaper entry alone is not evidence for a direction. The entry cap and price-change threshold are execution policy, not probabilities.");
         }
         EXECUTION_EVIDENCE_PROFILE_KEY => {
             selected = profile_for_key(FRESH_EVIDENCE_PROFILE_KEY)?;
             selected.key = EXECUTION_EVIDENCE_PROFILE_KEY;
             selected.context_version = EXECUTION_EVIDENCE_CONTEXT_VERSION;
-            selected.instructions.push_str(" Repeated time-series fields are encoded losslessly as columns and rows; each row follows the column order. rtds_contiguous_tail is a separate, explicitly shorter observed window when full-minute history is incomplete, never a replacement 60-second estimate. Its gap and age diagnostics explain missing context; unknown data is not quiet data. entry_calibration describes an execution-only adjustment fitted on prior filled markets and checked on a later chronological holdout. Return your independent raw probability; do not apply that adjustment yourself. Execution recomputes direction from the adjusted probability and transports its calibrated log-odds advantage over normalized two-sided executable asks to current books; a price decline cannot create an unchanged-probability bargain. Calibration policy: separate source-profile cohorts, 24-hour lookback, at most 300 filled decisions, minimum 40 training and 20 holdout markets, train-only squared-error blend weight in {1,.75,.5,.25,0}, holdout Brier improvement and nondecreasing quoted fee-net retained-entry PnL; unqualified cohorts leave raw probabilities unchanged. No fixed price-movement rejection is added.");
         }
         MARKET_REFERENCE_PROFILE_KEY => {
             selected = profile_for_key(EXECUTION_EVIDENCE_PROFILE_KEY)?;
             selected.key = MARKET_REFERENCE_PROFILE_KEY;
             selected.context_version = MARKET_REFERENCE_CONTEXT_VERSION;
-            selected.instructions = selected.instructions.replace("Distinguish your forecast from the market price.", "Use market_reference.probability_up as the starting reference for your snapshot-time probability_up. This normalized two-sided executable-ask proxy includes spread and liquidity effects; it is not a true or calibrated settlement probability. Justify any departure using the supplied current BTC movement, official settlement TWAP distance, time remaining and Binance trade-flow evidence. These observations may already be reflected in prices: their presence alone does not establish mispricing. Permit either direction and evidence-supported disagreement; do not manufacture an adjustment to satisfy entry limits. Express the supporting evidence through the existing reason_codes. If the reference is unavailable, forecast from the supplied causal observations without inventing a market probability. Return the probability at the request snapshot only; do not anticipate later book movements or apply execution calibration/current-book transport yourself.");
         }
         MARKET_REFERENCE_SOL_PROFILE_KEY => {
             selected = profile_for_key(MARKET_REFERENCE_PROFILE_KEY)?;
             selected.key = MARKET_REFERENCE_SOL_PROFILE_KEY;
-            selected.model = "gpt-6.1-sol";
         }
         _ => anyhow::bail!("unsupported agent profile"),
     }
@@ -396,35 +372,34 @@ mod tests {
         let original = profile();
         assert_eq!(
             hash(&original).unwrap(),
-            "77293f5aeeb0588c53aadb2e71b07840a823b8b65395cf2061563f7a5c5c33f3"
+            "8a80a01ae9fb1db22b6673019472c394b04fbfbc2fa6f5321506be9a146eaf63"
         );
         let selected = profile_for_key(SETTLEMENT_PROFILE_KEY).unwrap();
         let selection = AgentSelection {
             profile_key: selected.key.into(),
             profile_sha256: hash(&selected).unwrap(),
+            prompt: "Forecast from the supplied observations.".into(),
+            model: "test-model".into(),
         };
         selection.validate().unwrap();
         assert_ne!(selection.profile_sha256, hash(&original).unwrap());
-        assert_eq!(selected.model, original.model);
         assert_eq!(selected.attempts_seconds, original.attempts_seconds);
         assert_eq!(
             selected.decision_ceiling_seconds,
             original.decision_ceiling_seconds
         );
         assert_eq!(selected.timeout_seconds, original.timeout_seconds);
-        assert_eq!(
-            selected.instructions,
-            format!("{} {}", original.instructions, SETTLEMENT_RULE)
-        );
         assert_eq!(selection.context_version(), SETTLEMENT_CONTEXT_VERSION);
         assert_eq!(
             hash(&selected).unwrap(),
-            "be1c61203b42773ab443df3ca533e4de621f55bd75f6eceb2ceb319aa8c3ab0e"
+            "c83b5472e93783fc9774294a9dc6e2334149e2759a563c133dd331477173b2ea"
         );
         let volatility = profile_for_key(VOLATILITY_PROFILE_KEY).unwrap();
         let volatility_selection = AgentSelection {
             profile_key: volatility.key.into(),
             profile_sha256: hash(&volatility).unwrap(),
+            prompt: "Forecast from the supplied observations.".into(),
+            model: "test-model".into(),
         };
         volatility_selection.validate().unwrap();
         assert_eq!(
@@ -442,6 +417,8 @@ mod tests {
         AgentSelection {
             profile_key: PROFILE_KEY.into(),
             profile_sha256: hash(&profile()).unwrap(),
+            prompt: "Forecast from the supplied observations.".into(),
+            model: "test-model".into(),
         }
         .validate()
         .unwrap();
@@ -459,30 +436,28 @@ mod tests {
     }
 
     #[test]
-    fn reassessment_only_extends_volatility_context_and_instructions() {
+    fn reassessment_only_changes_profile_identity_and_context() {
         let previous = profile_for_key(VOLATILITY_PROFILE_KEY).unwrap();
         assert_eq!(
             hash(&previous).unwrap(),
-            "0ec00e99a41ed39a280f165e9f6b50fdb7b6c918bd0fd2e5e632fb7ac2a45aac"
+            "e5cddf5c3ea5709d37a0f156b4d365ac884fbd5e33415092427eaf16ddbf5ff8"
         );
         let selected = profile_for_key(REASSESSMENT_PROFILE_KEY).unwrap();
         assert_eq!(
             hash(&selected).unwrap(),
-            "e7b23b34460727ecf5693774e63f92fa0d04b2737c76b2e01a644c6b66eafa80"
+            "bf01e5d1ce34b2075baadbdf1f5a0b80b1854c4cc0996dfa32c253404bed1a27"
         );
         let selection = AgentSelection {
             profile_key: selected.key.into(),
             profile_sha256: hash(&selected).unwrap(),
+            prompt: "Forecast from the supplied observations.".into(),
+            model: "test-model".into(),
         };
         selection.validate().unwrap();
         assert_eq!(selection.context_version(), REASSESSMENT_CONTEXT_VERSION);
         let mut expected = serde_json::to_value(&previous).unwrap();
         expected["key"] = serde_json::json!(REASSESSMENT_PROFILE_KEY);
         expected["context_version"] = serde_json::json!(REASSESSMENT_CONTEXT_VERSION);
-        expected["instructions"] = serde_json::json!(format!(
-            "{} {}",
-            previous.instructions, REASSESSMENT_INSTRUCTION
-        ));
         assert_eq!(serde_json::to_value(selected).unwrap(), expected);
     }
     #[test]
@@ -490,12 +465,14 @@ mod tests {
         let old = profile_for_key(REASSESSMENT_PROFILE_KEY).unwrap();
         assert_eq!(
             hash(&old).unwrap(),
-            "e7b23b34460727ecf5693774e63f92fa0d04b2737c76b2e01a644c6b66eafa80"
+            "bf01e5d1ce34b2075baadbdf1f5a0b80b1854c4cc0996dfa32c253404bed1a27"
         );
         let new = profile_for_key(ENTRY_REASSESSMENT_PROFILE_KEY).unwrap();
         let selection = AgentSelection {
             profile_key: new.key.into(),
             profile_sha256: hash(&new).unwrap(),
+            prompt: "Forecast from the supplied observations.".into(),
+            model: "test-model".into(),
         };
         selection.validate().unwrap();
         assert_eq!(
@@ -505,10 +482,6 @@ mod tests {
         let mut expected = serde_json::to_value(&old).unwrap();
         expected["key"] = serde_json::json!(ENTRY_REASSESSMENT_PROFILE_KEY);
         expected["context_version"] = serde_json::json!(ENTRY_REASSESSMENT_CONTEXT_VERSION);
-        expected["instructions"] = serde_json::json!(format!(
-            "{} {}",
-            old.instructions, ENTRY_REASSESSMENT_INSTRUCTION
-        ));
         assert_eq!(serde_json::to_value(&new).unwrap(), expected);
         eprintln!("entry profile sha256: {}", hash(&new).unwrap());
     }
@@ -517,17 +490,17 @@ mod tests {
         let old = profile_for_key(ENTRY_REASSESSMENT_PROFILE_KEY).unwrap();
         assert_eq!(
             hash(&old).unwrap(),
-            "acedf40a871c3308098785e1af739aadc4996b589eb38886e8d7591ec254daeb"
+            "c34a46ac7df73d8ac2384e86c048561c8a64ba4057c65134ba90a24e95a81fb1"
         );
         let new = profile_for_key(CALIBRATION_PROFILE_KEY).unwrap();
-        assert!(new.instructions.starts_with(&old.instructions));
-        assert_eq!(new.model, old.model);
         assert_eq!(new.attempts_seconds, old.attempts_seconds);
         assert_eq!(new.timeout_seconds, old.timeout_seconds);
         assert_eq!(new.decision_ceiling_seconds, old.decision_ceiling_seconds);
         AgentSelection {
             profile_key: new.key.into(),
             profile_sha256: hash(&new).unwrap(),
+            prompt: "Forecast from the supplied observations.".into(),
+            model: "test-model".into(),
         }
         .validate()
         .unwrap();
@@ -538,11 +511,9 @@ mod tests {
         let old = profile_for_key(CALIBRATION_PROFILE_KEY).unwrap();
         assert_eq!(
             hash(&old).unwrap(),
-            "ec0c11d5493ce6a4fd3eca18f7081fc068cdbf9336512e293a89cc47088b67eb"
+            "58e99811e761118c95c0199b65a34a44ed9eee9c2a0064ca190637f1885797e4"
         );
         let new = profile_for_key(MARKET_CONTEXT_PROFILE_KEY).unwrap();
-        assert!(new.instructions.starts_with(&old.instructions));
-        assert_eq!(new.model, old.model);
         assert_eq!(new.attempts_seconds, old.attempts_seconds);
         assert_eq!(new.timeout_seconds, old.timeout_seconds);
         assert_eq!(new.decision_ceiling_seconds, old.decision_ceiling_seconds);
@@ -550,6 +521,8 @@ mod tests {
         let selection = AgentSelection {
             profile_key: new.key.into(),
             profile_sha256: hash(&new).unwrap(),
+            prompt: "Forecast from the supplied observations.".into(),
+            model: "test-model".into(),
         };
         selection.validate().unwrap();
         assert_eq!(selection.context_version(), MARKET_CONTEXT_VERSION);
@@ -559,21 +532,15 @@ mod tests {
         let original = profile_for_key(MARKET_CONTEXT_PROFILE_KEY).unwrap();
         assert_eq!(
             hash(&original).unwrap(),
-            "241c71750a8211718288ae1dfa45ac7e2eea0ca96ba8898a6d9a2a4945165350"
+            "fe5b6e81fd1617b6f3f200110e1e403111a346b172378b55ee0243256d9fe7ff"
         );
         let fresh = profile_for_key(FRESH_EVIDENCE_PROFILE_KEY).unwrap();
-        assert_eq!(fresh.model, original.model);
         assert_eq!(fresh.attempts_seconds, original.attempts_seconds);
         assert_eq!(
             fresh.decision_ceiling_seconds,
             original.decision_ceiling_seconds
         );
         assert_eq!(fresh.timeout_seconds, original.timeout_seconds);
-        assert!(fresh.instructions.contains(CALIBRATION_INSTRUCTION));
-        assert!(fresh.instructions.contains(MARKET_CONTEXT_INSTRUCTION));
-        assert!(fresh.instructions.contains(SETTLEMENT_RULE));
-        assert!(!fresh.instructions.contains(REASSESSMENT_INSTRUCTION));
-        assert!(!fresh.instructions.contains(ENTRY_REASSESSMENT_INSTRUCTION));
         assert!(
             uses_calibration(fresh.key)
                 && uses_market_context(fresh.key)
@@ -582,6 +549,8 @@ mod tests {
         let selection = AgentSelection {
             profile_key: fresh.key.into(),
             profile_sha256: hash(&fresh).unwrap(),
+            prompt: "Forecast from the supplied observations.".into(),
+            model: "test-model".into(),
         };
         selection.validate().unwrap();
         assert_eq!(selection.context_version(), FRESH_EVIDENCE_CONTEXT_VERSION);
@@ -595,12 +564,14 @@ mod tests {
         let old = profile_for_key(EXECUTION_EVIDENCE_PROFILE_KEY).unwrap();
         assert_eq!(
             hash(&old).unwrap(),
-            "8e5c869843f9cb56ef503489e4aaccce8048db349b9c21351f9a478484f29ae9"
+            "3841bd39b89359b7eb467fa23dc605d723bb36b3f30c6f26f1eddadba1679d2f"
         );
         let new = profile_for_key(MARKET_REFERENCE_PROFILE_KEY).unwrap();
         let selection = AgentSelection {
             profile_key: new.key.into(),
             profile_sha256: hash(&new).unwrap(),
+            prompt: "Forecast from the supplied observations.".into(),
+            model: "test-model".into(),
         };
         selection.validate().unwrap();
         assert_eq!(
@@ -617,25 +588,20 @@ mod tests {
         let mut unchanged = new.clone();
         unchanged.key = old.key;
         unchanged.context_version = old.context_version;
-        unchanged.instructions = old.instructions.clone();
         assert_eq!(hash(&unchanged).unwrap(), hash(&old).unwrap());
-        assert!(new.instructions.contains(CALIBRATION_INSTRUCTION));
-        assert!(new.instructions.contains(MARKET_CONTEXT_INSTRUCTION));
-        assert!(new.instructions.contains("request snapshot only"));
         eprintln!(
             "market reference profile sha256: {}",
             selection.profile_sha256
         );
     }
     #[test]
-    fn sol_variant_changes_only_model_and_profile_identity() {
+    fn sol_variant_preserves_context_and_schedule() {
         let astra = profile_for_key(MARKET_REFERENCE_PROFILE_KEY).unwrap();
         assert_eq!(
             hash(&astra).unwrap(),
-            "674fa7351ea66c957a8364e3cd9ef0368f99fda011ff9ab7f6a14f6fa2a1a7ef"
+            "bd7ba45b1b23d18e17ed0b5876fa345afe43cb7f57a72eb639f1e54715766ec8"
         );
         let sol = profile_for_key(MARKET_REFERENCE_SOL_PROFILE_KEY).unwrap();
-        assert_eq!(sol.model, "gpt-6.1-sol");
         assert!(
             uses_market_reference(sol.key)
                 && uses_execution_evidence(sol.key)
@@ -647,12 +613,13 @@ mod tests {
         let selection = AgentSelection {
             profile_key: sol.key.into(),
             profile_sha256: hash(&sol).unwrap(),
+            prompt: "Forecast from the supplied observations.".into(),
+            model: "test-model".into(),
         };
         selection.validate().unwrap();
         assert_eq!(selection.context_version(), astra.context_version);
         let mut comparable = sol.clone();
         comparable.key = astra.key;
-        comparable.model = astra.model;
         assert_eq!(hash(&comparable).unwrap(), hash(&astra).unwrap());
         eprintln!("SOL profile SHA256: {}", selection.profile_sha256);
     }

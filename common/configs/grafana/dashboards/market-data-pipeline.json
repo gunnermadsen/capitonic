@@ -18,7 +18,36 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
-  "links": [],
+  "links": [
+    {
+      "title": "Order execution (API / UMR)",
+      "type": "link",
+      "url": "/d/order-execution",
+      "includeVars": true,
+      "keepTime": true
+    },
+    {
+      "title": "Trading PnL",
+      "type": "link",
+      "url": "/d/polymarket-bot",
+      "includeVars": true,
+      "keepTime": true
+    },
+    {
+      "title": "Live trading health",
+      "type": "link",
+      "url": "/d/reconciliation-health",
+      "includeVars": true,
+      "keepTime": true
+    },
+    {
+      "title": "Unified Model Runtime",
+      "type": "link",
+      "url": "/d/unified-model-runtime",
+      "includeVars": true,
+      "keepTime": true
+    }
+  ],
   "panels": [
     {
       "collapsed": false,

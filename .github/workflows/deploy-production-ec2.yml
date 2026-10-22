@@ -120,6 +120,12 @@ jobs:
             ([.[0].IpRanges[].CidrIp] == ["0.0.0.0/0"])
           ' <<<"$ingress_rules" >/dev/null
 
+  dnssec:
+    name: Provision and validate production DNSSEC
+    needs: provision
+    if: inputs.terraform_action != 'plan'
+    uses: ./.github/workflows/provision-production-dnssec.yml
+
   dns:
     name: Converge production DNS
     needs: provision

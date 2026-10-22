@@ -1,7 +1,4 @@
 //! Agent-only probability calibration and current-book evidence, using the existing entry seam.
-use super::EvaluationResult;
-use crate::btc::strategy::BtcFeatureSnapshot;
-use rust_decimal::prelude::ToPrimitive;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -191,50 +188,6 @@ pub fn summarize(cutoff: chrono::DateTime<chrono::Utc>, rows: Vec<Value>) -> Val
     json!({"version":"agent-entry-calibration-v1","cutoff":cutoff,"status":"available","row_limit_reached":truncated,"cohorts":cohorts,"bands":bands,"meaning":"Prior filled markets only; separate profiles. Chronological holdout is a qualification check, not proof of future profitability. PnL replays retention of observed entries only, not hypothetical opposite fills; quoted costs include fees but exclude arrival slippage."})
 }
 
-/// Pure and repeatable from the original raw forecast on every entry attempt;
-/// never compound an adjustment on a retained or restored result.
-pub fn adjust(result: &EvaluationResult, snapshot: &BtcFeatureSnapshot) -> Option<(f64, Value)> {
-    if !super::uses_execution_evidence(&result.request.selection.profile_key) {
-        return None;
-    }
-    let raw = result.prediction.as_ref().ok()?.probability_up;
-    let context = &result.request.context;
-    let before = prior(
-        number(context.pointer("/execution_snapshot/up_book/executable_ask_vwap")?)?,
-        number(context.pointer("/execution_snapshot/down_book/executable_ask_vwap")?)?,
-    )?;
-    let now = prior(
-        snapshot.up_book.executable_ask_vwap?.to_f64()?,
-        snapshot.down_book.executable_ask_vwap?.to_f64()?,
-    )?;
-    // Do not blend source cohorts. Prefer this profile; bootstrap only from the
-    // immediately preceding independent-forecast profile with its pinned identity.
-    let cohorts = context
-        .pointer("/historical_calibration/entry_calibration/cohorts")
-        .and_then(Value::as_array);
-    let selected = [
-        result.request.selection.profile_key.as_str(),
-        super::EXECUTION_EVIDENCE_PROFILE_KEY,
-        super::FRESH_EVIDENCE_PROFILE_KEY,
-    ]
-    .iter()
-    .find_map(|key| {
-        cohorts?
-            .iter()
-            .find(|c| c["source_profile"] == *key && c["status"] == "qualified")
-    });
-    let weight = selected
-        .and_then(|c| number(&c["model_weight"]))
-        .filter(|w| (0.0..=1.0).contains(w))
-        .unwrap_or(1.0);
-    let calibrated = before + weight * (raw - before);
-    let adjusted = transport(calibrated, before, now);
-    Some((
-        adjusted,
-        json!({"raw_probability_up":raw,"calibrated_snapshot_probability_up":calibrated,"entry_probability_up":adjusted,"snapshot_market_probability_up":before,"entry_market_probability_up":now,"model_weight":weight,"calibration_applied":selected.is_some(),"calibration_source":selected,"snapshot_at":result.request.observed_at,"entry_at":snapshot.observed_at,"meaning":"Normalized two-sided executable asks are a market proxy, not a true probability. Preserve calibrated log-odds residual as that proxy changes; recompute direction from entry probability. Raw forecast remains unchanged."}),
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,7 +228,7 @@ mod tests {
                 &super::super::profile_for_key(super::super::FRESH_EVIDENCE_PROFILE_KEY).unwrap()
             )
             .unwrap(),
-            "70ef31029dd420cfa3c613109b1bc6a58f7f349d46495b51ea0ebf69f615d53d"
+            "73611824eb5db57209f75aa4a039bd0f96fc9e79aafd92e31081351774e86450"
         );
         let profile =
             super::super::profile_for_key(super::super::EXECUTION_EVIDENCE_PROFILE_KEY).unwrap();

@@ -21,23 +21,29 @@ impl OpenAiProvider {
         diagnostic: &mut FailureDiagnostic,
     ) -> Result<(Prediction, String, String), ProviderFailure> {
         diagnostic.mark("request", "request_preparation");
-        let selected = profile_for_key(&request.selection.profile_key)
-            .map_err(|_| ProviderFailure::InvalidResponse)?;
+        let rendered_prompt = super::prompt::render(&request.selection.prompt, &request.context)
+            .map_err(|_| diagnostic.invalid("request", "prompt_render"))?;
         let token = auth::access_token(&self.client)
             .await
             .map_err(|_| ProviderFailure::Authentication)?;
-        let response = self.client.post("https://api.openai.com/v1/responses").bearer_auth(token)
+        let response = self
+            .client
+            .post("https://api.openai.com/v1/responses")
+            .bearer_auth(token)
             .json(&serde_json::json!({
-                "model": selected.model, "instructions": selected.instructions,
+                "model": request.selection.model,
                 "store": false, "stream": true,
-                "input": [{"role":"user", "content":serde_json::to_string(&request.context).map_err(|_| ProviderFailure::InvalidResponse)?}],
+                "input": [{"role":"user", "content":rendered_prompt}],
                 "text": {"format": {"type":"json_schema", "name":"btc_prediction", "strict":true,
                     "schema": {"type":"object","additionalProperties":false,
                         "properties": {"direction":{"type":"string","enum":["up","down"]},
                             "probability_up":{"type":"number"}, "confidence":{"type":"number"},
                             "reason_codes":{"type":"array","items":{"type":"string"}}},
                         "required":["direction","probability_up","confidence","reason_codes"]}}}
-            })).send().await.map_err(|_| ProviderFailure::Transport)?;
+            }))
+            .send()
+            .await
+            .map_err(|_| ProviderFailure::Transport)?;
         diagnostic.http_status = Some(response.status().as_u16());
         diagnostic.provider_request_id = super::diagnostics::identifier(
             response

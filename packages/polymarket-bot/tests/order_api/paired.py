@@ -17,7 +17,7 @@ import time
 import urllib.parse
 import uuid
 
-from qualify import Qualification, REUSABLE_PROCESS_IDS, ROOT, ledger_amount
+from qualify import process_configuration, Qualification, REUSABLE_PROCESS_IDS, ROOT, ledger_amount
 
 
 class RetryablePreflight(RuntimeError):
@@ -50,7 +50,7 @@ def require_preflight_admission(code, receipt):
 
 
 def policies(process):
-    items = process['config']['execution']['order_policies']
+    items = process['order_policies']
     result = {p['name']: p for p in items}
     if len(result) != len(items):
         raise RuntimeError('Duplicate policy names')
@@ -64,10 +64,9 @@ def validate_pair(processes, account, ceiling, active):
         raise RuntimeError('Cash ceiling must be positive and finite')
     for mode, pid in REUSABLE_PROCESS_IDS.items():
         p = processes[mode]
-        e = p['config']['execution']
+        e = p['actions'][0]
         if (p['process_id'] != pid or e['mode'] != mode
-                or e.get('rail') != {'name': 'polymarket', 'version': 1}
-                or p['config']['raw']['btc_realtime_paper']['runtime']['trigger'] != 'api'
+                or e.get('rail') != 'polymarket'
                 or not e.get('execute_signals')
                 or (mode == 'live' and (not e.get('live_capital') or e.get('account_ref') != account))):
             raise RuntimeError('Retained process identity/contract/account mismatch')
@@ -129,7 +128,7 @@ class PairedQualification(Qualification):
         # Replays can become first submissions after transport failure; retain all bounds.
         current = self.current()
         validate_pair(current, pair['account'], pair['max_cash_usd'], True)
-        if any(current[m]['config'] != self.state['processes'][m]['config'] for m in current):
+        if any(process_configuration(current[m]) != process_configuration(self.state['processes'][m]) for m in current):
             raise RuntimeError('TPC changed since paired preparation')
         self.guard_opening_submission(mode, body)
 
@@ -162,7 +161,7 @@ class PairedQualification(Qualification):
             ps['order_execution_policy']['params']['member_order_types']['conservative'] = order_type
             ps['entry_timing_policy']['params']['min_seconds_after_open'] = 0
             run_key = 'order-api-' + mode + '-' + self.state['run']
-            control = p['config']['raw']['btc_realtime_paper']
+            control = p['actions'][0]['params']
             control['next_experiment_key'] = run_key
             control['preregistration_sha256'] = hashlib.sha256(run_key.encode()).hexdigest()
         differences = validate_pair(proposed, account, ceiling, False)
@@ -171,7 +170,7 @@ class PairedQualification(Qualification):
         self.state['processes_before_setup'] = current
         self.save()
         for mode, p in proposed.items():
-            code, response = self.request('PATCH', '/admin/trading-processes/' + p['process_id'], {'config': p['config']})
+            code, response = self.request('PATCH', '/admin/trading-processes/' + p['process_id'], process_configuration(p))
             self.check(mode + ' configuration saved', code == 200, response if code != 200 else None)
             self.state['processes'][mode] = response['process']
             self.save()
@@ -186,7 +185,7 @@ class PairedQualification(Qualification):
         current = self.current()
         validate_pair(current, pair['account'], pair['max_cash_usd'], True)
         self.check('prepared configuration unchanged', all(
-            current[m]['config'] == self.state['processes'][m]['config'] for m in current))
+            process_configuration(current[m]) == process_configuration(self.state['processes'][m]) for m in current))
         self.live_readiness(required=True)
         candidate = copy.deepcopy(candidate) if candidate is not None else self.candidate()
         if candidate is None:
@@ -204,7 +203,7 @@ class PairedQualification(Qualification):
                 self.check(mode + ' expected order', Decimal(str(order['size'])) == 5
                     and order['order_type'] == pair['order_type'] and order['side'] == 'buy')
                 self.check(mode + ' prepared cash reserve within test ceiling',
-                    Decimal(str(receipt['evidence']['execution']['policy_evidence']['max_entry_debit_usd']))
+                    Decimal(str(receipt['evidence']['policy_evidence']['max_entry_debit_usd']))
                     <= Decimal(pair['max_cash_usd']))
                 if route == 'dry-run':
                     prep = receipt.get('preparation') or {}

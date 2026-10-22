@@ -529,18 +529,11 @@ impl MarketDataStreamRuntime {
             .json::<RouteResponse>()
             .await?;
         self.metrics.set_resolution_snapshot(&required, &response);
-        let required_unresolved = response
-            .unresolved
-            .iter()
-            .filter(|item| required.contains(item.product.key.as_str()))
-            .collect::<Vec<_>>();
-        if !required_unresolved.is_empty() {
-            let detail = required_unresolved
-                .into_iter()
-                .map(|item| format!("{}:{}", item.product.key, item.reason))
-                .collect::<Vec<_>>()
-                .join(",");
-            bail!("required market-data products unresolved: {detail}");
+        // Keep usable routes recoverable while a different required product is
+        // unavailable. Resolution metrics and per-product readiness remain closed.
+        for rejection in &response.unresolved {
+            self.metrics
+                .set_product_ready(&rejection.product.key, false);
         }
         if response.routes.is_empty() {
             bail!("ingester master returned no stream routes");
@@ -2473,7 +2466,10 @@ mod tests {
                                     "contract_version": CONTRACT_VERSION
                                 }]
                             }],
-                            "unresolved": []
+                            "unresolved": [{
+                                "product": {"key": PRODUCT_BOOKS, "contract_version": CONTRACT_VERSION},
+                                "reason": "no_current_owner"
+                            }]
                         }))
                     }
                 }),
@@ -2495,13 +2491,22 @@ mod tests {
             metrics.clone(),
         )
         .expect("recovery runtime");
-        let (_selector_sender, selector_receiver) = watch::channel(vec![SourceSelector {
-            key: PRODUCT_TWAP.to_owned(),
-            contract_version: CONTRACT_VERSION,
-            required: true,
-            maximum_age_ms: Some(120_000),
-            require_sequence_integrity: true,
-        }]);
+        let (_selector_sender, selector_receiver) = watch::channel(vec![
+            SourceSelector {
+                key: PRODUCT_BOOKS.to_owned(),
+                contract_version: CONTRACT_VERSION,
+                required: true,
+                maximum_age_ms: Some(120_000),
+                require_sequence_integrity: true,
+            },
+            SourceSelector {
+                key: PRODUCT_TWAP.to_owned(),
+                contract_version: CONTRACT_VERSION,
+                required: true,
+                maximum_age_ms: Some(120_000),
+                require_sequence_integrity: true,
+            },
+        ]);
         let shutdown = CancellationToken::new();
         let runtime_shutdown = shutdown.clone();
         let runtime_task = tokio::spawn(runtime.run(selector_receiver, runtime_shutdown));
@@ -2559,6 +2564,11 @@ mod tests {
 
         assert!(metrics.reconnects.load(Ordering::Relaxed) > 0);
         assert_eq!(metrics.desired_connections.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            metrics.product_ready.lock().unwrap().get(PRODUCT_BOOKS),
+            Some(&false)
+        );
+        assert_eq!(metrics.resolved_products.load(Ordering::Relaxed), 1);
         shutdown.cancel();
         runtime_task.await.expect("runtime task");
         first_server.abort();

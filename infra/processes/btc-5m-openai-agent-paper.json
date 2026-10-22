@@ -1,98 +1,215 @@
 {
-  "name": "BTC 5m OpenAI agent paper",
+  "process_id": "ccf099cc-bd5b-474a-a1d3-88cec7075061",
+  "name": "BTC 5m OpenAI \u00b7 Market reference \u00b7 Clean history",
   "process_type": "btc_5m",
   "process_scope": "realtime_paper",
-  "process_key": "btc-5m-openai-agent-paper",
+  "playbook_version": "v1.2",
+  "process_key": "btc-5m-openai-market-reference-20261011t235026z",
+  "metadata": {
+    "previous_process_id": "057d0d78-d355-4e64-8894-b74a8ef36eb3",
+    "purpose": "Fresh history for market-referenced OpenAI agent in UMR"
+  },
   "enabled": false,
-  "status": "created",
-  "config": {
-    "execution": {
+  "status": "completed",
+  "actions": [
+    {
       "mode": "paper",
+      "type": "buy",
+      "rail": "polymarket",
+      "enabled": false,
       "execute_signals": true,
       "live_capital": false,
-      "taker_fee_rate": null
-    },
-    "raw": {
-      "btc_realtime_paper": {
-        "next_experiment_key": "btc-5m-agent-reassessment-060-250ms-20261007",
-        "paper": {
-          "arrival_latency_ms": 150,
-          "directional_model_entry_policy": "execute_directional_prediction",
-          "starting_collateral_usd": "1000",
-          "visible_depth_haircut": "0.80"
-        },
-        "playbook_version": "v1.2",
-        "preregistration_sha256": "b1bd2cb94096ce5d11e6dd8a62b550b37088be5c5e46c0aec18ea089d926fc5e",
-        "runtime": {
-          "strategy_interval_ms": 250
-        },
-        "schema_version": "btc_realtime_paper_process_v5",
-        "sources": [
-          "polymarket_btc_five_minute_market_contracts",
-          "polymarket_btc_five_minute_orderbooks",
-          "polymarket_btc_five_minute_resolutions",
-          "polymarket_rtds_chainlink_reference_price",
-          "binance_spot_btcusdt_one_second_ohlcv",
+      "params": {
+        "next_experiment_key": "tpc-action-ccf099cc-20261020t185640z",
+        "preregistration_sha256": "e3d2460f943f69a0a6d40b2beb8660daddbd6f511cc6a9549b0768a35a329edf",
+        "strategy_interval_ms": 250,
+        "schema_version": "btc_realtime_paper_process_v6",
+        "models": [
           {
-            "key": "polygon_chainlink_btcusd_oracle",
-            "maximum_age_ms": 600000,
-            "required": false
-          },
-          {
-            "key": "binance_futures_btcusdt_open_interest",
-            "maximum_age_ms": 600000,
-            "required": false
-          },
-          {
-            "key": "polymarket_chainlink_btcusd_twap",
-            "maximum_age_ms": 120000,
-            "required": false
+            "member_id": "agent",
+            "selection": {
+              "profile_key": "btc-5m-openai-agent-market-reference-sol-v1",
+              "profile_sha256": "206a30b561a4ffc6abfab33b9cae43760553d7595b7958f8d752c37efdb85e44",
+              "model": "gpt-6.1-sol",
+              "prompt": "Forecast the UP or DOWN settlement of this BTC five-minute market using only the supplied causal observations. Use the exact market resolution rule. Attempt a direction even when uncertain; mistakes in this paper process are acceptable. Return JSON only: direction (up/down), probability_up (0..1), confidence (0..1, self-assessed evidence strength, not a calibrated probability), reason_codes (1..8 short snake_case identifiers). UP requires probability_up >= 0.5; DOWN requires probability_up < 0.5. Use market_reference.probability_up as the starting reference for your snapshot-time probability_up. This normalized two-sided executable-ask proxy includes spread and liquidity effects; it is not a true or calibrated settlement probability. Justify any departure using the supplied current BTC movement, official settlement TWAP distance, time remaining and Binance trade-flow evidence. These observations may already be reflected in prices: their presence alone does not establish mispricing. Permit either direction and evidence-supported disagreement; do not manufacture an adjustment to satisfy entry limits. Express the supporting evidence through the existing reason_codes. If the reference is unavailable, forecast from the supplied causal observations without inventing a market probability. Return the probability at the request snapshot only; do not anticipate later book movements or apply execution calibration/current-book transport yourself. Missing optional context is not evidence of zero. Do not invent observations, browse, or submit orders. UP when the official Chainlink BTC/USD 60-second TWAP at window_end is greater than or equal to its value at window_start; otherwise DOWN. RTDS midpoint, Binance spot and Polygon oracle are supporting indicators, not settlement prices. Missing TWAP observations are unknown, not zero; do not substitute midpoint prices for them. Use previous_prediction_comparison only as a comparison of market observations. Make an independent settlement forecast from current evidence. Prior answers are deliberately omitted. Both UP and DOWN executable-price changes are supplied without selecting a prior side. Missing comparisons are unknown, not zero. When entry_reassessment.trigger is forecast_evidence_changed, market prices changed since the prior observation. Reassess settlement using current reference, TWAP, Binance and book evidence. A cheaper entry alone is not evidence for a direction. The entry cap and price-change threshold are execution policy, not probabilities. Use historical_calibration as historical reliability evidence when estimating probability_up. Its bands describe selected-side probabilities, not probability_up; respect direction when interpreting them. Source profiles are separate cohorts, not measured performance of this profile. Initial and latest reassessment populations can overlap markets and are not independent. Filled versus unfilled describes historical selection, not a known property of the current forecast. Small samples, wide intervals, unavailable outcomes and truncated coverage imply uncertainty; do not mechanically substitute a historical win rate, invent certainty, or abstain solely because history is unavailable. Forecast from the current causal observations with the existing settlement rule. Use market_horizons to compare the 15-second, 5-minute and 15-minute RTDS midpoint paths: returns, sample volatility, path efficiency and reversals. Respect each window's source end, sampling interval and availability; closed-minute summaries lag the current observation. Use settlement_uncertainty to relate the observed official TWAP distance to remaining time, the supporting RTDS variability scale and changes in the reference/TWAP gap. The square-root-time scale assumes stationary independent returns, ignores drift and TWAP averaging, and is not a calibrated settlement distribution or probability. A zero or unavailable scale gives no certainty. Reference/TWAP gap changes can reflect different observation timestamps; they do not guarantee convergence. Missing optional summaries are unknown and do not alone require abstention. Preserve the exact settlement rule and distinguish directional evidence from entry price. Repeated time-series fields are encoded losslessly as columns and rows; each row follows the column order. rtds_contiguous_tail is a separate, explicitly shorter observed window when full-minute history is incomplete, never a replacement 60-second estimate. Its gap and age diagnostics explain missing context; unknown data is not quiet data. entry_calibration describes an execution-only adjustment fitted on prior filled markets and checked on a later chronological holdout. Return your independent raw probability; do not apply that adjustment yourself. Execution recomputes direction from the adjusted probability and transports its calibrated log-odds advantage over normalized two-sided executable asks to current books; a price decline cannot create an unchanged-probability bargain. Calibration policy: separate source-profile cohorts, 24-hour lookback, at most 300 filled decisions, minimum 40 training and 20 holdout markets, train-only squared-error blend weight in {1,.75,.5,.25,0}, holdout Brier improvement and nondecreasing quoted fee-net retained-entry PnL; unqualified cohorts leave raw probabilities unchanged. No fixed price-movement rejection is added.\n\nThe following sections partition one evaluation snapshot by configured source. Fields retain their existing meanings; cross-source calculations are identified by their field names. Null means unavailable.\n\npolymarket_btc_five_minute_market_contracts:\n#{polymarket_btc_five_minute_market_contracts}\n\npolymarket_btc_five_minute_orderbooks:\n#{polymarket_btc_five_minute_orderbooks}\n\npolymarket_btc_five_minute_resolutions:\n#{polymarket_btc_five_minute_resolutions}\n\npolymarket_rtds_chainlink_reference_price:\n#{polymarket_rtds_chainlink_reference_price}\n\nbinance_spot_btcusdt_one_second_ohlcv:\n#{binance_spot_btcusdt_one_second_ohlcv}\n\npolygon_chainlink_btcusd_oracle:\n#{polygon_chainlink_btcusd_oracle}\n\nbinance_futures_btcusdt_open_interest:\n#{binance_futures_btcusdt_open_interest}\n\npolymarket_chainlink_btcusd_twap:\n#{polymarket_chainlink_btcusd_twap}",
+              "type": "openai_agent"
+            }
           }
         ],
-        "strategy": {
-          "decision_strategy": {
-            "models": [
-              {
-                "member_id": "agent",
-                "selection": {
-                  "profile_key": "btc-5m-openai-agent-reassessment-v1",
-                  "profile_sha256": "e7b23b34460727ecf5693774e63f92fa0d04b2737c76b2e01a644c6b66eafa80",
-                  "type": "openai_agent"
-                }
-              }
-            ],
-            "routing": {
-              "mode": "first_qualified",
-              "tie_break": "array_order"
-            },
-            "type": "unified_model_router",
-            "version": 1
-          },
-          "latency_reserve_per_share": "0.005",
-          "max_book_age_ms": 2000,
-          "max_chainlink_open_delay_ms": 5000,
-          "max_depth_participation": "0.25",
-          "max_directional_feature_age_ms": 5000,
-          "max_entry_price": "0.60",
-          "max_fee_age_ms": 3600000,
-          "max_fee_rate": "1",
-          "max_probability_uncertainty": "0.10",
-          "max_reference_age_ms": 2000,
-          "max_source_skew_ms": 1000,
-          "min_entry_price": "0.01",
-          "min_net_edge_per_share": "0.015",
-          "min_net_edge_usd": "0.02",
-          "min_seconds_after_open": 45,
-          "min_seconds_before_close": 180,
-          "slippage_reserve_bps": "25",
-          "spread_reserve_fraction": "0.10",
-          "target_size": "5"
-        }
+        "routing": {
+          "mode": "first_qualified",
+          "tie_break": "array_order"
+        },
+        "type": "unified_model_router",
+        "version": 1,
+        "max_directional_feature_age_ms": 5000,
+        "required_model_feeds": [],
+        "risk_strategies": []
       }
     }
-  },
-  "metadata": {
-    "decision_provider": "openai_agent",
-    "purpose": "paper_trading"
-  }
+  ],
+  "sources": [
+    {
+      "contract_version": 1,
+      "required": true,
+      "maximum_age_ms": null,
+      "require_sequence_integrity": true,
+      "key": "polymarket_btc_five_minute_market_contracts"
+    },
+    {
+      "contract_version": 1,
+      "required": true,
+      "maximum_age_ms": null,
+      "require_sequence_integrity": true,
+      "key": "polymarket_btc_five_minute_orderbooks"
+    },
+    {
+      "contract_version": 1,
+      "required": true,
+      "maximum_age_ms": null,
+      "require_sequence_integrity": true,
+      "key": "polymarket_btc_five_minute_resolutions"
+    },
+    {
+      "contract_version": 1,
+      "required": true,
+      "maximum_age_ms": null,
+      "require_sequence_integrity": true,
+      "key": "polymarket_rtds_chainlink_reference_price"
+    },
+    {
+      "contract_version": 1,
+      "required": true,
+      "maximum_age_ms": null,
+      "require_sequence_integrity": true,
+      "key": "binance_spot_btcusdt_one_second_ohlcv"
+    },
+    {
+      "contract_version": 1,
+      "required": false,
+      "maximum_age_ms": 600000,
+      "require_sequence_integrity": false,
+      "key": "polygon_chainlink_btcusd_oracle"
+    },
+    {
+      "contract_version": 1,
+      "required": false,
+      "maximum_age_ms": 600000,
+      "require_sequence_integrity": false,
+      "key": "binance_futures_btcusdt_open_interest"
+    },
+    {
+      "contract_version": 1,
+      "required": false,
+      "maximum_age_ms": 120000,
+      "require_sequence_integrity": false,
+      "key": "polymarket_chainlink_btcusd_twap"
+    }
+  ],
+  "order_policies": [
+    {
+      "name": "sizing_policy",
+      "version": 1,
+      "params": {
+        "default_share": 5,
+        "lower_share_bound": 5,
+        "max_depth_participation": "0.25",
+        "max_entry_price": "0.50",
+        "min_entry_price": "0.01",
+        "mode": "fixed",
+        "upper_share_bound": 5
+      }
+    },
+    {
+      "name": "entry_timing_policy",
+      "version": 1,
+      "params": {
+        "min_seconds_after_open": 45,
+        "min_seconds_before_close": 180
+      }
+    },
+    {
+      "name": "evidence_policy",
+      "version": 1,
+      "params": {
+        "max_book_age_ms": 2000,
+        "max_chainlink_open_delay_ms": 5000,
+        "max_fee_age_ms": 3600000,
+        "max_reference_age_ms": 2000,
+        "max_source_skew_ms": 1000
+      }
+    },
+    {
+      "name": "liquidity_policy",
+      "version": 1,
+      "params": {
+        "require_exit_book": false
+      }
+    },
+    {
+      "name": "execution_cost_policy",
+      "version": 1,
+      "params": {
+        "latency_reserve_per_share": "0.005",
+        "max_fee_rate": "1",
+        "slippage_reserve_bps": "25",
+        "spread_reserve_fraction": "0.10"
+      }
+    },
+    {
+      "name": "edge_policy",
+      "version": 1,
+      "params": {
+        "directional_model_entry_policy": "require_positive_direct_edge",
+        "min_net_edge_per_share": "0.015",
+        "min_net_edge_usd": "0.02"
+      }
+    },
+    {
+      "name": "order_execution_policy",
+      "version": 1,
+      "params": {
+        "member_order_types": {
+          "agent": "fok"
+        }
+      }
+    },
+    {
+      "name": "exposure_policy",
+      "version": 1,
+      "params": {
+        "max_open_notional_usd": null,
+        "max_open_positions": null
+      }
+    },
+    {
+      "name": "loss_limit_policy",
+      "version": 1,
+      "params": {
+        "max_daily_loss_usd": null,
+        "daily_realized_pnl_high_water_mark": null
+      }
+    },
+    {
+      "name": "paper_execution_policy",
+      "version": 1,
+      "params": {
+        "arrival_latency_ms": 150,
+        "starting_collateral_usd": "1000",
+        "visible_depth_haircut": "0.80",
+        "stress_previews": [
+          {
+            "arrival_latency_ms": 300,
+            "scenario_key": "latency_300ms_depth_65pct",
+            "visible_depth_haircut": "0.65"
+          },
+          {
+            "arrival_latency_ms": 600,
+            "scenario_key": "latency_600ms_depth_50pct",
+            "visible_depth_haircut": "0.50"
+          }
+        ]
+      }
+    }
+  ]
 }

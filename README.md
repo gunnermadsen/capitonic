@@ -124,8 +124,8 @@ distinct process-owned run, identified by `run_id`. Immutable run evidence
 lives in the existing process lifecycle records. Lifecycle and record ownership
 remain canonical to the selected `process_id`; the stable process key can be
 reused. Trading mode is selected by
-`trading_processes.config.execution.mode`; live definitions also require a
-bounded `execution.account_ref`. Optional execution limits and the exit-book
+`trading_processes.config.mode`; live definitions also require a
+bounded `account_ref`. Optional execution limits and the exit-book
 requirement are flat process-owned properties accepted identically by paper and
 live venues. When omitted, their checks are not configured. Host configuration
 is limited to credentials, venue URLs, and transport timing.
@@ -222,7 +222,7 @@ execution path, and legacy v1 definitions remain resume-only. The stable identit
 `process_key`. Paper definitions execute approved signals and never permit live
 capital; live definitions use the same strategy/runtime contract and change
 only the process-owned execution venue. Unknown fields inside
-`config.raw.btc_realtime_paper` are rejected. In particular, the retired
+`actions[].params` are rejected. In particular, the retired
 `ml_shadow` setting is not part of this contract.
 
 Save the following request body as `btc-process-v4.json`. Replace the process
@@ -239,47 +239,27 @@ run key; lifecycle and record ownership still belong to `process_id`.
   "process_scope": "realtime_paper",
   "enabled": false,
   "status": "created",
-  "config": {
-    "execution": {
+  "metadata": {},
+  "sources": [
+    "polymarket_btc_five_minute_market_contracts",
+    "polymarket_btc_five_minute_orderbooks",
+    "polymarket_btc_five_minute_resolutions",
+    "binance_spot_btcusdt_one_second_ohlcv",
+    "polygon_chainlink_btcusd_oracle"
+  ],
+  "playbook_version": "v1.2",
+  "actions": [
+    {
+      "type": "buy",
+      "enabled": true,
       "mode": "paper",
+      "rail": null,
       "execute_signals": true,
-      "live_capital": false
-    },
-    "raw": {
-      "btc_realtime_paper": {
+      "live_capital": false,
+      "params": {
         "schema_version": "btc_realtime_paper_process_v4",
-        "playbook_version": "v1.2",
-        "sources": [
-          "polymarket_btc_five_minute_market_contracts",
-          "polymarket_btc_five_minute_orderbooks",
-          "polymarket_btc_five_minute_resolutions",
-          "binance_spot_btcusdt_one_second_ohlcv",
-          "polygon_chainlink_btcusd_oracle"
-        ],
         "next_experiment_key": "btc-5m-router-paper-example-v1",
         "preregistration_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "strategy": {
-          "decision_strategy": {
-            "type": "unified_model_router",
-            "version": 1,
-            "routing": {
-              "mode": "first_qualified",
-              "tie_break": "array_order"
-            },
-            "models": [
-              {
-                "member_id": "primary",
-                "selection": {
-                  "type": "btc_directional_model",
-                  "model_key": "btc-5m-t2-bridge-aware-60-64--without-rtds-candles-q5"
-                }
-              }
-            ]
-          }
-        },
-        "runtime": {
-          "strategy_interval_ms": 1000
-        },
         "paper": {
           "arrival_latency_ms": 150,
           "visible_depth_haircut": "0.80",
@@ -296,11 +276,26 @@ run key; lifecycle and record ownership still belong to `process_id`.
               "visible_depth_haircut": "0.50"
             }
           ]
-        }
+        },
+        "strategy_interval_ms": 1000,
+        "type": "unified_model_router",
+        "version": 1,
+        "routing": {
+          "mode": "first_qualified",
+          "tie_break": "array_order"
+        },
+        "models": [
+          {
+            "member_id": "primary",
+            "selection": {
+              "type": "btc_directional_model",
+              "model_key": "btc-5m-t2-bridge-aware-60-64--without-rtds-candles-q5"
+            }
+          }
+        ]
       }
     }
-  },
-  "metadata": {}
+  ]
 }
 ```
 <!-- btc-5m-process-v4:end -->

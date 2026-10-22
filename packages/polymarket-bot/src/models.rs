@@ -277,8 +277,8 @@ where
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TradingProcess {
+#[derive(Debug, Clone, Serialize)]
+pub struct TradingProcess<C = TradingProcessConfig> {
     pub process_id: Uuid,
     pub name: String,
     pub process_type: String,
@@ -286,13 +286,35 @@ pub struct TradingProcess {
     pub process_key: Option<String>,
     pub status: String,
     pub enabled: bool,
-    pub config: TradingProcessConfig,
+    #[serde(flatten)]
+    pub config: C,
     pub metadata: serde_json::Value,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub stopped_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
+}
+
+impl<C> TradingProcess<C> {
+    pub fn with_config<D>(self, config: D) -> TradingProcess<D> {
+        TradingProcess {
+            config,
+            process_id: self.process_id,
+            name: self.name,
+            process_type: self.process_type,
+            process_scope: self.process_scope,
+            process_key: self.process_key,
+            status: self.status,
+            enabled: self.enabled,
+            metadata: self.metadata,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            started_at: self.started_at,
+            stopped_at: self.stopped_at,
+            last_error: self.last_error,
+        }
+    }
 }
 
 impl TradingProcess {
@@ -302,31 +324,41 @@ impl TradingProcess {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct TradingProcessConfig {
+    pub playbook_version: String,
+    pub actions: Vec<TradingProcessAction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub execution: Option<ProcessExecutionConfig>,
+    pub order_policies: Option<Vec<crate::execution::polymarket::policies::OrderPolicy>>,
+    pub sources: Vec<crate::market_data_stream::SourceSelector>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TradingProcessAction {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub enabled: bool,
+    pub rail: Option<String>,
+    pub mode: Option<String>,
     #[serde(default)]
-    pub raw: serde_json::Value,
+    pub execute_signals: bool,
+    #[serde(default)]
+    pub live_capital: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_ref: Option<String>,
+    pub params: serde_json::Value,
 }
 
 impl TradingProcessConfig {
     pub fn effective_execution(&self) -> EffectiveProcessExecutionConfig {
         let mut effective = EffectiveProcessExecutionConfig::default();
-        if let Some(config) = &self.execution {
-            if let Some(mode) = &config.mode {
+        if let Some(action) = self.actions.first() {
+            if let Some(mode) = &action.mode {
                 effective.mode = mode.clone();
             }
-            effective.execute_signals = config.execute_signals;
-            effective.live_capital = config.live_capital;
-            effective.account_ref = config.account_ref.clone();
-            if let Some(taker_fee_rate) = config.taker_fee_rate {
-                effective.taker_fee_rate = taker_fee_rate;
-            }
-            effective.max_order_notional_usd = config.max_order_notional_usd;
-            effective.max_open_notional_usd = config.max_open_notional_usd;
-            effective.max_open_positions = config.max_open_positions;
-            effective.max_daily_loss_usd = config.max_daily_loss_usd;
-            effective.require_exit_book = config.require_exit_book;
+            effective.execute_signals = action.execute_signals;
+            effective.live_capital = action.live_capital;
+            effective.account_ref = action.account_ref.clone();
         }
         effective
     }
@@ -362,39 +394,9 @@ impl Default for EffectiveProcessExecutionConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct ProcessExecutionConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rail: Option<crate::execution::polymarket::configuration::RailSelection>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub order_policies: Option<Vec<crate::execution::polymarket::policies::OrderPolicy>>,
-    #[serde(default)]
-    pub mode: Option<String>,
-    #[serde(default)]
-    pub execute_signals: bool,
-    #[serde(default)]
-    pub live_capital: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub account_ref: Option<String>,
-    #[serde(default)]
-    pub taker_fee_rate: Option<Decimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_order_notional_usd: Option<Decimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_open_notional_usd: Option<Decimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_open_positions: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_daily_loss_usd: Option<Decimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub require_exit_book: Option<bool>,
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{FillSource, ProcessExecutionConfig};
-    use rust_decimal_macros::dec;
+    use super::{FillSource, TradingProcessConfig};
 
     #[test]
     fn retired_sim_fill_source_is_not_part_of_the_application_contract() {
@@ -410,54 +412,25 @@ mod tests {
     }
 
     #[test]
-    fn execution_contract_accepts_only_flat_optional_controls() {
-        let execution = serde_json::from_value::<ProcessExecutionConfig>(serde_json::json!({
-            "mode": "paper",
-            "execute_signals": true,
-            "live_capital": false,
-            "max_order_notional_usd": "2",
-            "max_open_notional_usd": "20",
-            "max_open_positions": 6,
-            "max_daily_loss_usd": "10",
-            "require_exit_book": true
-        }))
-        .unwrap();
-        assert_eq!(execution.max_order_notional_usd, Some(dec!(2)));
-        assert_eq!(execution.max_open_notional_usd, Some(dec!(20)));
-        assert_eq!(execution.max_open_positions, Some(6));
-        assert_eq!(execution.max_daily_loss_usd, Some(dec!(10)));
-        assert_eq!(execution.require_exit_book, Some(true));
-
-        let omitted = serde_json::from_value::<ProcessExecutionConfig>(serde_json::json!({
-            "mode": "live",
-            "execute_signals": true,
-            "live_capital": true,
-            "account_ref": "polymarket-primary"
-        }))
-        .unwrap();
-        assert_eq!(omitted.max_order_notional_usd, None);
-        assert_eq!(omitted.require_exit_book, None);
-
-        assert!(
-            serde_json::from_value::<ProcessExecutionConfig>(serde_json::json!({
-                "mode": "paper",
-                "risk": {"max_order_notional_usd": "2"}
-            }))
-            .is_err()
-        );
-        assert!(
-            serde_json::from_value::<ProcessExecutionConfig>(serde_json::json!({
-                "mode": "paper",
-                "entry_policy": {"require_exit_book": true}
-            }))
-            .is_err()
-        );
-        assert!(
-            serde_json::from_value::<ProcessExecutionConfig>(serde_json::json!({
-                "mode": "paper",
-                "max_open_positions": [6]
-            }))
-            .is_err()
-        );
+    fn removed_root_controls_are_unknown_even_when_null() {
+        let base = serde_json::json!({"sources": [],"playbook_version": "v1.2","actions": [{"mode": null,"execute_signals": false,"live_capital": false,"rail": null,"type": "buy","enabled": true,"params": {}}]});
+        let config: TradingProcessConfig = serde_json::from_value(base.clone()).unwrap();
+        let serialized = serde_json::to_value(config).unwrap();
+        for field in [
+            "taker_fee_rate",
+            "max_order_notional_usd",
+            "max_open_notional_usd",
+            "max_open_positions",
+            "max_daily_loss_usd",
+            "require_exit_book",
+        ] {
+            assert!(serialized.get(field).is_none());
+            for value in [serde_json::Value::Null, serde_json::json!(1)] {
+                let mut invalid = base.clone();
+                invalid[field] = value;
+                let error = serde_json::from_value::<TradingProcessConfig>(invalid).unwrap_err();
+                assert!(error.to_string().contains("unknown field"));
+            }
+        }
     }
 }

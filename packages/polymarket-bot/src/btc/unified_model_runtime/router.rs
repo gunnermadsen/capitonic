@@ -66,6 +66,8 @@ pub enum Selection {
         profile_key: String,
         #[serde(default)]
         profile_sha256: String,
+        prompt: String,
+        model: String,
     },
     BtcDirectionalModel {
         model_key: String,
@@ -88,9 +90,13 @@ impl Selection {
             Self::OpenaiAgent {
                 profile_key,
                 profile_sha256,
+                prompt,
+                model,
             } => super::agent::AgentSelection {
                 profile_key: profile_key.clone(),
                 profile_sha256: profile_sha256.clone(),
+                prompt: prompt.clone(),
+                model: model.clone(),
             }
             .identity(),
             Self::BtcDirectionalModel {
@@ -137,9 +143,13 @@ impl Selection {
             Self::OpenaiAgent {
                 profile_key,
                 profile_sha256,
+                prompt,
+                model,
             } => BtcDecisionStrategyConfig::OpenaiAgent {
                 profile_key: profile_key.clone(),
                 profile_sha256: profile_sha256.clone(),
+                prompt: prompt.clone(),
+                model: model.clone(),
             },
             Self::BtcDirectionalModel { .. } => BtcDecisionStrategyConfig::BtcDirectionalModel {
                 model_key,
@@ -205,6 +215,8 @@ impl RouterDefinition {
             if let Selection::OpenaiAgent {
                 profile_key,
                 profile_sha256,
+                prompt,
+                model,
             } = &mut member.selection
             {
                 if profile_sha256.is_empty() {
@@ -214,6 +226,8 @@ impl RouterDefinition {
                 super::agent::AgentSelection {
                     profile_key: profile_key.clone(),
                     profile_sha256: profile_sha256.clone(),
+                    prompt: prompt.clone(),
+                    model: model.clone(),
                 }
                 .validate()?;
                 continue;
@@ -258,6 +272,8 @@ impl RouterDefinition {
                 if let Selection::OpenaiAgent {
                     profile_key,
                     profile_sha256,
+                    prompt,
+                    model,
                 } = &member.selection
                 {
                     ensure!(
@@ -267,6 +283,8 @@ impl RouterDefinition {
                     super::agent::AgentSelection {
                         profile_key: profile_key.clone(),
                         profile_sha256: profile_sha256.clone(),
+                        prompt: prompt.clone(),
+                        model: model.clone(),
                     }
                     .validate()?;
                     for product in super::agent::REQUIRED_PRODUCTS {

@@ -1,112 +1,204 @@
 {
+  "process_id": "4669169b-75b5-41e0-a08f-790d049a84da",
   "name": "BTC 5m extended specialist official UMR paper",
   "process_type": "btc_5m",
   "process_scope": "realtime_paper",
   "process_key": "btc-5m-extended-specialist-official-umr-20260902",
-  "enabled": false,
-  "status": "created",
-  "config": {
-    "execution": {
-      "mode": "paper",
-      "execute_signals": true,
-      "live_capital": false
+  "metadata": {
+    "deployment_scope": "paper_only",
+    "directional_model_entry_policy": "execute_directional_prediction",
+    "frozen_candidate": "extended_specialist_official",
+    "model_artifact_sha256": "457156bdcb08f6f2016781ac50292c32b7a2058bea77ba47542216a8afc3704a",
+    "model_feature_schema_sha256": "38b56e7a5e9819ef91f954224fbc90002cda3c20801fd66cfec63ec0830c0523",
+    "model_feature_schema_version": "btc-5m-payoff-aware-frozen-early-features-v1",
+    "model_key": "btc-5m-extended-specialist-official-umr-20260902-confidence-070",
+    "native_admission": true,
+    "optional_canonical_candles": "unavailable_native_missing",
+    "production_qualified": false,
+    "source_training_model_sha256": "5f34a841fcef2ae50fac193eb429a89fafd5173755d6cc15423674a198ffb6fe",
+    "strategy_family": "btc_5m_directional_model",
+    "umr_contract": "capitonic-unified-model-runtime-v1"
+  },
+  "enabled": true,
+  "status": "running",
+  "sources": [
+    {
+      "contract_version": 1,
+      "required": true,
+      "maximum_age_ms": null,
+      "require_sequence_integrity": true,
+      "key": "polymarket_btc_five_minute_market_contracts"
     },
-    "raw": {
-      "btc_realtime_paper": {
-        "schema_version": "btc_realtime_paper_process_v4",
-        "playbook_version": "v1.2",
-        "sources": [
-          "polymarket_btc_five_minute_market_contracts",
-          "polymarket_btc_five_minute_orderbooks",
-          "polymarket_btc_five_minute_resolutions",
-          "binance_spot_btcusdt_one_second_ohlcv",
+    {
+      "contract_version": 1,
+      "required": true,
+      "maximum_age_ms": null,
+      "require_sequence_integrity": true,
+      "key": "polymarket_btc_five_minute_orderbooks"
+    },
+    {
+      "contract_version": 1,
+      "required": true,
+      "maximum_age_ms": null,
+      "require_sequence_integrity": true,
+      "key": "polymarket_btc_five_minute_resolutions"
+    },
+    {
+      "contract_version": 1,
+      "required": true,
+      "maximum_age_ms": null,
+      "require_sequence_integrity": true,
+      "key": "binance_spot_btcusdt_one_second_ohlcv"
+    },
+    {
+      "contract_version": 1,
+      "required": false,
+      "maximum_age_ms": 600000,
+      "require_sequence_integrity": false,
+      "key": "polygon_chainlink_btcusd_oracle"
+    }
+  ],
+  "order_policies": [
+    {
+      "name": "sizing_policy",
+      "version": 1,
+      "params": {
+        "default_share": 5,
+        "lower_share_bound": 5,
+        "max_depth_participation": "0.25",
+        "max_entry_price": "0.99",
+        "min_entry_price": "0.01",
+        "mode": "fixed",
+        "upper_share_bound": 5
+      }
+    },
+    {
+      "name": "entry_timing_policy",
+      "version": 1,
+      "params": {
+        "min_seconds_after_open": 60,
+        "min_seconds_before_close": 211
+      }
+    },
+    {
+      "name": "evidence_policy",
+      "version": 1,
+      "params": {
+        "max_book_age_ms": 2000,
+        "max_chainlink_open_delay_ms": 5000,
+        "max_fee_age_ms": 3600000,
+        "max_reference_age_ms": 2000,
+        "max_source_skew_ms": 1000
+      }
+    },
+    {
+      "name": "liquidity_policy",
+      "version": 1,
+      "params": {
+        "require_exit_book": false
+      }
+    },
+    {
+      "name": "execution_cost_policy",
+      "version": 1,
+      "params": {
+        "latency_reserve_per_share": "0.005",
+        "max_fee_rate": "1",
+        "slippage_reserve_bps": "25",
+        "spread_reserve_fraction": "0.10"
+      }
+    },
+    {
+      "name": "edge_policy",
+      "version": 1,
+      "params": {
+        "directional_model_entry_policy": "execute_directional_prediction",
+        "min_net_edge_per_share": "0.015",
+        "min_net_edge_usd": "0.02"
+      }
+    },
+    {
+      "name": "order_execution_policy",
+      "version": 1,
+      "params": {
+        "member_order_types": {
+          "primary": "fok"
+        }
+      }
+    },
+    {
+      "name": "exposure_policy",
+      "version": 1,
+      "params": {
+        "max_open_notional_usd": null,
+        "max_open_positions": null
+      }
+    },
+    {
+      "name": "loss_limit_policy",
+      "version": 1,
+      "params": {
+        "max_daily_loss_usd": null,
+        "daily_realized_pnl_high_water_mark": null
+      }
+    },
+    {
+      "name": "paper_execution_policy",
+      "version": 1,
+      "params": {
+        "arrival_latency_ms": 150,
+        "starting_collateral_usd": "1000",
+        "stress_previews": [
           {
-            "key": "polygon_chainlink_btcusd_oracle",
-            "required": false,
-            "contract_version": 1,
-            "maximum_age_ms": 600000,
-            "require_sequence_integrity": false
+            "arrival_latency_ms": 300,
+            "scenario_key": "latency_300ms_depth_65pct",
+            "visible_depth_haircut": "0.65"
+          },
+          {
+            "arrival_latency_ms": 600,
+            "scenario_key": "latency_600ms_depth_50pct",
+            "visible_depth_haircut": "0.50"
           }
         ],
-        "strategy": {
-          "decision_strategy": {
-            "type": "unified_model_router",
-            "version": 1,
-            "routing": {
-              "mode": "first_qualified",
-              "tie_break": "array_order"
-            },
-            "models": [
-              {
-                "member_id": "primary",
-                "selection": {
-                  "type": "btc_directional_model",
-                  "model_key": "btc-5m-extended-specialist-official-umr-20260902-confidence-070",
-                  "artifact_sha256": "457156bdcb08f6f2016781ac50292c32b7a2058bea77ba47542216a8afc3704a",
-                  "feature_schema_sha256": "38b56e7a5e9819ef91f954224fbc90002cda3c20801fd66cfec63ec0830c0523"
-                }
-              }
-            ]
-          },
-          "target_size": "5",
-          "min_seconds_after_open": 60,
-          "min_seconds_before_close": 211,
-          "max_reference_age_ms": 2000,
-          "max_directional_feature_age_ms": 5000,
-          "max_chainlink_open_delay_ms": 5000,
-          "max_book_age_ms": 2000,
-          "max_source_skew_ms": 1000,
-          "max_fee_age_ms": 3600000,
-          "min_entry_price": "0.01",
-          "max_entry_price": "0.99",
-          "max_depth_participation": "0.25",
-          "max_probability_uncertainty": "0.10",
-          "spread_reserve_fraction": "0.10",
-          "slippage_reserve_bps": "25",
-          "latency_reserve_per_share": "0.005",
-          "min_net_edge_per_share": "0.015",
-          "min_net_edge_usd": "0.02",
-          "max_fee_rate": "1"
-        },
-        "runtime": {
-          "strategy_interval_ms": 1000
-        },
-        "paper": {
-          "arrival_latency_ms": 150,
-          "visible_depth_haircut": "0.80",
-          "starting_collateral_usd": "1000",
-          "directional_model_entry_policy": "execute_directional_prediction",
-          "stress_previews": [
-            {
-              "scenario_key": "latency_300ms_depth_65pct",
-              "arrival_latency_ms": 300,
-              "visible_depth_haircut": "0.65"
-            },
-            {
-              "scenario_key": "latency_600ms_depth_50pct",
-              "arrival_latency_ms": 600,
-              "visible_depth_haircut": "0.50"
-            }
-          ]
-        },
-        "next_experiment_key": "btc-5m-extended-specialist-official-umr-confidence-070-run",
-        "preregistration_sha256": "5da1d6f819eae517817c8a647626d3d59315914f3d480ea6d9dc6657f15397af"
+        "visible_depth_haircut": "0.80"
       }
     }
-  },
-  "metadata": {
-    "strategy_family": "btc_5m_directional_model",
-    "model_key": "btc-5m-extended-specialist-official-umr-20260902-confidence-070",
-    "model_artifact_sha256": "457156bdcb08f6f2016781ac50292c32b7a2058bea77ba47542216a8afc3704a",
-    "model_feature_schema_version": "btc-5m-payoff-aware-frozen-early-features-v1",
-    "model_feature_schema_sha256": "38b56e7a5e9819ef91f954224fbc90002cda3c20801fd66cfec63ec0830c0523",
-    "source_training_model_sha256": "5f34a841fcef2ae50fac193eb429a89fafd5173755d6cc15423674a198ffb6fe",
-    "deployment_scope": "paper_only",
-    "production_qualified": false,
-    "umr_contract": "capitonic-unified-model-runtime-v1",
-    "frozen_candidate": "extended_specialist_official",
-    "optional_canonical_candles": "unavailable_native_missing",
-    "directional_model_entry_policy": "execute_directional_prediction",
-    "native_admission": true
-  }
+  ],
+  "playbook_version": "v1.2",
+  "actions": [
+    {
+      "type": "buy",
+      "enabled": true,
+      "mode": "paper",
+      "rail": "polymarket",
+      "execute_signals": true,
+      "live_capital": false,
+      "params": {
+        "next_experiment_key": "tpc-action-4669169b-20261020t185640z",
+        "preregistration_sha256": "5da1d6f819eae517817c8a647626d3d59315914f3d480ea6d9dc6657f15397af",
+        "schema_version": "btc_realtime_paper_process_v6",
+        "risk_strategies": [],
+        "strategy_interval_ms": 1000,
+        "max_directional_feature_age_ms": 5000,
+        "required_model_feeds": [],
+        "type": "unified_model_router",
+        "version": 1,
+        "routing": {
+          "mode": "first_qualified",
+          "tie_break": "array_order"
+        },
+        "models": [
+          {
+            "member_id": "primary",
+            "selection": {
+              "artifact_sha256": "457156bdcb08f6f2016781ac50292c32b7a2058bea77ba47542216a8afc3704a",
+              "feature_schema_sha256": "38b56e7a5e9819ef91f954224fbc90002cda3c20801fd66cfec63ec0830c0523",
+              "model_key": "btc-5m-extended-specialist-official-umr-20260902-confidence-070",
+              "type": "btc_directional_model"
+            }
+          }
+        ]
+      }
+    }
+  ]
 }

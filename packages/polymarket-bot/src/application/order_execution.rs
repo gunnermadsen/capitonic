@@ -134,7 +134,7 @@ pub(super) fn prepare(
         execution: effective(&definition),
         execution_mode,
         strategy,
-        sources: definition.control.sources.clone(),
+        sources: definition.sources.clone(),
         entry_admission: None,
         risk_strategies: definition.control.risk_strategies.clone(),
         directional_model_entry_policy: p.edge.directional_model_entry_policy,
@@ -459,7 +459,7 @@ impl BtcProcessManager {
             .keys()
             .copied()
             .collect::<Vec<_>>();
-        let ids=sqlx::query_scalar::<_,Uuid>("SELECT process_id FROM polymarket.trading_processes WHERE enabled AND status IN ('starting','running') AND NOT(process_id=ANY($1)) AND config #>> '{execution,rail,name}'='polymarket' ORDER BY created_at LIMIT 64").bind(active_ids).fetch_all(&self.pool).await;
+        let ids=sqlx::query_scalar::<_,Uuid>("SELECT process_id FROM polymarket.trading_processes WHERE enabled AND status IN ('starting','running') AND NOT(process_id=ANY($1)) AND config #>> '{actions,0,rail}'='polymarket' ORDER BY created_at LIMIT 64").bind(active_ids).fetch_all(&self.pool).await;
         let Ok(ids) = ids else { return };
         for id in ids {
             let _transition = self.transition.lock().await;

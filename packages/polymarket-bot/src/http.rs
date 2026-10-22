@@ -156,7 +156,7 @@ pub trait ControlApi: Send + Sync + 'static {
     async fn get_trading_process(
         &self,
         _process_id: Uuid,
-    ) -> Result<TradingProcessResponse, HttpError> {
+    ) -> Result<TradingProcessResponse<serde_json::Value>, HttpError> {
         Err(HttpError::not_implemented(
             "trading processes are not wired",
         ))
@@ -476,7 +476,7 @@ async fn list_trading_processes(
 async fn get_trading_process(
     State(state): State<HttpState>,
     Path(process_id): Path<Uuid>,
-) -> Result<Json<TradingProcessResponse>, HttpError> {
+) -> Result<Json<TradingProcessResponse<serde_json::Value>>, HttpError> {
     state
         .control
         .get_trading_process(process_id)
@@ -652,9 +652,38 @@ pub struct UpdateTradingProcessRequest {
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
-    pub config: Option<TradingProcessConfig>,
+    pub playbook_version: Option<String>,
+    #[serde(default)]
+    pub actions: Option<Vec<crate::models::TradingProcessAction>>,
+    #[serde(default)]
+    pub order_policies: Option<Vec<crate::execution::polymarket::policies::OrderPolicy>>,
+    #[serde(default)]
+    pub sources: Option<Vec<crate::market_data_stream::SourceSelector>>,
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
+}
+
+impl UpdateTradingProcessRequest {
+    pub fn take_configuration(&mut self) -> Result<Option<TradingProcessConfig>, HttpError> {
+        match (
+            self.sources.take(),
+            self.actions.take(),
+            self.playbook_version.take(),
+        ) {
+            (None, None, None) if self.order_policies.is_none() => Ok(None),
+            (Some(sources), Some(actions), Some(playbook_version)) => {
+                Ok(Some(TradingProcessConfig {
+                    playbook_version,
+                    actions,
+                    order_policies: self.order_policies.take(),
+                    sources,
+                }))
+            }
+            _ => Err(HttpError::bad_request(
+                "configuration replacement requires sources, actions and playbook_version",
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -674,26 +703,30 @@ fn default_entry_status_scope() -> String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpsertTradingProcessByKeyRequest {
     pub name: String,
     pub process_type: String,
     pub process_scope: String,
     pub enabled: bool,
     pub status: String,
-    #[serde(default)]
-    pub config: TradingProcessConfig,
+    pub playbook_version: String,
+    pub actions: Vec<crate::models::TradingProcessAction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order_policies: Option<Vec<crate::execution::polymarket::policies::OrderPolicy>>,
+    pub sources: Vec<crate::market_data_stream::SourceSelector>,
     #[serde(default)]
     pub metadata: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TradingProcessResponse {
-    pub process: TradingProcess,
+#[derive(Debug, Clone, Serialize)]
+pub struct TradingProcessResponse<C = TradingProcessConfig> {
+    pub process: TradingProcess<C>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TradingProcessesResponse {
-    pub processes: Vec<TradingProcess>,
+    pub processes: Vec<TradingProcess<serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

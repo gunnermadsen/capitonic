@@ -480,16 +480,16 @@ def _load_execution_scenarios(
         raise FileNotFoundError(f"champion paper process is missing: {path}")
     process = json.loads(path.read_text())
     try:
-        process_config = process["config"]
-        paper_config = process_config["raw"]["btc_realtime_paper"]
+        process_config = process
+        paper_config = process_config["btc_realtime_paper"]
         strategy = paper_config["strategy"]
         paper = paper_config["paper"]
     except (KeyError, TypeError) as error:
         raise RuntimeError("champion paper process has an invalid structure") from error
     if (
         process.get("process_key") != "btc-5m-directional-model-paper-boundary-alignment"
-        or process_config.get("execution", {}).get("mode") != "paper"
-        or process_config.get("execution", {}).get("live_capital") is not False
+        or process_config.get("mode") != "paper"
+        or process_config.get("live_capital") is not False
         or Decimal(str(strategy.get("target_size"))) != Decimal(5)
         or int(strategy.get("min_seconds_after_open", -1)) != DECISION_SECONDS[0]
         or int(strategy.get("min_seconds_before_close", -1)) != 60

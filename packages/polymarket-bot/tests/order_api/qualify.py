@@ -32,6 +32,10 @@ def ledger_amount(value):
     return value.quantize(Decimal('0.0000000001'), rounding=ROUND_HALF_UP)
 
 
+def process_configuration(process):
+    return {key: process[key] for key in ('playbook_version', 'actions', 'order_policies', 'sources') if key in process}
+
+
 class Qualification:
     def __init__(self, directory, order_type="fak", mode="both"):
         self.directory = Path(directory)
@@ -57,7 +61,7 @@ class Qualification:
         if pid != self.state['processes']['paper']['process_id']:
             raise RuntimeError('Only the owned paper process may execute')
         code, actual = self.request('GET', '/admin/trading-processes/' + pid)
-        if code != 200 or actual['process']['config']['execution']['mode'] != 'paper':
+        if code != 200 or actual['process']['actions'][0]['mode'] != 'paper':
             raise RuntimeError('Current process must be paper before execution')
 
     def check(self, name, condition, detail=None):
@@ -150,23 +154,22 @@ class Qualification:
             if code != 200:
                 raise RuntimeError('Reusable ' + mode + ' process is unavailable; no replacement created')
             process = response['process']
-            execution = process['config']['execution']
-            control = process['config']['raw']['btc_realtime_paper']
+            execution = process['actions'][0]
+            control = process['actions'][0]['params']
             if (process['process_id'] != pid or process['enabled'] or process['status'] != 'stopped'
-                    or execution['mode'] != mode or execution.get('rail') != {'name': 'polymarket', 'version': 1}):
+                    or execution['mode'] != mode or execution.get('rail') != 'polymarket'):
                 raise RuntimeError('Reusable ' + mode + ' process must be stopped with its expected rail contract')
             existing[mode] = process
         for mode, process in existing.items():
-            config = copy.deepcopy(process['config'])
-            for policy in config['execution']['order_policies']:
+            config = copy.deepcopy(process_configuration(process))
+            for policy in config['order_policies']:
                 if policy['name'] == 'order_execution_policy':
                     policy['params']['member_order_types']['conservative'] = self.state['order_type']
-            control = config['raw']['btc_realtime_paper']
-            control.get('runtime', {}).pop('trigger', None)
+            control = config['actions'][0]['params']
             run_key = 'order-api-' + mode + '-' + self.state['run']
             control['next_experiment_key'] = run_key
             control['preregistration_sha256'] = hashlib.sha256(run_key.encode()).hexdigest()
-            code, response = self.request('PATCH', '/admin/trading-processes/' + process['process_id'], {'config': config})
+            code, response = self.request('PATCH', '/admin/trading-processes/' + process['process_id'], config)
             self.check(mode + ' reused new-contract definition', code == 200, response if code != 200 else None)
             self.check(mode + ' stable process identity', response['process']['process_id'] == process['process_id'])
             self.state['processes'][mode] = response['process']
@@ -179,10 +182,10 @@ class Qualification:
             code, response = self.request('GET', '/admin/trading-processes/' + pid)
             if code != 200 or response['process']['process_id'] != pid:
                 raise RuntimeError('Retained ' + mode + ' definition unavailable')
-            execution = response['process']['config']['execution']
-            if execution['mode'] != mode or execution['rail'] != {'name': 'polymarket', 'version': 1}:
+            execution = response['process']['actions'][0]
+            if execution['mode'] != mode or execution['rail'] != 'polymarket':
                 raise RuntimeError('Retained process contract changed')
-            policies = execution['order_policies']
+            policies = response['process']['order_policies']
             if len({p['name'] for p in policies}) != len(policies):
                 raise RuntimeError('Duplicate policy identity')
             definitions[mode] = {p['name']: p for p in policies}
@@ -224,23 +227,23 @@ class Qualification:
             '-n', 'capitonic', 'get', 'pods', '-l', 'app.kubernetes.io/name=polymarket-bot', '-o', 'json']))
         self.reuse_processes()
         if 'live' in self.state['processes']:
-            p, l = [self.state['processes'][m]['config']['execution']['order_policies'] for m in ('paper','live')]
+            p, l = [self.state['processes'][m]['order_policies'] for m in ('paper','live')]
             self.check('matching shared policy definitions', [x for x in p if x['name'] != 'paper_execution_policy'] == l)
         paper = self.state['processes']['paper']
         variants = {}
         for name in ('duplicate', 'unknown', 'mixed', 'unsupported'):
-            config = copy.deepcopy(paper['config'])
-            policies = config['execution']['order_policies']
+            config = copy.deepcopy(process_configuration(paper))
+            policies = config['order_policies']
             if name == 'duplicate': policies.append(copy.deepcopy(policies[0]))
             elif name == 'unknown': policies[0]['name'] = 'unsupported_policy'
-            elif name == 'mixed': config['execution']['max_open_positions'] = 2
-            else: config['execution']['rail']['version'] = 999
+            elif name == 'mixed': config['max_open_positions'] = 2
+            else: config['actions'][0]['rail'] = 'unsupported'
             variants[name] = config
         for name, config in variants.items():
-            code, response = self.request('PATCH', '/admin/trading-processes/' + paper['process_id'], {'config': config})
+            code, response = self.request('PATCH', '/admin/trading-processes/' + paper['process_id'], config)
             self.check('reject ' + name + ' configuration', code == 400, response if code != 400 else None)
         code, response = self.request('GET', '/admin/trading-processes/' + paper['process_id'])
-        self.check('invalid updates preserve definition', code == 200 and response['process']['config'] == paper['config'])
+        self.check('invalid updates preserve definition', code == 200 and process_configuration(response['process']) == process_configuration(paper))
         self.start()
 
     def start(self):
@@ -386,7 +389,7 @@ class Qualification:
                     self.check('paper fills and order retain canonical ownership',request['process_id'] == pid and all(x['source'] == 'paper' and x['raw_payload']['process_id'] == pid for x in fills))
                     debit = sum(Decimal(x['price'])*Decimal(x['size'])+Decimal(x['fee']) for x in fills)
                     self.check('paper debit equals notional plus actual fees',Decimal(snapshot['fill_debit']) - Decimal(self.state['paper_before']['fill_debit']) == debit)
-                    seed = next(x['params']['starting_collateral_usd'] for x in self.state['processes']['paper']['config']['execution']['order_policies'] if x['name']=='paper_execution_policy')
+                    seed = next(x['params']['starting_collateral_usd'] for x in self.state['processes']['paper']['order_policies'] if x['name']=='paper_execution_policy')
                     self.state['paper_available_collateral'] = str(Decimal(seed)-Decimal(snapshot['fill_debit'])+Decimal(snapshot['settlement_credit']))
                     self.check('paper authorized budget respected',sum(Decimal(x['price'])*Decimal(x['size']) for x in fills) <= Decimal(request['price'])*Decimal(request['size'])+Decimal('0.000001'))
                     self.check('paper price respects authorized limit',all(Decimal(x['price']) <= Decimal(request['price']) for x in fills))
@@ -445,10 +448,10 @@ class Qualification:
         self.check('settled economics remain unchanged before next order',
                    snapshot == self.state['settlement_snapshot'])
         code, current = self.request('GET', '/admin/trading-processes/' + pid)
-        expected = self.state['processes']['paper']['config']
+        expected = process_configuration(self.state['processes']['paper'])
         self.check('same paper configuration and active metrics owner', code == 200
                    and current['process']['enabled'] and current['process']['status'] == 'running'
-                   and current['process']['config'] == expected)
+                   and process_configuration(current['process']) == expected)
         keys = ('executed', 'pending_execute', 'paper_after', 'verified_settlement', 'settlement_snapshot')
         self.state.setdefault('completed_orders', []).append({key: self.state[key] for key in keys})
         for key in keys:
@@ -506,7 +509,7 @@ class Qualification:
             if p['enabled']:
                 actual = by_id.get(p['process_id'])
                 self.check('preserved existing process ' + p['process_id'], actual is not None and
-                           actual['config'] == p['config'] and actual['enabled'] and actual['status'] == 'running')
+                           process_configuration(actual) == process_configuration(p) and actual['enabled'] and actual['status'] == 'running')
         self.save()
 
 
