@@ -622,6 +622,23 @@ impl Store {
         enabled: bool,
         error: Option<&str>,
     ) -> Result<Option<TradingProcess>> {
+        self.update_trading_process_status_record(process_id, status, enabled, error)
+            .await?
+            .map(|record| {
+                let config = serde_json::from_value(record.config.clone())
+                    .context("failed to deserialize trading process config")?;
+                Ok(record.with_config(config))
+            })
+            .transpose()
+    }
+
+    pub async fn update_trading_process_status_record(
+        &self,
+        process_id: Uuid,
+        status: &str,
+        enabled: bool,
+        error: Option<&str>,
+    ) -> Result<Option<TradingProcess<serde_json::Value>>> {
         let row = sqlx::query_as::<_, TradingProcessRow>(
             r#"
             UPDATE polymarket.trading_processes

@@ -736,9 +736,12 @@ impl BtcProcessManager {
         reason: &str,
     ) -> Result<TradingProcess, HttpError> {
         if target != "running" {
-            return self
+            let process = self
                 .stop_process_locked(process_id, None, reason, false, target)
-                .await;
+                .await?;
+            let config = serde_json::from_value(process.config.clone())
+                .map_err(|error| HttpError::internal(error.to_string()))?;
+            return Ok(process.with_config(config));
         }
         if self.shutting_down.load(Ordering::Acquire) {
             return Err(HttpError::conflict(
@@ -1370,8 +1373,8 @@ impl BtcProcessManager {
         &self,
         process_id: uuid::Uuid,
         reason: &str,
-    ) -> Result<TradingProcess, HttpError> {
-        self.transition_process(process_id, "completed", reason)
+    ) -> Result<TradingProcess<serde_json::Value>, HttpError> {
+        self.stop_process_for_generation(process_id, None, reason, false, "completed")
             .await
     }
 
@@ -1382,7 +1385,7 @@ impl BtcProcessManager {
         reason: &str,
         runtime_failed: bool,
         successful_terminal_status: &str,
-    ) -> Result<TradingProcess, HttpError> {
+    ) -> Result<TradingProcess<serde_json::Value>, HttpError> {
         if !matches!(successful_terminal_status, "stopped" | "completed") {
             return Err(HttpError::internal(
                 "unsupported successful BTC terminal status",
@@ -1415,18 +1418,13 @@ impl BtcProcessManager {
         reason: &str,
         runtime_failed: bool,
         successful_terminal_status: &str,
-    ) -> Result<TradingProcess, HttpError> {
+    ) -> Result<TradingProcess<serde_json::Value>, HttpError> {
         let mut process = self
             .store
-            .get_trading_process(process_id)
+            .get_trading_process_record(process_id)
             .await
             .map_err(|error| HttpError::internal(error.to_string()))?
             .ok_or_else(|| HttpError::not_found("trading process not found"))?;
-        if !Self::is_managed_process(&process) {
-            return Err(HttpError::bad_request(
-                "process is not a managed BTC realtime execution process",
-            ));
-        }
 
         let pending = { self.terminal_pending.lock().await.get(&process_id).cloned() };
         if let Some(pending) = pending {
@@ -1453,7 +1451,7 @@ impl BtcProcessManager {
             )? {
                 let updated = self
                     .store
-                    .update_trading_process_status(
+                    .update_trading_process_status_record(
                         process_id,
                         successful_terminal_status,
                         false,
@@ -1482,7 +1480,7 @@ impl BtcProcessManager {
             return Ok(process);
         }
         self.store
-            .update_trading_process_status(process_id, "stopping", true, None)
+            .update_trading_process_status_record(process_id, "stopping", true, None)
             .await
             .map_err(|error| HttpError::internal(error.to_string()))?
             .ok_or_else(|| HttpError::not_found("trading process not found"))?;
@@ -1586,7 +1584,7 @@ impl BtcProcessManager {
     pub(super) async fn finalize_pending_locked(
         &self,
         pending: PendingBtcTerminal,
-    ) -> Result<TradingProcess, HttpError> {
+    ) -> Result<TradingProcess<serde_json::Value>, HttpError> {
         if let Err(terminal_error) = mark_btc_process_terminal(
             &self.pool,
             pending.process_id,
@@ -1642,7 +1640,7 @@ impl BtcProcessManager {
         )
         .await;
         self.store
-            .get_trading_process(pending.process_id)
+            .get_trading_process_record(pending.process_id)
             .await
             .map_err(|error| HttpError::internal(error.to_string()))?
             .ok_or_else(|| HttpError::not_found("trading process not found"))

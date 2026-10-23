@@ -119,8 +119,8 @@ pub(super) async fn mark_btc_process_terminal(
 
 /// An operator may move an inactive definition between terminal states without
 /// manufacturing another run. Late runtime callbacks must not rewrite it.
-pub(super) fn should_transition_inactive_btc_process(
-    process: &TradingProcess,
+pub(super) fn should_transition_inactive_btc_process<C>(
+    process: &TradingProcess<C>,
     expected_run_id: Option<uuid::Uuid>,
     runtime_failed: bool,
     target: &str,

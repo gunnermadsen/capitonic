@@ -231,7 +231,7 @@ pub trait ControlApi: Send + Sync + 'static {
     async fn complete_trading_process(
         &self,
         _process_id: Uuid,
-    ) -> Result<TradingProcessResponse, HttpError> {
+    ) -> Result<TradingProcessResponse<serde_json::Value>, HttpError> {
         Err(HttpError::not_implemented(
             "trading processes are not wired",
         ))
@@ -567,7 +567,7 @@ async fn stop_trading_process(
 async fn complete_trading_process(
     State(state): State<HttpState>,
     Path(process_id): Path<Uuid>,
-) -> Result<Json<TradingProcessResponse>, HttpError> {
+) -> Result<Json<TradingProcessResponse<serde_json::Value>>, HttpError> {
     state
         .control
         .complete_trading_process(process_id)

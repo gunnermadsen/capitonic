@@ -614,21 +614,11 @@ impl ControlApi for RuntimeControl {
     async fn complete_trading_process(
         &self,
         process_id: uuid::Uuid,
-    ) -> Result<TradingProcessResponse, HttpError> {
-        let current = self
-            .store
-            .get_trading_process(process_id)
-            .await
-            .map_err(|error| HttpError::internal(error.to_string()))?
-            .ok_or_else(|| HttpError::not_found("trading process not found"))?;
-        if !BtcProcessManager::is_managed_process(&current) {
-            return Err(HttpError::bad_request(
-                "only managed BTC realtime execution processes can be completed",
-            ));
-        }
-        let manager = self.btc_manager.as_ref().ok_or_else(|| {
-            HttpError::bad_request("BTC realtime capability is disabled for this deployment")
-        })?;
+    ) -> Result<TradingProcessResponse<serde_json::Value>, HttpError> {
+        let manager = self
+            .btc_manager
+            .as_ref()
+            .ok_or_else(|| HttpError::internal("process lifecycle manager is unavailable"))?;
         let process = manager.complete_process(process_id, "api_complete").await?;
         Ok(TradingProcessResponse { process })
     }

@@ -82,6 +82,50 @@ mod lifecycle_tests {
     }
 
     #[test]
+    fn completion_accepts_arbitrary_configuration_and_preserves_generation_isolation() {
+        for config in [
+            serde_json::json!({"raw": null}),
+            serde_json::json!({"station_id": "KLGA", "order_submission_enabled": false}),
+            serde_json::json!({"market_selector": {"interval": "1h"}}),
+        ] {
+            let mut process = eligible_btc_process().with_config(config.clone());
+            process.process_type = "offline_model_benchmark".into();
+            process.process_scope = "arbitrary_market".into();
+            process.status = "created".into();
+            process.enabled = false;
+            let process_id = process.process_id;
+            let process_key = process.process_key.clone();
+            assert!(
+                should_transition_inactive_btc_process(&process, None, false, "completed").unwrap()
+            );
+            assert!(!should_transition_inactive_btc_process(
+                &process,
+                Some(uuid::Uuid::new_v4()),
+                false,
+                "completed"
+            )
+            .unwrap());
+            assert!(
+                !should_transition_inactive_btc_process(&process, None, true, "completed").unwrap()
+            );
+            let response = control_http::TradingProcessResponse { process };
+            let serialized = serde_json::to_value(&response).unwrap();
+            for (key, value) in config.as_object().unwrap() {
+                assert_eq!(&serialized["process"][key], value);
+            }
+            assert_eq!(response.process.process_id, process_id);
+            assert_eq!(response.process.process_key, process_key);
+            assert_eq!(response.process.config, config);
+            let mut process = response.process;
+            process.status = "completed".into();
+            assert!(
+                !should_transition_inactive_btc_process(&process, None, false, "completed")
+                    .unwrap()
+            );
+        }
+    }
+
+    #[test]
     fn inactive_operator_transitions_preserve_idempotency_and_stale_run_isolation() {
         for current in [
             "created",

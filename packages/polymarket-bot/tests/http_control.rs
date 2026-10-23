@@ -545,18 +545,19 @@ impl ControlApi for FakeControlApi {
     async fn complete_trading_process(
         &self,
         process_id: Uuid,
-    ) -> Result<http::TradingProcessResponse, HttpError> {
+    ) -> Result<http::TradingProcessResponse<Value>, HttpError> {
         Ok(http::TradingProcessResponse {
             process: test_process(
                 process_id,
-                "btc-paper-canary".to_string(),
-                "btc_5m".to_string(),
-                "realtime_paper".to_string(),
-                Some("btc-paper-canary".to_string()),
+                "arbitrary-market-process".to_string(),
+                "offline_model_benchmark".to_string(),
+                "arbitrary_market".to_string(),
+                Some("arbitrary-market-process".to_string()),
                 "completed",
                 false,
                 TradingProcessConfig::default(),
-            ),
+            )
+            .with_config(serde_json::json!({"raw": null, "order_submission_enabled": false})),
         })
     }
 
@@ -1448,6 +1449,21 @@ async fn authenticated_admin_can_manage_trading_processes() {
     let complete_json: Value = serde_json::from_slice(&complete_body).unwrap();
     assert_eq!(complete_json["process"]["status"], "completed");
     assert_eq!(complete_json["process"]["enabled"], false);
+    assert_eq!(
+        complete_json["process"]["process_id"],
+        process_id.to_string()
+    );
+    assert_eq!(
+        complete_json["process"]["process_type"],
+        "offline_model_benchmark"
+    );
+    assert_eq!(
+        complete_json["process"]["process_key"],
+        "arbitrary-market-process"
+    );
+    assert!(complete_json["process"].get("raw").unwrap().is_null());
+    assert_eq!(complete_json["process"]["order_submission_enabled"], false);
+    assert!(complete_json["process"].get("actions").is_none());
 }
 
 async fn patch_process_config(
