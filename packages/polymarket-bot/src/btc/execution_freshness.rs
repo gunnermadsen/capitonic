@@ -60,7 +60,7 @@ pub struct ExecutionFreshnessMetrics {
     unresolved_orders: AtomicI64,
     process_id: Uuid,
     mode: &'static str,
-    limit_ms: i64,
+    limit_ms: AtomicI64,
     attempts: AtomicU64,
     checks: AtomicU64,
     book_rejections: AtomicU64,
@@ -76,6 +76,10 @@ pub struct ExecutionFreshnessMetrics {
 }
 
 impl ExecutionFreshnessMetrics {
+    pub(crate) fn update_book_age_limit(&self, limit_ms: i64) {
+        self.limit_ms.store(limit_ms, Relaxed);
+    }
+
     pub fn new(process_id: Uuid, mode: &'static str, limit_ms: i64) -> Arc<Self> {
         let metrics = Arc::new(Self {
             order_latency: Default::default(),
@@ -85,7 +89,7 @@ impl ExecutionFreshnessMetrics {
             unresolved_orders: AtomicI64::new(-1),
             process_id,
             mode,
-            limit_ms,
+            limit_ms: AtomicI64::new(limit_ms),
             attempts: AtomicU64::new(0),
             checks: AtomicU64::new(0),
             book_rejections: AtomicU64::new(0),
@@ -137,14 +141,14 @@ impl ExecutionFreshnessMetrics {
         }
         self.executions.fetch_add(1, Relaxed);
         self.last_execution_at.store(at.timestamp(), Relaxed);
-        if !book.is_some_and(|b| b.valid(at, self.limit_ms)) {
+        if !book.is_some_and(|b| b.valid(at, self.limit_ms.load(Relaxed))) {
             self.violations.fetch_add(1, Relaxed);
             self.last_violation_at.store(at.timestamp(), Relaxed);
             if book.is_none() {
                 self.missing.fetch_add(1, Relaxed);
             }
             tracing::error!(process_id=%self.process_id, execution_mode=self.mode,
-                client_order_id=%order_id, max_book_age_ms=self.limit_ms,
+                client_order_id=%order_id, max_book_age_ms=self.limit_ms.load(Relaxed),
                 ages_ms=?book.map(|b| b.ages(at)),
                 "execution freshness invariant violated");
         }
@@ -170,7 +174,7 @@ impl ExecutionFreshnessMetrics {
         );
         for (name, value) in [
             ("monitor_ready", 1),
-            ("book_age_limit_milliseconds", self.limit_ms),
+            ("book_age_limit_milliseconds", self.limit_ms.load(Relaxed)),
             ("attempts_total", self.attempts.load(Relaxed) as i64),
             ("book_checks_total", self.checks.load(Relaxed) as i64),
             (

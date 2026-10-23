@@ -1,14 +1,14 @@
 environment: production
-image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/polymarket-bot:v3.4.7-rc.0
+image: 192200846560.dkr.ecr.eu-west-1.amazonaws.com/capitonic/polymarket-bot:v3.4.8-rc.0
 imagePullPolicy: IfNotPresent
 imagePullSecrets:
   - name: ecr-registry
 openaiAgent:
   enabled: true
 release:
-  version: v3.4.7-rc.0
-  digest: sha256:a503b69edbe69988b58f61c5d7bd065ad6c99f58f7e4ec28806118ded0bae9fe
-  sourceRevision: 40320ee3322a14c8e6b72a72171f95f509137917
+  version: v3.4.8-rc.0
+  digest: sha256:b818ac420028ee808d887ff6b08755d3a4e672c1bd70c244df3959bb4d953522
+  sourceRevision: 1ab66ba46db6af386ab69d65721ceff536975345
 apiIngress:
   enabled: true
   host: api.capitonic.com

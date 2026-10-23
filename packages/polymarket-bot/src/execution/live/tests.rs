@@ -1881,4 +1881,52 @@ mod tests {
         config.clob_api_base_url.clear();
         assert!(config.validate_for_live().is_err());
     }
+    #[tokio::test]
+    async fn in_place_controls_reuse_bound_venue_and_submission_lock() {
+        use crate::execution::polymarket::{
+            configuration,
+            oms::{Oms, Ownership},
+            settings::{ProcessSettings, SettingsSnapshot},
+        };
+        let mut config: crate::models::TradingProcessConfig = serde_json::from_str(include_str!(
+            "../../../../../docs/polymarket-execution-rail/examples/live.json"
+        ))
+        .unwrap();
+        let definition = configuration::compile(&config).unwrap();
+        let owner = Ownership {
+            process_id: Uuid::new_v4(),
+            run_id: Uuid::new_v4(),
+        };
+        let venue = LiveVenue::new_for_test(live_config())
+            .unwrap()
+            .bind_process(
+                owner.process_id,
+                Utc::now(),
+                &definition.effective_execution(),
+            )
+            .unwrap();
+        let settings = Arc::new(ProcessSettings::new(Arc::new(
+            Oms::new_for_run(definition.clone(), owner.clone(), definition.config_sha256).unwrap(),
+        )));
+        venue.attach_process_settings(settings.clone()).unwrap();
+        assert!(venue.order_submission_enabled());
+        let guard = venue.lock_configuration_update().await;
+        assert!(venue.submit_guard.try_lock().is_err());
+        for enabled in [false, true] {
+            config.actions[0].execute_signals = enabled;
+            config.actions[0].live_capital = enabled;
+            let definition = configuration::compile(&config).unwrap();
+            settings.publish(SettingsSnapshot {
+                oms: Arc::new(
+                    Oms::new_for_run(definition.clone(), owner.clone(), definition.config_sha256)
+                        .unwrap(),
+                ),
+                configuration: None,
+            });
+            assert_eq!(venue.order_submission_enabled(), enabled);
+            assert_eq!(venue.bound_process_id(), Some(owner.process_id));
+        }
+        drop(guard);
+        assert!(venue.submit_guard.try_lock().is_ok());
+    }
 }

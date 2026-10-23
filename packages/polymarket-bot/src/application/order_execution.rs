@@ -33,13 +33,18 @@ struct PolymarketQualifiedExecution {
 impl QualifiedExecution for PolymarketQualifiedExecution {
     async fn execute(
         &self,
+        config_hash: &str,
         candidate_id: Uuid,
         member: String,
         snapshot: BtcFeatureSnapshot,
         decision: BtcDecision,
     ) -> Result<QualifiedExecutionOutcome> {
         let candidate = Candidate::qualified(candidate_id, member, snapshot, decision)?;
-        match self.service.execute(candidate).await {
+        match self
+            .service
+            .execute_for_config(config_hash, candidate)
+            .await
+        {
             Ok(receipt) => Ok(QualifiedExecutionOutcome::Receipt(
                 QualifiedExecutionReceipt {
                     order: receipt.order,
@@ -83,9 +88,6 @@ pub(super) fn prepare(
     }
     let definition = configuration::compile(&process.config)
         .map_err(|_| HttpError::bad_request("invalid order configuration"))?;
-    if !definition.execution.execute_signals {
-        return Err(HttpError::conflict("order execution is not authorized"));
-    }
     let p = &definition.execution.policies;
     let strategy = definition
         .runtime_strategy()
@@ -144,19 +146,7 @@ pub(super) fn prepare(
     })
 }
 pub(super) fn effective(definition: &CompiledDefinition) -> EffectiveProcessExecutionConfig {
-    let e = &definition.execution;
-    let p = &e.policies;
-    EffectiveProcessExecutionConfig {
-        mode: e.mode.as_str().into(),
-        execute_signals: e.execute_signals,
-        live_capital: e.live_capital,
-        account_ref: e.account_ref.clone(),
-        max_open_notional_usd: p.exposure.max_open_notional_usd,
-        max_open_positions: p.exposure.max_open_positions,
-        max_daily_loss_usd: p.loss_limit.max_daily_loss_usd,
-        require_exit_book: Some(p.liquidity.require_exit_book),
-        ..Default::default()
-    }
+    definition.effective_execution()
 }
 impl BtcProcessManager {
     #[allow(clippy::too_many_arguments)]
@@ -255,6 +245,7 @@ impl BtcProcessManager {
                 },
             )?
             .with_primary_persistence_state(state.clone())
+            .with_execution_settings(service.settings())
             .with_qualified_execution(Arc::new(PolymarketQualifiedExecution {
                 service: service.clone(),
             })),
@@ -392,6 +383,8 @@ impl OrderApplication for BtcProcessManager {
             .map_err(|error| dependency(id, error))
     }
     async fn execute(&self, id: Uuid, request: ExecuteRequest) -> Result<Receipt, HttpError> {
+        // Do not let an API request retain obsolete execution settings across a reload.
+        let _transition = self.transition.lock().await;
         let evaluation = EvaluationRequest {
             version: request.version,
             candidate: request.candidate,

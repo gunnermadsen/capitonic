@@ -953,6 +953,13 @@ impl Store {
         metadata: Option<serde_json::Value>,
     ) -> Result<Option<TradingProcess>> {
         let config_value = config.map(serde_json::to_value).transpose()?;
+        let mut tx = self.pool.begin().await?;
+        let previous = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT config FROM polymarket.trading_processes WHERE process_id = $1 FOR UPDATE",
+        )
+        .bind(process_id)
+        .fetch_optional(&mut *tx)
+        .await?;
         let row = sqlx::query_as::<_, TradingProcessRow>(
             r#"
             UPDATE polymarket.trading_processes
@@ -969,12 +976,27 @@ impl Store {
         )
         .bind(process_id)
         .bind(name)
-        .bind(config_value)
+        .bind(&config_value)
         .bind(metadata)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .context("failed to update BTC realtime-paper process definition")?;
-        row.map(trading_process_from_row).transpose()
+        if let (Some(previous), Some(current), Some(_)) = (previous, config_value, &row) {
+            if previous != current {
+                sqlx::query(
+                    "INSERT INTO polymarket.trading_process_events \
+                     (event_id, process_id, timestamp_utc, level, event_type, message, metadata, created_at) \
+                     VALUES (gen_random_uuid(), $1, now(), 'info', 'btc_process_configuration_updated', \
+                     'Process configuration updated without replacing run history', $2, now())",
+                )
+                .bind(process_id)
+                .bind(serde_json::json!({"previous_config": previous, "current_config": current}))
+                .execute(&mut *tx).await?;
+            }
+        }
+        let process = row.map(trading_process_from_row).transpose()?;
+        tx.commit().await?;
+        Ok(process)
     }
 
     pub async fn insert_order(&self, order: &OrderRecord) -> Result<()> {

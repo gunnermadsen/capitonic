@@ -987,6 +987,11 @@ pub struct BtcPlaybookRuntimeHandle {
 }
 
 impl BtcPlaybookRuntimeHandle {
+    pub fn update_evidence_limits(&mut self, book: StdDuration, reference: StdDuration) {
+        self.config.max_book_age = book;
+        self.config.max_reference_age = reference;
+    }
+
     pub fn start(
         config: BtcRuntimeConfig,
         strategy: Arc<dyn BtcStrategyRunner>,

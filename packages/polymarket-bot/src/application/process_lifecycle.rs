@@ -495,14 +495,26 @@ impl BtcProcessManager {
                 .await
                 .map_err(|error| HttpError::internal(error.to_string()))?
                 .ok_or_else(|| HttpError::conflict("active live run manifest is missing"))?;
-            if manifest.config_hash != active_config_hash
-                || resume_process_contract_projection(
-                    serde_json::to_value(&prepared.frozen_process_config)
-                        .map_err(|error| HttpError::internal(error.to_string()))?,
-                ) != resume_process_contract_projection(manifest.frozen_process_config)
-            {
+            self.repository
+                .verify_run_manifest(
+                    process_id,
+                    active_run_id,
+                    &active_run_key,
+                    &manifest.config_hash,
+                    &manifest.frozen_process_config,
+                )
+                .await
+                .map_err(|error| HttpError::conflict(error.to_string()))?;
+            let legacy_selector_match =
+                !polymarket_bot::execution::polymarket::configuration::is_selected(&process.config)
+                    && manifest.config_hash == active_config_hash
+                    && resume_process_contract_projection(
+                        serde_json::to_value(&prepared.frozen_process_config)
+                            .map_err(|error| HttpError::internal(error.to_string()))?,
+                    ) == resume_process_contract_projection(manifest.frozen_process_config);
+            if prepared.config_hash != active_config_hash && !legacy_selector_match {
                 return Err(HttpError::conflict(
-                    "live process definition or manifest drifted from the active runtime",
+                    "live process definition drifted from the active runtime",
                 ));
             }
             let active_still_matches = self
@@ -581,6 +593,31 @@ impl BtcProcessManager {
         Ok(())
     }
 
+    // The caller holds the lifecycle lock. Durable enabled intent stays unchanged,
+    // so the existing recovery loop can reattach after a failed reload.
+    pub(super) async fn detach_for_configuration_update(
+        &self,
+        process_id: uuid::Uuid,
+    ) -> Result<(), HttpError> {
+        let active = self.active_playbooks.lock().await.remove(&process_id);
+        if let Some(active) = active {
+            let quiesce_failure = Self::quiesce_live_venue(
+                active.live_venue.as_ref(),
+                "process_configuration_update",
+            )
+            .await;
+            let shutdown =
+                tokio::time::timeout(BTC_RUNTIME_SHUTDOWN_TIMEOUT, active.runtime.shutdown()).await;
+            if let Some(error) = quiesce_failure {
+                return Err(HttpError::unavailable(error));
+            }
+            shutdown
+                .map_err(|_| HttpError::unavailable("process runtime drain timed out"))?
+                .map_err(|error| HttpError::unavailable(error.to_string()))?;
+        }
+        Ok(())
+    }
+
     pub(super) async fn quiesce_live_venue(
         venue: Option<&Arc<LiveVenue>>,
         reason: &str,
@@ -643,9 +680,14 @@ impl BtcProcessManager {
             .map_err(|error| HttpError::internal(error.to_string()))?
             .ok_or_else(|| HttpError::not_found("trading process not found"))?;
         let prepared = self.prepare_start_definition(&process)?;
-        preflight_btc_run_identity(&self.repository, &prepared.run_key, prepared.run_id)
-            .await
-            .map_err(|error| HttpError::conflict(error.to_string()))?;
+        preflight_btc_run_identity(
+            &self.repository,
+            process_id,
+            &prepared.run_key,
+            prepared.run_id,
+        )
+        .await
+        .map_err(|error| HttpError::conflict(error.to_string()))?;
         Ok(TradingProcessStartPreviewResponse {
             process_id,
             run_id: prepared.run_id,
@@ -874,10 +916,10 @@ impl BtcProcessManager {
             .ok_or_else(|| {
                 HttpError::conflict("durable BTC run disappeared before runtime reattachment")
             })?;
-        let config_hash = manifest.config_hash;
-        let frozen_process_config_value = manifest.frozen_process_config;
-        // Reattach the existing run without making frozen configuration equality a restart gate.
-        // Preserve its manifest and hash; resume events record the current definition separately.
+        // Keep the original manifest immutable; execute the current persisted definition.
+        let original_config_hash = manifest.config_hash;
+        let frozen_process_config_value = serde_json::to_value(&prepared.frozen_process_config)
+            .map_err(|error| HttpError::internal(error.to_string()))?;
         let PreparedBtcStartDefinition {
             run_id,
             run_key,
@@ -893,7 +935,7 @@ impl BtcProcessManager {
             execution_mode,
             execution,
             frozen_process_config: _,
-            config_hash: current_config_hash,
+            config_hash,
         } = prepared;
         self.record_event(
             process_id,
@@ -905,7 +947,7 @@ impl BtcProcessManager {
                 "run_key": &run_key,
                 "preregistration_sha256": &preregistration_sha256,
                 "config_hash": &config_hash,
-                "current_definition_config_hash": &current_config_hash,
+                "original_config_hash": &original_config_hash,
                 "compiled_source_identity": COMPILED_SOURCE_IDENTITY,
             }),
         )
@@ -1028,7 +1070,7 @@ impl BtcProcessManager {
                 "run_id": run_id,
                 "run_key": &run_key,
                 "config_hash": &config_hash,
-                "current_definition_config_hash": &current_config_hash,
+                "original_config_hash": &original_config_hash,
                 "compiled_source_identity": COMPILED_SOURCE_IDENTITY,
             }),
         )
@@ -1071,9 +1113,17 @@ impl BtcProcessManager {
             frozen_process_config,
             config_hash,
         } = self.prepare_start_definition(&process)?;
-        preflight_btc_run_identity(&self.repository, &run_key, run_id)
+        let resume = preflight_btc_run_identity(&self.repository, process_id, &run_key, run_id)
             .await
             .map_err(|error| HttpError::conflict(error.to_string()))?;
+        if resume {
+            self.store
+                .update_trading_process_status(process_id, "starting", true, None)
+                .await
+                .map_err(|error| HttpError::internal(error.to_string()))?
+                .ok_or_else(|| HttpError::not_found("process not found"))?;
+            return self.resume_durable_process_locked(process_id).await;
+        }
         let frozen_process_config_value = serde_json::to_value(&frozen_process_config)
             .map_err(|error| HttpError::internal(error.to_string()))?;
 

@@ -5,6 +5,18 @@ use crate::execution::polymarket::oms::Origin;
 use crate::store::PaperCommit;
 
 impl PaperVenue {
+    pub(crate) async fn lock_configuration_update(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.submit_guard.clone().lock_owned().await
+    }
+    pub(crate) fn update_order_policies(
+        &mut self,
+        policies: &crate::execution::polymarket::policies::OrderPolicies,
+    ) {
+        self.config.max_book_age =
+            chrono::Duration::milliseconds(policies.evidence.max_book_age_ms);
+        self.max_depth_participation = policies.sizing.max_depth_participation;
+    }
+
     pub(crate) fn with_order_metrics(mut self, metrics: Arc<ExecutionFreshnessMetrics>) -> Self {
         self.freshness_metrics = Some(metrics);
         self
@@ -51,6 +63,7 @@ impl PaperVenue {
         if let Some(timer) = timer {
             timer.finish(LatencyOutcome::Completed);
         }
+        let _submit_guard = self.submit_guard.lock().await;
         let arrival_at = Utc::now();
         let order_id = format!("paper-{}", request.client_order_id);
         let execution = match guard.validate_pre_post(&request).await? {

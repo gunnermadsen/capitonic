@@ -420,14 +420,15 @@ struct EntryAdmissionEvaluation {
     evidence: serde_json::Value,
 }
 
+#[derive(Clone)]
 struct RouterMemberRuntime {
-    agent: Mutex<super::unified_model_runtime::agent::AgentSession>,
+    agent: Arc<Mutex<super::unified_model_runtime::agent::AgentSession>>,
     member_id: String,
     entry_order_type: OrderType,
     strategy: BtcStrategyConfig,
     max_feature_age_ms: Option<i64>,
-    runtime: StdMutex<DirectionalModelProcessRuntime>,
-    session: StdMutex<Option<Box<dyn super::unified_model_runtime::adapters::FeatureSession>>>,
+    runtime: Arc<StdMutex<DirectionalModelProcessRuntime>>,
+    session: Arc<StdMutex<Option<Box<dyn super::unified_model_runtime::adapters::FeatureSession>>>>,
 }
 impl RouterMemberRuntime {
     fn claim_directional_model_candidate(
@@ -485,6 +486,7 @@ pub enum QualifiedExecutionOutcome {
 pub trait QualifiedExecution: Send + Sync {
     async fn execute(
         &self,
+        config_hash: &str,
         candidate_id: Uuid,
         member: String,
         snapshot: BtcFeatureSnapshot,
@@ -577,30 +579,96 @@ fn bounded_live_intent_gate_reason(reason: &str) -> &'static str {
     }
 }
 
+#[derive(Clone)]
 pub struct BtcProcessRunner {
+    execution_settings: Option<Arc<crate::execution::polymarket::settings::ProcessSettings>>,
+    policy_view: Arc<StdMutex<Option<Arc<BtcProcessRunner>>>>,
     repository: BtcRepository,
     store: Store,
     execution_venue: Arc<dyn ExecutionVenue>,
     execution_lifecycle: Arc<dyn BtcExecutionLifecycle>,
     book_registry: Arc<tokio::sync::RwLock<BookRegistry>>,
     config: BtcProcessConfig,
-    initialized: OnceCell<()>,
-    loss_regime_admission: Mutex<Option<LossRegimeAdmissionRuntime>>,
-    high_water_mark_entry_submission: Mutex<()>,
-    execution_reconcile_started_at: Mutex<Option<Instant>>,
-    execution_reconcile_requested: AtomicBool,
+    initialized: Arc<OnceCell<()>>,
+    loss_regime_admission: Arc<Mutex<Option<LossRegimeAdmissionRuntime>>>,
+    high_water_mark_entry_submission: Arc<Mutex<()>>,
+    execution_reconcile_started_at: Arc<Mutex<Option<Instant>>>,
+    execution_reconcile_requested: Arc<AtomicBool>,
     router_members: Vec<RouterMemberRuntime>,
-    router_observation: Mutex<()>,
+    router_observation: Arc<Mutex<()>>,
     risk_model: Option<Arc<RuntimeRiskModel>>,
     primary_persistence_state: Option<Arc<RwLock<RealtimeState>>>,
     stress_preview_slot: Arc<Semaphore>,
-    stress_preview_tasks: StdMutex<Vec<tokio::task::JoinHandle<()>>>,
+    stress_preview_tasks: Arc<StdMutex<Vec<tokio::task::JoinHandle<()>>>>,
     qualified_execution: Option<Arc<dyn QualifiedExecution>>,
 }
 
 pub type BtcPaperProcessRunner = BtcProcessRunner;
 
 impl BtcProcessRunner {
+    pub fn with_execution_settings(
+        mut self,
+        settings: Arc<crate::execution::polymarket::settings::ProcessSettings>,
+    ) -> Self {
+        self.execution_settings = Some(settings);
+        self
+    }
+
+    // Rebuild only the immutable policy view when its revision changes. All model sessions,
+    // candidate claims, reconciliation state, and observation serialization remain shared.
+    fn current_policy_view(&self) -> Result<Option<Arc<Self>>> {
+        let Some(settings) = &self.execution_settings else {
+            return Ok(None);
+        };
+        let snapshot = settings.snapshot();
+        let definition = &snapshot.oms.definition;
+        if definition.matches_config_sha256(&self.config.config_hash) {
+            return Ok(None);
+        }
+        let mut cached = self
+            .policy_view
+            .lock()
+            .map_err(|_| anyhow::anyhow!("runner policy lock poisoned"))?;
+        if let Some(view) = cached
+            .as_ref()
+            .filter(|view| definition.matches_config_sha256(&view.config.config_hash))
+        {
+            return Ok(Some(view.clone()));
+        }
+        let mut view = self.clone();
+        view.execution_settings = None;
+        view.policy_view = Arc::new(StdMutex::new(None));
+        view.config.config_hash = definition.config_sha256.clone();
+        view.config.frozen_process_config = snapshot
+            .configuration
+            .clone()
+            .context("missing updated TPC")?;
+        view.config.strategy = definition.strategy();
+        view.config.directional_model_entry_policy = definition
+            .execution
+            .policies
+            .edge
+            .directional_model_entry_policy;
+        let keys = definition.sources.iter().map(|s| s.key.as_str()).collect();
+        let members = definition
+            .control
+            .strategy
+            .decision_strategy
+            .compile_members(&view.config.strategy, &keys)?;
+        ensure!(
+            members.len() == view.router_members.len(),
+            "in-place member identity changed"
+        );
+        for (member, (id, strategy, order_type)) in view.router_members.iter_mut().zip(members) {
+            ensure!(member.member_id == id, "in-place member identity changed");
+            member.strategy = strategy;
+            member.entry_order_type = order_type;
+        }
+        let view = Arc::new(view);
+        *cached = Some(view.clone());
+        Ok(Some(view))
+    }
+
     /// Backward-compatible paper constructor. New process wiring should use
     /// `new_with_execution` so venue choice occurs only at the composition boundary.
     pub fn new(
@@ -671,7 +739,22 @@ impl BtcProcessRunner {
             .frozen_process_config
             .pointer("/actions/0/params")
             .context("router requires frozen process configuration")?;
-        let member_strategies = if matches!(
+        let selected_config = serde_json::from_value::<crate::models::TradingProcessConfig>(
+            config.frozen_process_config.clone(),
+        )
+        .ok();
+        let member_strategies = if let Some(selected) = selected_config
+            .as_ref()
+            .filter(|c| crate::execution::polymarket::configuration::is_selected(c))
+        {
+            let definition = crate::execution::polymarket::configuration::compile(selected)?;
+            let keys = definition.sources.iter().map(|s| s.key.as_str()).collect();
+            definition
+                .control
+                .strategy
+                .decision_strategy
+                .compile_members(&config.strategy, &keys)?
+        } else if matches!(
             control["process_schema_version"]
                 .as_str()
                 .or_else(|| control["schema_version"].as_str()),
@@ -731,18 +814,20 @@ impl BtcProcessRunner {
                     )?)
                 };
                 Ok(RouterMemberRuntime {
-                    agent: Mutex::new(super::unified_model_runtime::agent::AgentSession::default()),
+                    agent: Arc::new(Mutex::new(
+                        super::unified_model_runtime::agent::AgentSession::default(),
+                    )),
                     member_id,
                     entry_order_type,
                     max_feature_age_ms: strategy.effective_max_directional_feature_age_ms()?,
                     strategy,
-                    runtime: StdMutex::new(DirectionalModelProcessRuntime::default()),
-                    session: StdMutex::new(
+                    runtime: Arc::new(StdMutex::new(DirectionalModelProcessRuntime::default())),
+                    session: Arc::new(StdMutex::new(
                         model
                             .as_ref()
                             .and_then(|m| m.unified_adapter())
                             .map(|a| a.new_session()),
-                    ),
+                    )),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -765,28 +850,30 @@ impl BtcProcessRunner {
         }
         umr_telemetry::register_risk(config.process_id, config.risk_strategies.first());
         Ok(Self {
+            execution_settings: None,
+            policy_view: Arc::new(StdMutex::new(None)),
             repository,
             store,
             execution_venue,
             execution_lifecycle,
             book_registry,
-            loss_regime_admission: Mutex::new(
+            loss_regime_admission: Arc::new(Mutex::new(
                 config
                     .entry_admission
                     .as_ref()
                     .map(|_| LossRegimeAdmissionRuntime::default()),
-            ),
-            high_water_mark_entry_submission: Mutex::new(()),
+            )),
+            high_water_mark_entry_submission: Arc::new(Mutex::new(())),
             config,
-            initialized: OnceCell::new(),
-            execution_reconcile_started_at: Mutex::new(None),
-            execution_reconcile_requested: AtomicBool::new(false),
+            initialized: Arc::new(OnceCell::new()),
+            execution_reconcile_started_at: Arc::new(Mutex::new(None)),
+            execution_reconcile_requested: Arc::new(AtomicBool::new(false)),
             router_members,
-            router_observation: Mutex::new(()),
+            router_observation: Arc::new(Mutex::new(())),
             risk_model,
             primary_persistence_state: None,
             stress_preview_slot: Arc::new(Semaphore::new(1)),
-            stress_preview_tasks: StdMutex::new(Vec::new()),
+            stress_preview_tasks: Arc::new(StdMutex::new(Vec::new())),
             qualified_execution: None,
         })
     }
@@ -856,13 +943,22 @@ impl BtcProcessRunner {
         self.initialized
             .get_or_try_init(|| async {
                 if resume {
+                    let manifest = self
+                        .repository
+                        .load_run_manifest(
+                            self.config.process_id,
+                            self.config.run_id,
+                            &self.config.run_key,
+                        )
+                        .await?
+                        .context("existing run manifest is missing")?;
                     self.repository
                         .verify_run_manifest(
                             self.config.process_id,
                             self.config.run_id,
                             &self.config.run_key,
-                            &self.config.config_hash,
-                            &self.config.frozen_process_config,
+                            &manifest.config_hash,
+                            &manifest.frozen_process_config,
                         )
                         .await?;
                     if self.qualified_execution.is_none() {
@@ -2495,6 +2591,7 @@ impl BtcProcessRunner {
             let execution_started = Instant::now();
             match execution
                 .execute(
+                    &self.config.config_hash,
                     candidate_id,
                     member.member_id.clone(),
                     snapshot.clone(),
@@ -3005,10 +3102,10 @@ impl BtcProcessRunner {
 
 impl Drop for BtcProcessRunner {
     fn drop(&mut self) {
-        let tasks = self
-            .stress_preview_tasks
-            .get_mut()
-            .unwrap_or_else(|error| error.into_inner());
+        let Some(tasks) = Arc::get_mut(&mut self.stress_preview_tasks) else {
+            return;
+        };
+        let tasks = tasks.get_mut().unwrap_or_else(|error| error.into_inner());
         for task in tasks.drain(..) {
             task.abort();
         }
@@ -3832,7 +3929,17 @@ impl BtcStrategyRunner for BtcProcessRunner {
                 .map(|m| m.market_id.as_str()),
         );
         let mut guard = umr_telemetry::ObservationGuard::new(self.config.process_id);
-        let result = self.observe(observation).await;
+        let view = self.current_policy_view()?;
+        let runner = view.as_deref().unwrap_or(self);
+        let mut observation = observation;
+        if view.is_some() {
+            observation.readiness = observation.state.readiness(
+                Utc::now(),
+                chrono::Duration::milliseconds(runner.config.strategy.max_book_age_ms),
+                chrono::Duration::milliseconds(runner.config.strategy.max_reference_age_ms),
+            );
+        }
+        let result = runner.observe(observation).await;
         if result.is_ok() {
             guard.complete();
         }
@@ -5657,5 +5764,126 @@ mod tests {
             ..context
         };
         assert!(process_sized_model_costs(&wrong_epoch, dec!(10)).is_err());
+    }
+    #[tokio::test]
+    async fn in_place_policy_view_preserves_model_sessions_and_candidate_state() {
+        use crate::execution::polymarket::{
+            configuration,
+            oms::{Oms, Ownership},
+            settings::{ProcessSettings, SettingsSnapshot},
+        };
+        let mut config: crate::models::TradingProcessConfig = serde_json::from_str(include_str!(
+            "../../../../docs/polymarket-execution-rail/examples/paper.json"
+        ))
+        .unwrap();
+        let definition = configuration::compile(&config).unwrap();
+        let owner = Ownership {
+            process_id: Uuid::new_v4(),
+            run_id: Uuid::new_v4(),
+        };
+        let settings = Arc::new(ProcessSettings::new(Arc::new(
+            Oms::new_for_run(
+                definition.clone(),
+                owner.clone(),
+                definition.config_sha256.clone(),
+            )
+            .unwrap(),
+        )));
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@localhost/unused")
+            .unwrap();
+        let books = Arc::new(RwLock::new(BookRegistry::new(Uuid::new_v4())));
+        let venue = PaperVenue::new(
+            books,
+            crate::btc::PaperVenueConfig::default(),
+            rust_decimal_macros::dec!(0.25),
+        )
+        .unwrap();
+        let runner = BtcProcessRunner::new(
+            BtcRepository::from_pool(pool.clone()),
+            Store::from_pool(pool),
+            venue,
+            BtcProcessConfig {
+                process_id: owner.process_id,
+                run_id: owner.run_id,
+                run_key: definition.control.next_experiment_key.clone(),
+                config_hash: definition.config_sha256.clone(),
+                frozen_process_config: serde_json::to_value(&config).unwrap(),
+                strategy: definition.strategy(),
+                entry_admission: None,
+                risk_strategies: vec![],
+                directional_model_entry_policy: definition
+                    .execution
+                    .policies
+                    .edge
+                    .directional_model_entry_policy,
+                execution_enabled: true,
+                paper_stress_previews: vec![],
+            },
+        )
+        .unwrap()
+        .with_execution_settings(settings.clone());
+        runner.initialized.set(()).unwrap();
+        runner.router_members[0].runtime.lock().unwrap().market_id =
+            Some("preserved-market".into());
+        config
+            .order_policies
+            .as_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|p| p.name == "sizing_policy")
+            .unwrap()
+            .params["default_share"] = serde_json::json!(6);
+        let updated = configuration::compile(&config).unwrap();
+        settings.publish(SettingsSnapshot {
+            oms: Arc::new(
+                Oms::new_for_run(updated.clone(), owner, updated.config_sha256.clone()).unwrap(),
+            ),
+            configuration: Some(serde_json::to_value(config).unwrap()),
+        });
+        let view = runner.current_policy_view().unwrap().unwrap();
+        assert_eq!(view.config.config_hash, updated.config_sha256);
+        assert_eq!(
+            view.router_members[0].strategy.target_size,
+            rust_decimal_macros::dec!(6)
+        );
+        assert_eq!(
+            runner.router_members[0].strategy.target_size,
+            rust_decimal_macros::dec!(5)
+        );
+        assert!(Arc::ptr_eq(
+            &runner.router_members[0].session,
+            &view.router_members[0].session
+        ));
+        assert!(Arc::ptr_eq(
+            &runner.router_members[0].agent,
+            &view.router_members[0].agent
+        ));
+        assert!(Arc::ptr_eq(
+            &runner.router_members[0].runtime,
+            &view.router_members[0].runtime
+        ));
+        assert!(Arc::ptr_eq(
+            &runner.router_observation,
+            &view.router_observation
+        ));
+        assert!(view.initialized.get().is_some());
+        assert_eq!(
+            view.router_members[0]
+                .runtime
+                .lock()
+                .unwrap()
+                .market_id
+                .as_deref(),
+            Some("preserved-market")
+        );
+        let started = std::time::Instant::now();
+        for _ in 0..20_000 {
+            assert!(Arc::ptr_eq(
+                &view,
+                &runner.current_policy_view().unwrap().unwrap()
+            ));
+        }
+        eprintln!("20,000 cached policy reads: {:?}", started.elapsed());
     }
 }

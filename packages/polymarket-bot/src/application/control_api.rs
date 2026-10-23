@@ -19,6 +19,7 @@ impl RuntimeMetrics {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct RuntimeControl {
     pub(super) store: Store,
     pub(super) live_venue: Option<Arc<LiveVenue>>,
@@ -557,121 +558,13 @@ impl ControlApi for RuntimeControl {
     async fn update_trading_process(
         &self,
         process_id: uuid::Uuid,
-        mut request: control_http::UpdateTradingProcessRequest,
+        request: control_http::UpdateTradingProcessRequest,
     ) -> Result<TradingProcessResponse, HttpError> {
-        let mut configuration = request.take_configuration()?;
-        if let Some(config) = configuration.as_mut() {
-            pin_router_config(config)?;
-        }
-        let name = request.name.as_deref().map(str::trim);
-        if matches!(name, Some("")) {
-            return Err(HttpError::bad_request(
-                "trading process name cannot be empty",
-            ));
-        }
-        let lifecycle_guard = match &self.btc_manager {
-            Some(manager) => Some(manager.transition.lock().await),
-            None => None,
-        };
-        let current = self
-            .store
-            .get_trading_process_record(process_id)
+        // Finish persistence and runtime replacement even if the HTTP client disconnects.
+        let control = self.clone();
+        tokio::spawn(async move { control.update_process_definition(process_id, request).await })
             .await
             .map_err(|error| HttpError::internal(error.to_string()))?
-            .ok_or_else(|| HttpError::not_found("trading process not found"))?;
-        if !BtcProcessManager::is_managed_identity(&current.process_type, &current.process_scope) {
-            return Err(HttpError::bad_request(
-                "only managed BTC realtime execution process definitions can be updated",
-            ));
-        }
-        let runtime_active = match &self.btc_manager {
-            Some(manager) => manager
-                .active_playbooks
-                .lock()
-                .await
-                .contains_key(&process_id),
-            None => false,
-        };
-        let terminal_pending = match &self.btc_manager {
-            Some(manager) => manager
-                .terminal_pending
-                .lock()
-                .await
-                .contains_key(&process_id),
-            None => false,
-        };
-        let active_selector_update = runtime_active
-            && request.name.is_none()
-            && request.metadata.is_none()
-            && configuration.as_ref().is_some_and(|config| {
-                serde_json::from_value::<TradingProcessConfig>(current.config.clone()).is_ok_and(
-                    |current_config| {
-                        selector_only_config_change(&current_config, config).unwrap_or(false)
-                    },
-                )
-            });
-        if terminal_pending
-            || current.enabled && !active_selector_update
-            || matches!(current.status.as_str(), "starting" | "stopping")
-        {
-            return Err(HttpError::conflict(
-                "stop the BTC trading process through its /stop endpoint before reconfiguring it",
-            ));
-        }
-        if let Some(config) = &configuration {
-            let manager = self.btc_manager.as_ref().ok_or_else(|| {
-                HttpError::bad_request("BTC realtime capability is disabled for this deployment")
-            })?;
-            let candidate = current.clone().with_config(config.clone());
-            if active_selector_update {
-                manager.validate_resume_definition(&candidate)?;
-            } else {
-                manager.validate_definition_for_storage(&candidate)?;
-            }
-        }
-        if configuration.is_none() {
-            serde_json::from_value::<TradingProcessConfig>(current.config.clone())
-                .map_err(|_| HttpError::bad_request("replace the process configuration with the current TPC layout before updating it"))?;
-        }
-        let process = self
-            .store
-            .update_btc_realtime_paper_process_definition(
-                process_id,
-                name,
-                configuration,
-                request.metadata,
-            )
-            .await
-            .map_err(|error| HttpError::internal(error.to_string()))?
-            .ok_or_else(|| HttpError::not_found("trading process not found"))?;
-        if active_selector_update {
-            let manager = self.btc_manager.as_ref().expect("BTC manager exists");
-            let sources = manager.validate_resume_definition(&process)?.sources;
-            {
-                let mut active = manager.active_playbooks.lock().await;
-                active
-                    .get_mut(&process_id)
-                    .expect("active selector update retains its runtime")
-                    .sources = sources;
-                let union = merge_runtime_source_selectors(
-                    active
-                        .values()
-                        .flat_map(|playbook| playbook.sources.clone()),
-                    manager.config.grafana_live_enabled,
-                )?;
-                if let Some(runtime) = manager
-                    .shared_runtime
-                    .lock()
-                    .await
-                    .as_ref()
-                    .and_then(|shared| shared.runtime.as_ref())
-                {
-                    runtime.update_sources(union);
-                }
-            }
-        }
-        drop(lifecycle_guard);
-        Ok(TradingProcessResponse { process })
     }
 
     async fn start_trading_process(
@@ -737,6 +630,183 @@ impl ControlApi for RuntimeControl {
             HttpError::bad_request("BTC realtime capability is disabled for this deployment")
         })?;
         let process = manager.complete_process(process_id, "api_complete").await?;
+        Ok(TradingProcessResponse { process })
+    }
+}
+
+impl RuntimeControl {
+    async fn update_process_definition(
+        &self,
+        process_id: uuid::Uuid,
+        mut request: control_http::UpdateTradingProcessRequest,
+    ) -> Result<TradingProcessResponse, HttpError> {
+        let mut configuration = request.take_configuration()?;
+        if let Some(config) = configuration.as_mut() {
+            pin_router_config(config)?;
+        }
+        let name = request.name.as_deref().map(str::trim);
+        if matches!(name, Some("")) {
+            return Err(HttpError::bad_request(
+                "trading process name cannot be empty",
+            ));
+        }
+        let lifecycle_guard = match &self.btc_manager {
+            Some(manager) => Some(manager.transition.lock().await),
+            None => None,
+        };
+        let current = self
+            .store
+            .get_trading_process_record(process_id)
+            .await
+            .map_err(|error| HttpError::internal(error.to_string()))?
+            .ok_or_else(|| HttpError::not_found("trading process not found"))?;
+        if !BtcProcessManager::is_managed_identity(&current.process_type, &current.process_scope) {
+            return Err(HttpError::bad_request(
+                "only managed BTC realtime execution process definitions can be updated",
+            ));
+        }
+        let runtime_active = match &self.btc_manager {
+            Some(manager) => manager
+                .active_playbooks
+                .lock()
+                .await
+                .contains_key(&process_id),
+            None => false,
+        };
+        let active_selector_update = runtime_active
+            && request.name.is_none()
+            && request.metadata.is_none()
+            && configuration.as_ref().is_some_and(|config| {
+                !polymarket_bot::execution::polymarket::configuration::is_selected(config)
+                    && serde_json::from_value::<TradingProcessConfig>(current.config.clone())
+                        .is_ok_and(|current_config| {
+                            selector_only_config_change(&current_config, config).unwrap_or(false)
+                        })
+            });
+        if let Some(config) = &configuration {
+            let manager = self.btc_manager.as_ref().ok_or_else(|| {
+                HttpError::bad_request("BTC realtime capability is disabled for this deployment")
+            })?;
+            let candidate = current.clone().with_config(config.clone());
+            if current.enabled {
+                manager.prepare_resume_definition(&candidate)?;
+            } else {
+                manager.validate_definition_for_storage(&candidate)?;
+            }
+        }
+        if configuration.is_none() {
+            serde_json::from_value::<TradingProcessConfig>(current.config.clone())
+                .map_err(|_| HttpError::bad_request("replace the process configuration with the current TPC layout before updating it"))?;
+        }
+        let in_place = if current.enabled && runtime_active {
+            if let Some(config) = configuration.as_ref() {
+                let previous =
+                    serde_json::from_value::<TradingProcessConfig>(current.config.clone())
+                        .map_err(|error| HttpError::bad_request(error.to_string()))?;
+                if polymarket_bot::execution::polymarket::configuration::supports_in_place_update(
+                    &previous, config,
+                )
+                .map_err(|error| HttpError::bad_request(error.to_string()))?
+                {
+                    let manager = self.btc_manager.as_ref().expect("validated manager");
+                    let prepared = manager
+                        .prepare_resume_definition(&current.clone().with_config(config.clone()))?;
+                    let active = manager.active_playbooks.lock().await;
+                    active
+                        .get(&process_id)
+                        .and_then(|p| p.order_service.clone())
+                        .map(|service| {
+                            service
+                                .prepare_settings(config)
+                                .map(|settings| (service, settings, prepared))
+                        })
+                        .transpose()
+                        .map_err(|error| HttpError::bad_request(error.to_string()))?
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let submission_guard = match &in_place {
+            Some((service, _, _)) => Some(service.lock_configuration_update().await),
+            None => None,
+        };
+        let reload = current.enabled
+            && configuration.is_some()
+            && !active_selector_update
+            && in_place.is_none();
+        if reload {
+            self.btc_manager
+                .as_ref()
+                .expect("validated manager")
+                .detach_for_configuration_update(process_id)
+                .await?;
+        }
+        let mut process = self
+            .store
+            .update_btc_realtime_paper_process_definition(
+                process_id,
+                name,
+                configuration,
+                request.metadata,
+            )
+            .await
+            .map_err(|error| HttpError::internal(error.to_string()))?
+            .ok_or_else(|| HttpError::not_found("trading process not found"))?;
+        if let Some((service, settings, prepared)) = in_place {
+            let manager = self.btc_manager.as_ref().expect("validated manager");
+            let mut active = manager.active_playbooks.lock().await;
+            let playbook = active
+                .get_mut(&process_id)
+                .expect("in-place update retains runtime");
+            service.publish_settings(settings);
+            playbook.config_hash = prepared.config_hash;
+            playbook.strategy = prepared.strategy;
+            playbook.runtime.update_evidence_limits(
+                prepared.runtime.max_book_age,
+                prepared.runtime.max_reference_age,
+            );
+        }
+        drop(submission_guard);
+        if active_selector_update {
+            let manager = self.btc_manager.as_ref().expect("BTC manager exists");
+            let sources = manager.validate_resume_definition(&process)?.sources;
+            {
+                let mut active = manager.active_playbooks.lock().await;
+                active
+                    .get_mut(&process_id)
+                    .expect("active selector update retains its runtime")
+                    .sources = sources;
+                let union = merge_runtime_source_selectors(
+                    active
+                        .values()
+                        .flat_map(|playbook| playbook.sources.clone()),
+                    manager.config.grafana_live_enabled,
+                )?;
+                if let Some(runtime) = manager
+                    .shared_runtime
+                    .lock()
+                    .await
+                    .as_ref()
+                    .and_then(|shared| shared.runtime.as_ref())
+                {
+                    runtime.update_sources(union);
+                }
+            }
+        }
+        if reload {
+            process = self
+                .btc_manager
+                .as_ref()
+                .expect("validated manager")
+                .resume_durable_process_locked(process_id)
+                .await?;
+        }
+        drop(lifecycle_guard);
         Ok(TradingProcessResponse { process })
     }
 }

@@ -1593,13 +1593,13 @@ impl ExecutionVenue for LiveVenue {
             reconciliation: state.reconciliation.as_deref().cloned(),
             reconciliation_error: state.reconciliation_error.clone(),
             max_order_notional_usd: self
-                .bound_execution
-                .as_ref()
+                .bound_execution()
+                .ok()
                 .and_then(|execution| execution.max_order_notional_usd)
                 .unwrap_or(Decimal::ZERO),
             max_open_notional_usd: self
-                .bound_execution
-                .as_ref()
+                .bound_execution()
+                .ok()
                 .and_then(|execution| execution.max_open_notional_usd)
                 .unwrap_or(Decimal::ZERO),
             entries_enabled,

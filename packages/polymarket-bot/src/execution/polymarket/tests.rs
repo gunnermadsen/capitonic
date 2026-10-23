@@ -123,6 +123,20 @@ fn admit(
     )
 }
 #[test]
+fn live_trading_disabled_rejects_otherwise_admissible_orders() {
+    let (mut oms, candidate, books, account) = fixture("live");
+    admit(&oms, &candidate, &books, &account).unwrap();
+    oms.definition.execution.execute_signals = false;
+    oms.definition.execution.live_capital = false;
+    assert_eq!(
+        admit(&oms, &candidate, &books, &account)
+            .unwrap_err()
+            .to_string(),
+        "order_submission_disabled"
+    );
+}
+
+#[test]
 fn identical_shared_evidence_produces_identical_paper_live_orders() {
     let (paper, candidate, books, account) = fixture("paper");
     let live = Oms::new(definition("live"), paper.owner.clone()).unwrap();
@@ -606,4 +620,70 @@ fn configured_daily_loss_threshold_is_enforced_identically_in_both_modes() {
             .max_daily_loss_usd = None;
         assert!(admit(&oms, &candidate, &books, &account).is_ok());
     }
+}
+
+#[test]
+fn in_place_policy_updates_exclude_structural_and_stateful_changes() {
+    use super::configuration::supports_in_place_update;
+    let config: TradingProcessConfig = serde_json::from_str(include_str!(
+        "../../../../../docs/polymarket-execution-rail/examples/live.json"
+    ))
+    .unwrap();
+    let mut next = config.clone();
+    next.actions[0].execute_signals = false;
+    next.actions[0].live_capital = false;
+    let policies = next.order_policies.as_mut().unwrap();
+    policies
+        .iter_mut()
+        .find(|p| p.name == "sizing_policy")
+        .unwrap()
+        .params["default_share"] = serde_json::json!(6);
+    policies
+        .iter_mut()
+        .find(|p| p.name == "exposure_policy")
+        .unwrap()
+        .params["max_open_positions"] = serde_json::json!(2);
+    assert!(supports_in_place_update(&config, &next).unwrap());
+    let mut changed = next.clone();
+    changed.actions[0].account_ref = Some("another-account".into());
+    assert!(!supports_in_place_update(&config, &changed).unwrap());
+    changed = next.clone();
+    changed.actions[0].params["strategy_interval_ms"] = serde_json::json!(500);
+    assert!(!supports_in_place_update(&config, &changed).unwrap());
+    changed = next.clone();
+    changed.actions[0].params["models"][0]["member_id"] = serde_json::json!("renamed");
+    changed
+        .order_policies
+        .as_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p.name == "order_execution_policy")
+        .unwrap()
+        .params["member_order_types"] = serde_json::json!({"renamed":"fak"});
+    assert!(!supports_in_place_update(&config, &changed).unwrap());
+    changed = next.clone();
+    changed
+        .order_policies
+        .as_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p.name == "loss_limit_policy")
+        .unwrap()
+        .params["daily_realized_pnl_high_water_mark"] = serde_json::json!({"schema_version":"daily_realized_pnl_high_water_mark_v1","activation_realized_pnl_usd":"10","max_drawdown_from_high_water_mark_usd":"5"});
+    assert!(!supports_in_place_update(&config, &changed).unwrap());
+    let paper: TradingProcessConfig = serde_json::from_str(include_str!(
+        "../../../../../docs/polymarket-execution-rail/examples/paper.json"
+    ))
+    .unwrap();
+    assert!(!supports_in_place_update(&config, &paper).unwrap());
+    changed = paper.clone();
+    changed
+        .order_policies
+        .as_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p.name == "paper_execution_policy")
+        .unwrap()
+        .params["starting_collateral_usd"] = serde_json::json!("2000");
+    assert!(!supports_in_place_update(&paper, &changed).unwrap());
 }
