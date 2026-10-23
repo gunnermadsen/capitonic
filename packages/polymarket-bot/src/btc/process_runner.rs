@@ -856,13 +856,22 @@ impl BtcProcessRunner {
         self.initialized
             .get_or_try_init(|| async {
                 if resume {
+                    let manifest = self
+                        .repository
+                        .load_run_manifest(
+                            self.config.process_id,
+                            self.config.run_id,
+                            &self.config.run_key,
+                        )
+                        .await?
+                        .context("existing run manifest is missing")?;
                     self.repository
                         .verify_run_manifest(
                             self.config.process_id,
                             self.config.run_id,
                             &self.config.run_key,
-                            &self.config.config_hash,
-                            &self.config.frozen_process_config,
+                            &manifest.config_hash,
+                            &manifest.frozen_process_config,
                         )
                         .await?;
                     if self.qualified_execution.is_none() {

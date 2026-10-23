@@ -29,19 +29,33 @@ pub(super) fn should_resume_configured_live_entries(
 
 pub(super) async fn preflight_btc_run_identity(
     repository: &BtcRepository,
+    process_id: uuid::Uuid,
     run_key: &str,
     run_id: uuid::Uuid,
-) -> Result<()> {
+) -> Result<bool> {
+    if let Some(manifest) = repository
+        .load_run_manifest(process_id, run_id, run_key)
+        .await?
+    {
+        repository
+            .verify_run_manifest(
+                process_id,
+                run_id,
+                run_key,
+                &manifest.config_hash,
+                &manifest.frozen_process_config,
+            )
+            .await?;
+        return Ok(true);
+    }
     let identity_exists = repository
         .run_manifest_exists(run_id, run_key)
         .await
         .context("failed to preflight immutable BTC run identity")?;
     if identity_exists {
-        bail!(
-            "BTC run identity {run_key} already exists; every new explicit start requires a globally unique run key"
-        );
+        bail!("BTC run identity {run_key} belongs to another process");
     }
-    Ok(())
+    Ok(false)
 }
 
 pub(super) async fn mark_btc_process_terminal(

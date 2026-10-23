@@ -342,10 +342,14 @@ impl ExecutionService {
         );
         ensure!(
             self.repository
-                .run_config_hash(self.oms.owner.process_id, self.oms.owner.run_id)
+                .load_run_manifest(
+                    self.oms.owner.process_id,
+                    self.oms.owner.run_id,
+                    &self.oms.definition.control.next_experiment_key,
+                )
                 .await?
-                == self.oms.run_config_sha256,
-            "run_configuration_identity_mismatch"
+                .is_some(),
+            "run_identity_mismatch"
         );
         self.restore_configured_authorization().await?;
         let live: Option<Arc<dyn ExecutionVenue>> = match &self.adapter {

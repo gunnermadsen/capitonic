@@ -977,6 +977,45 @@ mod lifecycle_tests {
     }
 
     #[test]
+    fn live_configuration_update_preserves_run_identity_and_compiles_current_settings() {
+        let mut process = eligible_btc_process();
+        process.config = serde_json::from_str(include_str!(
+            "../../../../docs/polymarket-execution-rail/examples/live.json"
+        ))
+        .unwrap();
+        process.config.actions[0].execute_signals = false;
+        process.config.actions[0].live_capital = false;
+        let original = super::super::order_execution::prepare(&process, false).unwrap();
+        process.enabled = true;
+        process.status = "running".into();
+        process.config.actions[0].params["strategy_interval_ms"] = serde_json::json!(750);
+        let updated = super::super::order_execution::prepare(&process, true).unwrap();
+        assert_eq!(updated.run_id, original.run_id);
+        assert_eq!(updated.run_key, original.run_key);
+        assert_ne!(updated.config_hash, original.config_hash);
+        assert_eq!(
+            updated.runtime.strategy_interval,
+            Duration::from_millis(750)
+        );
+        assert_eq!(
+            updated.frozen_process_config.actions[0].params["strategy_interval_ms"],
+            750
+        );
+        assert_eq!(
+            original.frozen_process_config.actions[0].params["strategy_interval_ms"],
+            1000
+        );
+        assert!(!updated.execution.execute_signals);
+        assert!(!updated.execution.live_capital);
+        process.enabled = false;
+        process.status = "stopped".into();
+        let restarted = super::super::order_execution::prepare(&process, false).unwrap();
+        assert_eq!(restarted.run_id, original.run_id);
+        assert_eq!(restarted.run_key, original.run_key);
+        assert_eq!(restarted.config_hash, updated.config_hash);
+    }
+
+    #[test]
     fn live_start_preparation_has_a_distinct_venue_identity_and_frozen_seam() {
         let run_key = "btc-5m-live-cutover-preview";
         let resolved = ResolvedBtcProcessDefinition {

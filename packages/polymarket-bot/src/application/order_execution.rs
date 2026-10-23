@@ -389,6 +389,8 @@ impl OrderApplication for BtcProcessManager {
             .map_err(|error| dependency(id, error))
     }
     async fn execute(&self, id: Uuid, request: ExecuteRequest) -> Result<Receipt, HttpError> {
+        // Do not let an API request retain obsolete execution settings across a reload.
+        let _transition = self.transition.lock().await;
         let evaluation = EvaluationRequest {
             version: request.version,
             candidate: request.candidate,
