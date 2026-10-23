@@ -94,6 +94,7 @@ impl LiveVenue {
             bound_process_created_at: None,
             bound_account_ref: None,
             bound_execution: None,
+            process_settings: std::sync::OnceLock::new(),
             transport_state: Arc::new(Mutex::new(LiveTransportState::initial())),
             readiness_state: Arc::new(Mutex::new(LiveVenueState::fail_closed())),
             global_entry_gate: Arc::new(Mutex::new(GlobalLiveEntryGate::fail_closed())),
@@ -127,6 +128,7 @@ impl LiveVenue {
             bound_process_created_at: None,
             bound_account_ref: None,
             bound_execution: None,
+            process_settings: std::sync::OnceLock::new(),
             transport_state: Arc::new(Mutex::new(LiveTransportState::initial())),
             readiness_state: Arc::new(Mutex::new(LiveVenueState::fail_closed())),
             global_entry_gate: Arc::new(Mutex::new(GlobalLiveEntryGate::fail_closed())),
@@ -176,6 +178,7 @@ impl LiveVenue {
             bound_process_created_at: Some(process_created_at),
             bound_account_ref: Some(account_ref.to_string()),
             bound_execution: Some(execution.clone()),
+            process_settings: std::sync::OnceLock::new(),
             transport_state: self.transport_state.clone(),
             readiness_state: Arc::new(Mutex::new(LiveVenueState::fail_closed())),
             global_entry_gate: self.global_entry_gate.clone(),
@@ -216,14 +219,32 @@ impl LiveVenue {
         Ok(())
     }
 
-    pub(super) fn bound_execution(&self) -> Result<&EffectiveProcessExecutionConfig> {
+    pub(crate) fn attach_process_settings(
+        &self,
+        settings: Arc<crate::execution::polymarket::settings::ProcessSettings>,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            self.process_settings.set(settings).is_ok(),
+            "process settings already attached"
+        );
+        Ok(())
+    }
+
+    pub(crate) async fn lock_configuration_update(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.submit_guard.clone().lock_owned().await
+    }
+
+    pub(super) fn bound_execution(&self) -> Result<EffectiveProcessExecutionConfig> {
+        if let Some(settings) = self.process_settings.get() {
+            return Ok(settings.snapshot().oms.definition.effective_execution());
+        }
         self.bound_execution
-            .as_ref()
+            .clone()
             .context("live execution venue is not bound to a trading process")
     }
 
     pub(super) fn order_submission_enabled(&self) -> bool {
-        self.bound_execution.as_ref().is_some_and(|execution| {
+        self.bound_execution().is_ok_and(|execution| {
             execution.mode == "live" && execution.execute_signals && execution.live_capital
         })
     }

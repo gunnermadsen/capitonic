@@ -12,6 +12,7 @@ pub const EXECUTION_UNAVAILABLE: &str = "polymarket_execution_not_implemented";
 pub mod lifecycle;
 pub mod oms;
 pub mod service;
+pub mod settings;
 
 #[cfg(test)]
 mod tests;

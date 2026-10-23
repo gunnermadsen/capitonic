@@ -24,7 +24,9 @@ fn observe_books(
 
 impl ExecutionService {
     pub fn accepts_api_member(&self, member: &str) -> bool {
-        self.oms
+        let current = self.current();
+        current
+            .oms
             .definition
             .execution
             .policies
@@ -38,7 +40,9 @@ impl ExecutionService {
         request: &EvaluationRequest,
         market: &BtcIntervalMarket,
     ) -> Result<Candidate> {
-        self.freshness
+        let current = self.current();
+        current
+            .freshness
             .time_order(
                 super::super::oms::Origin::Api,
                 OrderLatencyStage::Evidence,
@@ -47,12 +51,12 @@ impl ExecutionService {
                         request.candidate.market_id == market.market_id,
                         "market evidence unavailable"
                     );
-                    let p = &self.oms.definition.execution.policies;
+                    let p = &current.oms.definition.execution.policies;
                     // Execution reads the same canonical gRPC-fed registry as admission and arrival.
                     // Copy both sides under one read lock before choosing the causal reference cutoff.
                     // Historical database checkpoints are not a runtime orderbook dependency.
                     let (up_book, down_book, at) = {
-                        let books = self.books.read().await;
+                        let books = current.books.read().await;
                         observe_books(&books, market)
                     };
                     let mut inputs = self
@@ -69,7 +73,7 @@ impl ExecutionService {
                     inputs.up_book = up_book;
                     inputs.down_book = down_book;
                     let snapshot = crate::btc::process_runner::build_snapshot(
-                        self.oms.owner.process_id,
+                        current.oms.owner.process_id,
                         market,
                         at,
                         &inputs,
@@ -106,7 +110,9 @@ impl ExecutionService {
             .await
     }
     pub async fn preview_api(&self, candidate: &Candidate, prepare: bool) -> Result<Receipt> {
-        self.freshness
+        let current = self.current();
+        current
+            .freshness
             .time_order_outcome(
                 candidate.origin(),
                 if prepare {
@@ -114,7 +120,7 @@ impl ExecutionService {
                 } else {
                     OrderLatencyStage::Preview
                 },
-                self.preview_api_inner(candidate, prepare),
+                current.preview_api_inner(candidate, prepare),
                 |receipt| {
                     if receipt.status == "rejected" {
                         LatencyOutcome::Rejected

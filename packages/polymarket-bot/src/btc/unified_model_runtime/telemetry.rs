@@ -405,6 +405,10 @@ pub fn register(
     });
     tracing::info!(event="umr_model_registered",process_id=%id,run_id=%run,config_hash=config,model_key=selection.map(|v|v.model_key.as_str()),"UMR process model registered");
 }
+pub(crate) fn update_configuration(id: Uuid, config_hash: &str) {
+    update(id, |p| p.config_hash = config_hash.into());
+}
+
 pub fn register_risk(id: Uuid, selection: Option<&RiskStrategySelection>) {
     update(id, |p| {
         p.risk_identity = selection.cloned();

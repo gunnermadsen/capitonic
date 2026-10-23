@@ -26,16 +26,19 @@ use tokio::sync::RwLock;
 
 mod api;
 
+#[derive(Clone)]
 pub struct ExecutionService {
+    settings: Arc<super::settings::ProcessSettings>,
     oms: Arc<Oms>,
     store: Store,
     repository: BtcRepository,
     books: Arc<RwLock<BookRegistry>>,
     adapter: Adapter,
-    resumed: tokio::sync::OnceCell<()>,
-    live_lifecycle: tokio::sync::OnceCell<crate::btc::LiveExecutionLifecycle>,
+    resumed: Arc<tokio::sync::OnceCell<()>>,
+    live_lifecycle: Arc<tokio::sync::OnceCell<crate::btc::LiveExecutionLifecycle>>,
     freshness: Arc<crate::btc::execution_freshness::ExecutionFreshnessMetrics>,
 }
+#[derive(Clone)]
 enum Adapter {
     Paper(Box<PaperVenue>),
     Live(Arc<crate::execution::live::LiveVenue>),
@@ -47,6 +50,73 @@ pub struct ExecutionReceipt {
     pub replayed: bool,
 }
 impl ExecutionService {
+    pub fn settings(&self) -> Arc<super::settings::ProcessSettings> {
+        self.settings.clone()
+    }
+
+    fn current(&self) -> Self {
+        let snapshot = self.settings.snapshot();
+        let mut current = self.clone();
+        current.oms = snapshot.oms.clone();
+        if let Adapter::Paper(venue) = &mut current.adapter {
+            venue.update_order_policies(&current.oms.definition.execution.policies);
+        }
+        current
+    }
+
+    /// Hold the adapter's existing final-submission lock across persistence and publication.
+    pub async fn lock_configuration_update(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        match &self.adapter {
+            Adapter::Paper(venue) => venue.lock_configuration_update().await,
+            Adapter::Live(venue) => venue.lock_configuration_update().await,
+        }
+    }
+
+    pub fn prepare_settings(
+        &self,
+        config: &crate::models::TradingProcessConfig,
+    ) -> Result<super::settings::SettingsSnapshot> {
+        let definition = super::configuration::compile(config)?;
+        let hash = definition.config_sha256.clone();
+        Ok(super::settings::SettingsSnapshot {
+            oms: Arc::new(Oms::new_for_run(definition, self.oms.owner.clone(), hash)?),
+            configuration: Some(serde_json::to_value(config)?),
+        })
+    }
+
+    pub fn publish_settings(&self, snapshot: super::settings::SettingsSnapshot) {
+        self.freshness.update_book_age_limit(
+            snapshot
+                .oms
+                .definition
+                .execution
+                .policies
+                .evidence
+                .max_book_age_ms,
+        );
+        crate::btc::unified_model_runtime::telemetry::update_configuration(
+            snapshot.oms.owner.process_id,
+            &snapshot.oms.run_config_sha256,
+        );
+        self.settings.publish(snapshot);
+    }
+
+    pub async fn execute_for_config(
+        &self,
+        hash: &str,
+        candidate: Candidate,
+    ) -> Result<ExecutionReceipt> {
+        let current = self.current();
+        if !current.oms.definition.matches_config_sha256(hash) {
+            return Err(super::AdmissionRejection {
+                reason: "configuration_changed".into(),
+                policy_results: serde_json::json!([]),
+            }
+            .into());
+        }
+        current.execute_snapshot(candidate).await
+    }
+
     pub fn paper(
         definition: CompiledDefinition,
         owner: Ownership,
@@ -77,15 +147,18 @@ impl ExecutionService {
             },
             p.sizing.max_depth_participation,
         )?;
+        let oms = Arc::new(Oms::new_for_run(definition, owner, run_config_sha256)?);
+        let settings = Arc::new(super::settings::ProcessSettings::new(oms.clone()));
         Ok(Self {
-            oms: Arc::new(Oms::new_for_run(definition, owner, run_config_sha256)?),
+            settings,
+            oms,
             store,
             repository,
             books,
             adapter: Adapter::Paper(Box::new(venue.with_order_metrics(freshness.clone()))),
             freshness,
-            resumed: tokio::sync::OnceCell::new(),
-            live_lifecycle: tokio::sync::OnceCell::new(),
+            resumed: Arc::new(tokio::sync::OnceCell::new()),
+            live_lifecycle: Arc::new(tokio::sync::OnceCell::new()),
         })
     }
     /// The caller supplies the existing process-bound LiveVenue, preserving account identity,
@@ -114,21 +187,25 @@ impl ExecutionService {
             definition.execution.policies.evidence.max_book_age_ms,
         );
         freshness.expect_order_recovery();
+        let oms = Arc::new(Oms::new_for_run(definition, owner, run_config_sha256)?);
+        let settings = Arc::new(super::settings::ProcessSettings::new(oms.clone()));
+        venue.attach_process_settings(settings.clone())?;
         Ok(Self {
-            oms: Arc::new(Oms::new_for_run(definition, owner, run_config_sha256)?),
+            settings,
+            oms,
             store,
             repository,
             books,
             adapter: Adapter::Live(venue),
             freshness,
-            resumed: tokio::sync::OnceCell::new(),
-            live_lifecycle: tokio::sync::OnceCell::new(),
+            resumed: Arc::new(tokio::sync::OnceCell::new()),
+            live_lifecycle: Arc::new(tokio::sync::OnceCell::new()),
         })
     }
     /// Called on startup and periodically by the owning application, including after transient
     /// failures. It never changes enabled/status or assigns outstanding orders to a new run.
     pub async fn reconcile(&self) -> Result<()> {
-        let result = self.reconcile_inner().await;
+        let result = self.current().reconcile_inner().await;
         if result.is_err() {
             self.freshness.order_recovery(false, None);
         }
@@ -219,7 +296,9 @@ impl ExecutionService {
                 .get_trading_process(self.oms.owner.process_id)
                 .await?
                 .context("unknown process")?;
-            if process.enabled
+            if self.oms.definition.execution.execute_signals
+                && self.oms.definition.execution.live_capital
+                && process.enabled
                 && matches!(process.status.as_str(), "starting" | "running")
                 && super::configuration::compile(&process.config)?
                     .matches_config_sha256(&self.oms.run_config_sha256)
@@ -235,6 +314,9 @@ impl ExecutionService {
     }
 
     pub async fn execute(&self, candidate: Candidate) -> Result<ExecutionReceipt> {
+        self.current().execute_snapshot(candidate).await
+    }
+    async fn execute_snapshot(&self, candidate: Candidate) -> Result<ExecutionReceipt> {
         let origin = candidate.origin();
         self.freshness
             .order_event(origin, OrderStage::Candidate, OrderOutcome::Accepted);
@@ -335,11 +417,15 @@ impl ExecutionService {
             process.enabled && matches!(process.status.as_str(), "running" | "starting"),
             "process_not_authorized"
         );
-        ensure!(
-            super::configuration::compile(&process.config)?
-                .matches_config_sha256(&self.oms.run_config_sha256),
-            "process_configuration_changed"
-        );
+        if !super::configuration::compile(&process.config)?
+            .matches_config_sha256(&self.oms.run_config_sha256)
+        {
+            return Err(super::AdmissionRejection {
+                reason: "configuration_changed".into(),
+                policy_results: serde_json::json!([]),
+            }
+            .into());
+        }
         ensure!(
             self.repository
                 .load_run_manifest(
@@ -916,5 +1002,82 @@ fn order_origin(order: &OrderRecord) -> super::oms::Origin {
         super::oms::Origin::Api
     } else {
         super::oms::Origin::Umr
+    }
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+    #[tokio::test]
+    async fn in_place_settings_preserve_recovery_and_reject_old_candidates() {
+        let (oms, candidate, _, _) = super::super::tests::fixture("paper");
+        let old_hash = oms.run_config_sha256.clone();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@localhost/unused")
+            .unwrap();
+        let service = ExecutionService::paper(
+            oms.definition,
+            oms.owner,
+            old_hash.clone(),
+            Store::from_pool(pool.clone()),
+            BtcRepository::from_pool(pool),
+            Arc::new(RwLock::new(BookRegistry::new(uuid::Uuid::new_v4()))),
+        )
+        .unwrap();
+        service.resumed.set(()).unwrap();
+        let mut config: crate::models::TradingProcessConfig = serde_json::from_str(include_str!(
+            "../../../../../docs/polymarket-execution-rail/examples/paper.json"
+        ))
+        .unwrap();
+        config
+            .order_policies
+            .as_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|p| p.name == "sizing_policy")
+            .unwrap()
+            .params["default_share"] = serde_json::json!(6);
+        let snapshot = service.prepare_settings(&config).unwrap();
+        let new_hash = snapshot.oms.run_config_sha256.clone();
+        let original = service.current();
+        let guard = service.lock_configuration_update().await;
+        // Publication uses the same lock as the final adapter submission boundary.
+        assert!(tokio::time::timeout(
+            Duration::from_millis(10),
+            service.lock_configuration_update()
+        )
+        .await
+        .is_err());
+        service.publish_settings(snapshot);
+        drop(guard);
+        let current = service.current();
+        assert_eq!(current.oms.run_config_sha256, new_hash);
+        assert_eq!(original.oms.run_config_sha256, old_hash);
+        assert!(Arc::ptr_eq(&service.resumed, &current.resumed));
+        assert!(Arc::ptr_eq(
+            &service.live_lifecycle,
+            &current.live_lifecycle
+        ));
+        assert!(Arc::ptr_eq(&service.freshness, &current.freshness));
+        assert_eq!(
+            current
+                .oms
+                .definition
+                .execution
+                .policies
+                .sizing
+                .default_share,
+            rust_decimal_macros::dec!(6)
+        );
+        let err = service
+            .execute_for_config(&old_hash, candidate)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<super::super::AdmissionRejection>()
+                .unwrap()
+                .reason,
+            "configuration_changed"
+        );
     }
 }

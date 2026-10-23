@@ -698,7 +698,47 @@ impl RuntimeControl {
             serde_json::from_value::<TradingProcessConfig>(current.config.clone())
                 .map_err(|_| HttpError::bad_request("replace the process configuration with the current TPC layout before updating it"))?;
         }
-        let reload = current.enabled && configuration.is_some() && !active_selector_update;
+        let in_place = if current.enabled && runtime_active {
+            if let Some(config) = configuration.as_ref() {
+                let previous =
+                    serde_json::from_value::<TradingProcessConfig>(current.config.clone())
+                        .map_err(|error| HttpError::bad_request(error.to_string()))?;
+                if polymarket_bot::execution::polymarket::configuration::supports_in_place_update(
+                    &previous, config,
+                )
+                .map_err(|error| HttpError::bad_request(error.to_string()))?
+                {
+                    let manager = self.btc_manager.as_ref().expect("validated manager");
+                    let prepared = manager
+                        .prepare_resume_definition(&current.clone().with_config(config.clone()))?;
+                    let active = manager.active_playbooks.lock().await;
+                    active
+                        .get(&process_id)
+                        .and_then(|p| p.order_service.clone())
+                        .map(|service| {
+                            service
+                                .prepare_settings(config)
+                                .map(|settings| (service, settings, prepared))
+                        })
+                        .transpose()
+                        .map_err(|error| HttpError::bad_request(error.to_string()))?
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let submission_guard = match &in_place {
+            Some((service, _, _)) => Some(service.lock_configuration_update().await),
+            None => None,
+        };
+        let reload = current.enabled
+            && configuration.is_some()
+            && !active_selector_update
+            && in_place.is_none();
         if reload {
             self.btc_manager
                 .as_ref()
@@ -717,6 +757,21 @@ impl RuntimeControl {
             .await
             .map_err(|error| HttpError::internal(error.to_string()))?
             .ok_or_else(|| HttpError::not_found("trading process not found"))?;
+        if let Some((service, settings, prepared)) = in_place {
+            let manager = self.btc_manager.as_ref().expect("validated manager");
+            let mut active = manager.active_playbooks.lock().await;
+            let playbook = active
+                .get_mut(&process_id)
+                .expect("in-place update retains runtime");
+            service.publish_settings(settings);
+            playbook.config_hash = prepared.config_hash;
+            playbook.strategy = prepared.strategy;
+            playbook.runtime.update_evidence_limits(
+                prepared.runtime.max_book_age,
+                prepared.runtime.max_reference_age,
+            );
+        }
+        drop(submission_guard);
         if active_selector_update {
             let manager = self.btc_manager.as_ref().expect("BTC manager exists");
             let sources = manager.validate_resume_definition(&process)?.sources;

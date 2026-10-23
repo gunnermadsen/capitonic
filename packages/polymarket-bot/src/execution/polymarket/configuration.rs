@@ -347,3 +347,57 @@ pub fn pin_definition(config: &mut TradingProcessConfig) -> Result<()> {
     *config = candidate;
     Ok(())
 }
+
+/// Only stateless order policies and the two trading switches may change in place.
+/// Compare the remaining TPC, rather than allowlisting model/account fields individually.
+pub fn supports_in_place_update(
+    current: &TradingProcessConfig,
+    next: &TradingProcessConfig,
+) -> Result<bool> {
+    if !is_selected(current) || !is_selected(next) {
+        return Ok(false);
+    }
+    let before = compile(current)?;
+    let after = compile(next)?;
+    let old = &before.execution.policies;
+    let new = &after.execution.policies;
+    if old.loss_regime != new.loss_regime
+        || old.loss_limit.daily_realized_pnl_high_water_mark
+            != new.loss_limit.daily_realized_pnl_high_water_mark
+        || old.paper_execution != new.paper_execution
+    {
+        return Ok(false);
+    }
+    fn structural(config: &TradingProcessConfig) -> Result<serde_json::Value> {
+        let mut value = serde_json::to_value(config)?;
+        value
+            .as_object_mut()
+            .expect("TPC object")
+            .remove("order_policies");
+        for action in value["actions"].as_array_mut().expect("TPC actions") {
+            let action = action.as_object_mut().expect("TPC action");
+            action.remove("execute_signals");
+            action.remove("live_capital");
+        }
+        Ok(value)
+    }
+    Ok(structural(current)? == structural(next)?)
+}
+
+impl CompiledDefinition {
+    pub fn effective_execution(&self) -> crate::models::EffectiveProcessExecutionConfig {
+        let e = &self.execution;
+        let p = &e.policies;
+        crate::models::EffectiveProcessExecutionConfig {
+            mode: e.mode.as_str().into(),
+            execute_signals: e.execute_signals,
+            live_capital: e.live_capital,
+            account_ref: e.account_ref.clone(),
+            max_open_notional_usd: p.exposure.max_open_notional_usd,
+            max_open_positions: p.exposure.max_open_positions,
+            max_daily_loss_usd: p.loss_limit.max_daily_loss_usd,
+            require_exit_book: Some(p.liquidity.require_exit_book),
+            ..Default::default()
+        }
+    }
+}

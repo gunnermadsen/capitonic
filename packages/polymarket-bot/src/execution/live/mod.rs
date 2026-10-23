@@ -130,6 +130,8 @@ pub struct LiveVenue {
     bound_process_created_at: Option<DateTime<Utc>>,
     bound_account_ref: Option<String>,
     bound_execution: Option<EffectiveProcessExecutionConfig>,
+    process_settings:
+        std::sync::OnceLock<Arc<crate::execution::polymarket::settings::ProcessSettings>>,
     transport_state: Arc<Mutex<LiveTransportState>>,
     readiness_state: Arc<Mutex<LiveVenueState>>,
     global_entry_gate: Arc<Mutex<GlobalLiveEntryGate>>,
